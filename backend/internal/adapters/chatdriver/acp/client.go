@@ -743,6 +743,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
 				emit(event)
 			}
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -854,6 +855,21 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	}
 	if outputCut {
 		detailMap["outputTruncated"] = true
+	}
+	if c.harness == domain.HarnessHermes {
+		// Hermes omits tool payloads on delegation updates. Keep those fields
+		// absent, and use the timeline's arguments key without changing other
+		// ACP providers' persisted input contract.
+		delete(detailMap, "input")
+		if input, err := json.Marshal(tool.rawInput); err == nil && string(input) != "null" {
+			detailMap["arguments"] = cappedPayload(tool.rawInput)
+		}
+		if len(tool.locations) == 0 {
+			delete(detailMap, "locations")
+		}
+		if len(tool.content) == 0 {
+			delete(detailMap, "content")
+		}
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -1222,6 +1238,34 @@ func (c *conversation) sessionFailureEvent(
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
+}
+
+// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
+// OpenCode ends a failed compaction with a normal end_turn, so this update is the
+// only sign that the history was left as it was.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
+	compaction := nestedMap(meta, "opencode/compaction")
+	if compaction == nil {
+		return
+	}
+	failure := ""
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+	case "failed":
+		failure, _ = nestedMap(compaction, "error")["message"].(string)
+		if failure = strings.TrimSpace(failure); failure == "" {
+			failure = "Compaction failed"
+		}
+	default:
+		// OpenCode only sends the three statuses above. Leave the recorded
+		// outcome alone rather than guess what a new one means.
+		return
+	}
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+	}
+	c.mu.Unlock()
 }
 
 func sessionFailure(meta map[string]any) map[string]any {

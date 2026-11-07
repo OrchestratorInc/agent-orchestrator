@@ -93,6 +93,30 @@ type Service struct {
 	// there, rather than inferring "still blocked" from a goroutine that simply
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
+
+	agents AgentTracker // set once at boot; nil without agent detection
+}
+
+// AgentTracker follows the agent, if any, running in a user shell.
+type AgentTracker interface {
+	TrackShellTerminal(handleID string)
+	UntrackShellTerminal(handleID string)
+}
+
+// SetAgentTracker registers every open shell for agent detection. Watches start
+// only while a client subscribes. Call once at boot, before serving requests.
+func (s *Service) SetAgentTracker(ctx context.Context, tracker AgentTracker) {
+	s.agents = tracker
+	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+	if err != nil {
+		s.log.Warn("shell terminal agent tracking: list terminals failed", "err", err)
+		return
+	}
+	for _, rec := range recs {
+		if !rec.Transient {
+			tracker.TrackShellTerminal(rec.HandleID)
+		}
+	}
 }
 
 // IsShellTerminalChildAlive reports whether the command inside a shell
@@ -101,6 +125,24 @@ type Service struct {
 // this instead of treating host liveness as command liveness.
 func (s *Service) IsShellTerminalChildAlive(ctx context.Context, handleID string) (bool, error) {
 	return s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: strings.TrimSpace(handleID)})
+}
+
+// CommandTerminalHandles returns this app launch's commands for a trusted
+// workflow. Commands predating ownership metadata are included conservatively:
+// their editable title cannot establish which credential store they use.
+// Child liveness must still be checked; retained scrollback is not a live command.
+func (s *Service) CommandTerminalHandles(ctx context.Context, owner string) ([]string, error) {
+	records, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	var handles []string
+	for _, rec := range records {
+		if rec.Transient && (rec.CommandOwner == owner || rec.CommandOwner == "") {
+			handles = append(handles, rec.HandleID)
+		}
+	}
+	return handles, nil
 }
 
 // sessionGate is the admission/teardown barrier for one session's scoped
@@ -401,6 +443,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		workingDir:               workingDir,
 		title:                    in.Title,
 		transient:                true,
+		commandOwner:             in.Owner,
 		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
 	})
 	if err != nil {
@@ -648,6 +691,7 @@ type openTerminalConfig struct {
 	workingDir               string
 	title                    string
 	transient                bool
+	commandOwner             string
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
 	startOnAttach            bool
@@ -705,6 +749,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		Title:                     cfg.title,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
+		CommandOwner:              cfg.commandOwner,
 		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
@@ -720,6 +765,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: persist: %w", handle.ID, err)
 	}
 	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
+	// Login terminals run an agent CLI on purpose; only user shells are tracked.
+	if s.agents != nil && !cfg.transient {
+		s.agents.TrackShellTerminal(handle.ID)
+	}
 	return shellTerminalFromRecord(rec), nil
 }
 
@@ -877,6 +926,24 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	return out, nil
 }
 
+// ListCommandTerminalsForCurrentAppRun returns the trusted command terminals
+// (native login and setup flows) owned by this app launch, including those a
+// previous daemon in the same launch opened: they deliberately survive a daemon
+// restart. Liveness is not checked; callers probe the ones they own.
+func (s *Service) ListCommandTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
+	recs, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	out := make([]ShellTerminal, 0, len(recs))
+	for _, rec := range recs {
+		if rec.Transient {
+			out = append(out, shellTerminalFromRecord(rec))
+		}
+	}
+	return out, nil
+}
+
 // ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
 // destroys abandoned trusted auth terminals. Live or unknown session shells
 // are preserved with their original associations and attach handles. A user
@@ -933,6 +1000,9 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
 	if stillAlive {
 		return true, destroyErr
+	}
+	if s.agents != nil {
+		s.agents.UntrackShellTerminal(handleID)
 	}
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)

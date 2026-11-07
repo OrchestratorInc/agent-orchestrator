@@ -1,13 +1,28 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
+import { useShellAgentStore } from "../stores/shell-agent-store";
+import { useUiStore } from "../stores/ui-store";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { isWindowsPlatform } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false) }));
-vi.mock("../lib/platform", () => ({ isWindowsPlatform }));
+const { isWindowsPlatform, useShellAgentStream } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false), useShellAgentStream: vi.fn() }));
+vi.mock("../lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/platform")>()),
+	isWindowsPlatform,
+}));
+vi.mock("../stores/shell-agent-store", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../stores/shell-agent-store")>()),
+	useShellAgentStream,
+}));
 
-afterEach(() => isWindowsPlatform.mockReturnValue(false));
+afterEach(() => {
+	cleanup();
+	isWindowsPlatform.mockReturnValue(false);
+	useShellAgentStream.mockClear();
+	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+	useUiStore.setState({ developerMode: false });
+});
 
 const shell: ShellTerminal = {
 	handleId: "shellterm-1",
@@ -195,13 +210,110 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
 	});
 
-	it("Windows: right-click enters edit, double-click does not", () => {
+	it("Windows: right-click opens the tab menu, double-click enters edit", () => {
 		isWindowsPlatform.mockReturnValue(true);
-		renderTab();
+		renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		fireEvent.doubleClick(tab);
-		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 		fireEvent.contextMenu(tab);
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+		fireEvent.doubleClick(tab);
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+});
+
+describe("ShellTerminalTab context menu", () => {
+	it("starts rename from the menu", async () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		fireEvent.click(screen.getByRole("menuitem", { name: /rename terminal/i }));
+
+		expect(await screen.findByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+
+	it("opens from the keyboard with Shift+F10", () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.keyDown(screen.getByRole("tab", { name: "ao" }), { key: "F10", shiftKey: true });
+
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
+	it("disables rename where the tab cannot be renamed", () => {
+		renderTab({ appearance: "connected", onRename: undefined });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toHaveAttribute("aria-disabled", "true");
+	});
+});
+
+describe("ShellTerminalTab agent name", () => {
+	const claude = { harness: "claude-code", state: "idle" } as const;
+	beforeEach(() => useUiStore.setState({ developerMode: true }));
+
+	it("shows a plain tab and does not subscribe when Developer Mode is off", () => {
+		useUiStore.setState({ developerMode: false });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-agent-shell-tab-max");
+	});
+
+	it("returns to the plain tab when Developer Mode is switched off", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-agent-shell-tab-max");
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-shell-tab-max");
+		act(() => useUiStore.setState({ developerMode: false }));
+		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
+	});
+
+	it("names a default-named tab after its agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" }, stripShellHandleIds: ["shellterm-1"] });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
+	});
+
+	it("keeps the number when another tab in the strip runs the same agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude, "shellterm-2": claude } });
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
+	});
+
+	it("drops the number when the other tab runs a different agent", () => {
+		useShellAgentStore.setState({
+			agents: { "shellterm-1": claude, "shellterm-2": { harness: "codex", state: "idle" } },
+		});
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+	});
+
+	it("keeps a name the user chose", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected" });
+		expect(screen.getByRole("tab", { name: "ao" })).toBeInTheDocument();
+	});
+
+	it("renames from the stored title, not the agent's name", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code" }));
+		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toHaveValue("Terminal 3");
 	});
 });

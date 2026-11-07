@@ -37,6 +37,8 @@ import { isDialogOrMenuOpenOutside } from "../lib/dom-selectors";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
+import { droppedPathsText } from "../lib/terminal-drop";
+import { LoaderCircle, TriangleAlert } from "lucide-react";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import {
@@ -55,7 +57,9 @@ import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
 import { LinkPreviewCard, LinkPreviewCardLoading } from "./LinkPreviewCard";
+import { CloseButton } from "./ui/close-button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { Pressable } from "./ui/pressable";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -64,8 +68,25 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
+/** A dropped file that was not placed: its reason, or the limit it was over. */
+type DropFailure = { name: string; reason?: string; maxMegabytes?: number };
+type DropNotice = { kind: "placing"; names: string[] } | { kind: "failed"; failures: DropFailure[] };
+/** A local save shows its progress only once it takes longer than this. */
+const LOCAL_DROP_NOTICE_DELAY_MS = 400;
+/** How long a drop failure stays unless dismissed first. */
+const DROP_FAILURE_NOTICE_MS = 10_000;
+
 export type XtermTerminalProps = {
 	ariaLabel?: string;
+	/**
+	 * Puts a file dropped on the terminal where the terminal's program can open
+	 * it and answers with that path, a POSIX sandbox path, which is typed at the
+	 * prompt quoted for its shell. Absent, the file is saved on this machine (a
+	 * local terminal). Null, the terminal takes no dropped files.
+	 */
+	saveDroppedFile?: ((file: { name: string; bytes: Uint8Array }) => Promise<string | null | undefined>) | null;
+	/** The largest file saveDroppedFile takes; a larger one is refused before it is read. */
+	droppedFileMaxBytes?: number;
 	className?: string;
 	fontSize?: number;
 	isFullscreen?: boolean;
@@ -466,6 +487,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	const translucent = macPlatform && windowTranslucency;
 	const shellRef = useRef<HTMLDivElement | null>(null);
 	const hostRef = useRef<HTMLDivElement | null>(null);
+	const saveDroppedFileRef = useRef(props.saveDroppedFile);
+	saveDroppedFileRef.current = props.saveDroppedFile;
+	const droppedFileMaxBytesRef = useRef(props.droppedFileMaxBytes);
+	droppedFileMaxBytesRef.current = props.droppedFileMaxBytes;
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<Terminal | null>(null);
@@ -488,6 +513,48 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		link: null,
 	});
 	const [copiedToast, setCopiedToast] = useState(false);
+	// What a file dropped on the terminal is doing: being placed, or why it
+	// could not be. Non-blocking; a failure stays until dismissed or it times out.
+	const [dropNotice, setDropNotice] = useState<DropNotice | null>(null);
+	const dropNoticeTimerRef = useRef<number | undefined>(undefined);
+	const dropNoticeRef = useRef({
+		next: 0,
+		active: new Map<number, string[]>(),
+		failures: [] as DropFailure[],
+		begin(names: string[], delayMs: number): number {
+			const id = ++this.next;
+			this.active.set(id, names);
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+			const show = () => {
+				dropNoticeTimerRef.current = undefined;
+				if (this.active.size > 0) setDropNotice({ kind: "placing", names: [...this.active.values()].flat() });
+			};
+			if (delayMs > 0) dropNoticeTimerRef.current = window.setTimeout(show, delayMs);
+			else show();
+			return id;
+		},
+		end(id: number, failures: DropFailure[]): void {
+			this.active.delete(id);
+			this.failures = [...this.failures, ...failures];
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+			dropNoticeTimerRef.current = undefined;
+			if (this.active.size > 0) {
+				setDropNotice({ kind: "placing", names: [...this.active.values()].flat() });
+				return;
+			}
+			const shown = this.failures;
+			this.failures = [];
+			if (shown.length === 0) {
+				setDropNotice(null);
+				return;
+			}
+			setDropNotice({ kind: "failed", failures: shown });
+			dropNoticeTimerRef.current = window.setTimeout(() => {
+				dropNoticeTimerRef.current = undefined;
+				setDropNotice(null);
+			}, DROP_FAILURE_NOTICE_MS);
+		},
+	});
 	const [searchOpen, setSearchOpen] = useState(false);
 	const copiedToastTimerRef = useRef<number | undefined>(undefined);
 	const showCopiedToastRef = useRef<() => void>(() => undefined);
@@ -602,6 +669,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 	useEffect(
 		() => () => {
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
 			if (copiedToastTimerRef.current !== undefined) window.clearTimeout(copiedToastTimerRef.current);
 			if (linkPreviewTimerRef.current !== undefined) window.clearTimeout(linkPreviewTimerRef.current);
 		},
@@ -1401,6 +1469,20 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				rows: Math.max(1, Math.floor((Math.floor(observedBox.height) - paddingY) / cell.height)),
 			};
 		};
+		// The inspector slides open or closed by animating its gap's width, so the
+		// terminal box changes on every frame of that slide. Refitting each frame
+		// reflowed the whole buffer and resized the PTY ~36 times per toggle (each
+		// a SIGWINCH redraw from the agent). Hold the grid while the slide runs and
+		// fit once when it lands; the stable-fit timer is the fallback.
+		const inspectorSliding = () =>
+			host.closest(".session-split")?.querySelector('[data-slot="inspector-gap"][data-motion="animated"]') != null;
+		const settleAfterSlide = (event: TransitionEvent) => {
+			if (event.propertyName !== "width" || fitQuietTimer === null) return;
+			if (!(event.target instanceof Element) || event.target.getAttribute("data-slot") !== "inspector-gap") return;
+			if (!event.target.closest(".session-split")?.contains(host)) return;
+			flushScheduledFit();
+		};
+		document.addEventListener("transitionend", settleAfterSlide);
 		const observer = new ResizeObserver((entries) => {
 			if (disposed) return;
 			// Track the box even while parked, so the stabilizer never proposes
@@ -1421,6 +1503,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				return;
 			}
 			if (observed.width <= 0 || observed.height <= 0) return;
+			if (inspectorSliding()) {
+				scheduleStableFit();
+				return;
+			}
 			const grid = gridFromObservedBox();
 			if (!grid) {
 				scheduleLiveFit();
@@ -1602,7 +1688,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// a temp file by the main process and that path is inserted instead.
 		const isFileDrag = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
 		const dragOverInput = (event: DragEvent) => {
-			if (!isFileDrag(event)) return;
+			if (!isFileDrag(event) || saveDroppedFileRef.current === null) return;
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
@@ -1613,7 +1699,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const isDirectoryDrag = (event: DragEvent) =>
 			event.dataTransfer?.items?.[0]?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		const dropInput = (event: DragEvent) => {
-			if (isDirectoryDrag(event)) return;
+			if (isDirectoryDrag(event) || saveDroppedFileRef.current === null) return;
 			const files = Array.from(event.dataTransfer?.files ?? []);
 			if (files.length === 0) return;
 			event.preventDefault();
@@ -1624,17 +1710,34 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// never shows the overlay.
 			void (async () => {
 				const paths: string[] = [];
-				for (const file of files) {
-					try {
-						const bytes = new Uint8Array(await file.arrayBuffer());
-						const saved = await aoBridge.terminal.saveDroppedFile({ name: file.name, bytes });
-						if (saved) paths.push(saved);
-					} catch (error) {
-						console.warn("Unable to attach dropped file", error);
+				const failures: DropFailure[] = [];
+				const sandbox = saveDroppedFileRef.current;
+				const save = sandbox ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
+				const maxBytes = sandbox ? droppedFileMaxBytesRef.current : undefined;
+				// Uploading and placing a file in a sandbox takes a while: say so. A
+				// local save is quick, so it says so only if it is not.
+				const drop = dropNoticeRef.current.begin(files.map((file) => file.name), sandbox ? 0 : LOCAL_DROP_NOTICE_DELAY_MS);
+				try {
+					for (const file of files) {
+						if (maxBytes !== undefined && file.size > maxBytes) {
+							failures.push({ name: file.name, maxMegabytes: Math.floor(maxBytes / (1024 * 1024)) });
+							continue;
+						}
+						try {
+							const bytes = new Uint8Array(await file.arrayBuffer());
+							const saved = await save({ name: file.name, bytes });
+							if (saved) paths.push(saved);
+						} catch (error) {
+							console.warn("Unable to attach dropped file", error);
+							const reason = error instanceof Error ? error.message.trim() : "";
+							failures.push({ name: file.name, ...(reason ? { reason } : {}) });
+						}
 					}
+				} finally {
+					dropNoticeRef.current.end(drop, failures);
 				}
 				if (paths.length === 0) return;
-				pasteText(`${paths.map((p) => (/\s/.test(p) ? `'${p}'` : p)).join(" ")} `);
+				pasteText(droppedPathsText(paths, Boolean(sandbox)));
 			})();
 		};
 		shell.addEventListener("dragover", dragOverInput);
@@ -1802,6 +1905,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (fitCapTimer !== null) clearTimeout(fitCapTimer);
 			fitSettledListeners.clear();
 			observer.disconnect();
+			document.removeEventListener("transitionend", settleAfterSlide);
 			dragStateObserver.disconnect();
 			synchronizedFrames.dispose();
 			synchronizedCapability.dispose();
@@ -1992,6 +2096,50 @@ export function XtermTerminal(props: XtermTerminalProps) {
 					open={searchOpen && props.isVisible !== false}
 					searchAddon={searchAddonRef.current}
 				/>
+				{dropNotice && props.isVisible !== false ? (
+					dropNotice.kind === "placing" ? (
+						<div
+							aria-live="polite"
+							className="pointer-events-none absolute left-1/2 top-3 z-10 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+							role="status"
+						>
+							<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />
+							<span className="truncate">
+								{dropNotice.names.length === 1
+									? t("terminal.drop.attachingOne", { name: dropNotice.names[0] })
+									: t("terminal.drop.attachingMany", { number: dropNotice.names.length })}
+							</span>
+						</div>
+					) : (
+						<div
+							className="absolute left-1/2 top-3 z-10 flex w-max max-w-[min(36rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] py-1.5 pl-3 pr-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+							role="alert"
+						>
+							<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-error" />
+							<ul className="min-w-0 space-y-0.5">
+								{dropNotice.failures.map((failure, index) => (
+									<li key={`${failure.name}-${index}`} className="break-words">
+										{t("terminal.drop.failed", {
+											name: failure.name,
+											reason: failure.maxMegabytes !== undefined
+												? t("terminal.drop.tooLarge", { size: failure.maxMegabytes })
+												: failure.reason ?? t("terminal.drop.unknownReason"),
+										})}
+									</li>
+								))}
+							</ul>
+							<CloseButton
+								aria-label={t("terminal.drop.dismiss")}
+								onClick={() => {
+									if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+									dropNoticeTimerRef.current = undefined;
+									setDropNotice(null);
+								}}
+								size="icon-xs"
+							/>
+						</div>
+					)
+				) : null}
 				{copiedToast && props.isVisible !== false ? (
 					<div
 						aria-live="polite"
@@ -2004,8 +2152,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			</div>
 			<DropdownMenu modal={false} open={contextMenu.open} onOpenChange={setContextMenuOpen}>
 				<DropdownMenuTrigger asChild>
-					<button
-						type="button"
+					<Pressable
 						aria-hidden="true"
 						tabIndex={-1}
 						style={{
@@ -2091,8 +2238,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				}}
 			>
 				<HoverCardTrigger asChild>
-					<button
-						type="button"
+					<Pressable
 						aria-hidden="true"
 						tabIndex={-1}
 						style={{

@@ -19,6 +19,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -335,6 +336,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers (wire envelopes)
 	"ControllersListProjectsResponse":                     "ListProjectsResponse",
 	"ControllersProjectResponse":                          "ProjectResponse",
+	"ControllersClonePrepareStreamEvent":                  "ClonePrepareStreamEvent",
 	"ControllersAgentIDParam":                             "AgentIDParam",
 	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
 	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
@@ -529,6 +531,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"AgentauthPlan":                               "AgentAuthPlan",
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
+	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
+	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
+	"AgentauthLoginMethod":                        "AgentLoginMethod",
+	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
@@ -571,6 +577,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateShellTerminalRequest":            "UpdateShellTerminalRequest",
 	"ControllersShellTerminalResponse":                 "ShellTerminalResponse",
 	"ControllersListShellTerminalsResponse":            "ListShellTerminalsResponse",
+	"ControllersTerminalShellResponse":                 "TerminalShellResponse",
+	"ControllersTerminalShellsResponse":                "TerminalShellsResponse",
+	"ControllersTerminalShellCheckResponse":            "TerminalShellCheckResponse",
 	"ControllersShellTerminalEnvelope":                 "ShellTerminalEnvelope",
 	"ControllersOpenCodexAccountLoginTerminalResponse": "OpenCodexAccountLoginTerminalResponse",
 	"ControllersCodexAccountLoginTerminalResponse":     "CodexAccountLoginTerminalResponse",
@@ -646,6 +655,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectCloneInput":                 "CloneProjectInput",
 	"ProjectClonePreparationResult":     "ClonePreparationResult",
 	"ProjectCloneDestination":           "CloneDestination",
+	"ProjectCloneProgress":              "CloneProgress",
 	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
 	"ProjectInitializeRepositoryResult": "InitializeRepositoryResult",
 	"ProjectRemoveResult":               "RemoveProjectResult",
@@ -1078,6 +1088,10 @@ func browserOperations() []operation {
 	}
 }
 
+type terminalShellCheckQuery struct {
+	Path string `query:"path" description:"Custom shell: an absolute path, a ~/ path, or a command on PATH."`
+}
+
 type renderSourceQuery struct {
 	Source *string `query:"source,omitempty" enum:"1" description:"Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap."`
 }
@@ -1164,17 +1178,6 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/session-interface", id: "updateSessionInterface", tag: "settings",
 			summary: "Choose the default interface for new sessions",
 			reqBody: controllers.UpdateSessionInterfaceRequest{},
-			resps: []respUnit{
-				{http.StatusOK, controllers.SettingsResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodPatch, path: "/api/v1/settings/cloud-offering", id: "updateCloudOffering", tag: "settings",
-			summary: "Turn the cloud offering on or off for this machine",
-			reqBody: controllers.UpdateCloudOfferingRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -1834,6 +1837,21 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/terminal-shells", id: "listTerminalShells", tag: "shellTerminals",
+			summary: "List the shells installed on this machine for new terminals",
+			resps: []respUnit{
+				{http.StatusOK, controllers.TerminalShellsResponse{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/terminal-shells/check", id: "checkTerminalShell", tag: "shellTerminals",
+			summary:    "Check that a custom shell path is an executable",
+			pathParams: []any{terminalShellCheckQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.TerminalShellCheckResponse{}},
+			},
+		},
+		{
 			method: http.MethodDelete, path: "/api/v1/shell-terminals/{handleId}", id: "closeShellTerminal", tag: "shellTerminals",
 			summary:    "Close a standalone shell terminal and destroy its PTY",
 			pathParams: []any{controllers.ShellTerminalHandleIDParam{}},
@@ -1939,6 +1957,32 @@ func cueOperations() []operation {
 func agentOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",
+			summary:    "Submit a one-time Claude sign-in code to the existing native login",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			reqBody:    controllers.SubmitAgentUILoginCodeRequest{},
+			resps:      []respUnit{{http.StatusAccepted, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations", id: "startAgentUILogin", tag: "agents",
+			summary:    "Start a fixed native login in the background without exposing a terminal",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    controllers.StartAgentUILoginRequest{},
+			resps:      []respUnit{{http.StatusAccepted, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/operations/{operationId}", id: "getAgentUILogin", tag: "agents",
+			summary:    "Read recognized login prompts and background process state",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/{agent}/auth/operations/{operationId}", id: "cancelAgentUILogin", tag: "agents",
+			summary:    "Cancel a background login and wait for its native process to stop",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/agents/auth-plans", id: "listAgentAuthPlans", tag: "agents",
 			summary: "Return display-safe native authentication plans for supported agents",
 			resps: []respUnit{
@@ -1981,6 +2025,7 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StartAgentAuthResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -1992,6 +2037,7 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StartAgentAuthResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -2800,6 +2846,17 @@ func projectOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/projects/clone/prepare/stream", id: "prepareCloneProjectStream", tag: "projects",
+			summary: "Clone a project without registering it, streaming each git step as a server-sent event",
+			reqBody: projectsvc.CloneInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ClonePrepareStreamEvent{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/projects/clone/cleanup", id: "cleanupPreparedClone", tag: "projects",
 			summary: "Remove an abandoned clone created for project preparation",
 			reqBody: projectsvc.ClonePreparationCleanupInput{},
@@ -3059,6 +3116,18 @@ func sessionOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
+			summary:    "Stream changes to the files in a session's artifact directory",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}/artifact-files", id: "deleteSessionArtifactFile", tag: "sessions",

@@ -12,6 +12,11 @@ for (const [locale, catalog] of Object.entries(appCatalogs)) {
 	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
 }
 import { appShortcutBus } from "./app-shortcut-bus";
+import { resetAgentLoginLifecycle } from "../lib/agent-login-lifecycle";
+
+// Login lifecycle state is module-wide; a retained disposal must not leak into
+// the next test.
+beforeEach(() => resetAgentLoginLifecycle());
 
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
@@ -128,16 +133,27 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
 			getGitHubLogin: async (_repoPath?: string) => "",
-			getCachedGitHubOwners: async () => [],
+			listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 			refreshGitHubOwners: async () => [],
 			checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
@@ -162,6 +178,10 @@ if (typeof window !== "undefined") {
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -190,6 +210,20 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		sessionShareUrls: {
+			remember: async () => undefined,
+			recall: async () => ({}),
+			forget: async () => undefined,
+		},
+		cloudShare: {
+			available: async () => true,
+			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+			publish: async () => ({ status: "cancelled" as const }),
+			cancel: async () => undefined,
+			unpublish: async () => undefined,
+			onProgress: () => () => undefined,
+		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
 			openFolder: async () => undefined,
@@ -202,8 +236,10 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
+			pathAction: async () => undefined,
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },
@@ -223,6 +259,7 @@ if (typeof window !== "undefined") {
 			openArtifacts: async ({ targetId }) => targetId === "terminal"
 				? { id: "terminal", name: "Terminal", kind: "terminal" }
 				: { id: "file-manager", name: "Finder", kind: "file_manager" },
+			openArtifactInBrowser: async () => undefined,
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -388,6 +425,10 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
+			getFirstRunProjectPrompt: async () => "seen",
+			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
 			setEnabled: async () => undefined,
@@ -456,9 +497,12 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
+			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+			cancelBinary: () => undefined,
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

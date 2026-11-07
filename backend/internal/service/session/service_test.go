@@ -3894,6 +3894,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
 		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
+		{"chat permission unsupported", fmt.Errorf("spawn: %w", ports.ErrChatPermissionModeUnsupported), apierr.KindInvalid, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),

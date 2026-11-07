@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { captureFileReference } from "../../../shared/chat-file-reference";
+import { captureFileReference, formatCapturedFileReferences } from "../../../shared/chat-file-reference";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
@@ -26,8 +27,16 @@ const cloudMocks = vi.hoisted(() => ({
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
+// The control plane's base URL and attachment limit, for the tests that attach files.
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
+}));
+vi.mock("../../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({
+		features: cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"],
+		maxAttachmentBytes: cloudSetup.maxAttachmentBytes,
+	}),
 }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
@@ -71,6 +80,35 @@ describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+		cloudSetup.baseUrl = "";
+		cloudSetup.maxAttachmentBytes = undefined;
+	});
+
+	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The composer's agent and model picker reads each agent's list through
+		// this organization's Cloud catalog (AgentSwitchPicker).
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
+	});
+
+	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudSetup.baseUrl = "https://cp.example.com";
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		// No attachments feature: no attach control, paste or drop.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].cloudAttachments).toBeUndefined();
+		cloudSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeTypeOf("function");
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		// A deleted session takes none either.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, isTerminated: true, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
 	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
@@ -144,6 +182,39 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage.mock.calls[1][2].text).toContain("const ttl = 60;");
 	});
 
+	it("sends a message's files as attachment ids when code captures follow them, with no reference for the agent or the transcript", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const attachmentId = "6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11";
+		const capture = captureFileReference({ path: "cache.ts", side: "file", line: 3, endLine: 3, lines: [{ kind: "context", oldNo: 3, newNo: 3, text: "const ttl = 60;" }] }, session.id);
+		const excerpt = { id: "ex-1", order: 1, conversationId: `cloud:${session.id}`, messageId: "m-1", revision: 1, text: "the cache", role: "assistant" as const };
+		// As the composer sends it: the staged files listed under the typed
+		// text, the captures inlined after them, and the request text beside.
+		const requestText = `Is this right?\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: attachmentId, fileName: "notes.txt" })}`;
+		await props.onSend(formatCapturedFileReferences(requestText, [capture]), undefined, "files-capture-1", [excerpt], [capture], requestText);
+		// Files only, with a capture and no typed text.
+		const onlyFiles = `Attached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: attachmentId, fileName: "notes.txt" })}`;
+		await props.onSend(formatCapturedFileReferences(onlyFiles, [capture]), undefined, "files-capture-2", undefined, [capture], onlyFiles);
+		const [[, , first], [, , second]] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first.attachmentIds).toEqual([attachmentId]);
+		expect(first.displayText).toBe("Is this right?");
+		expect(first.text.startsWith("Is this right?\n\nUser-supplied captured code")).toBe(true);
+		expect(first.text).toContain("const ttl = 60;");
+		expect(first.text).toContain("Selected text:\n---\nthe cache");
+		expect(first.content).toHaveLength(2);
+		expect(second.attachmentIds).toEqual([attachmentId]);
+		expect(second).not.toHaveProperty("displayText");
+		expect(second.text.startsWith("User-supplied captured code")).toBe(true);
+		for (const body of [first, second]) {
+			expect(JSON.stringify(body)).not.toContain("ao-cloud-attachment:");
+			expect(JSON.stringify(body)).not.toContain("Attached files");
+		}
+	});
+
 	it("goes as text alone when the control plane refuses its display text", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -181,6 +252,30 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
 	});
 
+	it("shows a message of only files, with its files and no text", () => {
+		const files = [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615, sha256: "0".repeat(64) },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		];
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1", attachments: files }, createdAt: session.updatedAt },
+			// A malformed entry is dropped, not shown.
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "   ", turnId: "turn-2", attachments: [{ id: "bad" }, null] }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message", payload: { text: "And this one", turnId: "turn-3", attachments: [files[1]] }, createdAt: session.updatedAt },
+		]);
+		const messages = snapshot.items.filter((item) => item.kind === "message");
+		expect(messages).toHaveLength(2);
+		expect(messages[0]).toMatchObject({ role: "user", text: "", turnId: "turn-1", cloudAttachments: [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615 },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		] });
+		expect(messages[1]).toMatchObject({ text: "And this one", cloudAttachments: [{ id: "a2", fileName: "spec.pdf" }] });
+		// A message with neither text nor files is still not shown.
+		expect(toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1" }, createdAt: session.updatedAt },
+		]).items.filter((item) => item.kind === "message")).toEqual([]);
+	});
+
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -191,6 +286,27 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+			// A malformed one shows nothing.
+			{ sessionId: session.id, sequence: 2, type: "session.model_unavailable", payload: { harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+		];
+		const items = toSnapshot(session, events).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			kind: "activity", activityKind: "system", status: "completed",
+			summary: "claude-opus-5-5 isn't available to your Claude Code account on Cloud, so this session uses the default model.",
+			detail: { event: "session.model_unavailable" },
+		});
+		expect(items[0]?.turnId).toBeUndefined();
+		// Without a harness in the event, the session's own agent names the account.
+		const fallback = toSnapshot({ ...session, provider: "codex" }, [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "gpt-6.1-sol" }, createdAt: "2026-10-01T00:00:00Z" },
+		]).items[0];
+		expect(fallback).toMatchObject({ summary: "gpt-6.1-sol isn't available to your Codex account on Cloud, so this session uses the default model." });
+	});
+
 	it("shows a project setup outcome as a system row outside any turn", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" }, createdAt: "2026-10-01T00:00:00Z" },
@@ -375,6 +491,36 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("has the account's Cloud model lists read again once the session lists the account's own models", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: true, cliVersion: "2.1.287", models: [
+			{ id: "opus", displayName: "Opus", default: true },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-agent-models", cloudSetup.baseUrl, "user-1", "org-1", "claude-code"] }));
+	});
+
+	it("leaves the Cloud model lists alone when the session's list is the CLI's built-in one", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: false, models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", default: true }] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: expect.arrayContaining(["cloud-agent-models"]) }));
 	});
 
 	it("names a Claude alias by the model the session's own list describes, never this computer's", async () => {

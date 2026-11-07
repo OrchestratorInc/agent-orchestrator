@@ -85,6 +85,11 @@ export function ContextMenuSeparator({
 	return <ContextMenuPrimitive.Separator className={cn(actionMenuSeparatorClass, className)} {...props} />;
 }
 
+/** Trailing key hint on a menu row; same look as DropdownMenuShortcut. */
+export function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
+	return <span className={cn("ml-auto pl-4 text-micro tracking-wide-md text-passive", className)} {...props} />;
+}
+
 export const ContextMenuSub = ContextMenuPrimitive.Sub;
 
 /** A row that opens a side submenu; same row styling as ContextMenuItem. */

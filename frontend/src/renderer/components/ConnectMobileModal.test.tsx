@@ -50,6 +50,7 @@ const { mobileStatus } = vi.hoisted(() => ({
 // This suite exercises the mobile UI; shared desktop/mobile ownership is
 // covered with the real useAwake hook in AwakeControl.test.tsx.
 vi.mock("../hooks/useAwake", () => ({
+	awakeQueryKey: ["awake"],
 	useAwake: () => ({ state: { sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
 	awakeCapability: () => ({ available: true }),
 }));
@@ -1080,6 +1081,8 @@ test("keeps safety details accessible without filling the awake row", async () =
 	expect(tooltip).toHaveTextContent("Uses more battery. Keep your Mac ventilated.");
 	expect(tooltip).toHaveTextContent("Stops below 10% battery or at critical heat.");
 	expect(tooltip).not.toHaveTextContent("mobile access");
+	expect(tooltip).not.toHaveTextContent("Closed-lid wakefulness is disabled for custom or isolated data directories.");
+	expect(screen.getByTestId("mobile-keep-awake")).not.toHaveTextContent("custom or isolated");
 });
 
 test.each([false, true])("shows helper upgrade recovery with lid preference %s", async (lidClosed) => {

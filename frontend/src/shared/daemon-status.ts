@@ -28,4 +28,7 @@ export type DaemonStatus = {
 	code?: DaemonFailureCode;
 	exitCode?: number | null;
 	signal?: string | null;
+	// The daemon also serves [::1] at its port (its probes' ipv6Loopback), so a
+	// *.localhost name, which Chromium resolves to ::1 first, reaches it.
+	ipv6Loopback?: boolean;
 };

@@ -28,6 +28,16 @@
 	mix-blend-mode: normal;
 }
 
+/* Translucent window: no animation at all. The group's own 250 ms animation
+ * keeps the transition (and its frozen snapshot) alive, and the old snapshot
+ * would show its tint through the new one, so it is hidden. */
+html[data-window-translucent="true"]::view-transition-group(root) {
+	animation: none;
+}
+html[data-window-translucent="true"]::view-transition-old(root) {
+	display: none;
+}
+
 /* While data-theme flips, kill per-element color tweens (composer, search,
    switches). Without this they animate for hundreds of ms and read as a
    white box in dark mode / a black strip in light mode. */
@@ -235,6 +245,7 @@
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
+	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -250,6 +261,7 @@
 	--spacing-inspector-min: var(--size-inspector-min);
 	--spacing-textarea-min: var(--size-textarea-min);
 	--spacing-sidebar-project-actions: var(--size-sidebar-project-actions);
+	--spacing-sidebar-project-actions-pinned: var(--size-sidebar-project-actions-pinned);
 	--spacing-row-md: var(--size-row-md);
 	--spacing-empty-offset-y: var(--size-empty-offset-y);
 	--spacing-kv-label: var(--size-kv-label);
@@ -589,6 +601,236 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
+/* Floating top bar (macOS, windowed). The top bar keeps its place in the
+ * surface's layout but sits on the window chrome; the panel's fill and frame
+ * start below it. ::before paints the fill under the content, ::after paints
+ * the frame over it so content never covers the edge, and the mask clips the
+ * content to the frame's rounded corners while leaving the bar's band open. */
+/* The bar takes over the panel's old top inset: it runs from the window's top
+ * edge to the panel's frame, with equal space above and below its controls.
+ * Its center stays on the sidebar header and titlebar controls' line. */
+.center-panel-shell.center-panel-shell--floating-topbar {
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * var(--size-center-panel-inset-mac));
+	--size-toolbar: var(--floating-topbar-height);
+	--spacing-toolbar: var(--floating-topbar-height);
+	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
+	--size-inspector-tabs: var(--floating-topbar-height);
+	--spacing-inspector-tabs: var(--floating-topbar-height);
+	/* Controls sit centered in the band with equal space above and below. */
+	--floating-topbar-gap: var(--space-2);
+	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--floating-topbar-gap));
+	padding-top: 0;
+}
+
+.center-panel-shell--floating-topbar .panel-topbar-controls {
+	top: 1px;
+}
+
+.center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control {
+	font-size: var(--font-size-md);
+}
+
+/* The last tab's trailing gap (and separator) already spaces New terminal from
+ * it like any other tab; the action region starts one gap after it; and the
+ * reserve for the panel's trailing controls drops the surface's 1px edge
+ * padding. */
+.center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
+	padding-inline-start: 0;
+}
+
+.center-panel-shell--floating-topbar .session-topbar-actions {
+	padding-inline-start: var(--gap-topbar-control);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-inspector__trailing,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control) - 1px);
+}
+
+.center-panel-shell--floating-topbar .session-inspector__tab-button {
+	width: var(--size-topbar-control);
+	height: var(--size-topbar-control);
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface {
+	--floating-panel-top: calc(var(--size-toolbar) - 1px);
+	--floating-panel-radius: var(--radius-center-panel);
+	position: relative;
+	isolation: isolate;
+	/* Width only: the `border` shorthand would reset the color to currentcolor,
+	 * and the next page's border would fade in from bright text color. */
+	border-width: 0;
+	border-radius: 0;
+	/* The frame's faint top line reads as part of the gap below the controls,
+	 * so the bar's contents sit 1px low to look evenly spaced. */
+	padding: 1px 1px 1px;
+	background: transparent;
+	-webkit-mask:
+		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
+		linear-gradient(#000 0 0) 0 calc(var(--floating-panel-top) + var(--floating-panel-radius)) / 100% calc(100% - var(--floating-panel-top) - 2 * var(--floating-panel-radius)) no-repeat,
+		linear-gradient(#000 0 0) var(--floating-panel-radius) var(--floating-panel-top) / calc(100% - 2 * var(--floating-panel-radius)) calc(100% - var(--floating-panel-top)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 var(--floating-panel-top) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% var(--floating-panel-top) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat;
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::before,
+.center-panel-shell--floating-topbar > .center-panel-surface::after {
+	content: "";
+	position: absolute;
+	inset: var(--floating-panel-top) 0 0;
+	border-radius: var(--floating-panel-radius);
+	pointer-events: none;
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::before {
+	z-index: -1;
+	background-color: var(--color-bg-primary);
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::after {
+	z-index: var(--z-index-chrome);
+	border: 1px solid var(--color-border-strong);
+}
+
+.sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
+}
+
+
+/* The inspector rail spans the bar's band too: its fill starts at the panel's
+ * top edge, so the band above stays window chrome. Its divider line is drawn
+ * by the session column (below). */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] {
+	border-left-color: transparent;
+	background: linear-gradient(var(--color-bg-primary), var(--color-bg-primary)) 0 var(--floating-panel-top) / 100% 100% no-repeat border-box;
+}
+
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector {
+	background: transparent;
+}
+
+/* The rail's line is drawn by the session column, one pixel left of the rail,
+ * so the rail's own edge pixel is empty. The resize handle's hover line (which
+ * the rail clips to its own box) steps onto that pixel, so it continues the
+ * divider instead of floating 1px off it. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] [data-resize-line] {
+	transform: translateX(-1px);
+}
+
+/* Page roots (board, session, automations, …) fill the whole surface, band
+ * included; the panel fill comes from the surface's ::before instead. */
+.center-panel-shell--floating-topbar > .center-panel-surface > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > * > .bg-background {
+	background: transparent;
+}
+
+/* Floating session tabs. Resting tabs sit flat on the window chrome with
+ * short separators between them. Hover is a rounded pill around the label;
+ * the selected tab is the same pill, filled more strongly and outlined with
+ * the panel frame's line, so it reads as current at a glance (translucent
+ * windows included, where fills are faint). Every tab, the last included,
+ * ends in the same gap with its separator centered in it, so tabs and New
+ * terminal are evenly spaced and the separators never move or vanish. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+	--floating-tab-gap: var(--space-1);
+	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
+	font-size: var(--font-size-md);
+	/* A stacking context so the pill can sit behind the label. */
+	z-index: 0;
+	height: var(--size-topbar-control);
+	align-self: center;
+	margin-inline-end: calc(2 * var(--floating-tab-gap) + 1px);
+	padding-inline: 0;
+	border-right: 0;
+	border-radius: 0;
+	/* The pill below replaces the frame's own hover and selected fills. */
+	background: none;
+}
+
+/* The pill. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 0;
+	border: 1px solid transparent;
+	border-radius: var(--radius-topbar-control);
+	pointer-events: none;
+}
+
+/* The separator, centered in the trailing gap. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: calc(-1 * var(--floating-tab-gap) - 1px);
+	width: 1px;
+	height: var(--space-4);
+	translate: 0 -50%;
+	background-color: var(--floating-tab-separator);
+	pointer-events: none;
+}
+
+/* With nothing after the strip (orchestrators have no New terminal), the last
+ * tab ends at its pill. It is the reorder group's last tab, or the session tab
+ * when that group is empty. */
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame] {
+	margin-inline-end: 0;
+}
+
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible)::before {
+	background-color: var(--color-interactive-hover);
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	border-color: color-mix(in oklch, var(--color-foreground) 5%, transparent);
+	background-color: color-mix(in oklch, var(--color-foreground) 9%, transparent);
+}
+
+/* Light: the selected tab matches the center panel instead of a gray wash
+ * over the chrome. --solid-bg-primary exists only in a translucent window. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	border-color: color-mix(in oklch, var(--color-foreground) 12%, transparent);
+	background-color: var(--solid-bg-primary, var(--color-bg-primary));
+}
+
+/* Muted gray icons wash out on the light chrome; bar icons use the full
+ * foreground there. Disabled controls keep their own reduced opacity. */
+html[data-theme="light"] .center-panel-shell--floating-topbar :is(.topbar-control, .session-inspector__tab-button) {
+	color: var(--color-foreground);
+}
+
+.center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
+	display: none;
+}
+
+/* Draggable tab wrappers are opaque so a dragged tab hides the tabs it
+ * crosses; on the floating bar that fill is the chrome, and only while dragging. */
+.center-panel-shell--floating-topbar [data-terminal-tab-key] {
+	background: transparent;
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-key][data-dragging] {
+	background: var(--color-bg-sidebar);
+}
+
+/* The bars themselves carry no fill or divider: the frame's top edge is the divider. */
+.center-panel-shell--floating-topbar .center-panel-titlebar,
+.center-panel-shell--floating-topbar .session-topbar-surface,
+.center-panel-shell--floating-topbar .session-inspector__topbar {
+	border-bottom-color: transparent;
+	background: transparent;
+}
+
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
  * there, drop the outer border and radius (the surface provides both) and keep
  * only a bottom divider separating the tabs from the terminal below.
@@ -607,45 +849,52 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-radius: 0;
 }
 
-/* A persistent edge fade signals that the tab strip can scroll horizontally. */
-.session-tab-scroll-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: var(--space-8);
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-primary) 82%);
+/* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
+.center-panel-surface .new-chat-topbar .session-topbar-surface {
+	border-bottom: none;
 }
 
-.session-tab-scroll-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
+/* A page with no top bar on macOS: the panel claims the band above it. The
+ * new chat page's placeholder bar goes, and its empty composer needs no
+ * offset to look centered in the window. */
+.center-panel-shell--bare {
+	--size-inspector-tabs: 0px;
+	--spacing-inspector-tabs: 0px;
+}
+
+.center-panel-shell--bare .new-chat-topbar {
+	display: none;
+}
+
+/* Its drag region went with it, so the page's invisible drag strip takes over. */
+.bare-topbar-drag-strip {
+	display: none;
+}
+
+.center-panel-shell--bare .bare-topbar-drag-strip {
+	display: block;
+}
+
+/* Arriving from a floating page the surface is square; the corners snap to
+ * the frame instead of morphing while its edge is visible. */
+.center-panel-shell--bare > .center-panel-surface {
+	transition: border-color 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* The tab bar's header is 1px taller than the band; unfilled, it leaves the
+ * panel's top row to the panel. */
+.center-panel-shell--floating-topbar .workspace-topbar-container > header {
+	background: transparent;
+}
+
+/* The floating bar has no divider: the panel's own edge separates it. */
+.center-panel-shell--floating-topbar .center-panel-surface .session-topbar-surface {
+	border-bottom-color: transparent;
 }
 
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
 .sidebar-sections-container {
 	container-type: size;
-}
-
-/* Persistent edge fades show when a sidebar section has more content to scroll. */
-.sidebar-section-scroll-fade {
-	position: absolute;
-	inset-inline: 0;
-	z-index: 10;
-	height: var(--space-4);
-	pointer-events: none;
-}
-
-.sidebar-section-scroll-fade--top {
-	top: 0;
-	background: linear-gradient(180deg, var(--color-bg-sidebar) 0%, transparent 100%);
-}
-
-.sidebar-section-scroll-fade--bottom {
-	bottom: 0;
-	background: linear-gradient(0deg, var(--color-bg-sidebar) 0%, transparent 100%);
 }
 
 /* Session actions are portaled into the center pane. Make their responsive
@@ -1178,17 +1427,6 @@ button.settings-row-bar {
 	}
 }
 
-.model-menu-overflow-cue {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
-	height: var(--space-8);
-	pointer-events: none;
-	background: linear-gradient(to bottom, transparent, var(--color-bg-settings-menu));
-	transition: opacity var(--duration-fast) ease-out;
-}
-
 /* Search field inside a dropdown menu. settings-inline-input cannot be reused
    here: it is a settings-ROW control, so it caps at 42% width and right-aligns
    its text, which reads as a stray half-width box once it sits in a menu. */
@@ -1247,6 +1485,8 @@ button.settings-row-bar {
 	color: var(--color-text-settings-muted);
 }
 
+/* Footer actions for raw buttons in packages/product-ui (desktop uses Button
+   variant="footer" / "footer-primary"). */
 @utility settings-footer-button {
 	display: inline-flex;
 	height: var(--size-settings-action-height);
@@ -1351,35 +1591,6 @@ button.settings-row-bar {
 	font-weight: var(--font-weight-semibold);
 	line-height: 1.5rem;
 	color: var(--color-text-settings-title);
-}
-
-@utility settings-close-button {
-	display: grid;
-	width: calc(var(--spacing) * 8);
-	height: calc(var(--spacing) * 8);
-	place-items: center;
-	border-radius: var(--radius-md);
-	color: var(--color-text-settings-muted);
-	transition-property: color, background-color;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		background-color: var(--color-bg-settings-row-hover);
-		color: var(--color-text-settings-title);
-	}
-
-	&:focus-visible {
-		outline: none;
-		box-shadow: none;
-	}
-}
-
-/* Positioning only — compose with `settings-close-button` at the call site. */
-@utility settings-dialog-close-button {
-	position: absolute;
-	top: var(--space-3);
-	right: var(--space-3);
-	z-index: var(--z-chrome);
 }
 
 @utility import-title {
@@ -2010,46 +2221,56 @@ textarea,
 	}
 }
 
-/* Chat scroll windows (the plan): content fades out at
-   whichever edge still has more to scroll to, so a long list reads as continuing
-   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
-   from the scroll position; the lengths are registered so the fade eases in and out
-   instead of snapping. */
-@property --edge-fade-top {
+/* Scroll edge fades (hooks/useEdgeFade.ts): content fades out at whichever
+   edge still has more to scroll to, so a list reads as continuing rather than
+   cut off. The fade is a mask on the scroller itself, never a gradient painted
+   in a surface color, so it holds over the translucent window tint and in every
+   theme. The hook sets the data attributes from the scroll position; the lengths
+   are registered so a fade eases in and out instead of snapping. Masks do not
+   affect hit testing, so faded content stays clickable. */
+@property --edge-fade-start {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-@property --edge-fade-bottom {
+@property --edge-fade-end {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-.edge-fade-viewport {
+/* Sizes are read with fallbacks rather than declared here: this rule is
+   unlayered, so a declaration would beat a per-site Tailwind override
+   (`[--edge-fade-size:...]` lives in the utilities layer). */
+.edge-fade {
+	--edge-fade-direction: to bottom;
 	mask-image: linear-gradient(
-		to bottom,
+		var(--edge-fade-direction),
 		transparent,
-		#000 var(--edge-fade-top),
-		#000 calc(100% - var(--edge-fade-bottom)),
+		#000 var(--edge-fade-start),
+		#000 calc(100% - var(--edge-fade-end)),
 		transparent
 	);
 	transition:
-		--edge-fade-top 150ms ease-out,
-		--edge-fade-bottom 150ms ease-out;
+		--edge-fade-start 150ms ease-out,
+		--edge-fade-end 150ms ease-out;
 }
 
-.edge-fade-viewport[data-fade-top] {
-	--edge-fade-top: 24px;
+.edge-fade-x {
+	--edge-fade-direction: to right;
 }
 
-.edge-fade-viewport[data-fade-bottom] {
-	--edge-fade-bottom: 24px;
+.edge-fade[data-fade-start] {
+	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size, 24px));
+}
+
+.edge-fade[data-fade-end] {
+	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.edge-fade-viewport {
+	.edge-fade {
 		transition: none;
 	}
 }
@@ -2091,6 +2312,29 @@ textarea,
 	}
 	50% {
 		opacity: 0.35;
+	}
+}
+
+/* A sidebar marker (needs you / ready) appearing on a row that was already on
+   screen: one short pop, then still. Transform and opacity only. */
+@keyframes session-marker-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.6);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.session-marker-pop {
+	animation: session-marker-pop 200ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-marker-pop {
+		animation: none;
 	}
 }
 
@@ -2392,16 +2636,10 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 /* Keep keyboard focus visible without adding a ring to the sidebar chrome.
    Opt out elements that own their own fill (icon actions, brand, folder toggle,
    NavRowHighlight hosts) so each new control does not need another !important. */
-.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not([data-sidebar-brand]):not([data-project-folder]) {
+.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not(.group\/button):not([data-sidebar-brand]):not([data-project-folder]) {
 	background-color: var(--color-interactive-hover) !important;
 	outline: none !important;
 	box-shadow: none !important;
-}
-
-/* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   section "+") share the instant icon-button fill on hover and focus-visible. */
-.sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: var(--color-interactive-hover) !important;
 }
 
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
@@ -2575,43 +2813,6 @@ html.sidebar-reordering * {
 	border-color: var(--color-border) !important;
 }
 
-/* Keep every chat control tactile, including the small native buttons embedded
-   in message rows and activity summaries. The shared Button primitive owns its
-   own transition, but this makes the same interaction contract hold at the
-   thinner timeline boundaries too. */
-.cursor-chat-surface button:not(:disabled) {
-	transition-property: background-color, border-color, color, box-shadow, transform, opacity;
-	transition-duration: 100ms;
-	transition-timing-function: ease-out;
-}
-
-.cursor-chat-surface button:not(:disabled):active {
-	transform: scale(0.96);
-}
-
-/* Menu triggers anchor their menu: scaling one on press would move the open menu,
-   which is positioned from the trigger's box. They get hover and open states only. */
-.cursor-chat-surface .settings-option-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Timeline summaries are disclosure controls, not raised buttons. Keeping their
-   footprint fixed prevents the label from shifting when the pointer lands. */
-.cursor-chat-surface .activity-summary-button:not(:disabled):active {
-	transform: none;
-}
-
-/* Worked is a disclosure row, not a tactile button: keep its geometry and
-   scale stable while the accordion opens. */
-.cursor-chat-surface .chat-worked-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Welcome sample prompt chips hold still when pressed. */
-.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
-	transform: none;
-}
-
 .activity-run-toggle {
 	color: var(--color-text-muted);
 }
@@ -2674,16 +2875,6 @@ html.sidebar-reordering * {
 	.chat-worked-accordion-content[data-state="open"],
 	.chat-worked-accordion-content[data-state="closed"] {
 		animation: none;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.cursor-chat-surface button:not(:disabled) {
-		transition: none;
-	}
-
-	.cursor-chat-surface button:not(:disabled):active {
-		transform: none;
 	}
 }
 
@@ -2756,16 +2947,6 @@ html.sidebar-reordering * {
 	position: relative;
 	z-index: 1;
 	background: transparent;
-}
-
-.chat-composer-fade {
-	position: absolute;
-	right: 0;
-	bottom: 100%;
-	left: 0;
-	height: 10px;
-	background: linear-gradient(to top, var(--color-bg-primary), transparent);
-	pointer-events: none;
 }
 
 .cursor-chat-composer textarea {
@@ -2983,10 +3164,6 @@ html.sidebar-reordering * {
 	flex: none;
 }
 
-.cursor-chat-surface .queue-dock-toggle:not(:disabled):active {
-	transform: none;
-}
-
 .cursor-chat-surface .queue-dock-toggle:hover .queue-dock-label {
 	color: var(--color-foreground);
 }
@@ -3149,6 +3326,41 @@ html.sidebar-reordering * {
 	}
 }
 
+/* A long user message folded to about ten lines (CollapsibleHumanBody). The text
+   fades out at the fold so it reads as continuing; the fade length is registered
+   so it eases with the height instead of snapping. A mask, not an overlay, so the
+   fade works on every bubble fill, including a queued one's transparent body. */
+@property --chat-human-fade {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.chat-human-fold[data-folded] {
+	--chat-human-fade: 40px;
+}
+
+/* Open and settled, the message carries no mask or clip at all. Clip, not hidden:
+   a hidden box still scrolls when focus or find-in-page reaches the folded text,
+   which would leave the fold showing a slice from the middle. */
+.chat-human-fold[data-folded],
+.chat-human-fold[data-animating] {
+	overflow: clip;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - var(--chat-human-fade)), transparent);
+}
+
+.chat-human-fold[data-animating] {
+	transition:
+		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
+		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
+   on the toggle below it and a reader scrolled into the message keeps their place. */
+.chat-human-fold[data-collapsing] {
+	overflow-anchor: none;
+}
+
 .cursor-chat-origin-message,
 .cursor-chat-activity-panel {
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
@@ -3211,9 +3423,27 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	/* `--color-bg-secondary` equals the canvas in light themes; with no border
-	   the composer needs the tertiary step to separate (see human message). */
-	--composer-bg: var(--color-bg-tertiary);
+	/* Light composer is the popover surface (white) held up by a hairline and a
+	   soft shadow, not a gray fill: the canvas is near-white, so a darker well
+	   reads as disabled. Sent messages still use the tertiary fill below. */
+	--composer-bg: var(--color-bg-elevated);
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+		0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+		0 8px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+/* The tray hung under the composer is a near-white surface with a hairline, not
+   a gray well: the composer's shadow falls on it, and a gray tint turns dirty. */
+:root[data-theme="light"] .chat-composer-tray {
+	background: var(--color-bg-elevated);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* With a tray under it, keep only the hairline so the drop shadow does not
+   gray the tray's top edge. */
+:root[data-theme="light"] [data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 /* Light needs the tertiary fill to lift a sent message off the canvas; like
@@ -3290,14 +3520,14 @@ html.sidebar-reordering * {
 
 .chat-scroll-marker {
 	position: absolute;
-	right: 0;
+	right: 3px;
 	top: 50%;
 	width: 7px;
 	height: 2px;
 	transform: translateY(-50%);
 	border-radius: 999px;
-	background: color-mix(in srgb, var(--color-text-muted) 54%, transparent);
-	opacity: 0.76;
+	background: color-mix(in srgb, var(--color-text-muted) 40%, transparent);
+	opacity: 0.28;
 	transition:
 		width 180ms cubic-bezier(0.16, 1, 0.3, 1),
 		background-color 140ms ease,
@@ -3313,7 +3543,8 @@ html.sidebar-reordering * {
 }
 
 .chat-scroll-marker-visible {
-	background: color-mix(in srgb, var(--color-text-muted) 82%, transparent);
+	width: 13px;
+	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
 }
 
@@ -3363,6 +3594,10 @@ html.sidebar-reordering * {
 		animation: none;
 	}
 
+	.chat-human-fold[data-animating] {
+		transition: none;
+	}
+
 	.chat-welcome-leaving {
 		animation: none;
 	}
@@ -3405,6 +3640,17 @@ html.sidebar-reordering * {
 	padding-right: var(--gap-topbar-control);
 }
 
+/* Opening or closing the rail swaps that end padding (and the divider below).
+ * Instant, the action buttons would jump by the trailing controls' width before
+ * the column even starts to resize, so both ride the rail's own spring. Only a
+ * toggle inside the current session animates (data-motion="animated" on the
+ * rail's gap), so switching sessions and drag-resizing stay immediate. Only the
+ * simplified bar renders the divider, so the previous bar is left as it was. */
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .session-topbar-actions:has(.topbar-divider):not([data-fullscreen]) {
+	transition: padding-right var(--session-inspector-motion-duration, 300ms)
+		var(--session-inspector-motion-easing, ease-out);
+}
+
 .topbar-control > [data-nav-row-highlight],
 .topbar-control-group > [data-nav-row-highlight] {
 	z-index: -1;
@@ -3434,25 +3680,56 @@ html.sidebar-reordering * {
 	font-weight: var(--font-weight-semibold);
 }
 
-
-.workspace-topbar-actions .topbar-control:active:not(:disabled) {
-	transform: scale(0.96);
+/* Ends the session's own actions where the inspector rail begins; shown only
+ * while the rail is open. Collapsed it takes no room: the negative start margin
+ * cancels the row's flex gap, so it can grow in instead of popping in. */
+.workspace-topbar-actions .topbar-divider {
+	width: 0;
+	height: var(--space-5);
+	flex: 0 0 auto;
+	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
+	opacity: 0;
+	background: color-mix(in srgb, var(--color-border) 50%, transparent);
 }
 
-/* A control that anchors a popover must not transform while pressed. The menu is
-   positioned from the trigger's rect, so scaling the trigger drags the open menu
-   along with it. Press feedback moves to the glyph, which the menu does not
-   measure. */
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) {
-	transform: none;
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
+	transition:
+		width var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		margin-inline var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		opacity var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out);
 }
 
-.workspace-topbar-actions .topbar-control--static-press > svg {
-	transition: transform var(--duration-fast) ease-out;
+/* With the inspector open, the session column draws the line between it and
+ * the rail along its own last pixel column, and the top bar's divider steps
+ * past the region's end padding onto that same column, so the two read as one
+ * line. (The rail can't draw it: the column clips the bar's divider at its
+ * edge, one pixel short of the rail.) */
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child::after {
+	content: "";
+	position: absolute;
+	top: var(--floating-panel-top);
+	right: 0;
+	bottom: 0;
+	z-index: var(--z-index-chrome);
+	width: 1px;
+	background: var(--color-border-strong);
+	pointer-events: none;
 }
 
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) > svg {
-	transform: scale(0.96);
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions .topbar-divider {
+	margin-inline: 0 calc(-1 * var(--gap-topbar-control));
+}
+
+/* The rail's (transparent) 1px left border sits between the divider and the
+ * inspector tabs, so their start padding gives that pixel back. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar:not(.session-inspector__topbar--browser) {
+	padding-left: calc(var(--gap-topbar-control) - 1px);
+}
+
+.session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
+	width: 1px;
+	margin-inline: var(--space-1);
+	opacity: 1;
 }
 
 .workspace-topbar-actions .topbar-control--labeled {
@@ -5411,13 +5688,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	color: var(--fg);
 }
 
-.browser-panel__tab-actions button:not(:disabled):active,
-.browser-panel__toolbar button:not(:disabled):active,
-.browser-panel__address-bar button:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
 .browser-panel__tab-region {
 	position: relative;
 	display: flex;
@@ -5439,22 +5709,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 
 .browser-panel__tab-strip::-webkit-scrollbar {
 	display: none;
-}
-
-.browser-panel__tab-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: 24px;
-	background: linear-gradient(90deg, transparent 0%, var(--bg) 82%);
-}
-
-.browser-panel__tab-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
 }
 
 .browser-panel__tab {
@@ -5533,6 +5787,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 	white-space: nowrap;
 }
 
+/* Match the title line box to the icon so flex centering aligns both. */
+.side-chat__tab-row .browser-panel__tab-title {
+	line-height: 16px;
+}
+
 .browser-panel__tab-close {
 	position: relative;
 	top: 1px;
@@ -5555,11 +5814,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab-close:not(:disabled):hover {
 	color: var(--fg);
 	background: var(--surface-hover);
-}
-
-.browser-panel__tab-close:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__tab-close:disabled {
@@ -5605,11 +5859,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab-new:focus-visible {
 	outline: 2px solid var(--color-accent);
 	outline-offset: -2px;
-}
-
-.browser-panel__tab-new:active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__url-wrap {
@@ -5899,13 +6148,6 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.browser-panel__tab-close {
 		transition: none;
 	}
-
-	.browser-panel__toolbar button:not(:disabled):hover,
-	.browser-panel__toolbar button:not(:disabled):active,
-	.browser-panel__tab-new:active,
-	.browser-panel__tab-close:not(:disabled):active {
-		transform: none;
-	}
 }
 
 /* Notification rows: subtle entrance so new/unread items slide in when the
@@ -6074,6 +6316,9 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
 html:root[data-window-translucent="true"] {
+	/* The one shell tint over the vibrancy; the shell plate and the startup
+	 * screen both paint it so the loader hands off to the app without a shift. */
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
 	--solid-bg-primary: var(--color-bg-primary);
 	--solid-bg-secondary: var(--color-bg-secondary);
 	--solid-bg-tertiary: var(--color-bg-tertiary);
@@ -6082,6 +6327,14 @@ html:root[data-window-translucent="true"] {
 	--solid-secondary: var(--secondary);
 	--solid-accent: var(--accent);
 	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+/* Light follows native light apps: a frosted sidebar over a solid content
+ * panel (below). The light material itself is a mid gray, so the sidebar
+ * tint is pushed toward white to keep the chrome bright, at 72% so the
+ * material still shows through. */
+html:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
 }
 
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
@@ -6123,6 +6376,27 @@ html[data-window-translucent="true"] :is(
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Light: the center panel keeps the solid surfaces, so content reads as it does
+ * in an opaque window. It clears over a live browser page exactly as the
+ * opaque panel does (the native browser rules above). Dark keeps the clear
+ * single-tint panel. */
+html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
 }
 
 /* A Cloud session's startup and interface-switch screens cover the session
@@ -6170,13 +6444,13 @@ html[data-window-translucent="true"] .app-shell-root::before {
 	inset: 0;
 	z-index: -1;
 	pointer-events: none;
-	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+	background-color: var(--ao-shell-tint);
 }
 
-/* The startup screen covers the window above (or before) the shell. It has
- * only the mascot to show, so it skips the tint and shows the bare blur. */
+/* The startup screen covers the window above (or before) the shell. It paints
+ * the same tint as the shell plate, so the loader matches the loaded app. */
 html[data-window-translucent="true"] .ao-startup-screen {
-	background-color: transparent;
+	background-color: var(--ao-shell-tint);
 }
 
 /* A loader inside the running shell (remote host loading, missing
@@ -6191,8 +6465,19 @@ html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
 }
 
 /* The live page is a native view below the shell. Cut the tint out over its
- * rect (published by useBrowserView) so the page is not tinted. */
+ * rect (published by useBrowserView on .app-shell-root) so the page is not
+ * tinted. The rect changes every frame while the inspector slides, so the
+ * properties do not inherit: only this pseudo-element restyles, not the app. */
+@property --browser-hole-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-y { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-w { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-h { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
 html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	--browser-hole-x: inherit;
+	--browser-hole-y: inherit;
+	--browser-hole-w: inherit;
+	--browser-hole-h: inherit;
 	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
 	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
 	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
@@ -6235,4 +6520,220 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 @keyframes build-info-twinkle {
 	0%, 100% { opacity: 0.15; }
 	50% { opacity: 1; }
+}
+
+/* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to
+ * the same surface as the sidebar, so mix in some foreground and add a hairline
+ * + shadow. */
+:root:not([data-theme="light"]) [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
+		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* In light, darkening reads as dirty gray. Use the menu surface and its faint
+ * edge instead; the hover card wrapper already adds the popover shadow. */
+:root[data-theme="light"] [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: var(--color-bg-elevated) !important;
+	box-shadow: 0 0 0 1px var(--color-border-overlay);
+}
+
+/* Keep the session row lit while its hover preview card is open (pointer on the card). */
+.group\/nav-row[data-preview-open] [data-nav-row-highlight-idle] {
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+.group\/nav-row[data-preview-open] {
+	color: var(--color-foreground);
+}
+
+/* ── Split panes: tab drag ghost, drop preview, divider ──────────────────── */
+/* Positioned by lib/pane-drag.ts: the ghost moves by transform only, the
+ * preview box moves only when the zone under the pointer changes. */
+body.is-pane-dragging {
+	cursor: grabbing;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Embedded documents would swallow the pointer stream mid-drag. */
+body.is-pane-dragging iframe,
+body.is-pane-dragging webview {
+	pointer-events: none;
+}
+
+[data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source][data-terminal-tab-frame] {
+	opacity: 0.4;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: calc(var(--z-overlay) + 2);
+	display: flex;
+	overflow: hidden;
+	pointer-events: none;
+	/* Exactly the tab's box: square like the tab, no ring or scale that would
+	   read larger. Only a soft shadow lifts it off the page. */
+	background: var(--color-bg-elevated);
+	box-shadow: var(--shadow-popover);
+	opacity: 0;
+	will-change: transform;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost > [data-terminal-tab-frame] {
+	flex: 1;
+	min-width: 0;
+	max-width: none;
+}
+
+/* On the floating top bar a tab is a pill: round the ghost to match and
+   drop the trailing gap and separator, which sit outside the measured box. */
+.pane-drag-ghost.center-panel-shell--floating-topbar {
+	border-radius: var(--radius-topbar-control);
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+	margin-inline-end: 0;
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+.pane-drag-ghost[data-lifted] {
+	opacity: 0.96;
+}
+
+.pane-drag-ghost[data-leaving] {
+	opacity: 0;
+	transition-timing-function: ease-in;
+}
+
+.pane-drop-preview {
+	position: fixed;
+	z-index: calc(var(--z-overlay) + 1);
+	pointer-events: none;
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--primary) 7%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	opacity: 0;
+	contain: strict;
+	transition:
+		opacity var(--duration-fast) ease-out,
+		left 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		top 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		height 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pane-drop-preview[data-visible] {
+	opacity: 1;
+}
+
+.pane-drop-preview[data-instant] {
+	transition: none;
+}
+
+/* Unfocused panes of a split rest under a light veil of the background, so
+ * the focused one stands out in either theme. */
+.pane-split-dim {
+	z-index: 5;
+	pointer-events: none;
+	background: color-mix(in oklch, var(--background) 45%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-dim[data-dimmed] {
+	opacity: 1;
+}
+
+/* Divider between the panes: a hairline, with the shared hover-only grip line. */
+.pane-split-divider {
+	position: absolute;
+	z-index: 6;
+	touch-action: none;
+}
+
+.pane-split-divider[data-orientation="vertical"] {
+	top: 0;
+	bottom: 0;
+	width: 9px;
+	margin-left: -4px;
+	cursor: col-resize;
+}
+
+.pane-split-divider[data-orientation="horizontal"] {
+	left: 0;
+	right: 0;
+	height: 9px;
+	margin-top: -4px;
+	cursor: row-resize;
+}
+
+.pane-split-divider::before,
+.pane-split-divider::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The resting hairline. */
+.pane-split-divider[data-orientation="vertical"]::before {
+	top: 0;
+	bottom: 0;
+	left: 4px;
+	width: 1px;
+	background: var(--color-border);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::before {
+	left: 0;
+	right: 0;
+	top: 4px;
+	height: 1px;
+	background: var(--color-border);
+}
+
+/* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
+.pane-split-divider::after {
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-divider[data-orientation="vertical"]::after {
+	top: 0;
+	bottom: 0;
+	left: 3.5px;
+	width: 2px;
+	background: linear-gradient(to bottom, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::after {
+	left: 0;
+	right: 0;
+	top: 3.5px;
+	height: 2px;
+	background: linear-gradient(to right, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider:hover::after,
+.pane-split-divider:focus-visible::after {
+	opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pane-drag-ghost,
+	.pane-drop-preview,
+	.pane-split-dim,
+	.pane-split-divider::after {
+		transition: none;
+	}
 }

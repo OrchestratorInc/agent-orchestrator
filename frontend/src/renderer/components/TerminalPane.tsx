@@ -39,7 +39,10 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
+import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
@@ -57,7 +60,9 @@ export function preloadXtermTerminal(): void {
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { captureRendererException } from "../lib/telemetry";
 
 type TerminalPaneProps = {
 	session?: WorkspaceSession;
@@ -117,11 +122,6 @@ type CachedTerminalEntry = TerminalCacheDescriptor & {
 function isUnlisted(entry: CachedTerminalEntry, listed: Set<string> | null): boolean {
 	return Boolean(entry.sessionId) && listed !== null && !listed.has(entry.sessionId ?? "");
 }
-
-type ActiveTerminalEntry = {
-	key: string;
-	slot: HTMLDivElement;
-};
 
 type TerminalCacheController = {
 	activate: (descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => void;
@@ -346,7 +346,10 @@ export function TerminalCacheProvider({
 	const workspaceQuery = useWorkspaceQuery();
 	const shellTerminalsQuery = useShellTerminals();
 	const entriesRef = useRef(new Map<string, CachedTerminalEntry>());
-	const activeRef = useRef<ActiveTerminalEntry | null>(null);
+	// Every terminal on screen, keyed by cache key, with the pane slot showing
+	// it. A split center shows two at once; moving a terminal between panes
+	// only re-parents its container, so xterm and its attachment survive.
+	const activeRef = useRef(new Map<string, HTMLDivElement>());
 	const parkingRef = useRef<HTMLDivElement | null>(null);
 	// The sessions the last workspace snapshot listed (null before one
 	// arrived). A terminal kept on screen while its session was not listed is
@@ -441,11 +444,10 @@ export function TerminalCacheProvider({
 		(cacheKey: string) => {
 			const entry = entriesRef.current.get(cacheKey);
 			if (!entry) return;
-			const active = activeRef.current;
-			if (active?.key === cacheKey) {
+			if (activeRef.current.has(cacheKey)) {
 				blurTerminal(entry.container);
 				setTerminalPhase(entry, "parked");
-				activeRef.current = null;
+				activeRef.current.delete(cacheKey);
 			}
 			entriesRef.current.delete(cacheKey);
 			entry.container.remove();
@@ -463,7 +465,7 @@ export function TerminalCacheProvider({
 		(cacheKey: string) => {
 			queueMicrotask(() => {
 				const entry = entriesRef.current.get(cacheKey);
-				if (!entry || activeRef.current?.key === cacheKey) return;
+				if (!entry || activeRef.current.has(cacheKey)) return;
 				if (isUnlisted(entry, listedSessionsRef.current)) removeEntry(cacheKey);
 			});
 		},
@@ -476,17 +478,18 @@ export function TerminalCacheProvider({
 			if (!parking) return;
 			const cachedProps = { ...props, createMux: resolveCreateMux(props.session, props.terminalTarget) };
 
-			const previous = activeRef.current;
-			if (previous && previous.key !== descriptor.cacheKey) {
-				const previousEntry = entriesRef.current.get(previous.key);
-				if (previousEntry) {
-					parkTerminal(previousEntry, parking);
-					if (previousEntry.discardOnDeactivate) {
-						entriesRef.current.delete(previous.key);
-						previousEntry.container.remove();
-					} else {
-						disposeIfUnlistedOnceParked(previous.key);
-					}
+			// Park whatever this slot showed before; terminals in other slots stay.
+			for (const [previousKey, previousSlot] of [...activeRef.current]) {
+				if (previousSlot !== slot || previousKey === descriptor.cacheKey) continue;
+				activeRef.current.delete(previousKey);
+				const previousEntry = entriesRef.current.get(previousKey);
+				if (!previousEntry) continue;
+				parkTerminal(previousEntry, parking);
+				if (previousEntry.discardOnDeactivate) {
+					entriesRef.current.delete(previousKey);
+					previousEntry.container.remove();
+				} else {
+					disposeIfUnlistedOnceParked(previousKey);
 				}
 			}
 
@@ -495,7 +498,7 @@ export function TerminalCacheProvider({
 			// old generation, even if an opaque handle is later reused elsewhere.
 			for (const entry of entriesRef.current.values()) {
 				if (entry.ownerKey === descriptor.ownerKey && entry.cacheKey !== descriptor.cacheKey) {
-					if (activeRef.current?.key === entry.cacheKey) parkTerminal(entry, parking);
+					if (activeRef.current.delete(entry.cacheKey)) parkTerminal(entry, parking);
 					entriesRef.current.delete(entry.cacheKey);
 					entry.container.remove();
 				}
@@ -522,8 +525,10 @@ export function TerminalCacheProvider({
 			} else {
 				entry.props = cachedProps;
 			}
+			// Showing an entry another slot holds moves it here; that slot's later
+			// deactivate no longer matches and leaves it alone.
 			showTerminal(entry, slot);
-			activeRef.current = { key: entry.cacheKey, slot };
+			activeRef.current.set(entry.cacheKey, slot);
 			rerender();
 		},
 		[disposeIfUnlistedOnceParked, muxPool, rerender],
@@ -531,11 +536,10 @@ export function TerminalCacheProvider({
 
 	const deactivate = useCallback(
 		(cacheKey: string, slot: HTMLDivElement) => {
-			const active = activeRef.current;
-			if (active?.key !== cacheKey || active.slot !== slot) return;
+			if (activeRef.current.get(cacheKey) !== slot) return;
 			const entry = entriesRef.current.get(cacheKey);
 			const parking = parkingRef.current;
-			activeRef.current = null;
+			activeRef.current.delete(cacheKey);
 			if (!entry) return;
 			if (entry.discardOnDeactivate || !parking) {
 				entriesRef.current.delete(cacheKey);
@@ -565,7 +569,7 @@ export function TerminalCacheProvider({
 		(cacheKey: string, _message: string) => {
 			const entry = entriesRef.current.get(cacheKey);
 			if (!entry) return;
-			if (activeRef.current?.key !== cacheKey) {
+			if (!activeRef.current.has(cacheKey)) {
 				removeEntry(cacheKey);
 				return;
 			}
@@ -621,7 +625,7 @@ export function TerminalCacheProvider({
 				// project created elsewhere that the project list has not fetched
 				// yet). Once it leaves the screen it is disposed unless a snapshot
 				// lists it by then (disposeIfUnlistedOnceParked).
-				if (activeRef.current?.key === entry.cacheKey) continue;
+				if (activeRef.current.has(entry.cacheKey)) continue;
 				removeEntry(entry.cacheKey);
 				continue;
 			}
@@ -699,7 +703,7 @@ export function TerminalCacheProvider({
 	// portals; remove their externally-created host nodes as well.
 	useEffect(
 		() => () => {
-			activeRef.current = null;
+			activeRef.current.clear();
 			for (const entry of entriesRef.current.values()) entry.container.remove();
 			entriesRef.current.clear();
 			muxPool.dispose();
@@ -726,7 +730,7 @@ export function TerminalCacheProvider({
 			{children}
 			{[...entriesRef.current.values()].map((entry) => (
 				<CachedTerminalPortal
-					active={activeRef.current?.key === entry.cacheKey}
+					active={activeRef.current.has(entry.cacheKey)}
 					entry={entry}
 					key={entry.cacheKey}
 					onFatal={markFatal}
@@ -1119,6 +1123,27 @@ function AttachedTerminal({
 	onTerminalReady?: (terminal: AttachableTerminal) => void;
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudBaseUrlRef = useRef(cloudBaseUrl);
+	cloudBaseUrlRef.current = cloudBaseUrl;
+	// A file dropped on a cloud terminal is uploaded to the session and placed
+	// in its sandbox, so the path typed at the prompt is one the agent can open.
+	// Only while the control plane takes files (attachments in the session
+	// organization's offering): otherwise a cloud terminal takes no drops, since
+	// a path on this machine means nothing in the sandbox.
+	const cloudSessionId = session?.cloud ? session.id : undefined;
+	const cloudOrgId = session?.cloud?.orgId;
+	const cloudAttachmentMaxBytes = useCloudOffering(Boolean(cloudSessionId), cloudOrgId).maxAttachmentBytes;
+	const cloudDropsAccepted = cloudAttachmentMaxBytes !== undefined;
+	const saveCloudDrop = useMemo(() => {
+		if (!cloudSessionId || !cloudOrgId) return undefined;
+		if (!cloudDropsAccepted) return null;
+		return async (file: { name: string; bytes: Uint8Array }) => {
+			const baseUrl = cloudBaseUrlRef.current;
+			const attachment = await uploadCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, file);
+			return placeCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, attachment.id);
+		};
+	}, [cloudDropsAccepted, cloudOrgId, cloudSessionId]);
 	const attachSession =
 		terminalTarget?.kind === "shell"
 			? undefined
@@ -1263,6 +1288,7 @@ function AttachedTerminal({
 	}, [onTerminalReady, terminal]);
 	const handleInitError = useCallback((err: unknown) => {
 		console.error("xterm failed to initialize", err);
+		void captureRendererException(err, { source: "terminal-init", operation: "xterm_init" });
 		setInitFailed(true);
 	}, []);
 	useEffect(() => {
@@ -1433,6 +1459,8 @@ function AttachedTerminal({
 				<Suspense fallback={null}>
 				<XtermTerminal
 					ariaLabel={terminalTarget?.kind === "shell" ? t("terminal.shellAria") : t("terminal.sessionAria")}
+					saveDroppedFile={saveCloudDrop}
+					droppedFileMaxBytes={saveCloudDrop && cloudAttachmentMaxBytes !== undefined ? Math.min(cloudAttachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) : undefined}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
 					isFullscreen={isFullscreen}
@@ -1509,15 +1537,17 @@ function CloudConnectError({ onRetry }: { onRetry: () => void }) {
 			<div className="flex max-w-sm flex-col items-center gap-4 rounded-lg border border-border bg-surface p-6 text-center shadow-lg">
 				<div className="font-mono text-sm font-medium text-foreground">{t("terminal.cloudConnectTitle")}</div>
 				<div className="text-xs leading-relaxed text-muted-foreground">{t("terminal.cloudConnectDescription")}</div>
-				<button
+				<Button
 					type="button"
 					id="cloud-terminal-retry"
-					className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-raised px-3 py-1.5 font-mono text-xs text-foreground transition hover:bg-interactive-hover"
+					className="font-mono"
 					onClick={onRetry}
+					size="sm"
+					variant="secondary"
 				>
 					<RotateCcw className="size-3" aria-hidden="true" />
 					{t("terminal.cloudConnectRetry")}
-				</button>
+				</Button>
 			</div>
 		</div>
 	);
@@ -1595,16 +1625,16 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">
-								<button
+								<Button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
+									variant="secondary"
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
 									{t("terminal.restoreSession")}
-								</button>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("terminal.restoreSession")}</TooltipContent>

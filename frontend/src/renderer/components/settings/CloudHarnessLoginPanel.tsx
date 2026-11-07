@@ -169,13 +169,14 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 								i18nKey="cloudCredential.apiKeyHelp"
 								components={{
 									link: (
-										<button
+										<Button
 											type="button"
-											className="text-settings-label underline underline-offset-2"
+											variant="link"
+											className="text-settings-label"
 											onClick={() => void aoBridge.app.openExternal(selectedMethod.help.url)}
 										>
 											{selectedMethod.help.site}
-										</button>
+										</Button>
 									),
 								}}
 							/>
@@ -249,9 +250,10 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 					{otherMethods.map((entry, index) => (
 						<span key={entry.value}>
 							{index > 0 ? " · " : null}
-							<button
+							<Button
 								type="button"
-								className="text-settings-label underline-offset-2 hover:underline"
+								variant="link"
+								className="text-settings-label"
 								onClick={() => {
 									setCredentialType(entry.value);
 									setSecret("");
@@ -259,7 +261,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 								}}
 							>
 								{methodLabel(entry)}
-							</button>
+							</Button>
 						</span>
 					))}
 				</p>

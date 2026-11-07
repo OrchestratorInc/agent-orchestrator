@@ -87,6 +87,11 @@ function canonicalKey(url: string, number: number): string {
 	return canonicalURL(url) || `number:${number}`;
 }
 
+/** The key that tells two observations of one pull request apart from others. */
+export function prDisplayKey(pr: { url: string; number: number }): string {
+	return canonicalKey(pr.url, pr.number);
+}
+
 function canonicalURL(rawUrl: string): string | undefined {
 	return prURL({ url: rawUrl, htmlUrl: rawUrl, mergeability: { prUrl: rawUrl } } as SessionPRSummary);
 }
@@ -315,8 +320,9 @@ function reviewStatusDetail(pr: SessionPRSummary): string {
 
 function mergeReadinessDetail(pr: SessionPRSummary): string {
 	if (pr.mergeability.state === "conflicting") return appI18n.t("pr.merge.reasonConflict");
-	if (pr.ci.state === "failing") return appI18n.t("pr.merge.reasonChecksFailing");
+	// Review first: the checks-failing text states the review requirement is satisfied.
 	if (!reviewAllowsMerge(pr.review.decision)) return appI18n.t("pr.merge.reasonReview");
+	if (pr.ci.state === "failing") return appI18n.t("pr.merge.reasonChecksFailing");
 	if (pr.review.hasUnresolvedHumanComments) return appI18n.t("pr.merge.reasonComments");
 	if (pr.mergeability.state !== "mergeable") return providerBlockedDetail(pr);
 	return appI18n.t("pr.merge.reasonReady");

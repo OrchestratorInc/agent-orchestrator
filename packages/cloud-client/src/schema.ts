@@ -61,11 +61,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt: they no longer serve but still use a slot, so used counts them. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. A revoked link is restored the same way. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links; revoked links count toward it. */
-        post: operations["createArtifactShare"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -82,11 +81,98 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
-        put: operations["updateArtifactShare"];
+        put?: never;
         post?: never;
-        /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no link limit. */
+        post: operations["createArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Presigns up to 100 parts of an upload. Each URL signs its part's length and SHA-256: send method to url with exactly headers and the part's bytes, and keep the response's ETag for finalizing. A URL works until expiresAt; presign again after that. */
+        post: operations["presignArtifactShareParts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Cancels an upload and discards its parts. */
+        post: operations["abortArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired. */
+        post: operations["finalizeArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["getPublicArtifactShare"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -290,6 +376,65 @@ export interface paths {
         put?: never;
         /** @description Add a cue. A name the project already has is refused with CUE_NAME_TAKEN. */
         post: operations["createProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's share links, newest first, revoked ones included. No link carries its token, url, code or shortUrl: only the create response does. joinedCount says how many people the link still gives more than what was shared with them directly. */
+        get: operations["listProjectShareLinks"];
+        put?: never;
+        /** @description Mint a share link for the whole project, or one of its sessions with sessionId. Omitted fields default to role viewer, accessScope anyone and interaction view. 400 invalid_request for a body that is not JSON or names an unknown field; 422 validation_error for a role, accessScope, interaction or modeCap outside its enum, or a recipient that is not an email address. The response is the only one that carries the link's token and url, and its code and shortUrl when the control plane issues short codes. */
+        post: operations["createProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares/{linkId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn a share link off. Without a body, or with removeJoined false, only the link stops working: what it already granted stays, and a link that is unknown or already revoked is 404 not_found. With removeJoined true the people who joined by the link lose what it gave them too (access it alone gave is revoked; access also shared directly drops back to that level), the answer is 200 with how many grants changed, and a link already revoked is processed the same way: only an unknown link is 404. */
+        post: operations["revokeProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/share-links/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Redeem a share link, by its short code or by its organization and token, into the caller's own access grant (an existing one is only ever raised). Someone already in the project's organization gets no grant: member is true and grant is empty. 400 invalid_request for a code that is not 22 letters and digits, or without a code, an orgId that is not a UUID or an empty token. 404 not_found for an unknown, revoked or expired link, or an archived project. 403 forbidden when the caller created the link, or the link is restricted to recipients that do not include the caller's email. */
+        post: operations["redeemShareLink"];
         delete?: never;
         options?: never;
         head?: never;
@@ -672,7 +817,8 @@ export interface paths {
         get: operations["listSessionArtifacts"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** @description Deletes one of the session's artifact files: its row, its stored object version, and, through a request to a connected worker, the file on the worker's disk (a worker that is not connected removes it when it next starts). An invalid path answers 400 invalid_path. Only the person who started the session (Session.createdByUserId) deletes a file; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        delete: operations["deleteSessionArtifact"];
         options?: never;
         head?: never;
         patch?: never;
@@ -709,7 +855,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Only the person who started the session (Session.createdByUserId) saves an edit: any other member of its organization, who may still read the file, gets 403 artifact_not_owner, as does everyone for a session with no creator on record. Present only when the deployment reports offering.artifacts; otherwise 404. */
         put: operations["saveSessionArtifact"];
         post?: never;
         delete?: never;
@@ -771,7 +917,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. */
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. Only the person who started the session restores a version; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. */
         post: operations["restoreSessionArtifactVersion"];
         delete?: never;
         options?: never;
@@ -793,6 +939,27 @@ export interface paths {
         put?: never;
         /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
         post: operations["restartSessionAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video.
+         *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
+        post: operations["shareSessionArtifact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2516,6 +2683,11 @@ export interface components {
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
             offering?: components["schemas"]["Offering"];
+            /**
+             * @description Whether this is someone's own workspace or a team's. Only /me reports it; an older control plane leaves it out.
+             * @enum {string}
+             */
+            kind?: "personal" | "team" | "enterprise";
         };
         PutOrgSandboxProviderInput: {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
@@ -2537,8 +2709,13 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description Plan feature flags; empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on. Empty when none apply. */
             features: string[];
+            /**
+             * Format: int64
+             * @description The largest file one session attachment may be, in bytes. Sent with attachments in features and omitted without it.
+             */
+            maxAttachmentBytes?: number;
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
             /** @description Whether cloud sessions keep artifact files. When false the artifact routes return 404 and requestedOutput "artifact" is rejected. Older control planes omit it. */
@@ -2983,6 +3160,157 @@ export interface components {
             page: components["schemas"]["PageInfo"];
         };
         /** @enum {string} */
+        ShareRole: "viewer" | "editor";
+        /** @enum {string} */
+        ShareModeCap: "read-only" | "standard" | "trusted";
+        ShareLink: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: uuid
+             * @description The one session the link shares; absent, the whole project.
+             */
+            sessionId?: string;
+            role: components["schemas"]["ShareRole"];
+            /** @enum {string} */
+            status: "active" | "revoked";
+            /**
+             * @description anyone redeems the link; restricted, only the recipients.
+             * @enum {string}
+             */
+            accessScope: "anyone" | "restricted";
+            /** @description Lowercased email addresses; empty unless accessScope is restricted. */
+            recipients: string[];
+            /** @enum {string} */
+            interaction: "view" | "interact";
+            /** @description Absent when there is no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[];
+            /**
+             * Format: date-time
+             * @description Absent when the link never expires.
+             */
+            expiresAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description How many people the link still gives more than what was shared with them directly: the grants a revoke with removeJoined changes. 0 on a link just created. Absent from control planes that predate it, which also ignore removeJoined. */
+            joinedCount?: number;
+        };
+        /** @description A share link as its create returns it, the only time its secrets are sent: the store keeps only their hashes. */
+        CreatedShareLink: components["schemas"]["ShareLink"] & {
+            /** @description The link's raw token; with orgId it redeems the link. */
+            token: string;
+            /**
+             * Format: uri
+             * @description <scheme>://<host>/share/<orgId>/<token>, built from the host this request reached (X-Forwarded-* when present). A convenience for non-browser callers; browsers build the link from their own origin and token.
+             */
+            url: string;
+            /** @description The link's short code, which redeems it on its own. Present only when the control plane issues codes (AO_CLOUD_SHARE_LINK_CODES); the client then shares a /s/<code> link instead of the token. */
+            code?: string;
+            /**
+             * Format: uri
+             * @description <origin>/s/<code> on the public share-link origin (AO_CLOUD_SHARE_LINK_ORIGIN). Present only with a code and when that origin is configured; the client shares it as is.
+             */
+            shortUrl?: string;
+        };
+        ShareLinkList: {
+            links: components["schemas"]["ShareLink"][];
+        };
+        CreatedShareLinkEnvelope: {
+            link: components["schemas"]["CreatedShareLink"];
+        };
+        CreateShareLinkInput: {
+            /**
+             * Format: uuid
+             * @description Shares one session of the project; omitted, the whole project.
+             */
+            sessionId?: string;
+            /** @description Defaults to viewer. */
+            role?: components["schemas"]["ShareRole"];
+            /**
+             * @description Defaults to anyone. restricted lets only the recipients redeem it.
+             * @enum {string}
+             */
+            accessScope?: "anyone" | "restricted";
+            recipients?: string[];
+            /**
+             * @description Defaults to view.
+             * @enum {string}
+             */
+            interaction?: "view" | "interact";
+            /** @description Omitted, no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands?: string[];
+            /** @description Hours until the link expires; omitted, zero or negative, it never expires. */
+            expiresInHours?: number;
+        };
+        RevokeShareLinkInput: {
+            /** @description Also remove what the link gave the people who joined by it. */
+            removeJoined?: boolean;
+        };
+        RevokeShareLinkResult: {
+            /** @description How many grants were revoked or dropped back to their direct level. */
+            removedGrants: number;
+        };
+        RedeemShareLinkInput: {
+            /** @description The link's short code; it names the organization itself. */
+            code: string;
+        } | {
+            /** Format: uuid */
+            orgId: string;
+            token: string;
+        };
+        /** @description The caller's grant. Empty when member is true: id, role and status are empty strings, deniedCommands is null and redeemedAt is the zero time. */
+        SharedProjectGrant: {
+            /** @description The grant's UUID, or empty when member is true. */
+            id: string;
+            /** @enum {string} */
+            role: "viewer" | "editor" | "";
+            /** @enum {string} */
+            status: "active" | "revoked" | "";
+            userEmail?: string;
+            userDisplayName?: string;
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[] | null;
+            /** Format: date-time */
+            redeemedAt: string;
+        };
+        /** @description A project, or one of its sessions, shared with the caller. */
+        SharedProject: {
+            grant: components["schemas"]["SharedProjectGrant"];
+            project: components["schemas"]["Project"];
+            /** @description True when the caller already belongs to the project's organization and needs no grant; the link only says where to go. */
+            member?: boolean;
+            /**
+             * Format: uuid
+             * @description The shared session; absent when the whole project is shared.
+             */
+            sessionId?: string;
+            sessionName?: string;
+            sharedByEmail?: string;
+            sharedByName?: string;
+            /**
+             * Format: uuid
+             * @description The team this reaches the caller through, when not shared with them directly.
+             */
+            viaTeamId?: string;
+            viaTeamName?: string;
+            /**
+             * @description How the caller got it. Absent when member is true.
+             * @enum {string}
+             */
+            source?: "link" | "direct" | "team";
+        };
+        SharedProjectEnvelope: {
+            shared: components["schemas"]["SharedProject"];
+        };
+        /** @enum {string} */
         GitHubInstallationStatus: "active" | "suspended" | "removed";
         /** @enum {string} */
         GitHubSyncStatus: "pending" | "syncing" | "ready" | "retry" | "failed";
@@ -3400,9 +3728,19 @@ export interface components {
             sandboxProviderConnectionId?: string;
             /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
             branch?: string;
+            /** @description Coding-agent model the worker runs (harness-native id). One the account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the worker runs the project's worker model; without one, a worker on the orchestrator's harness runs the orchestrator's current model, else the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the worker's opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
         ChatMessageInput: {
+            /** @description The message. It may be empty only when attachmentIds names at least one file. */
             text: string;
+            /** @description Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message. */
+            attachmentIds?: string[];
             model?: string;
             /** @enum {string} */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -3423,6 +3761,15 @@ export interface components {
                 [key: string]: unknown;
             })[];
         };
+        MessageAttachment: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
         ChatApprovalDecisionInput: {
             decisionId: string;
         };
@@ -3435,6 +3782,10 @@ export interface components {
             defaultEffort?: string;
             /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
             approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
+            /** @description The model the account's provider listed behind this entry: its own ID, or the model an alias such as opus resolves to. Absent when the provider did not confirm the entry for the account, or from an older worker. Only such a confirmation says the account runs the model an alias describes. */
+            providerId?: string;
+            /** @description On a session's own list, a model its worker added only so the session keeps its own selection. The account's provider did not list it, so it is not kept as the account's. */
+            sessionOnly?: boolean;
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
@@ -3447,6 +3798,8 @@ export interface components {
             cliVersion?: string;
             /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
             accountListed?: boolean;
+            /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
+            sessionOnlyMarked?: boolean;
         };
         SendMessageInput: {
             text: string;
@@ -3722,6 +4075,13 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
+            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. The control plane always sends it; an empty string means the harness default. Absent only from older control planes, which predate it; read `model` then. */
+            currentModel?: string;
+            /**
+             * @description Reasoning effort the session's turns run with now: its owner's Chat pick, else the effort it launched with. Omitted when that is the model's default.
+             * @enum {string}
+             */
+            currentReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
             deniedCommands: string[];
             interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
@@ -3739,6 +4099,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
+             */
+            createdByUserId?: string;
             /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
             requestedBy?: {
                 userId: string;
@@ -3866,14 +4231,19 @@ export interface components {
         ArtifactShare: {
             /** Format: uuid */
             id: string;
-            /** @description The link's subdomain label. */
+            /** @description The link's public ID, 26 random characters of a-z and 2-7, and its subdomain label under the share origin. */
             slug: string;
-            /** @description The public link, for example http://<slug>.share.localhost:8081/. */
+            /** @description The same as contentUrl, kept for clients that predate it. */
             url: string;
+            /** @description Where the link's file is served, for example https://<slug>.orchestratorusercontent.com/. */
+            contentUrl: string;
+            /** @description The public page that shows the link, for example https://orchestrator.inc/artifact/<slug>. Absent when the control plane has no viewer configured; share contentUrl instead. */
+            viewerUrl?: string;
             name: string;
             contentType: string;
             /** Format: int64 */
             size: number;
+            /** @description The file's SHA-256 as declared when it was published. For a local file it is the uploader's claim, not checked against the bytes (each part is checked against its own declared SHA-256); for a cloud session's file it is the committed file's. It names no link and no version: ETags come from the link and its stored version. */
             sha256: string;
             /** Format: date-time */
             createdAt: string;
@@ -3881,12 +4251,9 @@ export interface components {
             updatedAt: string;
             /**
              * Format: date-time
-             * @description When the link was revoked. A revoked link serves nothing but still uses a slot.
+             * @description When the link was revoked. A revoked link serves nothing and uses no slot.
              */
             revokedAt?: string;
-        };
-        ArtifactShareEnvelope: {
-            share: components["schemas"]["ArtifactShare"];
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -3895,8 +4262,102 @@ export interface components {
         };
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
+            /** @description The free plan's limit of active links; it does not apply when unlimited is true. */
             limit: number;
+            /** @description True when the user's plan has no limit of active links. Absent or false means limit applies. */
+            unlimited?: boolean;
+            /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+        };
+        ArtifactShareUploadInput: {
+            /** @description The file name, without a directory. */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
+            sha256: string;
+            project?: string;
+            feature?: string;
+            /**
+             * Format: uuid
+             * @description Set to update this active link instead of publishing a document.
+             */
+            shareId?: string;
+        };
+        ArtifactShareUpload: {
+            /** @description Names the upload in the calls that follow; opaque. */
+            uploadToken: string;
+            /**
+             * Format: date-time
+             * @description When the upload can no longer be finalized.
+             */
+            expiresAt: string;
+            /** Format: int64 */
+            partSize: number;
+            partCount: number;
+        };
+        ArtifactShareUploadRef: {
+            uploadToken: string;
+        };
+        ArtifactShareUploadPartsInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                /** @description The part's SHA-256. */
+                sha256: string;
+            }[];
+        };
+        ArtifactSharePresignedParts: {
+            parts: {
+                partNumber: number;
+                method: string;
+                url: string;
+                headers: {
+                    [key: string]: string;
+                };
+                /**
+                 * Format: int64
+                 * @description The part's length in bytes.
+                 */
+                size: number;
+            }[];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShareFinalizeInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                sha256: string;
+                /** @description The ETag the part's PUT returned. */
+                etag: string;
+            }[];
+        };
+        SessionArtifactShareInput: {
+            /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
+            path: string;
+            /** @description The SessionArtifact.sha256 the person was shown. When the session has committed another version since, the route answers 409 artifact_share_source_changed and shares nothing. */
+            sha256: string;
+            /**
+             * Format: uuid
+             * @description An active link of the caller's, for a file of the same name, to point at this file.
+             */
+            shareId?: string;
+        };
+        PublicArtifactShare: {
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            updatedAt: string;
+            owner: {
+                /** @description The owner's display name; empty when they set none. */
+                displayName: string;
+            };
+            /** @description Where the link's file is served; the viewer frames it. */
+            contentUrl: string;
         };
         WorkerArtifactFile: {
             path: string;
@@ -4391,6 +4852,8 @@ export interface components {
                 authorUserId?: string;
                 /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
                 authorName?: string;
+                /** @description The files the message carries. */
+                attachments?: components["schemas"]["MessageAttachment"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -4715,10 +5178,6 @@ export interface components {
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
-        /** @description The file name, without a directory. */
-        ArtifactShareName: string;
-        /** @description Lowercase hex SHA-256 of the body. */
-        ArtifactShareSHA256: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -4866,28 +5325,114 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    createArtifactShare: {
+    deleteArtifactShare: {
         parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-                project?: string;
-                feature?: string;
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
             };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/octet-stream": string;
+                "application/json": components["schemas"]["ArtifactShareUploadInput"];
             };
         };
         responses: {
-            /** @description The document's existing link, now serving the new version. */
+            /** @description The upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignArtifactShareParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadPartsInput"];
+            };
+        };
+        responses: {
+            /** @description The presigned parts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePresignedParts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    abortArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadRef"];
+            };
+        };
+        responses: {
+            /** @description The upload was cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finalizeArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFinalizeInput"];
+            };
+        };
+        responses: {
+            /** @description The document's existing link, now serving the uploaded file. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4908,56 +5453,26 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    updateArtifactShare: {
-        parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-            };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
-            };
-            path: {
-                shareId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/octet-stream": string;
-            };
-        };
-        responses: {
-            /** @description The updated share link. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    deleteArtifactShare: {
+    getPublicArtifactShare: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                shareId: string;
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The link was revoked. */
-            204: {
+            /** @description The link's public details. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -5394,6 +5909,119 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectShareLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareLinkList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The created share link, with its secrets. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedShareLinkEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The link was revoked and the grants it gave were removed (removeJoined true). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeShareLinkResult"];
+                };
+            };
+            /** @description The link was revoked; grants it gave are kept. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    redeemShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description Where the link leads, and the caller's grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedProjectEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -6125,6 +6753,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    deleteSessionArtifact: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     createSessionArtifactAccess: {
         parameters: {
             query?: never;
@@ -6283,6 +6935,43 @@ export interface operations {
                     "application/json": {
                         requested: boolean;
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    shareSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionArtifactShareInput"];
+            };
+        };
+        responses: {
+            /** @description The file's existing link, now serving the file's current version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
                 };
             };
             default: components["responses"]["Error"];
