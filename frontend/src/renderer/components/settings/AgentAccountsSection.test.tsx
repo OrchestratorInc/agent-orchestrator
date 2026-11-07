@@ -23,8 +23,8 @@ vi.mock("../TerminalPane", () => ({
 	},
 }));
 
-const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, email: "a@example.com" };
-const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, email: "b@example.com" };
+const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, loggedIn: true, email: "a@example.com" };
+const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, loggedIn: false, email: "b@example.com" };
 const login = { operationId: "login-1", provider: "claude", shellTerminal: { handleId: "shellterm-1", title: "Sign in to Claude account", createdAt: "2026-10-18T10:00:00Z" } };
 
 function renderPanel(cliLogin?: CliLoginControls) {
@@ -91,7 +91,7 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
 	// The CLI exits while that check is still running.
 	terminalState.value?.("exited");
-	finish({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+	finish({ data: { status: "complete", account: { ...saved, signedIn: true, loggedIn: true } } });
 
 	await waitFor(() => expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument());
 	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/login/{operationId}/verify")).toHaveLength(1);
@@ -161,10 +161,26 @@ it("signs the CLI login in again and out from its own row", async () => {
 
 it("offers only a sign-in on a signed-out CLI login, held while a login terminal is open", async () => {
 	getMock.mockImplementation((path: string) => Promise.resolve({
-		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, signedIn: false, default: false }, { ...saved, signedIn: true, default: true }] },
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, signedIn: false, loggedIn: false, default: false }, { ...saved, signedIn: true, loggedIn: true, default: true }] },
 	}));
 	renderPanel({ disabled: true, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() });
 	const row = await findCliLoginRow();
 	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+});
+
+// An API key launches the CLI but is not a subscription: the row says so
+// instead of signed out, and the login can still be logged out.
+it("shows an API-key CLI login as logged in without a subscription and keeps its Log out", async () => {
+	const user = userEvent.setup();
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, email: undefined, signedIn: false, loggedIn: true }, saved] },
+	}));
+	const cliLogin = { disabled: false, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() };
+	renderPanel(cliLogin);
+	const row = await findCliLoginRow();
+	expect(row).toHaveTextContent("Logged in without a subscription");
+	expect(row).not.toHaveTextContent("Signed out");
+	await user.click(within(row).getByRole("button", { name: "Log out" }));
+	expect(cliLogin.onLogout).toHaveBeenCalledTimes(1);
 });

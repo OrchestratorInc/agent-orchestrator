@@ -487,7 +487,13 @@ export interface CloudCpClient {
 	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
 	listShareLinks(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ links: CloudCpShareLink[] }>;
-	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Turns a link off. With removeJoined, the people who joined by it lose
+	 * that access too (a control plane that reports joinedCount honours it),
+	 * and the answer says how many grants that changed. A plain revoke, or an
+	 * older control plane, answers 204 with no body: removedGrants is absent.
+	 */
+	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions & { removeJoined?: boolean }): Promise<{ removedGrants?: number }>;
 	/** Turns a share link's token into the caller's own access grant. */
 	redeemShareLink(orgId: string, token: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
 	/** Redeems a link by its short code, which names no organization. */
@@ -1121,8 +1127,20 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { body, signal: o?.signal }),
 		listShareLinks: (orgId, projectId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { signal: o?.signal }),
-		revokeShareLink: (orgId, projectId, linkId, o) =>
-			requestVoid("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/${seg(linkId)}/revoke`, { signal: o?.signal }),
+		revokeShareLink: async (orgId, projectId, linkId, o) => {
+			const response = await send("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/${seg(linkId)}/revoke`, {
+				...(o?.removeJoined ? { body: { removeJoined: true } } : {}),
+				signal: o?.signal,
+			});
+			const text = response.status === 204 ? "" : await response.text();
+			if (text.trim() === "") return {};
+			try {
+				const body = JSON.parse(text) as { removedGrants?: unknown } | null;
+				return typeof body?.removedGrants === "number" ? { removedGrants: body.removedGrants } : {};
+			} catch {
+				return {};
+			}
+		},
 		redeemShareLink: (orgId, token, o) =>
 			requestJson("POST", "/share-links/redeem", { body: { orgId, token }, signal: o?.signal }),
 		redeemShareLinkCode: (code, o) =>

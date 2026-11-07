@@ -1,8 +1,9 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
@@ -279,7 +280,7 @@ interface MobileStatus {
 
 export async function fetchMobileStatus(): Promise<MobileStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/mobile/status");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -415,7 +416,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		if (started.error) {
 			// Not left listed at an address nothing serves.
 			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
-			throw new Error(apiErrorMessage(started.error));
+			throw apiErrorException(started.error);
 		}
 		return started.data;
 	};
@@ -473,7 +474,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// not a computer that only serves this network after a restart. The
 			// link usually lands before the quick tunnel's address is advertised.
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!signedIn) return data;
 			invalidate(); // the code shows while the computer is linked
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
@@ -490,7 +491,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
 			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -499,7 +500,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const regenerate = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			invalidate(); // the new password shows at once; linking can take a minute
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
@@ -529,7 +530,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		// Shutdown can finish before returning an error. Refresh the actual
 		// server state while retaining the mutation error for the user.
@@ -540,7 +541,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setSecure = useMutation({
 		mutationFn: async (secureEnabled: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/secure-pairing", { body: { enabled: secureEnabled } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -553,7 +554,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onMutate: async (browserRemoteAccess) => {
@@ -938,6 +939,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
+					confirming={stayAwake.busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
 						if (next) stayAwake.setLid(true);
@@ -970,24 +972,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	confirming = false,
 	onCheckedChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	/** A wake request is in flight; the helper may not have acknowledged it yet. */
+	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// While a request is in flight the switch already shows it, so hide the
+	// transient "starting" line. Once it settles, a lease that never armed
+	// stays visible: closing the lid would otherwise sleep the Mac silently.
+	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
 		lidUnavailable ||
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		(keepAwake.enabled && keepAwake.lidClosed && !(confirming && lidStarting)) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
 	const status = keepAwake.lidActive && keepAwake.enabled
 		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
 		: keepAwake.lidReason || lidUnavailable
-			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
 			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
 		<SettingsRow

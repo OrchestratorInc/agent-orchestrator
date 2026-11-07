@@ -879,6 +879,40 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
 	});
 
+	it("passes a model's note, such as the orchestrator's model, to the agent picker", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[
+					{ id: "sonnet", displayName: "Sonnet", default: true },
+					{ id: "opus", displayName: "Opus", default: false, hint: "Same as orchestrator" },
+				]}
+				settings={{ model: "opus" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
+		expect(agentPicker.current?.models.find((model) => model.id === "sonnet")?.hint).toBeUndefined();
+	});
+
+	it("passes a provider choice's note to the agent picker", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				configOptions={[{ id: "model", name: "Model", category: "model", type: "select", currentValue: "opus", choices: [
+					{ value: "sonnet", name: "Sonnet" },
+					{ value: "opus", name: "Opus", hint: "Same as orchestrator" },
+				] }]}
+				onChangeConfigOption={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
+	});
+
 	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
 			<TurnSettingsBar
 				harness="codex"

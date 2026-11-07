@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -24,13 +24,6 @@ const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } =
 	},
 	localWorkspacesState: { ids: [] as string[] },
 }));
-
-const accountsResponse = {
-	accountRevision: 0,
-	accounts: [],
-	capabilities: {},
-	deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false },
-};
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, PUT: putMock, POST: postMock },
@@ -142,9 +135,7 @@ describe("SettingsDialog", () => {
 	beforeEach(() => {
 		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
 		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
-		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
-			? Promise.resolve({ data: accountsResponse })
-			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
+		postMock.mockReset().mockResolvedValue({ data: { operationId: "login-1", status: "cancelled" } });
 		useUiStore.setState({ developerMode: false, settingsModal: null, navigationGestures: true });
 		cloudProjectsState.data = [];
 		cloudProjectsState.isLoading = false;
@@ -176,6 +167,8 @@ describe("SettingsDialog", () => {
 		expect(teamsGate.myTeamsAsked.length).toBeGreaterThan(0);
 		expect(teamsGate.myTeamsAsked).not.toContain(true);
 	});
+
+	afterEach(() => vi.restoreAllMocks());
 
 	function renderSettingsDialog() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -411,20 +404,6 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
-		// The cached account read goes out at once; the slow forced
-		// reconciliation follows once the page's own reads have been sent.
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
-			"/api/v1/agents/codex/accounts/ensure",
-			{ body: { accountIds: [], includeUsage: true } },
-		));
-		expect(postMock).not.toHaveBeenCalledWith(
-			"/api/v1/agents/codex/accounts/ensure",
-			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
-		);
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
-			"/api/v1/agents/codex/accounts/ensure",
-			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
-		), { timeout: 3_000 });
 	});
 
 	it("scrolls to and briefly highlights the setting a deep link names", async () => {
@@ -453,7 +432,7 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
 	});
 
-	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
+	it("opens Harness, where accounts live, and forwards its agent focus target", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
 
@@ -461,7 +440,8 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
+		// Accounts are on each harness's Account tab; there is no page of their own.
+		expect(screen.queryByRole("button", { name: "Subscriptions" })).toBeNull();
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -481,15 +461,6 @@ describe("SettingsDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
 
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
-	});
-
-	it("refreshes accounts once when global Settings opens, not when its pages change", async () => {
-		useUiStore.getState().openGlobalSettings();
-		renderSettingsDialog();
-
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
-		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("mounts dialog chrome before the selected settings form", async () => {
@@ -517,8 +488,8 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
 		// The live monitor is a page of its own: the aggregate view never mounts it.
-		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
 
 	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
@@ -528,7 +499,7 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, diagnostics: false, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
 	});
 
 	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
@@ -542,7 +513,7 @@ describe("SettingsDialog", () => {
 
 	describe("offering gates", () => {
 		const pages = (context: { customCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
-			visibleGlobalSettings({ cloudEnabled: true, developerMode: false, diagnostics: false, ...context }).map((item) => item.id);
+			visibleGlobalSettings({ cloudEnabled: true, diagnostics: false, ...context }).map((item) => item.id);
 
 		it("a B2C self-serve org sees Upgrade and no Coder page", () => {
 			expect(pages({ customCoder: false, selfServeBilling: true })).toContain("billing");
@@ -567,7 +538,7 @@ describe("SettingsDialog", () => {
 
 		it("shows Teams only where sharing is on, or for teams the person is in elsewhere", () => {
 			const withTeams = (teams: TeamsPage, cloudEnabled = true) =>
-				visibleGlobalSettings({ cloudEnabled, developerMode: false, diagnostics: false, customCoder: false, selfServeBilling: false, teams }).map((item) => item.id);
+				visibleGlobalSettings({ cloudEnabled, diagnostics: false, customCoder: false, selfServeBilling: false, teams }).map((item) => item.id);
 			expect(withTeams("manage")).toContain("teams");
 			expect(withTeams("member")).toContain("teams");
 			expect(withTeams("none")).not.toContain("teams");
@@ -590,18 +561,6 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
-	});
-
-	it("closes Settings without cancelling daemon-owned account login work", async () => {
-		useUiStore.getState().openGlobalSettings("agents");
-		renderSettingsDialog();
-
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("agents");
-		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
-
-		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
 	});
 
 	it("renders inside the page and closes from Escape or Back", async () => {

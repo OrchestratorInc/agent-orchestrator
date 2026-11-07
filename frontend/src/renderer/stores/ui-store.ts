@@ -31,7 +31,6 @@ export type ChatSendKeyMode = "enter" | "mod-enter";
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
-	| "agents"
 	| "teams"
 	| "billing"
 	| "remoteHosts"
@@ -123,8 +122,8 @@ export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: num
 export type GlobalToast = {
 	title: string;
 	body?: string;
-	tone?: "info" | "error";
-	placement?: "bottom-right" | "top-center";
+	tone?: "info" | "error" | "success";
+	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
 	durationMs?: number;
 	dedupeKey?: string;
@@ -203,6 +202,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
+	splitPanes: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -284,6 +285,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
@@ -369,6 +371,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
@@ -471,6 +474,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
@@ -501,12 +505,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		if (get().themePreference === themePreference) return;
-		runThemeTransition(() => {
-			const resolvedTheme = resolveTheme(themePreference);
-			getLocalStorage()?.setItem(themeStorageKey, themePreference);
-			applyDocumentTheme(resolvedTheme);
-			set({ themePreference, resolvedTheme });
-		});
+		runThemeTransition(
+			() => {
+				const resolvedTheme = resolveTheme(themePreference);
+				getLocalStorage()?.setItem(themeStorageKey, themePreference);
+				applyDocumentTheme(resolvedTheme);
+				set({ themePreference, resolvedTheme });
+			},
+			// The window's vibrancy material follows nativeTheme; flip it as the
+			// new frame is revealed so the tint and the material change together.
+			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+		);
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
@@ -540,6 +549,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
+	},
+	setSplitPanes: (splitPanes) => {
+		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
+		set({ splitPanes });
 	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
@@ -866,8 +879,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
-			const tone = options?.tone ?? (style === "error" || style === "info" ? style : "info");
-			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" ? style : "bottom-right");
+			const tone = options?.tone ?? (style === "error" || style === "info" || style === "success" ? style : "info");
+			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" || style === "bottom-center" ? style : "bottom-right");
 			const toast = { title, body, tone, placement, nonce, ...options };
 			const globalToasts = toast.dedupeKey
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)

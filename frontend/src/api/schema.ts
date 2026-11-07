@@ -1996,6 +1996,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/clone/prepare/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clone a project without registering it, streaming each git step as a server-sent event */
+        post: operations["prepareCloneProjectStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/initialize": {
         parameters: {
             query?: never;
@@ -4433,6 +4450,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/terminal-shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the shells installed on this machine for new terminals */
+        get: operations["listTerminalShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminal-shells/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check that a custom shell path is an executable */
+        get: operations["checkTerminalShell"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -4582,6 +4633,7 @@ export interface components {
             email?: string;
             id: string;
             limits?: components["schemas"]["AgentAccountLimits"];
+            loggedIn: boolean;
             plan?: string;
             problem?: string;
             /** @enum {string} */
@@ -5190,6 +5242,17 @@ export interface components {
             path: string;
             preparationId: string;
             remoteUrl: string;
+        };
+        ClonePrepareStreamEvent: {
+            error?: components["schemas"]["APIError"];
+            progress?: components["schemas"]["CloneProgress"];
+            result?: components["schemas"]["ClonePreparationResult"];
+        };
+        CloneProgress: {
+            attempt: number;
+            percent?: null | number;
+            /** @enum {string} */
+            phase: "enumerating_objects" | "counting_objects" | "compressing_objects" | "receiving_objects" | "resolving_deltas" | "updating_files" | "filtering_content" | "retrying";
         };
         CloneProjectInput: {
             config?: components["schemas"]["ProjectConfig"];
@@ -6372,6 +6435,8 @@ export interface components {
             supported: components["schemas"]["AgentInfo"][];
         };
         ListArtifactVersionsResponse: {
+            /** @description This daemon serves a version's bytes on the preview route and restores any file type. Absent from an older daemon. */
+            mediaVersions?: boolean;
             path: string;
             versions: components["schemas"]["ArtifactVersionSummary"][];
         };
@@ -6607,7 +6672,7 @@ export interface components {
             rows?: number;
             /** @description Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell. */
             sessionId?: string;
-            /** @description Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux. */
+            /** @description Shell to launch: auto (the user's default shell), an executable path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl). */
             shell?: string;
             /** @description Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid. */
             startOnAttach?: boolean;
@@ -7856,6 +7921,27 @@ export interface components {
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
             optedOut: boolean;
+        };
+        TerminalShellCheckResponse: {
+            executable: boolean;
+            /** @description Why the path cannot launch. */
+            message?: string;
+            /** @description Resolved executable path when executable. */
+            path?: string;
+        };
+        TerminalShellResponse: {
+            /** @description Value to send as a terminal's shell: auto, a Windows selector, or the executable path. */
+            id: string;
+            /** @description Display name, such as zsh or PowerShell. */
+            name: string;
+            /** @description Executable path. Empty when the default shell cannot be resolved. */
+            path?: string;
+        };
+        TerminalShellsResponse: {
+            /** @description The shell auto resolves to. */
+            default: components["schemas"]["TerminalShellResponse"];
+            /** @description Installed shells, one per real binary. */
+            shells: components["schemas"]["TerminalShellResponse"][];
         };
         TrackerIntakeConfig: {
             assignee?: string;
@@ -14985,6 +15071,48 @@ export interface operations {
             };
         };
     };
+    prepareCloneProjectStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneProjectInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["ClonePrepareStreamEvent"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     initializeProjectRepository: {
         parameters: {
             query?: never;
@@ -21066,6 +21194,8 @@ export interface operations {
                 source?: "workspace" | "artifact";
                 /** @description When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview. */
                 raw?: boolean;
+                /** @description With source=artifact, serve this saved version of the file instead of its current content. */
+                artifactVersion?: number;
             };
             header?: never;
             path: {
@@ -24596,6 +24726,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listTerminalShells: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalShellsResponse"];
+                };
+            };
+        };
+    };
+    checkTerminalShell: {
+        parameters: {
+            query?: {
+                /** @description Custom shell: an absolute path, a ~/ path, or a command on PATH. */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalShellCheckResponse"];
                 };
             };
         };

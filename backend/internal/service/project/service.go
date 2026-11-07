@@ -43,6 +43,9 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	// PrepareCloneWithProgress is PrepareClone that reports each git step
+	// through onProgress as the clone reaches it.
+	PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error)
 	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 

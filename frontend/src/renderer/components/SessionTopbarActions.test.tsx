@@ -359,6 +359,17 @@ describe("SessionTopbarActions without Developer Mode", () => {
 
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
 	});
+
+	it("closes the archive confirm on the first Escape", async () => {
+		const user = userEvent.setup();
+		renderTopbarSessions([worker, orchestrator], worker.id);
+
+		await user.click(screen.getByRole("button", { name: "Archive session" }));
+		await screen.findByRole("dialog");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
 });
 
 describe("SessionTopbarActions orchestrator actions", () => {
