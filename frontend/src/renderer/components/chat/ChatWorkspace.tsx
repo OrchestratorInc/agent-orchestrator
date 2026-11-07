@@ -4636,7 +4636,7 @@ export function Timeline({
 							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
-						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
+						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} task="Thinking" />
 					) : openingPending && !groups.some((group) => group.live) ? (
 						// Before the brief has a turn of its own (still being created).
 						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
@@ -5062,7 +5062,10 @@ const TurnGroup = memo(function TurnGroup({
 				startedAt={group.liveStartedAt}
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
-				task={currentTask ? liveTaskLabel(currentTask) : undefined}
+				// Between steps the agent is still working out what to do next, so the row
+				// says "Thinking" beside the loader rather than only a timer. A turn waiting
+				// on the reader's answer is not thinking, so it keeps the timer alone.
+				task={currentTask ? liveTaskLabel(currentTask) : group.live && !group.blocked ? "Thinking" : undefined}
 				step={liveStep}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>

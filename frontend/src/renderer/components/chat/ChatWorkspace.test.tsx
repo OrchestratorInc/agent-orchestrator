@@ -1279,6 +1279,55 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText("go build ./...")).toBeInTheDocument();
 	});
 
+	it("says Thinking beside the loader between steps, but not while it waits on the reader", () => {
+		const turnId = "live-turn-thinking";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const read = {
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision: 0,
+			activityKind: "command" as const, status: "completed" as const, summary: "sed -n '1,40p' README.md",
+			detail: { command: "sed -n '1,40p' README.md" }, createdAt: at,
+		};
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 2,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read],
+		};
+
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+
+		// The finished step keeps its row; the loader row names what comes next.
+		expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument();
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·\d/);
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run go build?",
+							detail: { command: "go build ./..." }, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+	});
+
 	it("gives the step back its row once it finishes", () => {
 		const turnId = "live-turn-finished-step";
 		const at = "2026-08-11T10:01:00Z";
