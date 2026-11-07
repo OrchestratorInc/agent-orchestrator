@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "Berikutnya"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "Tidak"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "Tidak ada judul"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "Terminal"
 
+msgid "Thanks for letting us know."
+msgstr "Terima kasih atas masukannya."
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "Terima kasih. Beri tahu kami apa yang perlu diperbaiki di issue GitHub yang baru saja terbuka."
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "Halaman yang Anda cari mungkin telah dihapus, diganti namanya, atau untuk sementara tidak tersedia."
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Menggunakan Orchestrator"
 
+msgid "Was this page helpful?"
+msgstr "Apakah halaman ini membantu?"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "Ruang kerja"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "Ya"

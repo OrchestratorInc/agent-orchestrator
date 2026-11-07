@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "다음"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "아니요"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "제목 없음"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "터미널"
 
+msgid "Thanks for letting us know."
+msgstr "알려 주셔서 감사합니다."
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "감사합니다. 방금 열린 GitHub 이슈에 고칠 내용을 알려 주세요."
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "찾으시는 페이지가 삭제되었거나, 이름이 변경되었거나, 일시적으로 사용할 수 없습니다."
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator 사용하기"
 
+msgid "Was this page helpful?"
+msgstr "이 페이지가 도움이 되었나요?"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "워크스페이스"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "예"

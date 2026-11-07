@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "次へ"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "いいえ"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "見出しがありません"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "ターミナル"
 
+msgid "Thanks for letting us know."
+msgstr "ご意見ありがとうございます。"
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "ありがとうございます。開いた GitHub の Issue に、直すべき点を書いてください。"
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "お探しのページは削除されたか、名前が変更されたか、一時的に利用できない可能性があります。"
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator の使い方"
 
+msgid "Was this page helpful?"
+msgstr "このページは役に立ちましたか？"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "ワークスペース"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "はい"

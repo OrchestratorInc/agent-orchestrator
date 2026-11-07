@@ -1,0 +1,29 @@
+name: Docs problem
+description: Something on docs.orchestrator.inc is wrong, unclear or missing.
+title: "Docs: "
+labels: ["documentation", "comp/docs-site"]
+body:
+  - type: input
+    id: page-url
+    attributes:
+      label: Page URL
+      description: The docs page you were reading. The "Suggest a change" link on each page fills this in.
+      placeholder: https://docs.orchestrator.inc/quickstart/
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong or missing?
+      description: Quote the sentence, step or code that is wrong, or say what you looked for and could not find.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Optional. What the page should say instead, or a link that helped you.
+    validations:
+      required: false
