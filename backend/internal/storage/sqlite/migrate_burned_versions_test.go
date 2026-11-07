@@ -230,6 +230,8 @@ var shippedMigrations = map[int64]string{
 	20261026083409462: "20261026083409462_deepseek_chat_failure_code.sql",
 	20261026185532680: "20261026185532680_usage_telemetry_measurements.sql",
 	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
+	20261028224250364: "20261028224250364_usage_event_service_tier.sql",
+	20261028233910979: "20261028233910979_agent_limit_readings.sql",
 	20261029072736970: "20261029072736970_session_telemetry.sql",
 	20261029191416441: "20261029191416441_session_num_floors.sql",
 	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
@@ -238,13 +240,19 @@ var shippedMigrations = map[int64]string{
 	20261030182857119: "20261030182857119_session_cleanup_report_only.sql",
 	20261030182857237: "20261030182857237_session_retention.sql",
 	20261030182857344: "20261030182857344_session_delete_cdc.sql",
+	20261030234657125: "20261030234657125_app_settings_limit_history.sql",
 	20261031021251693: "20261031021251693_session_interface_transitions_degraded_kind.sql",
+	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",
+	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 	20261101145613011: "20261101145613011_repository_renames.sql",
 	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
+	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
 	20261103094403671: "20261103094403671_backfill_spanning_plan_copies.sql",
+	20261105105237146: "20261105105237146_usage_repricing.sql",
+	20261105114816657: "20261105114816657_cursor_usage.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

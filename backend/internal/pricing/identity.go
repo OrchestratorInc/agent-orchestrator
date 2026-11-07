@@ -1,15 +1,77 @@
 // Package pricing owns shared lookup identity rules for usage pricing.
 package pricing
 
-import "strings"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // CanonicalProviderID normalizes a reported provider for exact catalog lookup.
+// The catalog names providers as LiteLLM does; a harness that spells the same
+// billing account another way is mapped onto that name.
 func CanonicalProviderID(raw string) string {
 	providerID := strings.ToLower(strings.TrimSpace(raw))
-	if providerID == "z.ai" {
-		return "zai"
+	if alias, ok := providerAliases[providerID]; ok {
+		return alias
 	}
 	return providerID
+}
+
+// providerAliases maps the names harnesses use for a provider onto the
+// catalog's. An alias is the same account under another spelling, never a
+// sibling: a regional or plan-priced endpoint (minimax-cn, zai-coding-cn,
+// moonshotai-cn) bills at rates the catalog does not carry, so it stays
+// unpriced instead of borrowing its parent's list rate.
+var providerAliases = map[string]string{
+	"z.ai":                   "zai",
+	"google":                 "gemini",
+	"google-gemini":          "gemini",
+	"google_gemini":          "gemini",
+	"google-vertex":          "vertex_ai",
+	"google_vertex":          "vertex_ai",
+	"vertex":                 "vertex_ai",
+	"vertex-ai":              "vertex_ai",
+	"vertexai":               "vertex_ai",
+	"gcp_vertex_ai":          "vertex_ai",
+	"amazon-bedrock":         "bedrock",
+	"amazon_bedrock":         "bedrock",
+	"aws-bedrock":            "bedrock",
+	"aws_bedrock":            "bedrock",
+	"bedrock_converse":       "bedrock",
+	"azure-openai":           "azure",
+	"azure_openai":           "azure",
+	"azure-openai-responses": "azure",
+	"github-copilot":         "github_copilot",
+	"copilot":                "github_copilot",
+	"vercel-ai-gateway":      "vercel_ai_gateway",
+	"fireworks":              "fireworks_ai",
+	"together":               "together_ai",
+	"togetherai":             "together_ai",
+	"moonshotai":             "moonshot",
+	"mistralai":              "mistral",
+	"x-ai":                   "xai",
+	"deepseek-official":      "deepseek",
+	"opencode-go":            "opencode_go",
+	"xiaomi":                 "xiaomi_mimo",
+	"cloudflare-workers-ai":  "cloudflare",
+	"cohere":                 "cohere_chat",
+	"friendli":               "friendliai",
+	"lambda":                 "lambda_ai",
+}
+
+// RequiredProviderIDs are the providers every catalog must price. A catalog
+// missing one is a broken build of the upstream table, not a smaller one.
+// They are also the whole of the catalog committed to the repository: releases
+// that read that copy accept exactly these three.
+var RequiredProviderIDs = []string{"anthropic", "openai", "zai"}
+
+var providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// ValidProviderID reports whether id can name a catalog provider: it is also a
+// path segment of the provider's blob.
+func ValidProviderID(id string) bool {
+	return len(id) <= 64 && providerIDPattern.MatchString(id)
 }
 
 // UnidentifiedBillingRoute marks a Claude route the hook saw and could not
@@ -63,4 +125,50 @@ func CanonicalModelID(providerID, raw string) string {
 		modelID = strings.TrimPrefix(modelID, prefix+"/")
 	}
 	return modelID
+}
+
+// Service tiers the catalog prices apart from a model's standard rates. The
+// first three are LiteLLM's field suffixes (input_cost_per_token_priority);
+// fast is its provider_specific_entry multiple of every standard rate.
+const (
+	ServiceTierPriority  = "priority"
+	ServiceTierFlex      = "flex"
+	ServiceTierUltrafast = "ultrafast"
+	ServiceTierFast      = "fast"
+)
+
+// TierModelID names the catalog row that prices modelID at a service tier:
+// "gpt-6.1-sol#priority".
+//
+// A tier is its own row rather than more rate fields on the model's row because
+// installed daemons decode provider blobs with DisallowUnknownFields and fetch
+// the catalog from main: a new field would make every one of them reject each
+// later catalog, while an extra row is only a model they never look up. "#"
+// appears in no provider's model IDs; Vertex IDs already use "@".
+func TierModelID(modelID, tier string) string {
+	return modelID + "#" + tier
+}
+
+// LongContextModelID names the catalog row that prices modelID for a request
+// with more than aboveK thousand input tokens: "gpt-6.1-sol#above272k", and
+// "gpt-6.1-sol#priority#above272k" for a tier's row. It is a row for the same
+// reason a tier is.
+func LongContextModelID(modelID string, aboveK int64) string {
+	return modelID + longContextMarker + strconv.FormatInt(aboveK, 10) + "k"
+}
+
+const longContextMarker = "#above"
+
+// longContextThreshold splits a LongContextModelID into the row it extends and
+// its size in thousands of tokens.
+func longContextThreshold(rowID string) (base string, aboveK int64, ok bool) {
+	index := strings.LastIndex(rowID, longContextMarker)
+	if index < 0 || !strings.HasSuffix(rowID, "k") {
+		return "", 0, false
+	}
+	aboveK, err := strconv.ParseInt(rowID[index+len(longContextMarker):len(rowID)-1], 10, 64)
+	if err != nil || aboveK <= 0 {
+		return "", 0, false
+	}
+	return rowID[:index], aboveK, true
 }

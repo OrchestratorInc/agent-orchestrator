@@ -39,6 +39,19 @@ type AgentInstallJob struct {
 	UpdatedAt           time.Time
 }
 
+type AgentLimitReading struct {
+	AccountID       string
+	Provider        string
+	Email           string
+	Plan            string
+	WindowID        string
+	Label           string
+	DurationMinutes int64
+	UsedPercent     float64
+	ResetsAtMs      sql.NullInt64
+	ReadAtMs        int64
+}
+
 type AgentModelCatalog struct {
 	AgentID          string
 	ProjectID        string
@@ -173,6 +186,8 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	LimitHistory         bool
+	CursorUsage          bool
 }
 
 type Automation struct {
@@ -474,6 +489,8 @@ type ModelUsageEvent struct {
 	EstimatedCostNanos    sql.NullInt64
 	PricingVersion        string
 	BillingProviderSource sql.NullString
+	ServiceTier           sql.NullString
+	ProviderMessageID     sql.NullString
 }
 
 type Notification struct {
@@ -926,6 +943,11 @@ type UsageCodexSourceDiscovery struct {
 	HasMixedChildTypes     int64
 }
 
+type UsageCursorRead struct {
+	AccountKey string
+	ReadUntil  time.Time
+}
+
 type UsageMessageSummary struct {
 	SessionID    string
 	PendingCount int64
@@ -947,6 +969,16 @@ type UsagePRMeasurement struct {
 	MergedReported     int64
 	ClosedReported     int64
 	MergedVia          string
+}
+
+type UsagePriceOverride struct {
+	ModelID              string
+	InputUsdPerMtok      sql.NullString
+	OutputUsdPerMtok     sql.NullString
+	CacheReadUsdPerMtok  sql.NullString
+	CacheWriteUsdPerMtok sql.NullString
+	PriceAs              sql.NullString
+	UpdatedAt            time.Time
 }
 
 type UsageProjectIdentity struct {
@@ -977,6 +1009,10 @@ type UsageSource struct {
 	NextRetryAt     sql.NullTime
 	LastErrorCode   string
 	UpdatedAt       time.Time
+}
+
+type UsageTierRepair struct {
+	UsageSourceID int64
 }
 
 type WorkspaceRepo struct {

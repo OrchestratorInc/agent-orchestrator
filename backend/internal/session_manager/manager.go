@@ -403,6 +403,8 @@ type Manager struct {
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness ports.AgentReadinessProvider
+	// backgroundTaskUsage is late-bound by SetBackgroundTaskUsage.
+	backgroundTaskUsage BackgroundTaskUsage
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -642,6 +644,17 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// BackgroundTaskUsage counts the provider calls AO makes on a session's behalf.
+type BackgroundTaskUsage interface {
+	RecordBackgroundTask(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, workspace string) error
+}
+
+// SetBackgroundTaskUsage completes daemon wiring before request handling
+// begins. Nil leaves background calls uncounted.
+func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
+	m.backgroundTaskUsage = usage
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -7123,8 +7136,9 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 		ID:            string(id),
 		WorkspacePath: workspacePath,
 		Metadata: map[string]string{
-			ports.MetadataKeyAgentSessionID: meta.AgentSessionID,
-			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
+			ports.MetadataKeyAgentSessionID:       meta.AgentSessionID,
+			ports.MetadataKeyNativeTranscriptPath: meta.NativeTranscriptPath,
+			ports.MetadataKeySessionMode:          string(domain.SessionModeTUI),
 		},
 	}
 	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}

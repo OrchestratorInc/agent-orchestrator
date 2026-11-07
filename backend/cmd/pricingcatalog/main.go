@@ -1,4 +1,7 @@
-// Command pricingcatalog generates and validates AO's reviewed pricing catalog.
+// Command pricingcatalog generates and validates the pricing catalog in the
+// repository. Releases before the daemon built its catalog from the live
+// LiteLLM table still download it; once no supported release does, delete
+// this command and the committed catalog together.
 package main
 
 import (
@@ -10,8 +13,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
-
-const maxSourceBytes = 32 << 20
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -55,12 +56,12 @@ func runSync(args []string, stdout, stderr io.Writer) (err error) {
 			err = closeErr
 		}
 	}()
-	source, err := io.ReadAll(io.LimitReader(file, maxSourceBytes+1))
+	source, err := io.ReadAll(io.LimitReader(file, catalogsync.MaxSourceBytes+1))
 	if err != nil {
 		return fmt.Errorf("read source: %w", err)
 	}
-	if len(source) > maxSourceBytes {
-		return fmt.Errorf("source exceeds %d-byte limit", maxSourceBytes)
+	if len(source) > catalogsync.MaxSourceBytes {
+		return fmt.Errorf("source exceeds %d-byte limit", catalogsync.MaxSourceBytes)
 	}
 	result, err := catalogsync.Sync(*root, source, catalogsync.Source{
 		Repository: "BerriAI/litellm",

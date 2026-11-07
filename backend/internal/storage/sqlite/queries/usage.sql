@@ -50,6 +50,8 @@ SET state = 'finalizing',
     END,
     updated_at = sqlc.arg(finalized_at)
 WHERE usage_bindings.session_id = sqlc.arg(session_id)
+  -- Cursor usage is read from cursor.com, not drained from a file.
+  AND usage_bindings.harness <> 'cursor'
   AND EXISTS (
       SELECT 1
       FROM sessions
@@ -98,6 +100,8 @@ FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
+  -- Its artifact path names a Cursor account, not a file.
+  AND us.kind <> 'cursor_dashboard'
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -118,11 +122,19 @@ SELECT CAST(EXISTS (
     FROM usage_bindings ub
     JOIN sessions s ON s.id = ub.session_id
     WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-      AND ub.harness IN ('claude-code', 'codex', 'kimi')
       AND (
-          ub.harness = 'kimi'
+          ub.harness IN ('kimi', 'qwen')
           OR ub.state = 'discovering'
           OR ub.last_error_code = 'source_discovery_pending'
+          OR (
+              ub.harness = 'pi'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM usage_sources source
+                  WHERE source.binding_id = ub.id
+                    AND source.kind = 'pi_session'
+              )
+          )
           OR EXISTS (
               SELECT 1
               FROM usage_codex_pending_children pending
@@ -143,6 +155,23 @@ SELECT CAST(EXISTS (
                     LIMIT 1
                 )
           )
+      )
+) OR EXISTS (
+    SELECT 1
+    FROM sessions s
+    WHERE s.is_terminated = 0
+      AND s.activity_state <> 'exited'
+      AND s.harness = 'pi'
+      AND trim(s.agent_session_id) <> ''
+      AND (
+          trim(s.runtime_launch_id) = ''
+          OR s.agent_session_id_launch_id = s.runtime_launch_id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM usage_bindings ub
+          WHERE ub.session_id = s.id
+            AND ub.harness = 'pi'
       )
 ) AS INTEGER);
 
@@ -169,28 +198,36 @@ SELECT ub.*
 FROM usage_bindings ub
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  AND ub.harness IN ('claude-code', 'codex', 'kimi')
   AND (
       ub.state IN ('discovering', 'active', 'finalizing')
       OR (ub.state = 'partial' AND ub.last_error_code = 'codex_source_budget_exceeded')
   )
   AND (
-      ub.harness IN ('claude-code', 'kimi')
+      ub.harness IN ('claude-code', 'kimi', 'qwen')
       OR ub.state = 'discovering'
       OR ub.state = 'finalizing'
       OR ub.last_error_code = 'codex_source_budget_exceeded'
       OR ub.last_error_code = 'source_discovery_pending'
-      OR NOT EXISTS (
+      OR (ub.harness = 'codex' AND NOT EXISTS (
           SELECT 1
           FROM usage_sources us
           WHERE us.binding_id = ub.id
             AND us.kind = 'codex_rollout'
-      )
+      ))
+      OR (ub.harness = 'pi' AND NOT EXISTS (
+          SELECT 1
+          FROM usage_sources us
+          WHERE us.binding_id = ub.id
+            AND us.kind = 'pi_session'
+      ))
       OR EXISTS (
           SELECT 1
           FROM usage_sources us
           WHERE us.binding_id = ub.id
-            AND us.kind = 'codex_rollout'
+            AND (
+                ub.harness = 'codex' AND us.kind = 'codex_rollout'
+                OR ub.harness = 'pi' AND us.kind = 'pi_session'
+            )
             AND us.state = 'error'
             AND us.last_error_code IN ('artifact_missing', 'source_read_failed')
       )
@@ -366,15 +403,19 @@ FROM model_usage_events event
 WHERE event.binding_id = ? AND event.source_event_key = ?;
 
 -- name: InsertModelUsageEvent :one
+-- The caller has already found no row under this binding and key, so the only
+-- conflict left is a provider message another source already stored: a copy,
+-- which inserts nothing and returns no row.
 INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json,
+    provider_usage_json, service_tier, provider_message_id,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 RETURNING id;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
@@ -407,10 +448,12 @@ WHERE model_usage_events.id = sqlc.arg(id)
 -- A later observation supersedes an inferred billing provider and every cost
 -- derived from that inference. ApplyUsageChunk rehomes replacement-generation
 -- rows before this statement, so the source guard also prevents promotion on a
--- stale generation.
+-- stale generation. The new cost is estimated at the replayed service tier, so
+-- a row stored before tiers were recorded takes that tier with it.
 UPDATE model_usage_events
 SET billing_provider_id = sqlc.arg(billing_provider_id),
     billing_provider_source = 'observed',
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -457,6 +500,7 @@ SELECT
     event.uncached_input_tokens,
     event.output_tokens,
     event.provider_usage_json,
+    event.service_tier,
     event.pricing_version,
     event.source_event_key
 FROM model_usage_events event
@@ -488,10 +532,82 @@ WHERE id = sqlc.arg(id)
   AND uncached_input_tokens IS sqlc.narg(expected_uncached_input_tokens)
   AND output_tokens IS sqlc.narg(expected_output_tokens)
   AND provider_usage_json IS sqlc.narg(expected_provider_usage_json)
+  AND service_tier IS sqlc.narg(expected_service_tier)
   AND source_event_key = sqlc.arg(expected_source_event_key)
   AND pricing_version = sqlc.arg(expected_pricing_version)
-  AND estimated_cost_nanos IS NULL
+  AND estimated_cost_nanos IS sqlc.narg(expected_estimated_cost_nanos)
+  -- AO's own prices only: an agent's reported cost is never overwritten.
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%')
 RETURNING binding_id;
+
+-- name: ListUsagePricedVersions :many
+-- Versions a provider's priced events carry, read from the partial index
+-- idx_model_usage_events_priced_version. The range is one provider's
+-- 'ao-catalog:<provider>:' prefix.
+SELECT DISTINCT pricing_version
+FROM model_usage_events
+WHERE estimated_cost_nanos IS NOT NULL
+  AND pricing_version >= sqlc.arg(version_from)
+  AND pricing_version < sqlc.arg(version_to)
+ORDER BY pricing_version;
+
+-- name: ListUsageRepriceCandidates :many
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.pricing_version = sqlc.arg(pricing_version)
+  AND event.estimated_cost_nanos IS NOT NULL
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageModelCostCandidates :many
+-- One model's events that AO prices itself, for a price override change.
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.model_id = sqlc.arg(model_id)
+  AND (event.estimated_cost_nanos IS NULL
+       OR event.pricing_version LIKE 'ao-catalog:%'
+       OR event.pricing_version LIKE 'ao-override:%')
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageTierRepairSourceIDs :many
+SELECT usage_source_id FROM usage_tier_repairs ORDER BY usage_source_id;
+
+-- name: DeleteUsageTierRepair :exec
+DELETE FROM usage_tier_repairs WHERE usage_source_id = ?;
+
+-- name: SetUntieredUsageEventTier :execrows
+-- The tier changes the price, so the cost is cleared for the backfiller to
+-- price again at the tier's rates.
+UPDATE model_usage_events
+SET service_tier = sqlc.arg(service_tier),
+    input_cost_nanos = NULL,
+    cached_input_cost_nanos = NULL,
+    output_cost_nanos = NULL,
+    estimated_cost_nanos = NULL,
+    pricing_version = ''
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND service_tier IS NULL
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%');
+
+-- name: ListUsagePriceOverrides :many
+SELECT * FROM usage_price_overrides ORDER BY model_id;
+
+-- name: DeleteUsagePriceOverrides :exec
+DELETE FROM usage_price_overrides;
+
+-- name: InsertUsagePriceOverride :exec
+INSERT INTO usage_price_overrides (
+    model_id, input_usd_per_mtok, output_usd_per_mtok,
+    cache_read_usd_per_mtok, cache_write_usd_per_mtok, price_as, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListLegacyUsageSourceIDs :many
 -- Open attribution: never attributed, or attributed only by inference and so
@@ -505,6 +621,21 @@ FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
 ORDER BY mue.usage_source_id;
+
+-- name: ListUntimedUsageSourceIDs :many
+-- Events stored before the parser read record times. The usage report windows
+-- by created_at, so these are invisible to it until a reread fills the time.
+SELECT DISTINCT usage_source_id
+FROM model_usage_events
+WHERE created_at IS NULL
+ORDER BY usage_source_id;
+
+-- name: SetUntimedUsageEventTime :execrows
+UPDATE model_usage_events
+SET created_at = sqlc.arg(created_at)
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND created_at IS NULL;
 
 -- name: ListLegacyUsageEvents :many
 SELECT
@@ -535,6 +666,9 @@ SET billing_provider_id = sqlc.arg(billing_provider_id),
     -- The reparse is the only way a pre-capture event can ever gain its bounded
     -- provider object, and it is exactly what makes the event priceable.
     provider_usage_json = sqlc.narg(provider_usage_json),
+    -- Same for the service tier, which Codex reports on another line. The
+    -- repair's cost is estimated at it; a stored tier is never replaced.
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -654,3 +788,70 @@ LEFT JOIN usage_session_integrity integrity ON integrity.session_id = ub.session
 WHERE (sqlc.arg(project_id) = '' OR s.project_id = sqlc.arg(project_id))
 GROUP BY ub.session_id, s.project_id, s.num, integrity.incomplete
 ORDER BY s.project_id, s.num;
+
+-- name: ListUsageReportEvents :many
+-- Every timestamped usage event in a window, with the session it belongs to.
+-- created_at is stored as Go's UTC text, so a range over its fixed-width
+-- "YYYY-MM-DD HH:MM:SS" prefix is a time range. The cache-write counts are read
+-- out of the bounded provider object: Claude and Codex report them in their own
+-- vocabulary, and every other agent has them under the ao_ keys the usage
+-- parser adds. -1 means the object did not report that count.
+SELECT
+    model_usage_events.created_at,
+    model_usage_events.provider_id,
+    model_usage_events.billing_provider_id,
+    model_usage_events.model_id,
+    model_usage_events.service_tier,
+    model_usage_events.cached_input_tokens,
+    model_usage_events.uncached_input_tokens,
+    model_usage_events.output_tokens,
+    model_usage_events.input_cost_nanos,
+    model_usage_events.cached_input_cost_nanos,
+    model_usage_events.output_cost_nanos,
+    model_usage_events.estimated_cost_nanos,
+    CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
+        CASE model_usage_events.provider_id
+            WHEN 'anthropic' THEN COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+            ELSE COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+        END
+    END, -1) AS INTEGER) AS cache_write_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens')) END, -1) AS INTEGER) AS cache_write_1h_tokens,
+    usage_bindings.harness,
+    usage_bindings.session_id,
+    sessions.project_id,
+    CAST(COALESCE(NULLIF(trim(sessions.display_name), ''), NULLIF(trim(sessions.issue_id), ''), sessions.id) AS TEXT) AS session_title
+FROM model_usage_events
+JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+JOIN sessions ON sessions.id = usage_bindings.session_id
+WHERE model_usage_events.created_at IS NOT NULL
+  AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
+  AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
+ORDER BY model_usage_events.id;
+
+-- name: GetUsageCursorRead :one
+SELECT account_key, read_until FROM usage_cursor_reads LIMIT 1;
+
+-- name: DeleteUsageCursorReads :exec
+DELETE FROM usage_cursor_reads;
+
+-- name: InsertUsageCursorRead :exec
+INSERT INTO usage_cursor_reads (account_key, read_until) VALUES (?, ?);
+
+-- name: DeleteCursorUsageEventsInRange :exec
+-- A Cursor read replaces every event it covers: Cursor can finalize an event
+-- after it was first read, and its event keys count repeats within one read
+-- only. created_at is Go's UTC text, so whole-second prefixes compare as times.
+DELETE FROM model_usage_events
+WHERE usage_source_id IN (
+    SELECT id FROM usage_sources
+    WHERE kind = 'cursor_dashboard' AND artifact_path = sqlc.arg(artifact_path)
+)
+  AND substr(created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
+  AND substr(created_at, 1, 19) <= CAST(sqlc.arg(until_utc) AS TEXT);

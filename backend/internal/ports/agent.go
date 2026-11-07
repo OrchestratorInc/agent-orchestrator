@@ -731,12 +731,13 @@ type ActiveTurnSteerer interface {
 	SteersActiveTurn() bool
 }
 
-// MetadataKeyAgentSessionID is the SessionRef.Metadata key that carries an
-// agent's native session id. It matches the json tag on
-// domain.SessionMetadata.AgentSessionID and the key the adapters read, so the
-// Session Manager can bridge its typed metadata onto a SessionRef without
-// either side hard-coding the other's vocabulary.
-const MetadataKeyAgentSessionID = "agentSessionId"
+// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed
+// session metadata onto SessionRef without adapters hard-coding domain JSON
+// vocabulary.
+const (
+	MetadataKeyAgentSessionID       = "agentSessionId"
+	MetadataKeyNativeTranscriptPath = "nativeTranscriptPath"
+)
 
 // MetadataKeySessionMode is the SessionRef.Metadata key that carries the
 // current session mode (e.g. "chat" or "tui").

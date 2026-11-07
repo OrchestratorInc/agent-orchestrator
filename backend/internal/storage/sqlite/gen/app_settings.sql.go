@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, limit_history, cursor_usage FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -31,8 +31,32 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.VersionRefresh,
 		&i.ComputerUse,
 		&i.SessionRetentionDays,
+		&i.LimitHistory,
+		&i.CursorUsage,
 	)
 	return i, err
+}
+
+const getCursorUsage = `-- name: GetCursorUsage :one
+SELECT cursor_usage FROM app_settings WHERE id = 1
+`
+
+func (q *Queries) GetCursorUsage(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getCursorUsage)
+	var cursor_usage bool
+	err := row.Scan(&cursor_usage)
+	return cursor_usage, err
+}
+
+const getLimitHistory = `-- name: GetLimitHistory :one
+SELECT limit_history FROM app_settings WHERE id = 1
+`
+
+func (q *Queries) GetLimitHistory(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getLimitHistory)
+	var limit_history bool
+	err := row.Scan(&limit_history)
+	return limit_history, err
 }
 
 const resetHarnessDefault = `-- name: ResetHarnessDefault :exec
@@ -66,6 +90,20 @@ func (q *Queries) SetComputerUse(ctx context.Context, arg SetComputerUseParams) 
 	return err
 }
 
+const setCursorUsage = `-- name: SetCursorUsage :exec
+UPDATE app_settings SET cursor_usage = ?, updated_at = ? WHERE id = 1
+`
+
+type SetCursorUsageParams struct {
+	CursorUsage bool
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) SetCursorUsage(ctx context.Context, arg SetCursorUsageParams) error {
+	_, err := q.db.ExecContext(ctx, setCursorUsage, arg.CursorUsage, arg.UpdatedAt)
+	return err
+}
+
 const setDefaultSessionMode = `-- name: SetDefaultSessionMode :exec
 UPDATE app_settings SET default_session_mode = ?, updated_at = ? WHERE id = 1
 `
@@ -95,6 +133,20 @@ type SetHarnessDefaultParams struct {
 
 func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setLimitHistory = `-- name: SetLimitHistory :exec
+UPDATE app_settings SET limit_history = ?, updated_at = ? WHERE id = 1
+`
+
+type SetLimitHistoryParams struct {
+	LimitHistory bool
+	UpdatedAt    time.Time
+}
+
+func (q *Queries) SetLimitHistory(ctx context.Context, arg SetLimitHistoryParams) error {
+	_, err := q.db.ExecContext(ctx, setLimitHistory, arg.LimitHistory, arg.UpdatedAt)
 	return err
 }
 

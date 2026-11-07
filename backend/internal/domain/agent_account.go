@@ -56,6 +56,24 @@ type AgentAccountLimitWindow struct {
 	Label       string     `json:"label"`
 	UsedPercent float64    `json:"usedPercent" minimum:"0" maximum:"100"`
 	ResetsAt    *time.Time `json:"resetsAt,omitempty"`
+	// DurationMinutes is the window's length: 300 for the five-hour session,
+	// 10080 for a weekly limit, 0 when the provider does not say.
+	DurationMinutes int `json:"durationMinutes,omitempty" minimum:"0"`
+}
+
+// AgentLimitReading is one limit window's value as read at one moment. Email
+// and Plan are the login the account was signed in as then.
+type AgentLimitReading struct {
+	AccountID       string
+	Provider        AgentAccountProvider
+	Email           string
+	Plan            string
+	WindowID        string
+	Label           string
+	DurationMinutes int
+	UsedPercent     float64
+	ResetsAt        *time.Time
+	ReadAt          time.Time
 }
 
 // AgentAccountLimits is what the provider's CLI reports about an account's
