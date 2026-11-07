@@ -100,6 +100,54 @@ func TestBrokerExecuteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBrokerForgetSessionRoundTrip(t *testing.T) {
+	broker := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+	handshake(t, enc, dec, "")
+	waitConnected(t, broker)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- broker.ForgetSession(context.Background(), "session-1") }()
+
+	var command wireMessage
+	if err := dec.Decode(&command); err != nil {
+		t.Fatal(err)
+	}
+	if command.Type != "command" || command.SessionID != "session-1" || command.Action != "__forget-session" {
+		t.Fatalf("command = %#v", command)
+	}
+	if err := enc.Encode(wireMessage{
+		Type:      "result",
+		RequestID: command.RequestID,
+		OK:        true,
+		Result:    json.RawMessage(`{"forgotten":true}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for result")
+	}
+}
+
 func TestBrokerExecuteWaitsForRuntimeReconnect(t *testing.T) {
 	broker := New(nil)
 	ctx, cancel := context.WithCancel(context.Background())

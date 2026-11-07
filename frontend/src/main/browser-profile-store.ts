@@ -365,6 +365,18 @@ export class BrowserProfileStore {
 		});
 	}
 
+	/** Forget a confirmed ended worker, not a browser panel that may reopen. */
+	async forgetSession(sessionId: string): Promise<void> {
+		if (!isValidBrowserProfileSessionId(sessionId)) {
+			throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Session ID is invalid.");
+		}
+		return this.enqueueMutation((current) => {
+			const bindings = { ...current.bindings };
+			delete bindings[sessionId];
+			return { registry: { ...current, bindings }, result: undefined };
+		});
+	}
+
 	async deleteProfile(profileId: string): Promise<void> {
 		if (!isBrowserProfileId(profileId)) {
 			throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile ID is invalid.");

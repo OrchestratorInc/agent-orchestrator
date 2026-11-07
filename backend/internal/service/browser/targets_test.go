@@ -26,8 +26,23 @@ func (r *namedRuntime) Execute(_ context.Context, _ domain.SessionID, action str
 }
 
 type destroyRecorder struct {
+	forgotten []domain.SessionID
 	destroyed []domain.SessionID
 	err       error
+}
+
+func (d *destroyRecorder) ForgetSession(_ context.Context, sessionID domain.SessionID) error {
+	d.forgotten = append(d.forgotten, sessionID)
+	return d.err
+}
+
+func TestLifecycleForgetsOnlyPanelBindings(t *testing.T) {
+	panel := &destroyRecorder{err: errors.New("write failed")}
+	chrome := &destroyRecorder{}
+	err := (Lifecycle{Panel: panel, Chrome: chrome}).ForgetSession(context.Background(), "s1")
+	if err == nil || len(panel.forgotten) != 1 || len(chrome.forgotten) != 0 {
+		t.Fatalf("err=%v panel=%v chrome=%v", err, panel.forgotten, chrome.forgotten)
+	}
 }
 
 func (d *destroyRecorder) DestroySession(_ context.Context, sessionID domain.SessionID) error {

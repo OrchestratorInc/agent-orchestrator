@@ -502,6 +502,7 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	if !deleted {
 		return fmt.Errorf("delete %s: %w", id, ErrNotFound)
 	}
+	m.forgetBrowserBestEffort(ctx, id)
 	m.cleanupSystemPromptDir(id)
 	m.cleanupAttachments(ctx, id)
 	return nil
