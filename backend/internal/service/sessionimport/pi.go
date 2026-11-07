@@ -206,5 +206,6 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	if !nativeIDPattern.MatchString(t.nativeID) || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}
-	return t, finishTranscript(&t, errRelativeCWD)
+	finishErr := finishTranscript(&t, errRelativeCWD)
+	return t, finishErr
 }

@@ -4,7 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
+import { apiClient, apiErrorCode } from "../../../lib/api-client";
+import { apiErrorException } from "../../../lib/api-error-exception";
 import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../../../lib/format-time";
 import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
@@ -68,7 +69,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			const response = await apiClient.GET("/api/v1/session-import", {
 				signal,
 			});
-			if (response.error) throw new Error(apiErrorMessage(response.error));
+			if (response.error) throw apiErrorException(response.error);
 			return response.data;
 		},
 	});
@@ -149,7 +150,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			for (const path of newFolders) {
 				const added = await apiClient.POST("/api/v1/projects", { body: { path } });
 				if (added.error && apiErrorCode(added.error) !== "PATH_ALREADY_REGISTERED") {
-					throw new Error(apiErrorMessage(added.error));
+					throw apiErrorException(added.error);
 				}
 			}
 			if (newFolders.length) {
@@ -160,7 +161,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			const response = await apiClient.POST("/api/v1/session-import", {
 				body: { ids },
 			});
-			if (response.error) throw new Error(apiErrorMessage(response.error));
+			if (response.error) throw apiErrorException(response.error);
 			setResults(response.data.results);
 			setSelected(
 				new Set(

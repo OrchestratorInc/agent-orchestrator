@@ -637,7 +637,8 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}
-	return t, finishTranscript(&t, errRelativeCWD)
+	finishErr := finishTranscript(&t, errRelativeCWD)
+	return t, finishErr
 }
 
 // finishTranscript rejects a relative working directory with cwdErr, dates
