@@ -39,8 +39,8 @@
   }
 
   .prose figure.shiki {
-    background: rgb(255 255 255 / 0.04) !important;
-    border: 1px solid rgb(255 255 255 / 0.04) !important;
+    background: var(--code-surface) !important;
+    border: 1px solid var(--code-border) !important;
     box-shadow: none !important;
     padding: 0;
   }
@@ -95,4 +95,33 @@
     mask: none !important;
     overscroll-behavior: contain;
   }
+}
+
+/* The sidebar footer row is meant for icon links plus the theme switch. With
+   no icon links the switch is alone, so let its three buttons share the row
+   instead of sitting at the end of an empty box. Unlayered to beat utilities. */
+:is(#nd-sidebar, #nd-sidebar-mobile) [data-theme-toggle]:only-child {
+  flex: 1 1 auto;
+  margin-inline-start: 0;
+  border-inline-start-width: 0;
+  gap: 0.25rem;
+  padding: 0.125rem;
+}
+
+:is(#nd-sidebar, #nd-sidebar-mobile) [data-theme-toggle]:only-child > button {
+  flex: 1 1 0;
+  width: auto;
+  height: 1.75rem;
+}
+
+:is(#nd-sidebar, #nd-sidebar-mobile) [data-theme-toggle]:only-child > button > svg {
+  width: 1rem;
+  height: 1rem;
+  margin-inline: auto;
+}
+
+/* GitHub Light's keyword red (#D73A49) is under 4.5:1 on the code surface;
+   use GitHub's darker red in light mode. Dark mode keeps its own colours. */
+html:not(.dark) .shiki code span[style*="--shiki-light:#D73A49"] {
+  color: #b31d28;
 }

@@ -63,6 +63,10 @@ msgstr "Salin tautan ke bagian ini"
 msgid "Copy Markdown"
 msgstr "Salin Markdown"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Tema gelap"
+
 msgid "Docs"
 msgstr "Dokumentasi"
 
@@ -81,6 +85,10 @@ msgstr "Bantuan"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Sembunyikan bilah samping"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Tema terang"
 
 msgid "Main site"
 msgstr "Situs utama"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Buka/tutup menu"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Ganti tema"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Pelacak"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Gunakan tema sistem"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

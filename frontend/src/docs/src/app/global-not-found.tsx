@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 // Each language has its own root layout, so the 404 page brings its own.
 export default function NotFoundPage() {
   return (
-    <html lang="en" className={`dark overscroll-none ${GeistSans.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`overscroll-none ${GeistSans.variable}`} suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
         <Providers>
           <NotFound />

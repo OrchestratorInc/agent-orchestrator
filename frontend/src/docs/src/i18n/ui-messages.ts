@@ -24,6 +24,10 @@ const FRAMEWORK_MESSAGES: Record<string, MessageDescriptor> = {
   "Search(search trigger)": msg({ message: "Search", context: "search" }),
   "Open Search(search trigger)(aria-label)": msg({ message: "Open search", context: "search" }),
   "Toggle Menu(mobile menu)(aria-label)": msg({ message: "Toggle menu", context: "mobile menu" }),
+  "Light(theme switcher)(aria-label)": msg({ message: "Light theme", context: "theme switcher" }),
+  "Dark(theme switcher)(aria-label)": msg({ message: "Dark theme", context: "theme switcher" }),
+  "System(theme switcher)(aria-label)": msg({ message: "Use system theme", context: "theme switcher" }),
+  "Toggle Theme(theme switcher)(aria-label)": msg({ message: "Toggle theme", context: "theme switcher" }),
 };
 
 export function frameworkTranslations(i18n: I18n): Record<string, string> {

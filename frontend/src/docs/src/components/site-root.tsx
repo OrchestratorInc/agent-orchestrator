@@ -39,7 +39,7 @@ export function siteLayout(locale: SupportedLocale) {
     return (
       <html
         lang={locale}
-        className={`dark overscroll-none ${GeistSans.variable}`}
+        className={`overscroll-none ${GeistSans.variable}`}
         suppressHydrationWarning
       >
         <head>
