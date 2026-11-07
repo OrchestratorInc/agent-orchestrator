@@ -123,6 +123,7 @@ function SimplifiedSessionTopbarActions({
 						<span className="inline-flex" style={noDragStyle}>
 							<TopbarButton
 								aria-label={t("shell.openOrchestrator")}
+								data-ph-capture-attribute-ao_action="open_orchestrator"
 								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
@@ -228,6 +229,7 @@ function SimplifiedSessionTopbarActions({
 							<span className="inline-flex" style={noDragStyle}>
 								<TopbarButton
 									aria-label={t("shell.newTask")}
+									data-ph-capture-attribute-ao_action="new_task"
 									className="topbar-control--labeled"
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
@@ -373,6 +375,7 @@ function LegacySessionTopbarActions({
 									className="topbar-control--labeled"
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
+									data-ph-capture-attribute-ao_action="new_task"
 									onClick={openNewTask}
 									variant="primary"
 								>
@@ -485,6 +488,7 @@ function LegacySessionTopbarActions({
 								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
+								data-ph-capture-attribute-ao_action="open_orchestrator"
 								onClick={() => void openOrchestrator()}
 								variant="primary"
 							>

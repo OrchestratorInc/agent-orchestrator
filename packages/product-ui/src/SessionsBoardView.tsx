@@ -359,11 +359,13 @@ export function SessionCardView({
 						: "animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]"),
 			)}
 			data-testid="board-session-card"
+			data-ph-capture-attribute-ao_card_action={interactive ? "open_worker_session" : undefined}
 			data-session-id={session.id}
 		>
 			{interactive && onOpen ? (
 				<button
 					aria-label={session.title}
+					data-ph-capture-attribute-ao_action="open_worker_session"
 					className="pointer-events-none absolute inset-0 outline-none"
 					type="button"
 				/>
@@ -553,6 +555,7 @@ function BoardPullRequestGroup({
 								linkClassName,
 							)}
 							href={pr.url}
+							data-ph-capture-attribute-ao_action="open_pr"
 							stopPropagation
 						>
 			<PullRequestLifecycleIcon state={group.state} />
@@ -579,6 +582,7 @@ function BoardPullRequestGroup({
 								ariaLabel={`${pr.commentCount} comments on PR #${pr.number}`}
 								className={cn("ml-auto inline-flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground", linkClassName)}
 								href={pr.url}
+							data-ph-capture-attribute-ao_action="open_pr"
 								stopPropagation
 							>
 								<MessageSquareIcon aria-hidden="true" className="size-icon-2xs" />

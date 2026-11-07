@@ -36,6 +36,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
+						data-ph-capture-attribute-ao_action="open_orchestrator"
 						onClick={() => {
 							if (header) captureTopbarAction("open_orchestrator", "board");
 							openOrchestrator();
@@ -63,6 +64,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}
+						data-ph-capture-attribute-ao_action="new_task"
 						onClick={() => {
 							if (header) captureTopbarAction("new_task", "board");
 							openNewTask();

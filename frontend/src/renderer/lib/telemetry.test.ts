@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
+import { autocapturePropertiesForElement } from "posthog-js/lib/src/autocapture";
 import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
@@ -21,6 +22,7 @@ import {
 	startDailyActiveHeartbeat,
 	withTelemetryContext,
 	releaseChannelFrom,
+	setDisabledEventsForTest,
 	versionChannelFrom,
 } from "./telemetry";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
@@ -138,9 +140,7 @@ describe("telemetry sanitizers", () => {
 
 		expect(config.persistence).toBe("memory");
 		expect(config.person_profiles).toBe("identified_only");
-		expect(config.autocapture).toBe(false);
 		expect(config.capture_performance).toBe(false);
-		expect(config.disable_session_recording).toBe(true);
 		expect(config.bootstrap).toEqual({
 			distinctID: "ins_stable-install-id",
 			isIdentifiedID: false,
@@ -274,19 +274,100 @@ describe("telemetry sanitizers", () => {
 	it("disables every billable PostHog product AO does not consume", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
-		// Replay is billed per recording, so it escapes the per-name rate limits
-		// in this module entirely. Disabling it client-side means the project-side
-		// toggle cannot switch it back on for shipped builds.
-		expect(config.disable_session_recording).toBe(true);
 		// AO reads no flags and ships no surveys, and /flags requests are billed
 		// per request, so any request here is cost for data nothing reads.
 		expect(config.advanced_disable_flags).toBe(true);
 		expect(config.disable_surveys).toBe(true);
-		// Already-disabled capture paths that would otherwise autocapture volume.
-		expect(config.autocapture).toBe(false);
+		expect(config.capture_dead_clicks).toBe(false);
 		expect(config.capture_pageview).toBe(false);
 		expect(config.capture_exceptions).toBe(false);
 		expect(config.capture_performance).toBe(false);
+	});
+
+	it("autocaptures clicks and records replay with text, inputs and payloads masked", () => {
+		const config = buildPostHogConfig("ins_stable-install-id");
+
+		expect(config.autocapture).toEqual({
+			dom_event_allowlist: ["click", "submit", "change"],
+			capture_copied_text: false,
+		});
+		expect(config.mask_all_text).toBe(true);
+		expect(config.mask_all_element_attributes).toBe(true);
+
+		expect(config.disable_session_recording).toBe(false);
+		expect(config.enable_recording_console_log).toBe(false);
+		expect(config.session_recording).toMatchObject({
+			maskAllInputs: true,
+			maskTextSelector: "*",
+			recordHeaders: false,
+			recordBody: false,
+			recordCrossOriginIframes: false,
+		});
+	});
+
+	it.each(["new_task", "start_task", "open_orchestrator", "open_worker_session", "open_pr", "open_artifact"])("keeps the fixed %s action readable while masking UI content", (action) => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		card.setAttribute("data-session-id", "private-session-id");
+		const button = document.createElement("button");
+		button.setAttribute("data-ph-capture-attribute-ao_action", action);
+		button.setAttribute("title", "private-project-name");
+		button.textContent = "private-session-title";
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		button.append(icon);
+		card.append(button);
+		const config = buildPostHogConfig("ins_test");
+		const { props } = autocapturePropertiesForElement(icon, {
+			e: new MouseEvent("click"),
+			maskAllElementAttributes: config.mask_all_element_attributes!,
+			maskAllText: config.mask_all_text!,
+			elementsChainAsString: true,
+		});
+		const send = config.before_send as (event: unknown) => { properties: Record<string, unknown> };
+		const captured = send({ event: "$autocapture", properties: props });
+		expect(captured.properties.ao_action).toBe(action);
+		expect(captured.properties.$event_type).toBe("click");
+		expect(JSON.stringify(captured)).not.toContain("private-");
+	});
+
+	it("uses the session card action only when no nested control has its own action", () => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		const title = document.createElement("span");
+		title.textContent = "private-session-title";
+		card.append(title);
+		const { props } = autocapturePropertiesForElement(title, {
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+		});
+		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
+		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBe("open_worker_session");
+	});
+
+	it("does not mistake an unlabelled secondary card button for opening the session", () => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		const button = document.createElement("button");
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		button.append(icon);
+		card.append(button);
+		const { props } = autocapturePropertiesForElement(icon, {
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+		});
+		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
+		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBeUndefined();
+	});
+
+	it("drops SDK-generated events silenced by the kill switch", () => {
+		const { before_send } = buildPostHogConfig("ins_stable-install-id");
+		const send = before_send as (event: unknown) => unknown;
+		setDisabledEventsForTest(["$snapshot", "$autocapture"]);
+		try {
+			expect(send({ event: "$snapshot", properties: {} })).toBeNull();
+			expect(send({ event: "$autocapture", properties: {} })).toBeNull();
+			expect(send({ event: "$rageclick", properties: {} })).not.toBeNull();
+		} finally {
+			setDisabledEventsForTest([]);
+		}
 	});
 
 	it("emits the stable AO installation id without creating a person profile", () => {

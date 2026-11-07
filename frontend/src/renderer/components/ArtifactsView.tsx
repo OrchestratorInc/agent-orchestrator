@@ -315,6 +315,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 				<div className="group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent">
 					<Pressable
 						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
+						data-ph-capture-attribute-ao_action="open_artifact"
 						onClick={open}
 						title={`${row.sessionTitle} · ${row.path}`}
 					>
