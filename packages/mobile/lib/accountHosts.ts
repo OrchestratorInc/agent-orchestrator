@@ -8,7 +8,7 @@ import { isQuickTunnelHost } from "./staleTunnel";
 
 export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
-const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
+const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.orchestrator.inc").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
 // Tunnels are a quick tunnel's name or AO Cloud's fixed address,

@@ -50,7 +50,7 @@ it("uses the existing AO AuthKit callback and keeps refresh credentials in Secur
 	const authorization = new URL(authorizationUrl);
 	expect(redirectUrl).toBe("ao-app://callback");
 	expect(authorization.searchParams.get("client_id")).toBe("client_01KZ3VRKTDKBZ3JA8AMKTF6W2X");
-	expect(authorization.searchParams.get("redirect_uri")).toBe("https://api.aoagents.dev/app/auth/return");
+	expect(authorization.searchParams.get("redirect_uri")).toBe("https://orchestrator.inc/app/auth/return/");
 	expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
 	expect(authorization.searchParams.get("code_challenge")).toBe("YWJjZA");
 	expect(JSON.parse((fetch.mock.calls[0]?.[1] as RequestInit).body as string)).toMatchObject({

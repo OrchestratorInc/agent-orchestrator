@@ -59,7 +59,10 @@ const (
 	// defaultCloudControlPlaneURL is the control plane a build talks to when no
 	// override is set. Production, now that the hosted offering is live;
 	// AO_CLOUD_CONTROL_PLANE_URL still overrides it (e.g. staging-api for dev).
-	defaultCloudControlPlaneURL = "https://api.aoagents.dev"
+	// api.orchestrator.inc and the older api.aoagents.dev are the same service:
+	// released builds keep the old name until they age out, and nothing a build
+	// stores is tied to the hostname, so moving it signs no one out.
+	defaultCloudControlPlaneURL = "https://api.orchestrator.inc"
 )
 
 // TelemetryRemote selects the remote telemetry exporter.
