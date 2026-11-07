@@ -102,9 +102,12 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 	};
 }
 
-/** Samples the latest turn's rows on every animation frame until the returned stop is called. */
+/**
+ * Samples the latest turn's rows on every animation frame until the returned stop is called.
+ * Resolves once the first frame is in, so a settle that follows always has a frame before it.
+ */
 async function recordFrames(page: Page) {
-	await page.evaluate(() => {
+	await page.evaluate(async () => {
 		const state = window as unknown as { __settleFrames: Frame[]; __settleStop: boolean };
 		state.__settleFrames = [];
 		state.__settleStop = false;
@@ -122,7 +125,12 @@ async function recordFrames(page: Page) {
 			});
 			if (!state.__settleStop) requestAnimationFrame(tick);
 		};
-		requestAnimationFrame(tick);
+		await new Promise<void>((resolve) => {
+			requestAnimationFrame(() => {
+				tick();
+				resolve();
+			});
+		});
 	});
 	return async () => {
 		await page.evaluate(() => {

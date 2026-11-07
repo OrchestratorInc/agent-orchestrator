@@ -133,6 +133,7 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		triage: { launch: async () => ({ ok: true }) },
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,

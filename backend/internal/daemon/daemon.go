@@ -148,7 +148,7 @@ func Run(buildVersion string) error {
 	}
 	ignoreBrokenPipeSignal()
 
-	log := newLogger()
+	log := newLogger(cfg.DataDir)
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -229,7 +229,7 @@ func Run(buildVersion string) error {
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
-		log.Warn("install using-ao skill", "err", err)
+		log.Warn("install AO skills", "err", err)
 	}
 	// Before any session starts: an AppImage remounts under a new path on every
 	// launch, so sessions get a link under the data dir that follows it.
@@ -1605,9 +1605,17 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 }
 
 // newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// can capture it separately from any structured stdout protocol added later,
+// and to $AO_DATA_DIR/daemon.log so the log outlives the process that read it.
+func newLogger(dataDir string) *slog.Logger {
+	options := &slog.HandlerOptions{Level: slog.LevelDebug}
+	file, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+	if err != nil {
+		log := slog.New(slog.NewTextHandler(os.Stderr, options))
+		log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+		return log
+	}
+	return slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, options))
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary

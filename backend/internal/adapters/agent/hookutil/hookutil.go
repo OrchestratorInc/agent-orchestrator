@@ -12,12 +12,70 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 // GitignoreSentinel marks a workspace .gitignore as AO-managed so
 // EnsureWorkspaceGitignore can rewrite its own file idempotently while never
 // touching a user- or repo-provided .gitignore at the same path.
 const GitignoreSentinel = "# managed by agent-orchestrator: AO hook files stay out of git status"
+
+// bugTriageMarkerFile sits inside the skill folder because the skills folder's
+// .gitignore belongs to the using-ao install, which rewrites it. Replacing the
+// skill clears the folder, so the marker is written after it.
+const (
+	bugTriageMarkerFile = ".ao-managed"
+	bugTriageSentinel   = "agent-orchestrator: managed bug-triage skill"
+)
+
+// InstallBugTriageSkill writes AO's bug-triage skill into a harness's skills
+// folder. Unlike using-ao, the name is generic: a project may have its own
+// bug-triage, so a folder AO does not own stays and the session still starts.
+func InstallBugTriageSkill(skillsDir string) error {
+	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
+	if _, err := os.Lstat(skillDir); err == nil {
+		if managed, err := bugTriageManaged(skillDir); err != nil || !managed {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat bug-triage skill: %w", err)
+	}
+	if err := skillassets.MaterializeBugTriage(skillDir); err != nil {
+		return fmt.Errorf("materialize bug-triage skill: %w", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(skillDir, bugTriageMarkerFile), []byte(bugTriageSentinel+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write bug-triage marker: %w", err)
+	}
+	if err := EnsureWorkspaceGitignore(skillDir, "SKILL.md", bugTriageMarkerFile); err != nil {
+		return fmt.Errorf("bug-triage gitignore: %w", err)
+	}
+	return nil
+}
+
+// UninstallBugTriageSkill removes the skill only when AO's marker owns it.
+func UninstallBugTriageSkill(skillsDir string) error {
+	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
+	managed, err := bugTriageManaged(skillDir)
+	if err != nil || !managed {
+		return err
+	}
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("remove bug-triage skill: %w", err)
+	}
+	return nil
+}
+
+func bugTriageManaged(skillDir string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(skillDir, bugTriageMarkerFile)) //nolint:gosec // path is rooted in the caller-owned workspace
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read bug-triage marker: %w", err)
+	}
+	return strings.Contains(string(data), bugTriageSentinel), nil
+}
 
 // CopilotAgentProfileSentinel marks a Copilot custom-agent profile as
 // AO-managed so writers and scratch-workspace readers share one ownership
