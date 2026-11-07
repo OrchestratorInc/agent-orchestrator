@@ -199,7 +199,8 @@ function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
-function protectedStorageAvailable(): boolean {
+/** Whether safeStorage protects what it encrypts (not Linux's basic_text backend). */
+export function protectedStorageAvailable(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
   const backend = safeStorage.getSelectedStorageBackend();

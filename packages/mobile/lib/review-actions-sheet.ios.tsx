@@ -7,13 +7,12 @@ import type { ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } fro
 import { ReviewerPicker } from "./reviewer-picker.ios";
 import { symbols } from "./symbols";
 import { appFont } from "./swiftUIFont";
+import { secondaryForeground as secondary } from "./swiftUIStyles";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 import { sheetInset, space } from "./tokens";
 import { SheetHeader } from "./ui";
 import { useAnnounceAlerts } from "./useAnnounceAlerts";
-
-const secondary = foregroundStyle({ type: "hierarchical", style: "secondary" });
 
 /**
  * The review actions sheet as a SwiftUI Form: switches, menu pickers and

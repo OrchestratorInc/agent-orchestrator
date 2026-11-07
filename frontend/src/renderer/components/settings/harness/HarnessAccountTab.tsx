@@ -1,12 +1,11 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountProviderFor, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { agentAccountProviderFor } from "../../../hooks/useAgentAccounts";
 import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import { IdleUpdateStatus } from "./HarnessSessionsDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
-import { useUiStore } from "../../../stores/ui-store";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import { AgentAccountsPanel } from "../AgentAccountsSection";
@@ -46,11 +45,8 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 	// Sessions that must end first turn Update into a way to find them.
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
-	// Subscription accounts are a developer-mode preview, for local Claude Code
-	// and Codex. A saved account new tasks start on is listed even without it:
-	// readiness then speaks for that account, not for the CLI's own login.
-	const accountsPreview = useUiStore((state) => state.developerMode);
-	const accountProvider = (accountsPreview || followsSavedAccount(details.readinessAgent)) && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	// Subscription accounts are for local Claude Code and Codex.
+	const accountProvider = !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on Done.
 	const justFinished = useInstallJustFinished(job);
 	const stage = justFinished ? "done" : installStage(job);

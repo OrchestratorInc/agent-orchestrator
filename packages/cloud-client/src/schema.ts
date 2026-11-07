@@ -382,6 +382,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's share links, newest first, revoked ones included. No link carries its token, url, code or shortUrl: only the create response does. joinedCount says how many people the link still gives more than what was shared with them directly. */
+        get: operations["listProjectShareLinks"];
+        put?: never;
+        /** @description Mint a share link for the whole project, or one of its sessions with sessionId. Omitted fields default to role viewer, accessScope anyone and interaction view. 400 invalid_request for a body that is not JSON or names an unknown field; 422 validation_error for a role, accessScope, interaction or modeCap outside its enum, or a recipient that is not an email address. The response is the only one that carries the link's token and url, and its code and shortUrl when the control plane issues short codes. */
+        post: operations["createProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares/{linkId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn a share link off. Without a body, or with removeJoined false, only the link stops working: what it already granted stays, and a link that is unknown or already revoked is 404 not_found. With removeJoined true the people who joined by the link lose what it gave them too (access it alone gave is revoked; access also shared directly drops back to that level), the answer is 200 with how many grants changed, and a link already revoked is processed the same way: only an unknown link is 404. */
+        post: operations["revokeProjectShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/share-links/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Redeem a share link, by its short code or by its organization and token, into the caller's own access grant (an existing one is only ever raised). Someone already in the project's organization gets no grant: member is true and grant is empty. 400 invalid_request for a code that is not 22 letters and digits, or without a code, an orgId that is not a UUID or an empty token. 404 not_found for an unknown, revoked or expired link, or an archived project. 403 forbidden when the caller created the link, or the link is restricted to recipients that do not include the caller's email. */
+        post: operations["redeemShareLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/cues/{cueId}": {
         parameters: {
             query?: never;
@@ -2624,6 +2683,11 @@ export interface components {
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
             offering?: components["schemas"]["Offering"];
+            /**
+             * @description Whether this is someone's own workspace or a team's. Only /me reports it; an older control plane leaves it out.
+             * @enum {string}
+             */
+            kind?: "personal" | "team" | "enterprise";
         };
         PutOrgSandboxProviderInput: {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
@@ -3096,6 +3160,157 @@ export interface components {
             page: components["schemas"]["PageInfo"];
         };
         /** @enum {string} */
+        ShareRole: "viewer" | "editor";
+        /** @enum {string} */
+        ShareModeCap: "read-only" | "standard" | "trusted";
+        ShareLink: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: uuid
+             * @description The one session the link shares; absent, the whole project.
+             */
+            sessionId?: string;
+            role: components["schemas"]["ShareRole"];
+            /** @enum {string} */
+            status: "active" | "revoked";
+            /**
+             * @description anyone redeems the link; restricted, only the recipients.
+             * @enum {string}
+             */
+            accessScope: "anyone" | "restricted";
+            /** @description Lowercased email addresses; empty unless accessScope is restricted. */
+            recipients: string[];
+            /** @enum {string} */
+            interaction: "view" | "interact";
+            /** @description Absent when there is no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[];
+            /**
+             * Format: date-time
+             * @description Absent when the link never expires.
+             */
+            expiresAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description How many people the link still gives more than what was shared with them directly: the grants a revoke with removeJoined changes. 0 on a link just created. Absent from control planes that predate it, which also ignore removeJoined. */
+            joinedCount?: number;
+        };
+        /** @description A share link as its create returns it, the only time its secrets are sent: the store keeps only their hashes. */
+        CreatedShareLink: components["schemas"]["ShareLink"] & {
+            /** @description The link's raw token; with orgId it redeems the link. */
+            token: string;
+            /**
+             * Format: uri
+             * @description <scheme>://<host>/share/<orgId>/<token>, built from the host this request reached (X-Forwarded-* when present). A convenience for non-browser callers; browsers build the link from their own origin and token.
+             */
+            url: string;
+            /** @description The link's short code, which redeems it on its own. Present only when the control plane issues codes (AO_CLOUD_SHARE_LINK_CODES); the client then shares a /s/<code> link instead of the token. */
+            code?: string;
+            /**
+             * Format: uri
+             * @description <origin>/s/<code> on the public share-link origin (AO_CLOUD_SHARE_LINK_ORIGIN). Present only with a code and when that origin is configured; the client shares it as is.
+             */
+            shortUrl?: string;
+        };
+        ShareLinkList: {
+            links: components["schemas"]["ShareLink"][];
+        };
+        CreatedShareLinkEnvelope: {
+            link: components["schemas"]["CreatedShareLink"];
+        };
+        CreateShareLinkInput: {
+            /**
+             * Format: uuid
+             * @description Shares one session of the project; omitted, the whole project.
+             */
+            sessionId?: string;
+            /** @description Defaults to viewer. */
+            role?: components["schemas"]["ShareRole"];
+            /**
+             * @description Defaults to anyone. restricted lets only the recipients redeem it.
+             * @enum {string}
+             */
+            accessScope?: "anyone" | "restricted";
+            recipients?: string[];
+            /**
+             * @description Defaults to view.
+             * @enum {string}
+             */
+            interaction?: "view" | "interact";
+            /** @description Omitted, no cap beyond the session's own mode. */
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands?: string[];
+            /** @description Hours until the link expires; omitted, zero or negative, it never expires. */
+            expiresInHours?: number;
+        };
+        RevokeShareLinkInput: {
+            /** @description Also remove what the link gave the people who joined by it. */
+            removeJoined?: boolean;
+        };
+        RevokeShareLinkResult: {
+            /** @description How many grants were revoked or dropped back to their direct level. */
+            removedGrants: number;
+        };
+        RedeemShareLinkInput: {
+            /** @description The link's short code; it names the organization itself. */
+            code: string;
+        } | {
+            /** Format: uuid */
+            orgId: string;
+            token: string;
+        };
+        /** @description The caller's grant. Empty when member is true: id, role and status are empty strings, deniedCommands is null and redeemedAt is the zero time. */
+        SharedProjectGrant: {
+            /** @description The grant's UUID, or empty when member is true. */
+            id: string;
+            /** @enum {string} */
+            role: "viewer" | "editor" | "";
+            /** @enum {string} */
+            status: "active" | "revoked" | "";
+            userEmail?: string;
+            userDisplayName?: string;
+            modeCap?: components["schemas"]["ShareModeCap"];
+            deniedCommands: string[] | null;
+            /** Format: date-time */
+            redeemedAt: string;
+        };
+        /** @description A project, or one of its sessions, shared with the caller. */
+        SharedProject: {
+            grant: components["schemas"]["SharedProjectGrant"];
+            project: components["schemas"]["Project"];
+            /** @description True when the caller already belongs to the project's organization and needs no grant; the link only says where to go. */
+            member?: boolean;
+            /**
+             * Format: uuid
+             * @description The shared session; absent when the whole project is shared.
+             */
+            sessionId?: string;
+            sessionName?: string;
+            sharedByEmail?: string;
+            sharedByName?: string;
+            /**
+             * Format: uuid
+             * @description The team this reaches the caller through, when not shared with them directly.
+             */
+            viaTeamId?: string;
+            viaTeamName?: string;
+            /**
+             * @description How the caller got it. Absent when member is true.
+             * @enum {string}
+             */
+            source?: "link" | "direct" | "team";
+        };
+        SharedProjectEnvelope: {
+            shared: components["schemas"]["SharedProject"];
+        };
+        /** @enum {string} */
         GitHubInstallationStatus: "active" | "suspended" | "removed";
         /** @enum {string} */
         GitHubSyncStatus: "pending" | "syncing" | "ready" | "retry" | "failed";
@@ -3513,6 +3728,13 @@ export interface components {
             sandboxProviderConnectionId?: string;
             /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
             branch?: string;
+            /** @description Coding-agent model the worker runs (harness-native id). One the account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the worker runs the project's worker model; without one, a worker on the orchestrator's harness runs the orchestrator's current model, else the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the worker's opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
         ChatMessageInput: {
             /** @description The message. It may be empty only when attachmentIds names at least one file. */
@@ -3853,6 +4075,13 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
+            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. The control plane always sends it; an empty string means the harness default. Absent only from older control planes, which predate it; read `model` then. */
+            currentModel?: string;
+            /**
+             * @description Reasoning effort the session's turns run with now: its owner's Chat pick, else the effort it launched with. Omitted when that is the model's default.
+             * @enum {string}
+             */
+            currentReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
             deniedCommands: string[];
             interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
@@ -5680,6 +5909,119 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectShareLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareLinkList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The created share link, with its secrets. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedShareLinkEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeProjectShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RevokeShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description The link was revoked and the grants it gave were removed (removeJoined true). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeShareLinkResult"];
+                };
+            };
+            /** @description The link was revoked; grants it gave are kept. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    redeemShareLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemShareLinkInput"];
+            };
+        };
+        responses: {
+            /** @description Where the link leads, and the caller's grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedProjectEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

@@ -7,6 +7,7 @@ import { type ReactElement, type ReactNode } from "react";
 import { FlatList, Platform, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import { refreshControlColors } from "./refreshControlColors";
+import { secondaryForeground } from "./swiftUIStyles";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 import { iconSize, sheetInset, space, stateOpacity, type } from "./tokens";
@@ -56,7 +57,7 @@ export function NativePickerList({ header, options, selected, onSelect, refreshi
 					<FieldGroup modifiers={[scrollContentBackground("hidden"), refreshable(onRefresh)]}>
 						<FieldGroup.Section>
 							{options.map((option) => <OptionRow key={option.id} option={option} selected={option.id === selected} onSelect={onSelect} />)}
-							{options.length === 0 && empty ? <SwiftUIText modifiers={[foregroundStyle({ type: "hierarchical", style: "secondary" })]}>{empty}</SwiftUIText> : null}
+							{options.length === 0 && empty ? <SwiftUIText modifiers={[secondaryForeground]}>{empty}</SwiftUIText> : null}
 						</FieldGroup.Section>
 						{footer}
 					</FieldGroup>

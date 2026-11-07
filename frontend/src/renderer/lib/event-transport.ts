@@ -12,8 +12,6 @@ import {
 } from "../hooks/useReviewerConversation";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
-import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
-import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
@@ -100,8 +98,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// A supporting daemon answers with an open stream; do not keep it.
 					.finally(() => controller.abort());
 			};
-			let accountSource: EventSource | undefined;
-			let accountSourceBaseUrl: string | undefined;
 			const stopPersistingRemoteCache = persistRemoteCache(queryClient);
 			let disposed = false;
 			type RemoteConnection = {
@@ -271,15 +267,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					remoteSources.delete(hostId);
 				}
 				for (const hostId of active) connectRemote(hostId);
-			};
-			const applyAccountEvent = (event: Event) => {
-				if (disposed || !("data" in event)) return;
-				try {
-					const decoded = JSON.parse(String((event as MessageEvent).data)) as components["schemas"]["CodexAccountsResponse"];
-					writeCodexAccounts(queryClient, decoded, "replace");
-				} catch {
-					// A malformed transient event cannot replace the cached safe snapshot.
-				}
 			};
 			// The scheduled flush body. Extracted so a leading-edge event can run
 			// it immediately without waiting out a full window.
@@ -509,30 +496,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (!hasTrustedApiBaseUrl()) {
 					healthAttempt += 1;
 					source?.close();
-					accountSource?.close();
 					source = undefined;
-					accountSource = undefined;
 					sourceBaseUrl = undefined;
-					accountSourceBaseUrl = undefined;
 					setEventsConnectionState("disconnected");
 					return;
 				}
 				const baseUrl = getApiBaseUrl();
-				if (!accountSource || accountSourceBaseUrl !== baseUrl || accountSource.readyState === EVENTSOURCE_CLOSED) {
-					accountSource?.close();
-					accountSourceBaseUrl = baseUrl;
-					try {
-						accountSource = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/agents/codex/accounts/events`);
-						accountSource.onopen = () => {
-							if (disposed) return;
-							void queryClient.invalidateQueries({ queryKey: codexAccountsQueryKey });
-						};
-						accountSource.onerror = () => { if (accountSource?.readyState === EVENTSOURCE_CLOSED) scheduleRetry(); };
-						accountSource.addEventListener("codex_account", applyAccountEvent);
-					} catch {
-						accountSource = undefined;
-					}
-				}
 				// Keep a still-usable source on the same base URL; replace one the
 				// browser abandoned (CLOSED) or one bound to a stale port.
 				if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
@@ -633,7 +602,6 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				removeBaseUrlListener();
 				removeConnectedHostsListener();
 				source?.close();
-				accountSource?.close();
 				for (const connection of remoteSources.values()) {
 					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);

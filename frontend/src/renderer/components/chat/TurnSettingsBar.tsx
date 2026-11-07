@@ -368,7 +368,7 @@ export function TurnSettingsBar({
 	const current: PickerSource = nativeModelMenu && onChange
 		? {
 			models: (harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels)
-				.map((model) => ({ id: model.id, label: model.displayName, unavailableReason: model.unavailableReason })),
+				.map((model) => ({ id: model.id, label: model.displayName, unavailableReason: model.unavailableReason, hint: model.hint })),
 			modelId: settings.model ?? fallback?.id,
 			modelLabel,
 			// Fast mode is kept only where the newly picked model offers it.
@@ -401,6 +401,7 @@ export function TurnSettingsBar({
 					id: choice.value, label: choice.name, group: choice.groupName || choice.group,
 					aliases: (choice as ChatConfigOption["choices"][number] & { aliases?: string[] }).aliases,
 					unavailableReason: choice.unavailableReason,
+					hint: choice.hint,
 				})),
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),

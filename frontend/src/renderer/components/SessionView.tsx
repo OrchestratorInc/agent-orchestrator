@@ -2053,6 +2053,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			{hostLabel ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel}</span> : null}
 			{/* On a session shared with this person: what they can do in it, and through which team. */}
 			{session ? <SessionAccessTag session={session} /> : null}
+			{/* A shared project's pull requests and merge requests, on its orchestrator. */}
+			{isOrchestrator && session?.cloud && routedWorkspace ? (
+				<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
+			) : null}
 			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
@@ -2060,6 +2064,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					projectId={session.workspaceId}
 					sessionId={session.id}
 					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE)}
+					sessionName={session.title}
+					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
 				/>
 			) : null}
 			<SessionTopbarActions />
@@ -2521,9 +2527,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							ref={splitScreenRef}
 							style={shownLayout?.vars as CSSProperties | undefined}
 						>
-							{isOrchestrator && session?.cloud && routedWorkspace ? (
-								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
-							) : null}
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
 							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
