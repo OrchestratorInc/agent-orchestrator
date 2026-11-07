@@ -3720,6 +3720,7 @@
 	"sessionImport.messages_one": "{{count}} Nachricht",
 	"sessionImport.messages_other": "{{count}} Nachrichten",
 	"sessionImport.alreadyImported": "Bereits in AO",
+	"sessionImport.allInAO": "Alle Chats hier sind bereits in AO.",
 	"sessionImport.failed": "Import fehlgeschlagen. Erneut versuchen.",
 	"sessionImport.offerTitle": "Frühere Unterhaltungen in AO übernehmen",
 	"sessionImport.offerDescription": "Unterhaltungen der Agents auf diesem Computer in AO fortsetzen. Git-Ordner, die noch keine Projekte sind, werden als Projekte hinzugefügt.",

@@ -3702,6 +3702,7 @@
 	"sessionImport.messages_one": "{{count}} 条消息",
 	"sessionImport.messages_other": "{{count}} 条消息",
 	"sessionImport.alreadyImported": "已存在于 AO 中",
+	"sessionImport.allInAO": "这里的所有聊天都已在 AO 中。",
 	"sessionImport.failed": "导入失败。请重试。",
 	"sessionImport.offerTitle": "将以前的对话导入 AO",
 	"sessionImport.offerDescription": "在 AO 中继续你在此电脑上使用的代理的对话。尚未成为项目的 Git 文件夹会被添加为项目。",

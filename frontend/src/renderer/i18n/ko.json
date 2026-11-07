@@ -3720,6 +3720,7 @@
 	"sessionImport.messages_one": "메시지 {{count}}개",
 	"sessionImport.messages_other": "메시지 {{count}}개",
 	"sessionImport.alreadyImported": "이미 AO에 있음",
+	"sessionImport.allInAO": "여기 있는 모든 채팅이 이미 AO에 있습니다.",
 	"sessionImport.failed": "가져오지 못했습니다. 다시 시도하세요.",
 	"sessionImport.offerTitle": "이전 대화를 AO로 가져오기",
 	"sessionImport.offerDescription": "이 컴퓨터에서 사용하는 에이전트의 대화를 AO에서 이어서 진행하세요. 아직 프로젝트가 아닌 Git 폴더는 프로젝트로 추가됩니다.",

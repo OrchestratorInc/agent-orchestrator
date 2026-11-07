@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
 import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
@@ -12,6 +12,7 @@ import { useUiStore } from "../../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
+import { Pressable } from "../../ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { SettingsSearch } from "../SettingsSearch";
 import type { components } from "../../../../api/schema";
@@ -45,6 +46,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	// Choices made on the last list (a selection or an import) survive the next scan.
 	const keepChoicesRef = useRef(false);
 	const [error, setError] = useState<string>();
+	const [showInAO, setShowInAO] = useState(false);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const navigateToSession = useNavigateToSession();
@@ -109,8 +111,12 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						: c.projectId === project)) &&
 			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
+	// Chats already in AO before this list was read sit in their own collapsed
+	// section; chats imported from this list stay in place until the next scan.
+	const inAO = visible.filter((c) => c.sessionId);
+	const listed = visible.filter((c) => !c.sessionId);
 	const importedIds = new Set(results.filter((r) => r.status !== "failed").map((r) => r.id));
-	const eligible = visible.filter((c) => !c.sessionId && !importedIds.has(c.id));
+	const eligible = listed.filter((c) => !importedIds.has(c.id));
 	const selectedVisible = eligible.filter((c) => selected.has(c.id));
 	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
 	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
@@ -257,10 +263,10 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						}
 						disabled={importing || !eligible.length}
 					/>
-					{t("sessionImport.selectAll", { count: visible.length })}
+					{t("sessionImport.selectAll", { count: eligible.length })}
 				</label>
 				<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-					{visible.map((c) => (
+					{listed.map((c) => (
 						<ImportRow
 							key={c.id}
 							candidate={c}
@@ -272,10 +278,36 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 							onOpen={(sessionId) => openSession(c, sessionId)}
 						/>
 					))}
-					{!preview.isFetching && !visible.length ? (
+					{!preview.isFetching && !listed.length ? (
 						<p className="p-6 text-sm text-muted-foreground">
-							{needle ? t("sessionImport.noMatches", { query: query.trim() }) : t("sessionImport.empty")}
+							{inAO.length
+								? t("sessionImport.allInAO")
+								: needle
+									? t("sessionImport.noMatches", { query: query.trim() })
+									: t("sessionImport.empty")}
 						</p>
+					) : null}
+					{inAO.length ? (
+						<div className="border-t border-border">
+							<Pressable
+								className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+								aria-expanded={showInAO}
+								onClick={() => setShowInAO((open) => !open)}
+							>
+								<ChevronDown className={`size-4 shrink-0 transition-transform ${showInAO ? "" : "-rotate-90"}`} aria-hidden="true" />
+								{t("sessionImport.alreadyImported")} · {inAO.length}
+							</Pressable>
+							{showInAO
+								? inAO.map((c) => (
+										<InAORow
+											key={c.id}
+											candidate={c}
+											projectName={projectName(c)}
+											onOpen={() => openSession(c, c.sessionId as string)}
+										/>
+									))
+								: null}
+						</div>
 					) : null}
 				</div>
 			</div>
@@ -367,10 +399,9 @@ function ImportRow({
 	onOpen: (sessionId: string) => void;
 }) {
 	const { t, i18n } = useTranslation();
-	const imported = Boolean(
-		c.sessionId || (result && result.status !== "failed"),
-	);
-	const sessionId = c.sessionId || (result?.status !== "failed" ? result?.sessionId : undefined);
+	// Rows here are not in AO yet; a successful result from this list marks one imported.
+	const imported = Boolean(result && result.status !== "failed");
+	const sessionId = imported ? result?.sessionId : undefined;
 	return (
 		<label className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-3 last:border-0">
 			<Checkbox
@@ -417,5 +448,25 @@ function ImportRow({
 				) : null}
 			</span>
 		</label>
+	);
+}
+
+/** A chat that is already an AO session: shown muted with no checkbox, and
+ * opened instead of imported again. */
+function InAORow({ candidate: c, projectName, onOpen }: { candidate: Candidate; projectName: string; onOpen: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<div className="flex items-center gap-3 border-t border-border py-2 pr-3 pl-9">
+			<span className="min-w-0 flex-1 text-muted-foreground">
+				<span className="block truncate text-sm">{c.title}</span>
+				<span className="block truncate text-xs">
+					<span title={c.folder}>{projectName}</span> · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					<time dateTime={c.lastActivity}>{formatTimeCompact(c.lastActivity, { longUnits: true })}</time>
+				</span>
+			</span>
+			<Button size="xs" variant="ghost" onClick={onOpen}>
+				{t("sessionImport.open")}
+			</Button>
+		</div>
 	);
 }

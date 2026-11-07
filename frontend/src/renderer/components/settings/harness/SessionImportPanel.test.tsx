@@ -185,3 +185,34 @@ it("imports only selected Copilot chats through the existing import flow", async
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["copilot-chat"] } });
 });
+
+it("keeps chats already in AO in a collapsed section that opens them instead of importing", async () => {
+	api.GET.mockResolvedValue({
+		data: {
+			candidates: [
+				{ ...chat, id: "new", title: "New chat", projectId: "project", harness: "claude-code" },
+				{ ...chat, id: "done", title: "Imported chat", projectId: "project", harness: "claude-code", sessionId: "project-9" },
+			],
+		},
+	});
+	renderPanel();
+	await screen.findByRole("checkbox", { name: "Import New chat" });
+	expect(screen.getByText("Select all shown · 1 conversation")).toBeInTheDocument();
+	expect(screen.queryByText("Imported chat")).not.toBeInTheDocument();
+	const section = screen.getByRole("button", { name: "Already in AO · 1" });
+	expect(section).toHaveAttribute("aria-expanded", "false");
+	fireEvent.click(section);
+	expect(screen.getByText("Imported chat")).toBeInTheDocument();
+	expect(screen.queryByRole("checkbox", { name: "Import Imported chat" })).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Open" }));
+	expect(openSession).toHaveBeenLastCalledWith("project", "project-9");
+});
+
+it("says so when every chat in the list is already in AO", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "done", title: "Imported chat", projectId: "project", harness: "claude-code", sessionId: "project-9" }] },
+	});
+	renderPanel();
+	expect(await screen.findByText("Every chat here is already in AO.")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Import 0 conversations" })).toBeDisabled();
+});

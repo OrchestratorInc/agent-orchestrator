@@ -3701,6 +3701,7 @@
 	"sessionImport.messages_one": "{{count}} message",
 	"sessionImport.messages_other": "{{count}} messages",
 	"sessionImport.alreadyImported": "Already in AO",
+	"sessionImport.allInAO": "Every chat here is already in AO.",
 	"sessionImport.failed": "Import failed. Try again.",
 	"sessionImport.offerTitle": "Bring your earlier chats into AO",
 	"sessionImport.offerDescription": "Continue chats from the agents you use on this computer. Git folders that are not projects yet are added as projects.",
