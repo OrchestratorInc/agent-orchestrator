@@ -57,12 +57,16 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
 	const command = activity.detail?.command?.trim();
 	if (command) return describeCommandStep(command);
 
-	const summary = activity.summary.trim().replace(/^`+|`+$/g, "");
+	const title = activity.summary.trim();
+	const summary = title.replace(/^`+|`+$/g, "");
 	const web = /^Searched the web(?:\s+for\s+([\s\S]+))?$/i.exec(summary);
 	if (web) return webSearchStep(web[1]);
-	// Without a command line the summary may be a provider's prose title, so only
-	// a summary that starts with a program we know is read as a command.
-	const step = summary ? describeKnownCommand(summary) : undefined;
+	// Without a command line the summary is the provider's title for the call. Claude
+	// Code titles a command with the command itself in backticks; any other title may
+	// be prose that starts like one ("make the build pass", "touch up README"), so
+	// only a backticked title is read as a command.
+	const backticked = title.length > 2 && title.startsWith("`") && title.endsWith("`");
+	const step = backticked && summary ? describeKnownCommand(summary) : undefined;
 	return step ?? GENERIC_STEP;
 }
 
@@ -93,7 +97,8 @@ export function activityToolStep(activity: ConversationActivity): CommandStep | 
 			return findStep(input("pattern"));
 		case "LS": {
 			const folder = input("path");
-			return folder ? { done: "Listed", live: "Listing", ...fileTarget(folder), icon: "list" } : listStep(undefined);
+			const step = listStep(folder);
+			return step.target && folder ? { ...step, ...fileTarget(folder) } : step;
 		}
 		case "WebSearch":
 			return webSearchStep(input("query"));
@@ -114,15 +119,24 @@ export function activityToolStep(activity: ConversationActivity): CommandStep | 
  * part it is on. Claude Code writes prose that ends on what it will do next ("…
  * I'm creating the to-do list next."), so its last whole sentence is used. A
  * sentence still being written is skipped, and with nothing whole yet there is
- * no gist.
+ * no gist. Code in a fence is not a sentence, and a list marker ("1.", "-") is
+ * not part of one, so both go before the text is read as prose.
  */
 export function thoughtHeadline(text: string | undefined): string | undefined {
 	if (!text?.trim()) return undefined;
-	const headings = [...text.matchAll(/^[ \t]*\*\*([^*\n]+?)\*\*[ \t]*$/gm)]
+	let fenced = false;
+	const lines = text.split("\n").filter((line) => {
+		if (!/^\s*(?:```|~~~)/.test(line)) return !fenced;
+		fenced = !fenced;
+		return false;
+	});
+	const headings = [...lines.join("\n").matchAll(/^[ \t]*\*\*([^*\n]+?)\*\*[ \t]*$/gm)]
 		.map((match) => match[1]!.trim())
 		.filter(Boolean);
 	if (headings.length > 0) return headings.at(-1);
-	const plain = text
+	const plain = lines
+		.map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ""))
+		.join("\n")
 		.replace(/`([^`\n]*)`/g, "$1")
 		.replace(/\*\*|__/g, "")
 		.replace(/\s+/g, " ")
@@ -221,7 +235,7 @@ function describeSegment(segment: Segment, depth: number): CommandStep | undefin
 
 	if (binary === "sed") return sedStep(args);
 	if (READERS.has(binary)) return readStep(readerFiles(binary, args));
-	if (LISTERS.has(binary)) return listStep(positionals(args)[0]);
+	if (LISTERS.has(binary)) return listStep(positionals(args, LISTER_VALUE_FLAGS[binary])[0]);
 	if (SEARCHERS.has(binary)) {
 		if (binary === "rg" && args.includes("--files")) return listStep(positionals(args)[0]);
 		return searchStep(searchPattern(args));
@@ -259,7 +273,7 @@ function describeSegment(segment: Segment, depth: number): CommandStep | undefin
 	if (binary === "go") return goStep(args);
 	if (binary === "cargo") return cargoStep(args);
 	if (binary === "make" || binary === "just" || binary === "task") {
-		const target = positionals(args)[0];
+		const target = taskTarget(binary, args);
 		return target ? scriptStep(target, `${binary} ${target}`) : { done: "Ran", live: "Running", target: binary, icon: "run" };
 	}
 	if (INTERPRETERS.has(binary)) return interpreterStep(binary, args);
@@ -605,6 +619,15 @@ function buildStep(): CommandStep {
 	return { done: "Built project", live: "Building project", icon: "build" };
 }
 
+/** The target of `make -C frontend -j 4 test`, past the options and their values. */
+function taskTarget(binary: string, args: string[]): string | undefined {
+	// make's `-j` and `-l` take a number only when one follows: `make -j 4 test`, `make -j test`.
+	const words = binary === "make"
+		? args.filter((arg, index) => !(/^\d+$/.test(arg) && (args[index - 1] === "-j" || args[index - 1] === "-l")))
+		: args;
+	return positionals(words, TASK_RUNNER_VALUE_FLAGS[binary])[0];
+}
+
 /** A developer tool run directly or through npx / pnpm dlx. */
 function toolStep(tool: string, args: string[]): CommandStep | undefined {
 	if (TEST_TOOLS.has(tool)) return testStep();
@@ -631,8 +654,11 @@ function goStep(args: string[]): CommandStep {
 		case "fmt":
 			return formatStep();
 		case "run": {
-			const file = values[1];
-			return file ? runFileStep(file) : { done: "Ran", live: "Running", target: "go run", icon: "run" };
+			// `go run main.go` runs a file. `go run .` and `go run ./cmd/server` run a
+			// package, which only reads as one in full.
+			const target = values[1];
+			if (target?.endsWith(".go")) return runFileStep(target);
+			return { done: "Ran", live: "Running", target: ["go run", target].filter(Boolean).join(" "), icon: "run" };
 		}
 		case "get":
 		case "install":
@@ -742,7 +768,7 @@ function commandSegments(command: string): Segment[] {
 	const segments: Segment[] = [];
 	for (const words of splitSegments(tokenize(firstLogicalLine(command)))) {
 		const segment = toSegment(words);
-		if (segment && !NAVIGATION.has(segment.binary)) segments.push(segment);
+		if (segment && !NAVIGATION.has(segment.binary) && !SHELL_SYNTAX.has(segment.binary)) segments.push(segment);
 	}
 	const work = segments.filter((segment) => !isProbe(segment));
 	return work.length > 0 ? work : segments;
@@ -822,10 +848,19 @@ function toSegment(segmentWords: Word[]): Segment | undefined {
 			index += 1;
 			continue;
 		}
-		if (WRAPPERS.has(word)) {
+		// `if grep -q …; then`, `do cat "$f"`: shell grammar in front of the program.
+		if (SHELL_KEYWORDS.has(word)) {
 			index += 1;
-			// `env -i FOO=1 cmd`, `timeout 30 cmd`: skip the wrapper's own flags and values.
-			while (index < words.length && (words[index]!.startsWith("-") || /^\d+[smh]?$/.test(words[index]!))) index += 1;
+			continue;
+		}
+		if (WRAPPERS.has(word)) {
+			const valueFlags = WRAPPER_VALUE_FLAGS[word];
+			index += 1;
+			// `env -i FOO=1 cmd`, `timeout -s KILL 30 cmd`, `sudo -u postgres psql`: skip the
+			// wrapper's own flags, the values they take, and a duration.
+			while (index < words.length && (words[index]!.startsWith("-") || /^\d+[smh]?$/.test(words[index]!))) {
+				index += valueFlags?.has(words[index]!) ? 2 : 1;
+			}
 			continue;
 		}
 		break;
@@ -938,7 +973,9 @@ function looksLikeFile(value: string): boolean {
 		value.startsWith("../") ||
 		value.startsWith("~/") ||
 		value.includes("/") ||
-		/^[\w@.+-]+\.[A-Za-z][\w-]*$/.test(value) ||
+		/^[A-Za-z]:\\/.test(value) ||
+		// Any script's letters: `ファイル.md` is as much a file name as `notes.md`.
+		/^[\p{L}\p{N}_@.+-]+\.[A-Za-z][\w-]*$/u.test(value) ||
 		/^[A-Z][\w-]*$/.test(value)
 	);
 }
@@ -958,20 +995,28 @@ function fileTarget(path: string): { target: string; targetTitle?: string } {
 	return base === cleaned ? { target: base } : { target: base, targetTitle: cleaned };
 }
 
-function fileBasename(path: string): string {
+/**
+ * The last part of a path, for a row too narrow for the whole of it; the tooltip
+ * carries the rest. Windows paths split on `\` too: `C:\repo\a.ts` → `a.ts`.
+ */
+export function fileBasename(path: string): string {
 	const cleaned = trimSlash(path);
-	const slash = cleaned.lastIndexOf("/");
+	const slash = lastSeparator(cleaned);
 	return slash >= 0 ? cleaned.slice(slash + 1) || cleaned : cleaned;
 }
 
 function dirname(path: string): string {
 	const cleaned = trimSlash(path);
-	const slash = cleaned.lastIndexOf("/");
+	const slash = lastSeparator(cleaned);
 	return slash >= 0 ? cleaned.slice(0, slash) : "";
 }
 
+function lastSeparator(path: string): number {
+	return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+}
+
 function trimSlash(path: string): string {
-	return path.length > 1 ? path.replace(/\/+$/, "") : path;
+	return path.length > 1 ? path.replace(/[\\/]+$/, "") : path;
 }
 
 function repoName(url: string): string {
@@ -986,8 +1031,19 @@ export function binaryName(value: string): string {
 
 const EMPTY: ReadonlySet<string> = new Set();
 const NAVIGATION = new Set(["cd", "pushd", "popd", "export", "set", "source", ".", "true", ":"]);
+// Shell grammar with no program of its own: a loop's header, a block's end, a test.
+const SHELL_SYNTAX = new Set(["for", "case", "select", "function", "fi", "done", "esac", "}", "[", "[[", "test"]);
+const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{"]);
 const PROBES = new Set(["which", "type", "hash", "whereis"]);
 const WRAPPERS = new Set(["sudo", "env", "time", "nohup", "exec", "timeout", "nice"]);
+// The wrapper flags that take the next word as their value: `sudo -u postgres`, `timeout -s KILL`.
+const WRAPPER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
+	sudo: new Set(["-u", "-g", "-U", "-C", "-D", "-p", "-r", "-t", "-T", "--user", "--group", "--other-user", "--chdir", "--prompt", "--role", "--type"]),
+	timeout: new Set(["-s", "-k", "--signal", "--kill-after"]),
+	env: new Set(["-u", "-C", "--unset", "--chdir"]),
+	nice: new Set(["-n", "--adjustment"]),
+	time: new Set(["-f", "-o", "--format", "--output"]),
+};
 const WRITERS = new Set(["cat", "echo", "printf"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "fish"]);
 const READERS = new Set(["cat", "head", "tail", "nl", "bat", "less", "more", "wc", "jq"]);
@@ -1009,6 +1065,20 @@ const READER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
 	head: HEAD_TAIL_VALUE_FLAGS,
 	tail: HEAD_TAIL_VALUE_FLAGS,
 	bat: new Set(["-r"]),
+};
+// `tree -L 2 src`, `eza -L 2`: a depth or a pattern, not the folder.
+const LISTER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
+	ls: new Set(["-I", "--ignore", "-w", "--width"]),
+	tree: new Set(["-L", "-I", "-P", "-o", "--filelimit"]),
+	eza: new Set(["-L", "--level", "-I", "--ignore-glob"]),
+	exa: new Set(["-L", "--level", "-I", "--ignore-glob"]),
+	lsd: new Set(["--depth", "-I", "--ignore-glob"]),
+};
+// `make -C frontend test`, `just -f ci.just lint`: a folder or a file, not the target.
+const TASK_RUNNER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
+	make: new Set(["-C", "-f", "-I", "-o", "-W", "--directory", "--file", "--makefile", "--include-dir"]),
+	just: new Set(["-f", "-d", "--justfile", "--working-directory"]),
+	task: new Set(["-d", "-t", "--dir", "--taskfile"]),
 };
 /**
  * What grouping counts as exploring, from the same lists the rows are named by:

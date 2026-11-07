@@ -139,7 +139,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, thoughtHeadline, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, fileBasename, thoughtHeadline, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1273,19 +1273,39 @@ export function AssistantMessage({
 }
 
 
-/** What the live row says the agent is doing right now, in the words its own row uses. */
+/**
+ * What the live row says the agent is doing right now, in the words its own row
+ * uses: "Reading" while the step is in progress, and "Read" for the moment a
+ * finished one stays on the row before it moves up.
+ */
 export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return thoughtHeadline(reasoningText(activity)) ?? "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
 	if (activity.activityKind === "mcp_tool") {
 		const step = activityToolStep(activity);
 		if (!step) return activity.summary.trim() || "Using a tool";
-		return step.target ? `${step.live} ${step.target}` : step.live;
+		const verb = stepInProgress(activity) ? step.live : step.done;
+		return step.target ? `${verb} ${step.target}` : verb;
 	}
-	// The live row only ever names a step in progress, so it is always "Reading", never "Read".
-	const { label, path } = splitSummary(activity, "live");
+	const { label, path } = splitSummary(activity);
 	return path ? `${label} ${path}` : label;
 }
+
+/**
+ * A step still under way. Claude Code reports a tool call as pending and then done,
+ * with nothing in between, so a pending step is in progress too: "Reading a.ts",
+ * not "Read a.ts", and "Deleting build" while it waits for approval.
+ */
+export function stepInProgress(activity: ConversationActivity): boolean {
+	return activity.status === "running" || activity.status === "pending";
+}
+
+/**
+ * What the reader chose on the live row for a step, open or closed, by step id.
+ * The step's own row starts from it once the step moves up from the live row, so
+ * output the reader opened to follow stays open where it lands.
+ */
+export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
 
 /**
  * A provider retry, split for display: the attempt count up front and the reason
@@ -1336,9 +1356,13 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// Per step: null until the reader decides, so a step that starts printing opens
 	// itself, as its own row did. The next step starts from its own default.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
+	const stepChoices = useContext(LiveStepChoices);
 	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
 	const stepStreaming = step?.status === "running" && Boolean(step.detail?.output);
 	const stepOpen = expandable && (stepChoice?.id === step?.id ? stepChoice!.open : stepStreaming);
+	// A finished step stays on the row for a moment before it moves up. It says what
+	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
+	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
 	const started = useMemo(() => {
 		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
@@ -1377,7 +1401,9 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 								<span className="truncate">{label}</span>
 							</span>
 						) : (
-							<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
+							<span className={failed ? "text-destructive" : stepSettled ? "text-muted-foreground" : "chat-working-shimmer"}>
+								{label}
+							</span>
 						)}
 					</span>
 				) : null}
@@ -1414,7 +1440,10 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{row}
 				{expandable && step ? (
 					<Pressable
-						onClick={() => setStepChoice({ id: step.id, open: !stepOpen })}
+						onClick={() => {
+							stepChoices?.set(step.id, !stepOpen);
+							setStepChoice({ id: step.id, open: !stepOpen });
+						}}
 						aria-expanded={stepOpen}
 						aria-labelledby={labelId}
 						className="absolute inset-0"
@@ -1643,8 +1672,15 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// null means "nobody has decided", which is what lets a running command open
 	// itself and then close again once it settles. Once the user clicks, their
 	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
-	// a finished row open.
-	const [override, setOverride] = useState<boolean | null>(null);
+	// a finished row open. That goes for a choice made on the live row too, which
+	// the row starts from when the step moves up from there.
+	const stepChoices = useContext(LiveStepChoices);
+	const [override, setOverride] = useState<boolean | null>(() => stepChoices?.get(activity.id) ?? null);
+	const toggle = (open: boolean) => {
+		setOverride(open);
+		// Kept current, so a later remount starts from the reader's latest choice.
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, open);
+	};
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const detail = activity.detail;
@@ -1684,7 +1720,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 			)}
 		>
 			<Pressable
-				onClick={() => setOverride(!open)}
+				onClick={() => toggle(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
@@ -1713,7 +1749,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<span className="shrink-0 text-muted-foreground">
-							{activity.status === "running"
+							{stepInProgress(activity)
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
 								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
@@ -2107,13 +2143,11 @@ function commandOutputText(raw: unknown): string {
 /**
  * Split a summary into an action and a muted target, which is how the row scans:
  * what happened, then what it happened to ("Read" README.md, "Searched for" TODO).
- * A step still running says it in the present tense ("Reading"). Anything without
- * a natural split keeps its whole label.
+ * A step still in progress says it in the present tense ("Reading"). Anything
+ * without a natural split keeps its whole label.
  */
-function splitSummary(
-	activity: ConversationActivity,
-	tense: "done" | "live" = activity.status === "running" ? "live" : "done",
-): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
+	const tense = stepInProgress(activity) ? "live" : "done";
 	if (activity.activityKind === "command") {
 		const step = activityCommandStep(activity);
 		return { label: step[tense], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
@@ -2126,6 +2160,13 @@ function splitSummary(
 			label: `${tense === "live" ? liveFileChangeVerb(status) : fileChangeVerb(status)} ${fileBasename(files[0]!.path)}`,
 			icon: fileChangeIcon(status),
 		};
+	}
+	// The provider sums up an edit of several files once it is done ("Edited 3 files");
+	// while it is under way, the row says so itself.
+	if (activity.activityKind === "file_change" && files.length > 1 && tense === "live") {
+		const statuses = new Set(files.map((file) => file.status ?? "modified"));
+		const verb = statuses.size === 1 ? liveFileChangeVerb([...statuses][0]!) : "Editing";
+		return { label: `${verb} ${files.length} files`, icon: "write" };
 	}
 	if (activity.activityKind === "file_change") return { label: activity.summary, icon: "write" };
 	return { label: activity.summary };
@@ -2384,14 +2425,20 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
-	const [open, setOpen] = useState(false);
+	// A choice made on the live row carries over when the call moves up from there.
+	const stepChoices = useContext(LiveStepChoices);
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const toggle = () => {
+		setOpen(!open);
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, !open);
+	};
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
 	// An agent's built-in tool (a read, a web search) is named like a command step;
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
 	const StepMark = step ? stepIcon[step.icon] : undefined;
-	const tool = step ? (activity.status === "running" ? step.live : step.done) : detail?.toolName ?? activity.summary;
+	const tool = step ? (stepInProgress(activity) ? step.live : step.done) : detail?.toolName ?? activity.summary;
 	const server = detail?.server ?? detail?.namespace;
 	const sourceLabel = step
 		? undefined
@@ -2406,7 +2453,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	return (
 		<div className="min-w-0 max-w-full">
 			<Pressable
-				onClick={() => setOpen((prev) => !prev)}
+				onClick={toggle}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
@@ -3841,12 +3888,6 @@ function StepTarget({ text, title }: { text: string; title?: string }) {
 
 function fileLocationLabel(path: string, oldPath?: string): string {
 	return oldPath ? `${shortenPaths(oldPath)} → ${shortenPaths(path)}` : shortenPaths(path);
-}
-
-/** Basename only — the row is too narrow for a full path; the tooltip carries that. */
-function fileBasename(path: string): string {
-	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-	return slash >= 0 ? path.slice(slash + 1) : path;
 }
 
 /* -------------------------------------------------------------------------- */

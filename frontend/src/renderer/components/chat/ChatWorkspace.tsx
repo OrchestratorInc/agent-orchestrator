@@ -131,11 +131,13 @@ import {
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
+	LiveStepChoices,
 	LiveThoughtTexts,
 	isLiveStepKind,
 	liveTaskLabel,
 	reasoningText,
 	reconnectCopy,
+	stepInProgress,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
@@ -3692,6 +3694,9 @@ export function Timeline({
 	// headline the live row shows (sameGroup). The thought opened from that row reads
 	// its full text from here, so a token re-renders that body and not the turn.
 	const liveThoughtTexts = useStableValue(useMemo(() => liveThoughtTextsOf(grouped), [grouped]));
+	// Whether the reader opened a step from the live row, kept for the step's own row
+	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
+	const [liveStepChoices] = useState(() => new Map<string, boolean>());
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
@@ -4502,6 +4507,7 @@ export function Timeline({
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
 		<LiveThoughtTexts.Provider value={liveThoughtTexts}>
+		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
 			className="relative min-h-0 flex-1"
 			data-testid="chat-timeline"
@@ -4798,16 +4804,12 @@ export function Timeline({
 				</Button>
 			) : null}
 		</div>
+		</LiveStepChoices.Provider>
 		</LiveThoughtTexts.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
 
-/**
- * One turn, and the memo boundary that keeps a poll from re-rendering the whole
- * conversation. A turn is the right granularity because it is what changes: while
- * the agent works, one group grows and every other group is finished history.
- */
 /**
  * How long a step stays on the live row once it shows there. Claude Code reports
  * most tool calls as pending and then done, with nothing in between, and a quick
@@ -4821,11 +4823,16 @@ const LIVE_STEP_MIN_MS = 900;
  * running, or pending while nothing waits on the reader. Once no step is in
  * progress, the newest one stays on the row until it has been there for
  * LIVE_STEP_MIN_MS, so each step shows beside the loader before it moves up into
- * the list. A step that was already done when the turn mounted (a session
- * reopened mid-turn) never comes back to the row. A step in a subagent's tree, or
- * one with a subagent under it, keeps its row, so the tree stays whole.
+ * the list. Only a step that completed stays: one that failed or was stopped goes
+ * straight to its row, which says so. A step that was already done when the turn
+ * mounted (a session reopened mid-turn) never comes back to the row. A step in a
+ * subagent's tree, or one with a subagent under it, keeps its row, so the tree
+ * stays whole.
+ *
+ * While the row shows a retry or the setup checklist (`paused`), it cannot show a
+ * step, so every step keeps its own row.
  */
-function useLiveRowStep(group: TimelineGroup): ConversationActivity | undefined {
+function useLiveRowStep(group: TimelineGroup, paused: boolean): ConversationActivity | undefined {
 	const [, setTick] = useState(0);
 	const memory = useRef<{ shownAt: Map<string, number>; doneAtMount?: Set<string> }>({ shownAt: new Map() });
 	const parents = new Set<string>();
@@ -4841,22 +4848,23 @@ function useLiveRowStep(group: TimelineGroup): ConversationActivity | undefined 
 					!(item.providerItemId && parents.has(item.providerItemId)),
 			)
 		: [];
-	const inProgress = (step: ConversationActivity) => step.status === "running" || step.status === "pending";
-	memory.current.doneAtMount ??= new Set(steps.filter((step) => !inProgress(step)).map((step) => step.id));
+	memory.current.doneAtMount ??= new Set(steps.filter((step) => !stepInProgress(step)).map((step) => step.id));
 
 	const now = Date.now();
-	let step = [...steps]
-		.reverse()
-		.find((candidate) => candidate.status === "running" || (candidate.status === "pending" && !group.blocked));
+	let step = paused
+		? undefined
+		: [...steps]
+				.reverse()
+				.find((candidate) => candidate.status === "running" || (candidate.status === "pending" && !group.blocked));
 	const latest = steps.at(-1);
-	if (!step && latest && !inProgress(latest) && !memory.current.doneAtMount.has(latest.id)) {
+	if (!paused && !step && latest?.status === "completed" && !memory.current.doneAtMount.has(latest.id)) {
 		const shownAt = memory.current.shownAt.get(latest.id);
 		if (shownAt === undefined || now - shownAt < LIVE_STEP_MIN_MS) step = latest;
 	}
 	if (step && !memory.current.shownAt.has(step.id)) memory.current.shownAt.set(step.id, now);
 
 	// A finished step on the row moves up once its time is out.
-	const holding = step && !inProgress(step) ? step.id : undefined;
+	const holding = step && !stepInProgress(step) ? step.id : undefined;
 	useEffect(() => {
 		if (!holding) return;
 		const shownAt = memory.current.shownAt.get(holding) ?? Date.now();
@@ -4869,6 +4877,11 @@ function useLiveRowStep(group: TimelineGroup): ConversationActivity | undefined 
 	return step;
 }
 
+/**
+ * One turn, and the memo boundary that keeps a poll from re-rendering the whole
+ * conversation. A turn is the right granularity because it is what changes: while
+ * the agent works, one group grows and every other group is finished history.
+ */
 const TurnGroup = memo(function TurnGroup({
 	group,
 	harness,
@@ -5039,7 +5052,7 @@ const TurnGroup = memo(function TurnGroup({
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
 	// is done and has had its moment on the live row.
-	const liveStep = useLiveRowStep(group);
+	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
 	// Between steps, when the newest thing in the turn is a thought, the live row
 	// names what the agent is working on in its own words, as Claude's own app does,
 	// rather than a bare "Thinking". Once it writes or starts a step, that takes over.
@@ -5597,15 +5610,6 @@ function sentMessageHistory(
 const groupKey = (group: TimelineGroup): string => group.key;
 
 /**
- * Whether two groups say the same thing.
- *
- * A group carries more than its items: a turn's plan and its changed files are
- * current state that the daemon overwrites, and both move while the turn's items
- * stay exactly as they were. Comparing only the items would keep the previous
- * group object — and with it the previous plan — so a checklist would stop ticking
- * until something else in the turn happened to change.
- */
-/**
  * Gives each running turn its newest thought, when nothing has come after it: no
  * message, step or other row with a later sequence. A subagent's thoughts are its
  * own and are left out.
@@ -5658,6 +5662,15 @@ function liveThoughtGist(group: TimelineGroup): string | undefined {
 	return text ? thoughtHeadline(text) ?? "" : undefined;
 }
 
+/**
+ * Whether two groups say the same thing.
+ *
+ * A group carries more than its items: a turn's plan and its changed files are
+ * current state that the daemon overwrites, and both move while the turn's items
+ * stay exactly as they were. Comparing only the items would keep the previous
+ * group object — and with it the previous plan — so a checklist would stop ticking
+ * until something else in the turn happened to change.
+ */
 function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 	return (
 		a.anchor === b.anchor &&

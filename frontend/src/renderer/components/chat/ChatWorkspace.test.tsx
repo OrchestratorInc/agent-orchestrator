@@ -1416,12 +1416,16 @@ describe("ChatWorkspace timeline", () => {
 
 		const view = render(<ChatWorkspace snapshot={snapshot("pending", 0)} />);
 		const task = () => screen.getByTestId("live-working-task");
+		const shimmer = () => task().querySelector(".chat-working-shimmer");
 		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(shimmer()).not.toBeNull();
 		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
 
-		// Done within a blink, it still stays beside the loader for a moment...
+		// Done within a blink, it still stays beside the loader for a moment, saying
+		// what it did, without the shimmer that means it is under way...
 		view.rerender(<ChatWorkspace snapshot={snapshot("completed", 1)} />);
-		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(task()).toHaveTextContent(/^Read README\.md$/);
+		expect(shimmer()).toBeNull();
 		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
 
 		// ...then moves up into the list, and the live row goes back to Thinking.
@@ -1512,6 +1516,128 @@ describe("ChatWorkspace timeline", () => {
 
 		expect(screen.getByRole("button", { name: /^Built project/ })).toBeInTheDocument();
 		expect(screen.queryByTestId("live-working-row")).toBeNull();
+	});
+
+	describe("a step's tense and its row", () => {
+		const turnId = "live-turn-step-rows";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Tidy the build",
+			streaming: false, createdAt: at,
+		};
+		const live = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+		const command = (
+			id: string,
+			sequence: number,
+			text: string,
+			status: ConversationActivity["status"],
+			detail: ConversationActivity["detail"] = {},
+		) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "command" as const, status, summary: text,
+			detail: { command: text, ...detail }, createdAt: at,
+		});
+		const read = (id: string, sequence: number, file: string) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "mcp_tool" as const, status: "pending" as const, summary: `Read ${file}`,
+			detail: { protocol: "acp", providerToolName: "Read", toolKind: "read", input: { file_path: file } } as ConversationActivity["detail"],
+			createdAt: at,
+		});
+
+		it("says a pending step is under way, even while it waits for approval", () => {
+			// Claude Code reports a call as pending until it is done. One waiting on the
+			// reader has not deleted anything yet.
+			const view = render(
+				<ChatWorkspace
+					snapshot={live([
+						command("rm", 2, "rm -rf build", "pending"),
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run rm -rf build?",
+							detail: { command: "rm -rf build" }, createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByRole("button", { name: /^Deleting build/ })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^Deleted build/ })).toBeNull();
+
+			// Of two reads at once, the newest is on the live row, and the other's own row
+			// says it is still reading.
+			view.rerender(<ChatWorkspace snapshot={live([read("a", 2, "a.ts"), read("b", 3, "b.ts")])} />);
+			expect(screen.getByRole("button", { name: /^Reading a\.ts/ })).toBeInTheDocument();
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Reading b\.ts$/);
+
+			// An edit of several files says so in its own words while it runs.
+			view.rerender(
+				<ChatWorkspace
+					snapshot={live([
+						{
+							kind: "activity", id: "edit", turnId, sequence: 2, revision: 0,
+							activityKind: "file_change", status: "running", summary: "Edited 2 files",
+							detail: {
+								files: [
+									{ path: "src/a.ts", status: "modified", additions: 1, deletions: 0 },
+									{ path: "src/b.ts", status: "modified", additions: 2, deletions: 1 },
+								],
+							},
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Editing 2 files$/);
+		});
+
+		it("keeps a step the reader opened on the live row open once it moves up", async () => {
+			const user = userEvent.setup();
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			const row = screen.getByTestId("live-working-row");
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+
+			view.rerender(
+				<ChatWorkspace snapshot={live([command("test", 2, "npm test", "completed", { output: "42 passed" })])} />,
+			);
+			// Once its moment on the live row is over, its own row is still open on the output.
+			const landed = await waitFor(() => screen.getByRole("button", { name: /^Ran tests/ }), { timeout: 2_000 });
+			expect(landed).toHaveAttribute("aria-expanded", "true");
+			expect(screen.getByText("42 passed")).toBeInTheDocument();
+		});
+
+		it("moves a step that failed straight to its row", () => {
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Running tests$/);
+
+			view.rerender(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "failed", { exitCode: 1 })])} />);
+			expect(screen.getByRole("button", { name: /^Ran tests/ })).toHaveTextContent("exit 1");
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		});
+
+		it("keeps each step's own row while the live row shows a retry", () => {
+			render(
+				<ChatWorkspace
+					snapshot={live([
+						command("build", 2, "go build ./...", "running"),
+						{
+							kind: "activity", id: "retry", turnId, sequence: 3, revision: 0,
+							activityKind: "system", status: "running", summary: "Reconnecting to Claude, attempt 2 of 10.",
+							detail: { event: "provider.failure", category: "connection", severity: "warning" },
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent("Reconnecting… 2/10");
+			expect(screen.getByRole("button", { name: /^Building project/ })).toBeInTheDocument();
+		});
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {

@@ -34,37 +34,6 @@ export function commandCategory(text: string): CommandCategory {
 	return "run";
 }
 
-/**
- * Count explicit file arguments for reader commands. Search expressions are too
- * ambiguous to count honestly, so those fall back to the unnumbered label.
- */
-export function exploredFileCount(text: string): number | undefined {
-	if (commandCategory(text) !== "read") return undefined;
-
-	const files = new Set<string>();
-	for (const token of text.match(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g) ?? []) {
-		const value = token
-			.replace(/^["']|["']$/g, "")
-			.replace(/[;&|]+$/, "");
-		if (!value || value.startsWith("-") || /[*?{}]/.test(value)) continue;
-		if (["&&", "||", "|", ";"].includes(value)) continue;
-		if (READ_PROGRAMS.has(binaryName(value))) continue;
-		if (/^\d+(?:,\d+)?[a-z]*$/i.test(value)) continue;
-		if (/^[a-z]+:\/\//i.test(value)) continue;
-
-		const looksLikeFile =
-			value.startsWith("/") ||
-			value.startsWith("./") ||
-			value.startsWith("../") ||
-			value.startsWith("~/") ||
-			value.includes("/") ||
-			/^[\w@.+-]+\.[A-Za-z][\w-]*$/.test(value);
-		if (looksLikeFile) files.add(value);
-	}
-
-	return files.size > 0 ? files.size : undefined;
-}
-
 /** The command's binary, normalized so `/bin/sed` and `sed` classify alike. */
 export function commandBinaryLabel(command: string): string | undefined {
 	const trimmed = command.trim();

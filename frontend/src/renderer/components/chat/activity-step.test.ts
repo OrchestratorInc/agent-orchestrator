@@ -70,6 +70,10 @@ describe("describeCommandStep", () => {
 		expect(done("grep -rn -e 'needle' src")).toBe("Searched for needle");
 		expect(done('grep ">" notes.md')).toBe("Searched for >");
 		expect(done("rg --files src")).toBe("Listed src");
+		// A depth or an ignore pattern is the option's value, not the folder.
+		expect(done("tree -L 2")).toBe("Listed files");
+		expect(done("tree -L 2 -I node_modules src")).toBe("Listed src");
+		expect(done("eza --level 3 docs")).toBe("Listed docs");
 		expect(done('find . -type f -name "*.test.ts" | wc -l')).toBe("Found files *.test.ts");
 		expect(done("fd component")).toBe("Found files component");
 		expect(live('rg -n "TODO" .')).toBe("Searching for TODO");
@@ -142,6 +146,14 @@ describe("describeCommandStep", () => {
 		expect(done("npm run seed")).toBe("Ran seed");
 		expect(done("make test")).toBe("Ran tests");
 		expect(done("make release")).toBe("Ran make release");
+		// make's folder, file and job count are option values, not the target.
+		expect(done("make -C frontend test")).toBe("Ran tests");
+		expect(done("make -f ci.mk -j 4 release")).toBe("Ran make release");
+		expect(done("make -j test")).toBe("Ran tests");
+		// `go run` names a file, and a package as typed.
+		expect(done("go run main.go")).toBe("Ran main.go");
+		expect(done("go run .")).toBe("Ran go run .");
+		expect(done("go run ./cmd/server")).toBe("Ran go run ./cmd/server");
 	});
 
 	it("skips deno's and tsx's subcommand before the script", () => {
@@ -166,6 +178,24 @@ describe("describeCommandStep", () => {
 		expect(done("CI=1 npm test")).toBe("Ran tests");
 		expect(done("timeout 30 npm test")).toBe("Ran tests");
 		expect(done("bash -lc 'git status'")).toBe("Checked git status");
+		// A wrapper's option values are not the program.
+		expect(done("sudo -u postgres psql")).toBe("Ran psql");
+		expect(done("timeout -s KILL 30 npm test")).toBe("Ran tests");
+		expect(done("env -u DEBUG node server.js")).toBe("Ran server.js");
+	});
+
+	it("looks past shell grammar to the program it runs", () => {
+		expect(done('for f in src/*.ts; do wc -l "$f"; done')).toBe("Read file");
+		expect(done("if [ -f a.ts ]; then cat a.ts; fi")).toBe("Read a.ts");
+		expect(done("if ! grep -q TODO notes.md; then echo none; fi")).toBe("Searched for TODO");
+		expect(done("while true; do sleep 5; done")).toBe("Waited 5s");
+		expect(done("test -f a.ts && cat a.ts")).toBe("Read a.ts");
+	});
+
+	it("names files in any script and Windows paths by their name", () => {
+		expect(done("cat ファイル.md")).toBe("Read ファイル.md");
+		expect(done("cat C:\\repo\\src\\a.ts")).toBe("Read a.ts");
+		expect(describeCommandStep("cat C:\\repo\\src\\a.ts").targetTitle).toBe("C:\\repo\\src\\a.ts");
 	});
 
 	it("names any other program instead of saying Ran command", () => {
@@ -208,6 +238,10 @@ describe("activityCommandStep", () => {
 	it("keeps the generic label for a prose summary", () => {
 		expect(text(activityCommandStep(commandActivity({ summary: "Ran a command" })), "done")).toBe("Ran command");
 		expect(text(activityCommandStep(commandActivity({ summary: "List files in the folder" })), "done")).toBe("Ran command");
+		// Prose can start with a program's name; only a backticked title is a command.
+		expect(text(activityCommandStep(commandActivity({ summary: "make the build pass" })), "done")).toBe("Ran command");
+		expect(text(activityCommandStep(commandActivity({ summary: "touch up README" })), "done")).toBe("Ran command");
+		expect(text(activityCommandStep(commandActivity({ summary: "`touch README`" })), "done")).toBe("Created README");
 	});
 });
 
@@ -242,6 +276,14 @@ describe("thoughtHeadline", () => {
 		expect(thoughtHeadline("Looking at the")).toBeUndefined();
 		expect(thoughtHeadline("")).toBeUndefined();
 	});
+
+	it("reads past list markers and code fences", () => {
+		// "1." and "2." are markers, not the ends of sentences.
+		expect(thoughtHeadline("I need to:\n1. Read the file\n2. Update the test")).toBeUndefined();
+		expect(thoughtHeadline("Plan:\n1. Read the file.\n2. Update the test.")).toBe("Update the test");
+		expect(thoughtHeadline("I'll check the config first.\n- It may be stale")).toBe("I'll check the config first");
+		expect(thoughtHeadline("The fix is small.\n```ts\nconst a = 1. Then b\n```\n")).toBe("The fix is small");
+	});
 });
 
 describe("activityToolStep", () => {
@@ -256,6 +298,10 @@ describe("activityToolStep", () => {
 	it("names reads, searches and fetches like the commands that do the same", () => {
 		const read = activityToolStep(toolActivity("Read", "read", { file_path: "/w/market-place/README.md", limit: 40 }, "Read README.md (1 - 40)"))!;
 		expect(read).toMatchObject({ done: "Read", target: "README.md", targetTitle: "/w/market-place/README.md", icon: "read" });
+		const windowsRead = activityToolStep(toolActivity("Read", "read", { file_path: "C:\\repo\\src\\a.ts" }))!;
+		expect(windowsRead).toMatchObject({ target: "a.ts", targetTitle: "C:\\repo\\src\\a.ts" });
+		expect(text(activityToolStep(toolActivity("LS", "search", { path: "." }))!, "done")).toBe("Listed files");
+		expect(activityToolStep(toolActivity("LS", "search", { path: "/w/app/src" }))).toMatchObject({ target: "src", targetTitle: "/w/app/src" });
 		expect(text(activityToolStep(toolActivity("Grep", "search", { pattern: "TODO" }))!, "done")).toBe("Searched for TODO");
 		expect(text(activityToolStep(toolActivity("Glob", "search", { pattern: "**/*.test.ts" }))!, "done")).toBe("Found files **/*.test.ts");
 		const fetch = activityToolStep(toolActivity("WebFetch", "fetch", { url: "https://versionlog.com/nodejs/" }))!;
