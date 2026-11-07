@@ -1,6 +1,7 @@
 import { EyeOff, Send } from "lucide-react";
 import { createContext, useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { CloudCpSuggestion } from "../../lib/cloud-cp/types";
 import type { ConversationActivity } from "../../types/conversation";
 import { PersonAvatar } from "../teams/TeamVisuals";
 import { Button } from "../ui/button";
@@ -9,12 +10,14 @@ import { Button } from "../ui/button";
 export interface AsideActions {
 	/** The signed-in person, whose own asides read "You". */
 	selfUserId?: string;
-	/** A person's name from the session (who is here, who follows it), when the aside carries none. */
+	/** A person's name from the session, for an aside from before the author's name was recorded. */
 	nameOf?: (userId: string) => string | undefined;
 	/** Puts an aside forward for whoever drives the session; absent, asides offer nothing. */
 	onSuggest?: (asideId: string) => Promise<unknown>;
-	/** Asides already waiting for the driver. */
-	suggestedAsideIds?: ReadonlySet<string>;
+	/** The suggestion an aside waits as, if any. */
+	suggestionFor?: (asideId: string) => CloudCpSuggestion | undefined;
+	/** Takes back a suggestion its maker made. */
+	onWithdraw?: (suggestion: CloudCpSuggestion) => Promise<unknown>;
 }
 
 export const AsideActionsContext = createContext<AsideActions>({});
@@ -34,7 +37,10 @@ export function AsideRow({ activity }: { activity: ConversationActivity }) {
 	const mine = Boolean(actions.selfUserId) && aside.authorUserId === actions.selfUserId;
 	const known = aside.authorName || (aside.authorUserId ? actions.nameOf?.(aside.authorUserId) : undefined);
 	const name = mine ? t("aside.you") : known || t("chat.shared.someone");
-	const suggested = actions.suggestedAsideIds?.has(aside.asideId) ?? false;
+	const pending = actions.suggestionFor?.(aside.asideId);
+	const suggested = Boolean(pending);
+	// Its maker may always take a suggestion back; anyone else leaves it to the driver.
+	const withdraw = pending && actions.onWithdraw && actions.selfUserId && pending.suggestedBy.userId === actions.selfUserId ? actions.onWithdraw : undefined;
 	const suggest = actions.onSuggest;
 	return (
 		<div
@@ -46,7 +52,23 @@ export function AsideRow({ activity }: { activity: ConversationActivity }) {
 				<span className="min-w-0 truncate font-medium text-foreground">{name}</span>
 				<span className="flex-1" />
 				{suggest && suggested ? (
-					<span className="shrink-0 text-caption text-muted-foreground" data-aside-suggested="">{t("aside.suggested")}</span>
+					<span className="inline-flex shrink-0 items-center gap-1 text-caption text-muted-foreground" data-aside-suggested="">
+						{t("aside.suggested")}
+						{withdraw && pending ? (
+							<Button
+								disabled={state === "sending"}
+								onClick={() => {
+									setState("sending");
+									void withdraw(pending).then(() => setState("idle"), () => setState("failed"));
+								}}
+								size="xs"
+								type="button"
+								variant="quiet"
+							>
+								{state === "failed" ? t("aside.withdrawFailed") : t("aside.withdraw")}
+							</Button>
+						) : null}
+					</span>
 				) : suggest ? (
 					<Button
 						className="shrink-0 opacity-0 group-hover/aside:opacity-100 group-focus-within/aside:opacity-100 data-[state=failed]:opacity-100"

@@ -3,7 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promptSuggestionMessages } from "../../hooks/useCloudPromptSuggestion";
-import type { CloudCpAsideSuggestion, CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer } from "../../lib/cloud-cp";
+import type { CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer, CloudCpSuggestion } from "../../lib/cloud-cp";
+import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { recordTeamCollabSupport, resetTeamCollabSupport, type ComposerMention } from "../../lib/cloud-team-collab";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity, ConversationSnapshot } from "../../types/conversation";
@@ -33,15 +34,19 @@ const mocks = vi.hoisted(() => ({
 	me: vi.fn(),
 	getMyFeed: vi.fn(),
 	listMentionCandidates: vi.fn(),
-	postAside: vi.fn(),
-	suggestAside: vi.fn(),
-	listAsideSuggestions: vi.fn(),
-	dismissAsideSuggestion: vi.fn(),
+	createSessionAside: vi.fn(),
+	createSessionSuggestion: vi.fn(),
+	listSessionSuggestions: vi.fn(),
+	sendSessionSuggestion: vi.fn(),
+	dismissSessionSuggestion: vi.fn(),
 	createShareGrants: vi.fn(),
 	chatProps: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: mocks, userId: "user-me", baseUrl: "https://cp.test" }),
+}));
+vi.mock("../../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ features: ["attachments"], maxAttachmentBytes: 1_000_000 }),
 }));
 vi.mock("../../hooks/useCloudSessionLive", () => ({
 	useCloudSessionLive: () => mocks.live,
@@ -85,17 +90,21 @@ function liveState(composer: Partial<CloudCpSessionLive["composer"]> = {}, viewe
 const event = (sequence: number, type: string, payload: Record<string, unknown>): CloudCpClientEvent => ({
 	sessionId: session.id, sequence, type, payload, createdAt: "2026-11-07T10:00:00Z",
 });
-const asideEvent = (sequence: number, asideId: string, text: string, authorUserId = "user-ben") =>
-	event(sequence, "chat.aside", { asideId, text, authorUserId, mentions: [] });
+const asideEvent = (sequence: number, asideId: string, text: string, authorUserId = "user-ben", authorName: string | undefined = "Ben Ortiz") =>
+	event(sequence, "chat.aside", { asideId, text, authorUserId, ...(authorName === undefined ? {} : { authorName }), mentions: [] });
 
-const suggestion: CloudCpAsideSuggestion = {
-	suggestionId: "sg-1", asideId: "a-2", text: "Also cover a refresh after the cookie expires.",
-	suggestedBy: { userId: "user-chen", name: "Chen Wei" }, createdAt: "2026-11-07T10:00:00Z",
+const suggestion: CloudCpSuggestion = {
+	id: "sg-1", orgId: "org-1", sessionId: "session-1", kind: "aside", asideId: "a-2", text: "Also cover a refresh after the cookie expires.",
+	suggestedBy: { userId: "user-chen", name: "Chen Wei" }, author: { userId: "user-chen", name: "Chen Wei" }, status: "pending",
+	createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
 };
+const second: CloudCpSuggestion = { ...suggestion, id: "sg-2", asideId: "a-3", text: "Second", createdAt: "2026-11-07T10:05:00Z", updatedAt: "2026-11-07T10:05:00Z" };
 
 type Props = {
 	snapshot: ConversationSnapshot;
 	onSend: (text: string, attachments?: unknown, clientMessageId?: string, excerpts?: unknown, files?: unknown, display?: string, mentions?: ComposerMention[]) => Promise<unknown>;
+	onSteer?: (text: string, attachments?: unknown, clientMessageId?: string, recoverOnly?: boolean, mentions?: ComposerMention[]) => Promise<unknown>;
+	onStageAttachments?: unknown;
 	composerModes?: { mode: "agent" | "aside"; onModeChange: (mode: "agent" | "aside") => void; onSendAside: (text: string, clientMessageId: string | undefined, mentions: ComposerMention[] | undefined) => Promise<unknown> };
 	composerMentions?: ComposerMentionSource;
 	composerDraftRequest?: { id: string; text: string };
@@ -103,8 +112,9 @@ type Props = {
 };
 const lastProps = () => mocks.chatProps.mock.lastCall?.[0] as Props;
 
+let queryClient: QueryClient;
 function renderSurface(shown: WorkspaceSession = session) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
@@ -125,10 +135,11 @@ beforeEach(() => {
 	mocks.listUserAgentModels.mockResolvedValue({ models: [] });
 	mocks.resumeSession.mockResolvedValue(undefined);
 	mocks.sendSessionMessage.mockResolvedValue({ event: {} });
-	mocks.postAside.mockResolvedValue({ event: {} });
-	mocks.suggestAside.mockResolvedValue({ suggestion });
-	mocks.listAsideSuggestions.mockResolvedValue({ items: [] });
-	mocks.dismissAsideSuggestion.mockResolvedValue(undefined);
+	mocks.createSessionAside.mockResolvedValue({ event: {} });
+	mocks.createSessionSuggestion.mockResolvedValue({ suggestion });
+	mocks.listSessionSuggestions.mockResolvedValue({ items: [] });
+	mocks.sendSessionSuggestion.mockImplementation(async (_org: string, _session: string, id: string) => ({ event: {}, suggestion: { ...suggestion, id, status: "sent" } }));
+	mocks.dismissSessionSuggestion.mockImplementation(async (_org: string, _session: string, id: string) => ({ suggestion: { ...suggestion, id, status: "dismissed" } }));
 	mocks.createShareGrants.mockResolvedValue({ entries: [] });
 	mocks.listMentionCandidates.mockResolvedValue({ people: [], teams: [] });
 	mocks.me.mockResolvedValue({ user: { id: "user-me", email: "asha@example.test", displayName: "Asha Rao", authProvider: "workos" }, organizations: [{ id: "org-1", slug: "northwind", displayName: "Northwind", role: "owner" }] });
@@ -183,10 +194,25 @@ describe("asides in the timeline", () => {
 		mocks.listChatEvents.mockResolvedValue({ events, hasMore: false, nextAfter: 5 });
 		renderSurface();
 		const button = await screen.findByRole("button", { name: "Suggest to agent" });
-		// Ben wrote it; the session's live state names him.
-		expect(screen.getByText("Ben Ortiz")).toBeInTheDocument();
 		await act(async () => fireEvent.click(button));
-		expect(mocks.suggestAside).toHaveBeenCalledWith("org-1", "session-1", "a-1");
+		expect(mocks.createSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", { asideId: "a-1" }, { idempotencyKey: expect.any(String) });
+		// Its answer marks the aside at once.
+		mocks.createSessionSuggestion.mockResolvedValue({ suggestion: { ...suggestion, asideId: "a-1" } });
+	});
+
+	it("names their author as the event recorded them", async () => {
+		recordTeamCollabSupport(BASE, "supported");
+		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-1", "Hi", "user-ben", "Ben O.")], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		expect(await screen.findByText("Ben O.")).toBeInTheDocument();
+		expect(screen.queryByText("Ben Ortiz")).toBeNull();
+	});
+
+	it("name an old aside's author from the people in the session", async () => {
+		recordTeamCollabSupport(BASE, "supported");
+		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-1", "Hi", "user-ben", undefined)], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		expect(await screen.findByText("Ben Ortiz")).toBeInTheDocument();
 	});
 });
 
@@ -199,7 +225,7 @@ describe("on a control plane without asides", () => {
 		expect(lastProps().composerModes).toBeUndefined();
 		expect(lastProps().composerMentions).toBeUndefined();
 		expect(screen.queryByRole("button", { name: "Suggest to agent" })).toBeNull();
-		expect(mocks.listAsideSuggestions).not.toHaveBeenCalled();
+		expect(mocks.listSessionSuggestions).not.toHaveBeenCalled();
 		expect(mocks.listMentionCandidates).not.toHaveBeenCalled();
 	});
 
@@ -236,7 +262,7 @@ describe("the composer's Aside mode", () => {
 		await act(async () => {
 			await lastProps().composerModes!.onSendAside("@Chen Wei can you check?", "aside-key", [{ kind: "person", id: "user-chen", name: "Chen Wei", canOpen: true }]);
 		});
-		expect(mocks.postAside).toHaveBeenCalledWith("org-1", "session-1", { text: "@Chen Wei can you check?", mentions: [{ kind: "person", userId: "user-chen" }] }, { idempotencyKey: "aside-key" });
+		expect(mocks.createSessionAside).toHaveBeenCalledWith("org-1", "session-1", { text: "@Chen Wei can you check?", mentions: [{ kind: "person", userId: "user-chen" }] }, { idempotencyKey: "aside-key" });
 		expect(mocks.acquireComposer).not.toHaveBeenCalled();
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 	});
@@ -246,7 +272,7 @@ describe("the composer's Aside mode", () => {
 		renderSurface();
 		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
 		await act(async () => { await lastProps().composerModes!.onSendAside("Looks right", "k", undefined); });
-		expect(mocks.postAside).toHaveBeenCalledWith("org-1", "session-1", { text: "Looks right" }, { idempotencyKey: "k" });
+		expect(mocks.createSessionAside).toHaveBeenCalledWith("org-1", "session-1", { text: "Looks right" }, { idempotencyKey: "k" });
 	});
 
 	it("is not offered on a deleted session", async () => {
@@ -319,6 +345,31 @@ describe("mentions", () => {
 		expect(mocks.createShareGrants).not.toHaveBeenCalled();
 	});
 
+	it("say calmly when the control plane doesn't know someone, and still send without them", async () => {
+		mocks.createShareGrants.mockRejectedValue(new CloudCpError("Not found", { status: 404, code: "not_found" }));
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
+		const cara: ComposerMention = { kind: "person", id: "user-cara", name: "Cara Diaz", canOpen: false };
+		let answer: Promise<ComposerMention[] | null> | undefined;
+		act(() => { answer = lastProps().composerMentions!.confirm!([cara]); });
+		await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Share and send" })));
+		expect(screen.getByText("Couldn't share with Cara Diaz. Send without them?")).toHaveAttribute("role", "status");
+		fireEvent.click(screen.getByRole("button", { name: "Send without them" }));
+		await expect(answer).resolves.toEqual([]);
+	});
+
+	it("go back to the draft calmly when the control plane refuses them", async () => {
+		mocks.sendSessionMessage.mockRejectedValue(new CloudCpError("Not allowed.", { status: 422, code: "mention_not_allowed" }));
+		mocks.createSessionAside.mockRejectedValue(new CloudCpError("Too many.", { status: 422, code: "too_many_mentioned" }));
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerModes).toBeDefined());
+		const chen: ComposerMention = { kind: "person", id: "user-chen", name: "Chen Wei", canOpen: true };
+		await expect(lastProps().onSend("@Chen Wei hi", undefined, "m-1", undefined, undefined, undefined, [chen]))
+			.rejects.toMatchObject({ message: "You can mention only people in this session.", code: "mention_not_allowed", calm: true });
+		await expect(lastProps().composerModes!.onSendAside("@Platform hi", "a-1", [{ kind: "team", id: "t-1", name: "Platform" }]))
+			.rejects.toMatchObject({ message: "That would notify too many people. Mention fewer.", code: "too_many_mentioned", calm: true });
+	});
+
 	it("keep asking when sharing fails", async () => {
 		mocks.createShareGrants.mockRejectedValue(new Error("forbidden"));
 		renderSurface();
@@ -331,46 +382,156 @@ describe("mentions", () => {
 });
 
 describe("suggestions from asides", () => {
-	beforeEach(() => {
-		recordTeamCollabSupport(BASE, "supported");
-		mocks.listAsideSuggestions.mockResolvedValue({ items: [suggestion, { ...suggestion, suggestionId: "sg-2", asideId: "a-3", text: "Second" }] });
+	const holding = () => liveState({ holder: { userId: "user-me", name: "Asha Rao" }, epoch: 7 });
+	const appendEvents = (...added: CloudCpClientEvent[]) => act(() => {
+		queryClient.setQueryData<CloudCpClientEvent[]>(["cloud-chat-events", "org-1", "session-1"], (current) => [...(current ?? []), ...added]);
 	});
 
-	it("wait above the driver's composer, oldest first, and Send sends it as a message", async () => {
+	beforeEach(() => {
+		recordTeamCollabSupport(BASE, "supported");
+		mocks.live = holding();
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [suggestion, second] });
+	});
+
+	it("wait above the driver's composer, oldest first, and Send goes through the suggestion's route", async () => {
 		renderSurface();
 		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toHaveTextContent("Also cover a refresh after the cookie expires.");
-		expect(screen.queryByText("Second")).toBeNull();
+		expect(screen.queryByText(/Second/)).toBeNull();
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
-		expect(mocks.sendSessionMessage).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ text: suggestion.text, suggestionId: "sg-1" }), expect.objectContaining({ idempotencyKey: expect.any(String) }));
+		// Its own text, the turn's settings and the driver's grant; no ordinary message.
+		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { mode: "standard", composerEpoch: 7 }, { idempotencyKey: expect.any(String) });
+		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 		// The next one waits its turn.
 		expect(await screen.findByText(/Second/)).toBeInTheDocument();
 	});
 
-	it("Dismiss drops it on the control plane, which tells its author", async () => {
+	it("Dismiss declines it with the driver's grant", async () => {
 		renderSurface();
 		await screen.findByRole("region", { name: "Chen Wei suggests" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Dismiss" })));
-		expect(mocks.dismissAsideSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1");
-		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+		expect(mocks.dismissSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { composerEpoch: 7 });
+		expect(await screen.findByText(/Second/)).toBeInTheDocument();
+		expect(mocks.sendSessionSuggestion).not.toHaveBeenCalled();
 	});
 
-	it("Edit puts it in the agent draft, and the next message sends it", async () => {
+	it("say calmly, on one line, that someone else drives now", async () => {
+		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Someone else is writing to the agent.", { status: 409, code: "COMPOSER_LOCKED" }));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+		const line = await screen.findByText("Someone else is driving now.");
+		expect(line).toHaveAttribute("role", "status");
+		expect(line).toHaveClass("text-muted-foreground");
+		expect(screen.queryByRole("alert")).toBeNull();
+		// It still waits.
+		expect(screen.getByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+	});
+
+	it("say calmly, on one line, that it was already sent or dismissed, and move on", async () => {
+		mocks.dismissSessionSuggestion.mockRejectedValue(new CloudCpError("Already resolved.", { status: 409, code: "suggestion_resolved" }));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Dismiss" })));
+		expect(await screen.findByText("Already sent or dismissed.")).toHaveAttribute("role", "status");
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(await screen.findByText(/Second/)).toBeInTheDocument();
+	});
+
+	it("say a real failure as one", async () => {
+		mocks.sendSessionSuggestion.mockRejectedValue(new Error("offline"));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't do that. Try again.");
+	});
+
+	it("Edit puts it in the agent draft, and the next send sends it, as edited, through its route", async () => {
 		renderSurface();
 		await screen.findByRole("region", { name: "Chen Wei suggests" });
 		act(() => lastProps().composerModes!.onModeChange("aside"));
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 		await waitFor(() => expect(lastProps().composerDraftRequest).toEqual({ id: "sg-1", text: suggestion.text }));
 		expect(lastProps().composerModes?.mode).toBe("agent");
+		expect(screen.getByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeInTheDocument();
+		// It goes as text alone, so the composer takes no files meanwhile.
+		expect(lastProps().onStageAttachments).toBeUndefined();
 		await act(async () => { await lastProps().onSend("Also cover an expired cookie", undefined, "m-2"); });
-		expect(mocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", "session-1", expect.objectContaining({ text: "Also cover an expired cookie", suggestionId: "sg-1" }), { idempotencyKey: "m-2" });
+		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "Also cover an expired cookie", mode: "standard", composerEpoch: 7 }, { idempotencyKey: "m-2" });
+		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+		// Done editing: the next message is an ordinary one.
+		await waitFor(() => expect(screen.queryByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeNull());
+		expect(lastProps().onStageAttachments).toBeTypeOf("function");
 		await act(async () => { await lastProps().onSend("Thanks", undefined, "m-3"); });
-		expect(mocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("suggestionId");
+		expect(mocks.sendSessionMessage).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ text: "Thanks" }), { idempotencyKey: "m-3" });
+	});
+
+	it("Cancel stops editing and the suggestion waits again", async () => {
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+		await act(async () => { await lastProps().onSend("Something else", undefined, "m-9"); });
+		expect(mocks.sendSessionSuggestion).not.toHaveBeenCalled();
+	});
+
+	it("an edited send that finds it already handled goes back to the composer, calmly", async () => {
+		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Already resolved.", { status: 409, code: "suggestion_resolved" }));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		let refusal: unknown;
+		await act(async () => { await lastProps().onSend("Edited", undefined, "m-4").catch((error: unknown) => { refusal = error; }); });
+		expect(refusal).toMatchObject({ message: "Already sent or dismissed.", code: "suggestion_resolved", calm: true });
+		await waitFor(() => expect(screen.queryByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeNull());
+		// The text, sent again, is an ordinary message.
+		await act(async () => { await lastProps().onSend("Edited", undefined, "m-5"); });
+		expect(mocks.sendSessionMessage).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ text: "Edited" }), { idempotencyKey: "m-5" });
+	});
+
+	it("an edited send refused because someone else drives keeps the edit, calmly", async () => {
+		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Locked.", { status: 409, code: "COMPOSER_LOCKED" }));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		let refusal: unknown;
+		await act(async () => { await lastProps().onSend("Edited", undefined, "m-6").catch((error: unknown) => { refusal = error; }); });
+		expect(refusal).toMatchObject({ message: "Someone else is driving now.", code: "COMPOSER_LOCKED", calm: true });
+		expect(screen.getByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeInTheDocument();
+	});
+
+	it("follow the session's suggestion events as they arrive", async () => {
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [] });
+		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-2", "Also cover it")], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		await waitFor(() => expect(lastProps().snapshot.items).toHaveLength(1));
+		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalledTimes(1));
+		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
+		appendEvents(event(2, "chat.suggestion_created", suggestion));
+		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+		expect(screen.getByText("Suggested")).toBeInTheDocument();
+		appendEvents(event(3, "chat.suggestion_resolved", { ...suggestion, status: "dismissed" }));
+		await waitFor(() => expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull());
+		expect(screen.queryByText("Suggested")).toBeNull();
+		// The events did it; the list was read once.
+		expect(mocks.listSessionSuggestions).toHaveBeenCalledTimes(1);
+	});
+
+	it("stop editing when someone else settles the suggestion meanwhile", async () => {
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await waitFor(() => expect(lastProps().snapshot).toBeDefined());
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		await screen.findByRole("region", { name: "Editing Chen Wei's suggestion" });
+		appendEvents(event(5, "chat.suggestion_resolved", { ...suggestion, status: "sent" }));
+		expect(await screen.findByText("Already sent or dismissed.")).toHaveAttribute("role", "status");
+		expect(screen.queryByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeNull();
 	});
 
 	it("never show to someone else while another person holds the agent", async () => {
 		mocks.live = liveState({ holder: { userId: "user-ben", name: "Ben Ortiz" }, epoch: 3 });
 		renderSurface();
-		await waitFor(() => expect(mocks.listAsideSuggestions).toHaveBeenCalled());
+		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalled());
 		await act(async () => undefined);
 		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
 	});
@@ -378,7 +539,7 @@ describe("suggestions from asides", () => {
 	it("never show to a viewer", async () => {
 		mocks.live = liveState({}, [{ ...me, role: "viewer" }, ben]);
 		renderSurface();
-		await waitFor(() => expect(mocks.listAsideSuggestions).toHaveBeenCalled());
+		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalled());
 		await act(async () => undefined);
 		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
 	});
@@ -387,5 +548,55 @@ describe("suggestions from asides", () => {
 		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-2", "Also cover it")], hasMore: false, nextAfter: 1 });
 		renderSurface();
 		expect(await screen.findByText("Suggested")).toBeInTheDocument();
+		// Chen made it, not this person: nothing to withdraw.
+		expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
+	});
+
+	it("let the person who made one withdraw it, holding no grant", async () => {
+		const mine: CloudCpSuggestion = { ...suggestion, suggestedBy: { userId: "user-me", name: "Asha Rao" } };
+		mocks.live = liveState({}, [{ ...me, role: "viewer" }, ben]);
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [mine] });
+		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-2", "Also cover it")], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Withdraw" })));
+		expect(mocks.dismissSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", {});
+		await waitFor(() => expect(screen.queryByText("Suggested")).toBeNull());
+	});
+
+});
+
+describe("mentions in a steer", () => {
+	it("report a refused mention as a declined steer, calmly", async () => {
+		recordTeamCollabSupport(BASE, "supported");
+		mocks.listChatEvents.mockResolvedValue({ events: [
+			event(1, "chat.user_message", { text: "Fix it", turnId: "t1" }),
+			event(2, "chat.turn_started", { turnId: "t1" }),
+			event(3, "chat.turn_capabilities", { turnId: "t1", steering: true }),
+		], hasMore: false, nextAfter: 3 });
+		mocks.steerTurn.mockRejectedValue(new CloudCpError("Not allowed.", { status: 422, code: "mention_not_allowed" }));
+		renderSurface();
+		await waitFor(() => expect(lastProps().onSteer).toBeTypeOf("function"));
+		let outcome: unknown;
+		await act(async () => { outcome = await lastProps().onSteer!("@Cara look", undefined, "steer-2", false, [{ kind: "person", id: "user-cara", name: "Cara", canOpen: true }]); });
+		expect(outcome).toEqual({ status: "not-accepted", reason: "You can mention only people in this session." });
+	});
+
+	it("go to the steer route as typed tokens", async () => {
+		recordTeamCollabSupport(BASE, "supported");
+		const running = [
+			event(1, "chat.user_message", { text: "Fix it", turnId: "t1" }),
+			event(2, "chat.turn_started", { turnId: "t1" }),
+			event(3, "chat.turn_capabilities", { turnId: "t1", steering: true }),
+		];
+		mocks.listChatEvents.mockImplementation(async (_org: string, _session: string, query: { after: number }) => query.after === 10
+			? { events: [event(11, "chat.turn_steered", { turnId: "t1", text: "@Chen Wei look", clientMessageId: "steer-1" })], hasMore: false, nextAfter: 11 }
+			: { events: running, hasMore: false, nextAfter: 3 });
+		mocks.steerTurn.mockResolvedValue({ event: { sequence: 10 } });
+		renderSurface();
+		await waitFor(() => expect(lastProps().onSteer).toBeTypeOf("function"));
+		await act(async () => {
+			await lastProps().onSteer!("@Chen Wei look", undefined, "steer-1", false, [{ kind: "person", id: "user-chen", name: "Chen Wei", canOpen: true }]);
+		});
+		expect(mocks.steerTurn).toHaveBeenCalledWith("org-1", "session-1", "t1", { text: "@Chen Wei look", mentions: [{ kind: "person", userId: "user-chen" }] }, { idempotencyKey: "steer-1" });
 	});
 });

@@ -52,7 +52,7 @@ import {
 } from "react";
 import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { mentionText, uniqueMentions, type ComposerMention } from "../../lib/cloud-team-collab";
+import { mentionText, splitByMentions, uniqueMentions, type ComposerMention } from "../../lib/cloud-team-collab";
 import { cn } from "../../lib/utils";
 import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
 import { composerFileIcon } from "./composerFileIcon";
@@ -367,31 +367,7 @@ function $draftMentions(): ComposerMention[] {
  * the draft is saved as text, and the mentions it held beside it.
  */
 function splitMentions(line: string, mentions: readonly ComposerMention[]): Array<string | ComposerMention> {
-	if (mentions.length === 0 || !line.includes("@")) return [line];
-	// Longest first, so "@Chen Wei" wins over "@Chen".
-	const ordered = [...mentions].sort((a, b) => b.name.length - a.name.length);
-	const parts: Array<string | ComposerMention> = [];
-	let plain = "";
-	let index = 0;
-	while (index < line.length) {
-		// A chip only ever starts the line or follows whitespace, as the @ menu does,
-		// and ends where the name does.
-		if (line[index] === "@" && (index === 0 || /\s/.test(line[index - 1]!))) {
-			const match = ordered.find((mention) => line.startsWith(mentionText(mention), index) &&
-				!/[\p{L}\p{N}_]/u.test(line[index + mentionText(mention).length] ?? " "));
-			if (match) {
-				if (plain) parts.push(plain);
-				plain = "";
-				parts.push(match);
-				index += mentionText(match).length;
-				continue;
-			}
-		}
-		plain += line[index];
-		index += 1;
-	}
-	if (plain) parts.push(plain);
-	return parts;
+	return splitByMentions(line, mentions);
 }
 
 function $insertComposerReference(path: string, display: string, wire: string): void {

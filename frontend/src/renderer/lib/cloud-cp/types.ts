@@ -303,145 +303,57 @@ export interface CloudCpListQuery {
 }
 
 // ---------------------------------------------------------------------------
-// Asides, mentions and the team feed. Written by hand from the build spec
-// ahead of the contract; switch each to its generated type once
-// contracts/cloud/openapi.yaml carries it.
+// Asides, mentions, suggestions and the team feed, from the contract.
 // ---------------------------------------------------------------------------
 
 /**
- * Someone a message or an aside names, as a typed token beside its text. A
- * team expands to its members when it is sent; only the people named are
- * notified (kind `mentioned`), never the session's other followers.
+ * Someone a message, a steer or an aside names, as a typed token beside its
+ * text: `{kind: "person", userId}` or `{kind: "team", teamId}`. A team
+ * expands to its members when it is sent; only the people named are notified
+ * (kind `mentioned`). Events record each one's name; a client sends none.
  */
-export type CloudCpMention = { kind: "person"; userId: string } | { kind: "team"; teamId: string };
+export type CloudCpMention = Mention;
 
-/** A person the composer's @ menu offers. Names only, never emails. */
-export interface CloudCpMentionPerson {
-	userId: string;
-	name: string;
-	/** Present in the session or following it. */
-	inSession: boolean;
-	/** Can open this session now; someone who can't is asked about before a send. */
-	canOpen: boolean;
-}
+/** POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer: guidance into the running turn, naming people as a message does. */
+export type CloudCpSteerTurnRequest = SteerTurnInput;
 
-/** A team the composer's @ menu offers. */
-export interface CloudCpMentionTeam {
-	teamId: string;
-	name: string;
-	memberCount: number;
-	/** Members who can't open this session. */
-	membersWithoutAccess: number;
-}
-
-/**
- * GET /orgs/{orgId}/sessions/{sessionId}/mention-candidates?q=&limit=. For a
- * guest (not a member of the session's workspace) only the people in the
- * session come back, and no teams.
- */
-export interface CloudCpMentionCandidates {
-	people: CloudCpMentionPerson[];
-	teams: CloudCpMentionTeam[];
-}
+/** GET /orgs/{orgId}/sessions/{sessionId}/mention-candidates: names only, never emails. */
+export type CloudCpMentionCandidates = MentionCandidates;
+export type CloudCpMentionPerson = MentionCandidates["people"][number];
+export type CloudCpMentionTeam = MentionCandidates["teams"][number];
 
 export interface CloudCpMentionCandidatesQuery {
 	q?: string;
 	limit?: number;
 }
 
-/**
- * The payload of a `chat.aside` session event: a note people write in the
- * timeline that the agent never sees.
- */
-export interface CloudCpAsidePayload {
-	asideId: string;
-	text: string;
-	authorUserId: string;
-	/** The author's display name, when the control plane records it as it does for chat.user_message. */
-	authorName?: string;
-	mentions?: CloudCpMention[];
-}
+/** POST /orgs/{orgId}/sessions/{sessionId}/asides (Idempotency-Key). */
+export type CloudCpAsideInput = AsideInput;
+/** A note people write in the timeline that the agent never sees. */
+export type CloudCpAsideEvent = AsideEvent;
+export type CloudCpAsidePayload = AsideEvent["payload"];
 
-/**
- * POST /orgs/{orgId}/sessions/{sessionId}/asides (Idempotency-Key header).
- * Needs no composer lease; anyone who can open the session may post one,
- * viewers included.
- */
-export interface CloudCpPostAsideRequest {
-	text: string;
-	mentions?: CloudCpMention[];
-}
-
-/** The stored `chat.aside` event. */
-export interface CloudCpPostAsideResponse {
-	event: CloudCpClientEvent;
-}
-
-/**
- * An aside put forward for the agent, waiting for whoever drives the session
- * to send, edit or dismiss it. Pending ones list oldest first.
- */
-export interface CloudCpAsideSuggestion {
-	suggestionId: string;
-	asideId: string;
-	/** The aside's text, as it will be sent. */
-	text: string;
-	/** Who put it forward: the aside's author or anyone else in the session. */
-	suggestedBy: CloudCpPersonRef;
-	createdAt: string;
-}
-
-/** GET /orgs/{orgId}/sessions/{sessionId}/suggestions: the pending ones, oldest first. */
-export interface CloudCpAsideSuggestionsResponse {
-	items: CloudCpAsideSuggestion[];
-}
-
-/** Where a feed row's session stands, derived by the control plane. */
-export type CloudCpFeedStatus = "needs" | "working" | "review" | "ready" | "merged" | "failed" | "idle";
+/** An aside put forward for the driver: pending until sent or dismissed. */
+export type CloudCpSuggestion = Suggestion;
+export type CloudCpSuggestionEnvelope = SuggestionEnvelope;
+/** chat.suggestion_created or chat.suggestion_resolved, with the suggestion as its payload. */
+export type CloudCpSuggestionEvent = SuggestionEvent;
+export type CloudCpCreateSuggestionInput = CreateSuggestionInput;
+export type CloudCpSendSuggestionInput = SendSuggestionInput;
+export type CloudCpSendSuggestionResult = SendSuggestionResult;
+export type CloudCpDismissSuggestionInput = DismissSuggestionInput;
 
 /** Team: every session you may open; mine: ones you created or prompted; following: ones you follow. */
-export type CloudCpFeedScope = "team" | "mine" | "following";
-
-/** One session in the team feed. */
-export interface CloudCpFeedItem {
-	orgId: string;
-	orgName: string;
-	projectId: string;
-	projectName: string;
-	sessionId: string;
-	title: string;
-	owner: CloudCpPersonRef;
-	status: CloudCpFeedStatus;
-	/** One short sentence about the latest state. */
-	line: string;
-	/** Others in the session, at most 5. */
-	people: CloudCpPersonRef[];
-	following: boolean;
-	updatedAt: string;
-	/** An orchestrator's worker: which of its workers this is. */
-	worker?: { index: number; of: number; orchestratorTitle: string };
-}
-
-/** What changed since the caller's last visit to the feed, at most 7 days back. */
-export interface CloudCpFeedAway {
-	since: string;
-	/** Things waiting on the caller. */
-	needsYou: number;
-	prsMerged: Array<{ number: number; url: string; sessionId: string }>;
-	failed: Array<{ sessionId: string; title: string }>;
-	started: { count: number; names: string[] };
-}
+export type CloudCpFeedScope = FeedScope;
+export type CloudCpFeedItem = FeedItem;
+export type CloudCpFeedStatus = FeedItem["status"];
+export type CloudCpFeedAway = FeedAway;
+/** GET /me/feed: newest activity first, paginated by (updated_at, id); the first page carries `away`. */
+export type CloudCpFeedResponse = FeedPage;
+export type CloudCpMarkFeedSeenResult = MarkFeedSeenResult;
 
 export interface CloudCpFeedQuery extends CloudCpListQuery {
 	scope?: CloudCpFeedScope;
-}
-
-/** GET /me/feed: newest activity first, paginated by (updated_at, id). */
-export interface CloudCpFeedResponse {
-	items: CloudCpFeedItem[];
-	page: CloudCpPageInfo;
-	/** Absent when nothing changed since the last visit. */
-	away?: CloudCpFeedAway;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +361,25 @@ export interface CloudCpFeedResponse {
 // ---------------------------------------------------------------------------
 
 import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
+import type {
+	AsideEvent,
+	AsideInput,
+	CreateSuggestionInput,
+	DismissSuggestionInput,
+	FeedAway,
+	FeedItem,
+	FeedPage,
+	FeedScope,
+	MarkFeedSeenResult,
+	Mention,
+	MentionCandidates,
+	SteerTurnInput,
+	SendSuggestionInput,
+	SendSuggestionResult,
+	Suggestion,
+	SuggestionEnvelope,
+	SuggestionEvent,
+} from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
 /** A project's environment variables; `value` only for an owner or admin (`editable`). */
@@ -1552,8 +1483,6 @@ export interface CloudCpSendMessageRequest {
 	content?: Array<{ type: string }>;
 	/** People and teams the message mentions; only they are notified. */
 	mentions?: CloudCpMention[];
-	/** The pending aside suggestion this message sends, which the control plane then resolves. */
-	suggestionId?: string;
 }
 
 export interface CloudCpChatModelsResponse {
@@ -2211,8 +2140,9 @@ export interface CloudCpCreateShareGrantsRequest {
 	sessionId?: string;
 	/**
 	 * A team, an email, or a workspace member by user id. The user id form is
-	 * how a mention shares a session with someone who can't open it: mention
-	 * candidates carry names only, never emails.
+	 * how a mention shares a session with someone who can't open it (mention
+	 * candidates carry names only, never emails). This route is outside the
+	 * contract, so the subject is typed here by hand.
 	 */
 	subjects: Array<{ teamId: string } | { email: string } | { userId: string }>;
 	role: CloudCpShareRole;

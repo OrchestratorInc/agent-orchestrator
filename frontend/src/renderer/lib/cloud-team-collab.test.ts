@@ -1,20 +1,30 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { CloudCpError } from "./cloud-cp/errors";
-import type { CloudCpFeedItem } from "./cloud-cp/types";
+import type { CloudCpFeedItem, CloudCpSuggestion } from "./cloud-cp/types";
 import {
+	applySuggestionEvents,
 	asidePayload,
 	awayHasNews,
+	composerLockedError,
 	groupFeed,
 	isPathQuery,
+	MAX_MENTIONS,
 	mentionAskSteps,
+	mentionNotAllowedError,
+	parseMentions,
+	splitByMentions,
+	tooManyMentionedError,
 	mentionSections,
 	mentionToken,
 	peopleWithoutAccess,
 	probeTeamCollab,
 	resetTeamCollabSupport,
+	suggestionFromEvent,
+	suggestionResolvedError,
 	teamCollabSupport,
 	teamsToConfirm,
 	uniqueMentions,
+	withSuggestion,
 	type ComposerMention,
 } from "./cloud-team-collab";
 
@@ -53,13 +63,19 @@ describe("learning whether a control plane has asides, mentions and the feed", (
 });
 
 describe("aside events", () => {
-	it("reads an aside's note, author and mentions", () => {
+	it("reads an aside's note, author and mentions with the names they had", () => {
 		expect(asidePayload({
 			type: "chat.aside",
-			payload: { asideId: "a1", text: "Looks right", authorUserId: "u-chen", authorName: " Chen Wei ", mentions: [{ kind: "person", userId: "u-ben" }, { kind: "team", teamId: "t-1" }, { kind: "x" }] },
+			payload: { asideId: "a1", text: "Looks right", authorUserId: "u-chen", authorName: " Chen Wei ", mentions: [{ kind: "person", userId: "u-ben", name: "Ben Ortiz" }, { kind: "team", teamId: "t-1" }, { kind: "x" }] },
 		})).toEqual({
 			asideId: "a1", text: "Looks right", authorUserId: "u-chen", authorName: "Chen Wei",
-			mentions: [{ kind: "person", userId: "u-ben" }, { kind: "team", teamId: "t-1" }],
+			mentions: [{ kind: "person", userId: "u-ben", name: "Ben Ortiz" }, { kind: "team", teamId: "t-1" }],
+		});
+	});
+
+	it("gives an aside from before names were recorded an empty author name", () => {
+		expect(asidePayload({ type: "chat.aside", payload: { asideId: "a1", text: "Old", authorUserId: "u" } })).toEqual({
+			asideId: "a1", text: "Old", authorUserId: "u", authorName: "", mentions: [],
 		});
 	});
 
@@ -78,7 +94,7 @@ describe("mentions", () => {
 		{ userId: "me", name: "Asha Rao", inSession: true, canOpen: true },
 		...Array.from({ length: 6 }, (_, index) => ({ userId: `s${index}`, name: `Sam ${index}`, inSession: true, canOpen: true })),
 	];
-	const teams = [{ teamId: "t1", name: "Checkout", memberCount: 3, membersWithoutAccess: 0 }];
+	const teams = [{ teamId: "t1", name: "Checkout", memberCount: 3, membersWithoutAccess: 0, namesWithoutAccess: [] }];
 
 	it("treats a query with a slash or a dot as a path", () => {
 		expect(isPathQuery("src/auth/")).toBe(true);
@@ -159,8 +175,78 @@ describe("the team feed", () => {
 		expect(awayHasNews(undefined)).toBe(false);
 		expect(awayHasNews(nothing)).toBe(false);
 		expect(awayHasNews({ ...nothing, needsYou: 1 })).toBe(true);
-		expect(awayHasNews({ ...nothing, prsMerged: [{ number: 1, url: "", sessionId: "s" }] })).toBe(true);
-		expect(awayHasNews({ ...nothing, failed: [{ sessionId: "s", title: "t" }] })).toBe(true);
+		expect(awayHasNews({ ...nothing, prsMerged: [{ number: 1, url: "", sessionId: "s", orgId: "o" }] })).toBe(true);
+		expect(awayHasNews({ ...nothing, failed: [{ sessionId: "s", orgId: "o", title: "t" }] })).toBe(true);
 		expect(awayHasNews({ ...nothing, started: { count: 2, names: ["Ben"] } })).toBe(true);
+	});
+});
+
+describe("suggestions", () => {
+	const suggestion = (id: string, status: CloudCpSuggestion["status"], createdAt: string): CloudCpSuggestion => ({
+		id, orgId: "o", sessionId: "s", kind: "aside", asideId: `aside-${id}`, text: id, status, createdAt, updatedAt: createdAt,
+		suggestedBy: { userId: "u-chen", name: "Chen Wei" }, author: { userId: "u-chen", name: "Chen Wei" },
+	});
+	const event = (type: string, payload: unknown) => ({ type, payload });
+
+	it("reads a suggestion from its two event types, and nothing else", () => {
+		const made = suggestion("a", "pending", "2026-11-07T10:00:00Z");
+		expect(suggestionFromEvent(event("chat.suggestion_created", made))).toBe(made);
+		expect(suggestionFromEvent(event("chat.suggestion_resolved", { ...made, status: "sent" }))?.status).toBe("sent");
+		expect(suggestionFromEvent(event("chat.aside", made))).toBeUndefined();
+		expect(suggestionFromEvent(event("chat.suggestion_created", { id: "x" }))).toBeUndefined();
+	});
+
+	it("keeps the pending list oldest first as suggestions are made, sent and dismissed", () => {
+		const first = suggestion("a", "pending", "2026-11-07T10:00:00Z");
+		const second = suggestion("b", "pending", "2026-11-07T10:05:00Z");
+		const list = applySuggestionEvents([], [
+			event("chat.suggestion_created", second),
+			event("chat.user_message", { text: "hi" }),
+			event("chat.suggestion_created", first),
+		]);
+		expect(list.map((item) => item.id)).toEqual(["a", "b"]);
+		expect(applySuggestionEvents(list, [event("chat.suggestion_resolved", { ...first, status: "sent" })]).map((item) => item.id)).toEqual(["b"]);
+		expect(withSuggestion(list, { ...second, status: "dismissed" }).map((item) => item.id)).toEqual(["a"]);
+		// Made twice (its 200 answer), it shows once.
+		expect(withSuggestion(list, first).map((item) => item.id)).toEqual(["a", "b"]);
+	});
+
+	it("tells a resolved suggestion and a locked composer from other failures", () => {
+		expect(suggestionResolvedError(new CloudCpError("x", { status: 409, code: "suggestion_resolved" }))).toBe(true);
+		expect(composerLockedError(new CloudCpError("x", { status: 409, code: "COMPOSER_LOCKED" }))).toBe(true);
+		expect(suggestionResolvedError(new CloudCpError("x", { status: 409, code: "COMPOSER_LOCKED" }))).toBe(false);
+		expect(composerLockedError(new CloudCpError("x", { status: 500, code: "COMPOSER_LOCKED" }))).toBe(false);
+		expect(suggestionResolvedError(new Error("offline"))).toBe(false);
+	});
+});
+
+describe("mentions in text", () => {
+	const chen = { kind: "person" as const, name: "Chen Wei" };
+	const chenShort = { kind: "person" as const, name: "Chen" };
+	const platform = { kind: "team" as const, name: "Platform" };
+
+	it("picks out each mention where it starts the text or follows whitespace, longest name first", () => {
+		expect(splitByMentions("@Chen Wei and @Platform, look", [chenShort, chen, platform])).toEqual([chen, " and ", platform, ", look"]);
+		expect(splitByMentions("hi @Chen there", [chen, chenShort])).toEqual(["hi ", chenShort, " there"]);
+	});
+
+	it("leaves emails, longer words and unknown names as text", () => {
+		expect(splitByMentions("mail ana@Platform.com", [platform])).toEqual(["mail ana@Platform.com"]);
+		expect(splitByMentions("@Platforms team", [platform])).toEqual(["@Platforms team"]);
+		expect(splitByMentions("@Dana hi", [platform])).toEqual(["@Dana hi"]);
+		expect(splitByMentions("no mentions", [])).toEqual(["no mentions"]);
+	});
+
+	it("reads recorded tokens with the names they had", () => {
+		const tokens = parseMentions([{ kind: "person", userId: "u", name: "Chen Wei" }, { kind: "team", teamId: "t" }, "junk"]);
+		expect(tokens).toEqual([{ kind: "person", userId: "u", name: "Chen Wei" }, { kind: "team", teamId: "t" }]);
+		expect(parseMentions(undefined)).toEqual([]);
+	});
+
+	it("caps one send at 20 people and teams, and knows the two mention refusals", () => {
+		expect(MAX_MENTIONS).toBe(20);
+		expect(mentionNotAllowedError(new CloudCpError("x", { status: 422, code: "mention_not_allowed" }))).toBe(true);
+		expect(tooManyMentionedError(new CloudCpError("x", { status: 422, code: "too_many_mentioned" }))).toBe(true);
+		expect(tooManyMentionedError(new CloudCpError("x", { status: 422, code: "mention_not_allowed" }))).toBe(false);
 	});
 });

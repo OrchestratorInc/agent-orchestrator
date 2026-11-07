@@ -9,7 +9,7 @@ import { teamFeedQueryKey, useMarkFeedSeen, useMentionCandidates, useTeamCollabS
 const mocks = vi.hoisted(() => ({
 	ready: true,
 	getMyFeed: vi.fn(),
-	markFeedSeen: vi.fn(),
+	markMyFeedSeen: vi.fn(),
 	listMentionCandidates: vi.fn(),
 }));
 vi.mock("./useCloudCp", () => ({
@@ -27,7 +27,7 @@ beforeEach(() => {
 	resetTeamCollabSupport();
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	mocks.getMyFeed.mockResolvedValue({ items: [], page: { hasMore: false } });
-	mocks.markFeedSeen.mockResolvedValue(undefined);
+	mocks.markMyFeedSeen.mockResolvedValue({ seenAt: "2026-11-08T00:00:00Z" });
 	mocks.listMentionCandidates.mockResolvedValue({ people: [], teams: [] });
 });
 afterEach(() => resetTeamCollabSupport());
@@ -84,7 +84,7 @@ describe("useTeamFeed and useMarkFeedSeen", () => {
 		await waitFor(() => expect(feed.result.current.data?.pages[0]?.away).toBeDefined());
 		const seen = renderHook(() => useMarkFeedSeen(), { wrapper });
 		await act(async () => { await seen.result.current.mutateAsync(); });
-		expect(mocks.markFeedSeen).toHaveBeenCalledTimes(1);
+		expect(mocks.markMyFeedSeen).toHaveBeenCalledTimes(1);
 		const cached = client.getQueryData<{ pages: Array<{ away?: unknown }> }>(teamFeedQueryKey("https://cp.test", "user-me", "team"));
 		expect(cached?.pages[0]?.away).toBeUndefined();
 	});

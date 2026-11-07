@@ -24,14 +24,16 @@ export function useMentionAsk({ share, resetKey }: {
 	const pending = useRef<Pending | null>(null);
 	const [step, setStep] = useState<MentionAskStep>();
 	const [sharing, setSharing] = useState(false);
-	const [shareFailed, setShareFailed] = useState(false);
+	// Why the last share didn't go: the control plane doesn't know the person
+	// (a bare 404), or it failed some other way.
+	const [shareProblem, setShareProblem] = useState<"unknown-person" | "failed">();
 
 	const finish = useCallback((answer: ComposerMention[] | null) => {
 		const current = pending.current;
 		pending.current = null;
 		setStep(undefined);
 		setSharing(false);
-		setShareFailed(false);
+		setShareProblem(undefined);
 		current?.resolve(answer);
 	}, []);
 
@@ -41,7 +43,7 @@ export function useMentionAsk({ share, resetKey }: {
 		current.mentions = mentions;
 		current.index += 1;
 		setSharing(false);
-		setShareFailed(false);
+		setShareProblem(undefined);
 		if (current.index >= current.steps.length) finish(mentions);
 		else setStep(current.steps[current.index]);
 	}, [finish]);
@@ -53,7 +55,7 @@ export function useMentionAsk({ share, resetKey }: {
 		return new Promise((resolve) => {
 			pending.current = { steps, index: 0, mentions, resolve };
 			setSharing(false);
-			setShareFailed(false);
+			setShareProblem(undefined);
 			setStep(steps[0]);
 		});
 	}, []);
@@ -77,13 +79,13 @@ export function useMentionAsk({ share, resetKey }: {
 		const asked = current?.steps[current.index];
 		if (!current || asked?.kind !== "noAccess") return;
 		setSharing(true);
-		setShareFailed(false);
+		setShareProblem(undefined);
 		try {
 			await share(asked.people);
-		} catch {
+		} catch (error) {
 			if (pending.current === current) {
 				setSharing(false);
-				setShareFailed(true);
+				setShareProblem((error as { status?: unknown } | null)?.status === 404 ? "unknown-person" : "failed");
 			}
 			return;
 		}
@@ -98,5 +100,5 @@ export function useMentionAsk({ share, resetKey }: {
 		finish(null);
 	}, [finish, resetKey]);
 
-	return { step, sharing, shareFailed, confirm, cancel, notifyTeam, sendWithout, shareAndSend };
+	return { step, sharing, shareProblem, confirm, cancel, notifyTeam, sendWithout, shareAndSend };
 }

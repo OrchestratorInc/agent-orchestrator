@@ -55,8 +55,20 @@ describe("useMentionAsk", () => {
 		act(() => { void hook.result.current.confirm([cara]); });
 		await act(async () => { await hook.result.current.shareAndSend(); });
 		expect(hook.result.current.step).toEqual({ kind: "noAccess", people: [cara] });
-		expect(hook.result.current.shareFailed).toBe(true);
+		expect(hook.result.current.shareProblem).toBe("failed");
 		expect(hook.result.current.sharing).toBe(false);
+	});
+
+	it("tells a person the control plane doesn't know (a bare 404) from a failed share", async () => {
+		const share = vi.fn(async () => { throw Object.assign(new Error("not found"), { status: 404, code: "not_found" }); });
+		const { hook } = setup(share);
+		let answer: Promise<ComposerMention[] | null> | undefined;
+		act(() => { answer = hook.result.current.confirm([cara, chen]); });
+		await act(async () => { await hook.result.current.shareAndSend(); });
+		expect(hook.result.current.shareProblem).toBe("unknown-person");
+		// The draft waits; Send without them still goes.
+		act(() => hook.result.current.sendWithout());
+		await expect(answer).resolves.toEqual([chen]);
 	});
 
 	it("drops a question still open for another session", async () => {

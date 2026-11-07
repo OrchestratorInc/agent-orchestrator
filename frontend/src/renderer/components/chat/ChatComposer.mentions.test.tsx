@@ -25,8 +25,8 @@ const CANDIDATES: CloudCpMentionCandidates = {
 		{ userId: "u-me", name: "Asha Rao", inSession: true, canOpen: true },
 	],
 	teams: [
-		{ teamId: "t-checkout", name: "Checkout", memberCount: 3, membersWithoutAccess: 0 },
-		{ teamId: "t-platform", name: "Platform", memberCount: 6, membersWithoutAccess: 2 },
+		{ teamId: "t-checkout", name: "Checkout", memberCount: 3, membersWithoutAccess: 0, namesWithoutAccess: [] },
+		{ teamId: "t-platform", name: "Platform", memberCount: 6, membersWithoutAccess: 2, namesWithoutAccess: ["Dana Kim", "Eli Park"] },
 	],
 };
 
@@ -162,7 +162,7 @@ describe("mention chips", () => {
 		await typeInLexicalEditor(field, "heads up");
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(onSend).toHaveBeenCalled());
-		expect(onSend.mock.calls[0]![7]).toEqual([{ kind: "team", id: "t-platform", name: "Platform", memberCount: 6, membersWithoutAccess: 2 }]);
+		expect(onSend.mock.calls[0]![7]).toEqual([{ kind: "team", id: "t-platform", name: "Platform", memberCount: 6, membersWithoutAccess: 2, namesWithoutAccess: ["Dana Kim", "Eli Park"] }]);
 	});
 
 	it("keeps a file pick as today's file chip", async () => {
@@ -251,6 +251,27 @@ describe("asking before a mentioning send", () => {
 	});
 });
 
+describe("mentions in a steer", () => {
+	it("asks first, then steers with the mentions it cleared", async () => {
+		let answer!: (mentions: ComposerMention[] | null) => void;
+		const confirm = vi.fn(() => new Promise<ComposerMention[] | null>((resolve) => { answer = resolve; }));
+		const onSteer = vi.fn(async () => ({ status: "accepted" as const }));
+		const { field, onSend } = renderComposer({ mentions: mentions({ confirm }), willQueue: true, canSteer: true, onSteer });
+		await typeInLexicalEditor(field, "@che");
+		await userEvent.keyboard("{Enter}");
+		await typeInLexicalEditor(field, "look");
+		await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(onSteer).not.toHaveBeenCalled();
+		await act(async () => answer([{ kind: "person", id: "u-chen", name: "Chen Wei", canOpen: true }]));
+		await waitFor(() => expect(onSteer).toHaveBeenCalled());
+		const call = onSteer.mock.calls[0] as unknown[];
+		expect(call[0]).toBe("@Chen Wei look");
+		expect(call[4]).toEqual([{ kind: "person", id: "u-chen", name: "Chen Wei", canOpen: true }]);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+});
+
 describe("composer modes", () => {
 	it("switches mode on Shift+Tab instead of moving focus", async () => {
 		const onToggleMode = vi.fn();
@@ -299,5 +320,52 @@ describe("mentions on a saved draft's delivery", () => {
 		const second = onSend.mock.calls[1] as unknown[];
 		expect(second[2]).toBe(first[2]);
 		expect(second[7]).toEqual(first[7]);
+	});
+});
+
+describe("calm refusals", () => {
+	it("reads an ordinary refusal calmly and puts the text back", async () => {
+		const onSend = vi.fn(async () => {
+			throw Object.assign(new Error("Already sent or dismissed."), { code: "suggestion_resolved", calm: true });
+		});
+		render(<ChatComposer onSend={onSend} draftSessionId="session-calm" />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInLexicalEditor(field, "Edited suggestion");
+		await userEvent.keyboard("{Enter}");
+		const line = await screen.findByText("Already sent or dismissed.");
+		expect(line).toHaveAttribute("role", "status");
+		expect(line).toHaveClass("text-muted-foreground");
+		expect(screen.queryByRole("alert")).toBeNull();
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("Edited suggestion"));
+	});
+
+	it("still reads a real refusal as an error", async () => {
+		const onSend = vi.fn(async () => {
+			throw Object.assign(new Error("The request body is invalid."), { code: "INVALID_BODY" });
+		});
+		render(<ChatComposer onSend={onSend} draftSessionId="session-error" />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		await typeInLexicalEditor(field, "Hello");
+		await userEvent.keyboard("{Enter}");
+		expect(await screen.findByRole("alert")).toHaveTextContent("The request body is invalid.");
+	});
+});
+
+describe("the mention cap", () => {
+	it("holds a send that names more than 20 people and teams, saying so calmly", async () => {
+		const name = (index: number) => `P${String(index).padStart(2, "0")}`;
+		const people = Array.from({ length: 21 }, (_, index) => ({ userId: `u-${index}`, name: name(index), inSession: true, canOpen: true }));
+		const onSend = vi.fn();
+		render(<ChatComposer onSend={onSend} mentions={mentions({ candidates: { people, teams: [] } })} />);
+		const field = screen.getByLabelText("Message the agent") as HTMLElement;
+		for (let index = 0; index < 21; index++) {
+			await typeInLexicalEditor(field, `@${name(index)}`);
+			await userEvent.keyboard("{Enter}");
+		}
+		expect(field.querySelectorAll('[data-composer-token="person"]')).toHaveLength(21);
+		await userEvent.keyboard("{Enter}");
+		const line = await screen.findByText("Mention at most 20 people and teams at once.");
+		expect(line).toHaveAttribute("role", "status");
+		expect(onSend).not.toHaveBeenCalled();
 	});
 });

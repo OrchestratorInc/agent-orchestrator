@@ -10,7 +10,8 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
 	getMyFeed: vi.fn(),
-	markFeedSeen: vi.fn(),
+	getSession: vi.fn(),
+	markMyFeedSeen: vi.fn(),
 	navigateToSession: vi.fn(),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
@@ -52,7 +53,7 @@ function renderFeed() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	resetTeamCollabSupport();
-	mocks.markFeedSeen.mockResolvedValue(undefined);
+	mocks.markMyFeedSeen.mockResolvedValue({ seenAt: "2026-11-08T00:00:00Z" });
 	mocks.getMyFeed.mockResolvedValue(page([]));
 });
 afterEach(() => resetTeamCollabSupport());
@@ -149,8 +150,8 @@ describe("TeamFeedView", () => {
 			away: {
 				since: minutesAgo(600),
 				needsYou: 2,
-				prsMerged: [{ number: 476, url: "https://github.test/pr/476", sessionId: "s-merged" }, { number: 478, url: "", sessionId: "s-other" }],
-				failed: [{ sessionId: "s-failed", title: "Upgrade Next.js to 16" }],
+				prsMerged: [{ number: 476, url: "https://github.test/pr/476", sessionId: "s-merged", orgId: "org-1" }, { number: 478, url: "", sessionId: "s-other", orgId: "org-1" }],
+				failed: [{ sessionId: "s-failed", orgId: "org-1", title: "Upgrade Next.js to 16" }],
 				started: { count: 5, names: ["Ben", "Dana", "Omar", "Riya"] },
 			},
 		}));
@@ -165,9 +166,15 @@ describe("TeamFeedView", () => {
 		expect(useUiStore.getState().notificationCenterOpenRequest).toBeGreaterThan(0);
 		fireEvent.click(within(card).getByRole("button", { name: "#476" }));
 		expect(mocks.navigateToSession).toHaveBeenLastCalledWith("project-2", "s-merged");
-		// A session not on this page opens through its own route.
+		// A session not on this page is looked up in its organization for its project.
+		mocks.getSession.mockResolvedValue({ session: { id: "s-other", orgId: "org-1", projectId: "project-7" } });
 		fireEvent.click(within(card).getByRole("button", { name: "#478" }));
-		expect(mocks.navigateToSession).toHaveBeenLastCalledWith(undefined, "s-other");
+		expect(mocks.getSession).toHaveBeenCalledWith("org-1", "s-other");
+		await waitFor(() => expect(mocks.navigateToSession).toHaveBeenLastCalledWith("project-7", "s-other"));
+		// And when that fails, it opens through the session's own route.
+		mocks.getSession.mockRejectedValue(new CloudCpError("Not found", { status: 404, code: "SESSION_NOT_FOUND" }));
+		fireEvent.click(within(card).getByRole("button", { name: "#478" }));
+		await waitFor(() => expect(mocks.navigateToSession).toHaveBeenLastCalledWith(undefined, "s-other"));
 		fireEvent.click(within(card).getByRole("button", { name: "Upgrade Next.js to 16" }));
 		expect(mocks.navigateToSession).toHaveBeenLastCalledWith("project-1", "s-failed");
 		requestBell.mockRestore();
@@ -187,7 +194,7 @@ describe("TeamFeedView", () => {
 		renderFeed();
 		await screen.findByRole("region", { name: "While you were away" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Mark caught up" })));
-		expect(mocks.markFeedSeen).toHaveBeenCalledTimes(1);
+		expect(mocks.markMyFeedSeen).toHaveBeenCalledTimes(1);
 		await waitFor(() => expect(screen.queryByRole("region", { name: "While you were away" })).toBeNull());
 	});
 
@@ -195,7 +202,7 @@ describe("TeamFeedView", () => {
 		const view = renderFeed();
 		await screen.findByText("Nothing from your team yet.");
 		view.unmount();
-		await waitFor(() => expect(mocks.markFeedSeen).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(mocks.markMyFeedSeen).toHaveBeenCalledTimes(1));
 	});
 
 	it("records no visit when the feed never loaded", async () => {
@@ -204,7 +211,7 @@ describe("TeamFeedView", () => {
 		await screen.findByText("Couldn't load the team feed.", {}, { timeout: 4000 });
 		view.unmount();
 		await act(async () => undefined);
-		expect(mocks.markFeedSeen).not.toHaveBeenCalled();
+		expect(mocks.markMyFeedSeen).not.toHaveBeenCalled();
 	});
 
 	it("says when the feed failed, and tries again on Retry", async () => {
@@ -229,15 +236,30 @@ describe("TeamFeedView", () => {
 		expect(await screen.findByText("The team feed isn't available here yet.")).toBeInTheDocument();
 	});
 
-	it("loads the next page on Show more", async () => {
+	it("pages with each page's nextCursor until there is no more", async () => {
 		recordTeamCollabSupport("https://cp.test", "supported");
-		mocks.getMyFeed.mockImplementation(async (query: CloudCpFeedQuery) => query.cursor
-			? page([item("b")])
-			: page([item("a")], { page: { hasMore: true, nextCursor: "c1" } }));
+		mocks.getMyFeed.mockImplementation(async (query: CloudCpFeedQuery) => query.cursor === "c2"
+			? page([item("c")])
+			: query.cursor === "c1"
+				? page([item("b")], { page: { hasMore: true, nextCursor: "c2" } })
+				: page([item("a")], { page: { hasMore: true, nextCursor: "c1" } }));
 		renderFeed();
 		fireEvent.click(await screen.findByRole("button", { name: "Show more" }));
 		expect(await screen.findByRole("button", { name: /Session b/ })).toBeInTheDocument();
 		expect(mocks.getMyFeed).toHaveBeenLastCalledWith({ scope: "team", limit: 30, cursor: "c1" }, expect.anything());
+		fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+		expect(await screen.findByRole("button", { name: /Session c/ })).toBeInTheDocument();
+		expect(mocks.getMyFeed).toHaveBeenLastCalledWith({ scope: "team", limit: 30, cursor: "c2" }, expect.anything());
+		expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+		// One list, in page order.
+		expect(screen.getAllByRole("button").map((row) => row.getAttribute("data-feed-row")).filter(Boolean)).toEqual(["a", "b", "c"]);
+	});
+
+	it("shows no Show more when a page says there is more but gives no cursor", async () => {
+		recordTeamCollabSupport("https://cp.test", "supported");
+		mocks.getMyFeed.mockResolvedValue(page([item("a")], { page: { hasMore: true } }));
+		renderFeed();
+		await screen.findByRole("button", { name: /Session a/ });
 		expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 	});
 });

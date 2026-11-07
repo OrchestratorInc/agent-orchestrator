@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { CloudCpSuggestion } from "../../lib/cloud-cp/types";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 import { AsideActionsContext, AsideRow, type AsideActions } from "./AsideRow";
@@ -38,13 +39,19 @@ describe("AsideRow", () => {
 		expect(screen.getByText("You")).toBeInTheDocument();
 	});
 
-	it("names an author the event doesn't name from the people in the session, else Someone", () => {
-		renderRow(aside({ authorName: undefined }), { nameOf: (userId) => (userId === "u-chen" ? "Chen Wei" : undefined) });
+	it("names the author the event names, whoever else the session knows", () => {
+		renderRow(aside({ authorName: "Chen Wei" }), { nameOf: () => "Somebody Else" });
+		expect(screen.getByText("Chen Wei")).toBeInTheDocument();
+		expect(screen.queryByText("Somebody Else")).toBeNull();
+	});
+
+	it("names the author of an aside from before names were recorded from the session", () => {
+		renderRow(aside({ authorName: "" }), { nameOf: (userId) => (userId === "u-chen" ? "Chen Wei" : undefined) });
 		expect(screen.getByText("Chen Wei")).toBeInTheDocument();
 	});
 
-	it("falls back to Someone when nobody knows the author", () => {
-		renderRow(aside({ authorName: undefined }));
+	it("falls back to Someone when nobody knows that author", () => {
+		renderRow(aside({ authorName: "" }));
 		expect(screen.getByText("Someone")).toBeInTheDocument();
 	});
 
@@ -62,11 +69,29 @@ describe("AsideRow", () => {
 		expect(screen.getByRole("button", { name: /try again/ })).toBeInTheDocument();
 	});
 
+	const waiting = (suggestedBy: string): CloudCpSuggestion => ({
+		id: "sg-1", orgId: "o", sessionId: "s", kind: "aside", asideId: "a1", text: "Looks right", status: "pending",
+		suggestedBy: { userId: suggestedBy, name: "Chen Wei" }, author: { userId: "u-chen", name: "Chen Wei" },
+		createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
+	});
+
 	it("shows an aside already waiting for the driver as Suggested", () => {
-		renderRow(aside(), { onSuggest: vi.fn(), suggestedAsideIds: new Set(["a1"]) });
+		renderRow(aside(), { onSuggest: vi.fn(), onWithdraw: vi.fn(), selfUserId: "u-other", suggestionFor: () => waiting("u-chen") });
 		expect(screen.getByText("Suggested")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Suggest to agent" })).toBeNull();
+		// Someone else's suggestion is the driver's to decline, not theirs.
+		expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
 	});
+
+	it("lets the person who suggested it withdraw it", async () => {
+		const suggestion = waiting("u-me");
+		const onWithdraw = vi.fn(async () => undefined);
+		renderRow(aside(), { onSuggest: vi.fn(), onWithdraw, selfUserId: "u-me", suggestionFor: () => suggestion });
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Withdraw" })));
+		expect(onWithdraw).toHaveBeenCalledWith(suggestion);
+	});
+
+
 
 	it("renders nothing for a row without an aside", () => {
 		const { container } = renderRow({ ...aside(), detail: { event: "chat.aside" } });

@@ -3,6 +3,7 @@ import { ScrollArea } from "radix-ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { useCloudCp } from "../hooks/useCloudCp";
 import { useMarkFeedSeen, useTeamCollabSupport, useTeamFeed } from "../hooks/useTeamCollab";
 import { awayHasNews, groupFeed, type FeedGroup, type FeedGroupId } from "../lib/cloud-team-collab";
 import type { CloudCpFeedAway, CloudCpFeedItem, CloudCpFeedScope, CloudCpFeedStatus } from "../lib/cloud-cp/types";
@@ -44,6 +45,7 @@ export function TeamFeedView() {
 	const feed = useTeamFeed(scope, support !== "unsupported");
 	const markSeen = useMarkFeedSeen();
 	const navigateToSession = useNavigateToSession();
+	const { client } = useCloudCp();
 	const openBell = useUiStore((state) => state.requestNotificationCenterOpen);
 	const listTop = useRef<HTMLDivElement>(null);
 
@@ -61,7 +63,19 @@ export function TeamFeedView() {
 	}, []);
 
 	const openSession = (projectId: string | undefined, sessionId: string) => navigateToSession(projectId, sessionId);
-	const projectOf = (sessionId: string) => items.find((item) => item.sessionId === sessionId)?.projectId;
+	// A merged PR or a stopped session names its organization: its project comes
+	// from the feed when the session is on it, else from the session itself.
+	const openAwaySession = (orgId: string, sessionId: string) => {
+		const listed = items.find((item) => item.orgId === orgId && item.sessionId === sessionId);
+		if (listed) {
+			openSession(listed.projectId, sessionId);
+			return;
+		}
+		void client.getSession(orgId, sessionId).then(
+			(answer) => openSession(answer.session.projectId, sessionId),
+			() => openSession(undefined, sessionId),
+		);
+	};
 
 	let body: ReactNode;
 	if (support === "unsupported") {
@@ -84,7 +98,7 @@ export function TeamFeedView() {
 						locale={i18n.language}
 						onMarkCaughtUp={() => markSeen.mutate()}
 						onNeedsYou={openBell}
-						onOpenSession={(sessionId) => openSession(projectOf(sessionId), sessionId)}
+						onOpenSession={openAwaySession}
 						onStarted={() => {
 							setScope("team");
 							listTop.current?.scrollIntoView({ block: "start" });
@@ -178,7 +192,7 @@ export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSessi
 	locale: string;
 	onMarkCaughtUp: () => void;
 	onNeedsYou: () => void;
-	onOpenSession: (sessionId: string) => void;
+	onOpenSession: (orgId: string, sessionId: string) => void;
 	onStarted: () => void;
 }) {
 	const { t } = useTranslation();
@@ -209,7 +223,7 @@ export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSessi
 						<span className="shrink-0">{t("feed.away.prsMerged", { count: away.prsMerged.length })}</span>
 						<span className="flex min-w-0 flex-wrap gap-x-1.5">
 							{away.prsMerged.map((pr) => (
-								<Button className="h-auto p-0 text-xs" key={`${pr.sessionId}:${pr.number}`} onClick={() => onOpenSession(pr.sessionId)} type="button" variant="link">
+								<Button className="h-auto p-0 text-xs" key={`${pr.sessionId}:${pr.number}`} onClick={() => onOpenSession(pr.orgId, pr.sessionId)} type="button" variant="link">
 									#{pr.number}
 								</Button>
 							))}
@@ -223,7 +237,7 @@ export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSessi
 						<span className="shrink-0">{t("feed.away.failed", { count: away.failed.length })}</span>
 						<span className="flex min-w-0 flex-wrap gap-x-1.5">
 							{away.failed.map((session) => (
-								<Button className="h-auto max-w-full truncate p-0 text-xs" key={session.sessionId} onClick={() => onOpenSession(session.sessionId)} type="button" variant="link">
+								<Button className="h-auto max-w-full truncate p-0 text-xs" key={session.sessionId} onClick={() => onOpenSession(session.orgId, session.sessionId)} type="button" variant="link">
 									{session.title}
 								</Button>
 							))}

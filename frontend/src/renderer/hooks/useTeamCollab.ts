@@ -14,8 +14,11 @@ import { useCloudCp } from "./useCloudCp";
 export const FEED_PAGE_SIZE = 30;
 /** How often an open feed refreshes, so "Working now" stays true. */
 export const FEED_REFRESH_MS = 30_000;
-/** How often a session's pending suggestions are read while its chat is open. */
-export const SUGGESTIONS_REFRESH_MS = 15_000;
+/**
+ * How often a session's pending suggestions are read while its chat is open:
+ * only a safety net, since its suggestion events keep the list current.
+ */
+export const SUGGESTIONS_REFRESH_MS = 60_000;
 
 export const teamCollabProbeKey = (baseUrl: string, userId: string) =>
 	["cloud-team-collab-probe", baseUrl.replace(/\/+$/, ""), userId] as const;
@@ -77,7 +80,7 @@ export function useMarkFeedSeen() {
 	const { client, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: () => client.markFeedSeen(),
+		mutationFn: () => client.markMyFeedSeen(),
 		onSuccess: () => {
 			// Every tab's first page carries the card; they all start over.
 			for (const query of queryClient.getQueryCache().findAll({ queryKey: teamFeedQueryRoot(baseUrl, userId) })) {
@@ -125,6 +128,6 @@ export function useAsideSuggestions(orgId: string | undefined, sessionId: string
 		enabled: enabled && ready && Boolean(orgId),
 		refetchInterval: SUGGESTIONS_REFRESH_MS,
 		retry: false,
-		queryFn: async ({ signal }) => (await client.listAsideSuggestions(orgId ?? "", sessionId, { signal })).items,
+		queryFn: async ({ signal }) => (await client.listSessionSuggestions(orgId ?? "", sessionId, { signal })).items,
 	});
 }

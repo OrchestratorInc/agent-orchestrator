@@ -1,4 +1,4 @@
-import type { components } from "./schema.js";
+import type { components, operations } from "./schema.js";
 
 type Schemas = components["schemas"];
 
@@ -251,6 +251,25 @@ export interface IdempotentRequestOptions {
   idempotencyKey: string;
   signal?: AbortSignal;
 }
+
+// Asides, mentions, suggestions and the team feed.
+export type Mention = Schemas["Mention"];
+export type SteerTurnInput = Schemas["SteerTurnInput"];
+export type AsideInput = Schemas["AsideInput"];
+export type AsideEvent = Schemas["AsideEvent"];
+export type Suggestion = Schemas["Suggestion"];
+export type SuggestionEnvelope = Schemas["SuggestionEnvelope"];
+export type SuggestionEvent = Schemas["SuggestionEvent"];
+export type MentionCandidates = Schemas["MentionCandidates"];
+export type FeedItem = Schemas["FeedItem"];
+export type FeedAway = Schemas["FeedAway"];
+export type FeedPage = Schemas["FeedPage"];
+export type FeedScope = NonNullable<NonNullable<operations["getMyFeed"]["parameters"]["query"]>["scope"]>;
+export type CreateSuggestionInput = operations["createSessionSuggestion"]["requestBody"]["content"]["application/json"];
+export type SendSuggestionInput = NonNullable<operations["sendSessionSuggestion"]["requestBody"]>["content"]["application/json"];
+export type SendSuggestionResult = operations["sendSessionSuggestion"]["responses"][202]["content"]["application/json"];
+export type DismissSuggestionInput = NonNullable<operations["dismissSessionSuggestion"]["requestBody"]>["content"]["application/json"];
+export type MarkFeedSeenResult = operations["markMyFeedSeen"]["responses"][200]["content"]["application/json"];
 
 export interface RequestOptions {
   signal?: AbortSignal;

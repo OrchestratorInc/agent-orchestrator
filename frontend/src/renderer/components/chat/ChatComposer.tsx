@@ -76,7 +76,7 @@ import {
 } from "./ComposerEditor";
 import { MAX_SUGGESTIONS, moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import { useTranslation } from "react-i18next";
-import { isPathQuery, mentionSections, type ComposerMention } from "../../lib/cloud-team-collab";
+import { MAX_MENTIONS, isPathQuery, mentionSections, type ComposerMention } from "../../lib/cloud-team-collab";
 import type { CloudCpMentionPerson, CloudCpMentionTeam } from "../../lib/cloud-cp/types";
 import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import {
@@ -154,6 +154,13 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// composer; nothing was accepted, so the text goes back to the draft.
 	"COMPOSER_LOCKED",
 	"COMPOSER_LEASE_LOST",
+	// The suggestion an edited message would send was sent or dismissed first:
+	// nothing was sent, so the text goes back to the draft.
+	"suggestion_resolved",
+	// A mention the control plane refused (a guest naming someone outside the
+	// session, or too many people): nothing was sent.
+	"mention_not_allowed",
+	"too_many_mentioned",
 	// Excerpts are verified before AppendUserMessage, so retrying the same
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
@@ -399,7 +406,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * Deliver this text into the turn already running. Absent means the harness
 	 * cannot steer and the choice is never offered.
 	 */
-	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean) => Promise<ChatSteerOutcome | void>;
+	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean, mentions?: ComposerMention[]) => Promise<ChatSteerOutcome | void>;
 	/** Expose steering as a separate action while a Cloud turn is running. */
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
@@ -508,6 +515,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const enterSends = chatSendKeyMode === "enter";
 	const [dragging, setDragging] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
+	// A refusal that is an ordinary outcome (another person drives, a suggestion
+	// already handled) reads calmly rather than as a failure.
+	const [calmSendError, setCalmSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
@@ -771,7 +781,7 @@ export const ChatComposer = memo(function ChatComposer({
 				label: team.name,
 				section: t("mention.section.teams"),
 				badge: t("mention.teamSize", { count: team.memberCount }),
-				mention: { kind: "team", id: team.teamId, name: team.name, memberCount: team.memberCount, membersWithoutAccess: team.membersWithoutAccess },
+				mention: { kind: "team", id: team.teamId, name: team.name, memberCount: team.memberCount, membersWithoutAccess: team.membersWithoutAccess, namesWithoutAccess: team.namesWithoutAccess },
 			})),
 			...sections.workspace.map((row) => person(row, workspace)),
 			...files.map((file) => ({ ...file, section: t("mention.section.files") })),
@@ -1559,10 +1569,17 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// One send names at most MAX_MENTIONS people and teams; past that it waits.
+		if (mentionSource && !durableDelivery && (editor.current?.getSnapshot().mentions?.length ?? 0) > MAX_MENTIONS) {
+			const notice = t("mention.tooMany", { max: MAX_MENTIONS });
+			setSendError(notice);
+			setCalmSendError(notice);
+			return Promise.resolve();
+		}
 		// A send that mentions people may ask first (a big team, someone who can't
 		// open the session). The draft stays as it is, editable, while it asks; an
 		// edit or Escape drops the question and the next send asks again.
-		const asking = !confirmedMentions.current && !durableDelivery && !savingQueuedEdit && !forceSteer
+		const asking = !confirmedMentions.current && !durableDelivery && !savingQueuedEdit
 			? mentionSource?.confirm?.(editor.current?.getSnapshot().mentions ?? [])
 			: undefined;
 		if (asking) {
@@ -1772,8 +1789,8 @@ export const ChatComposer = memo(function ChatComposer({
 				if (clearForLocalEcho) clearEditorView();
 				if (shouldSteer && onSteer) {
 					const outcome = nativePayloads.length > 0
-						? await onSteer(message, nativePayloads)
-						: await onSteer(message);
+						? (sendMentions ? await onSteer(message, nativePayloads, undefined, undefined, sendMentions) : await onSteer(message, nativePayloads))
+						: sendMentions ? await onSteer(message, undefined, undefined, undefined, sendMentions) : await onSteer(message);
 					if (outcome?.status === "not-accepted") {
 						setSteerOutcomeNotice(outcome.reason);
 						return;
@@ -1875,7 +1892,10 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!isChatComposerMutationCurrent(draftScope, mutationToken)) return;
 			if (delivery.kind === "steer") {
 				if (!onSteer) throw new Error("Steering is unavailable");
-				const outcome = await onSteer(delivery.requestText, prepared.recovered || nativePayloads.length === 0 ? undefined : nativePayloads, delivery.clientMessageId, prepared.recovered);
+				const steerAttachments = prepared.recovered || nativePayloads.length === 0 ? undefined : nativePayloads;
+				const outcome = delivery.mentions?.length
+					? await onSteer(delivery.requestText, steerAttachments, delivery.clientMessageId, prepared.recovered, delivery.mentions)
+					: await onSteer(delivery.requestText, steerAttachments, delivery.clientMessageId, prepared.recovered);
 				if (outcome?.status === "not-accepted") {
 					const cleared = clearRejectedChatComposerDelivery(
 						draftScope,
@@ -1948,6 +1968,7 @@ export const ChatComposer = memo(function ChatComposer({
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
 				// A failed agent switch is reported in its own strip above the box.
 				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
+				setCalmSendError((error as { calm?: unknown } | null)?.calm === true ? apiErrorMessage(error) : null);
 				return;
 			}
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
@@ -2430,9 +2451,15 @@ export const ChatComposer = memo(function ChatComposer({
 				/>
 
 				{attachmentError ? (
-					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
-						{translateDraft(attachmentError)}
-					</p>
+					attachmentError === calmSendError ? (
+						<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
+							{attachmentError}
+						</p>
+					) : (
+						<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
+							{translateDraft(attachmentError)}
+						</p>
+					)
 				) : null}
 				{canAbandonUncertainSteer ? (
 					<div className="px-1.5">

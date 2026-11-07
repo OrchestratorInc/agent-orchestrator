@@ -495,13 +495,13 @@ export interface SystemEventDetail {
 		| "session.model_unavailable"
 		/** A note people wrote for each other in a shared Cloud session, which the agent never sees. */
 		| "chat.aside";
-	/** chat.aside: the note, who wrote it, and whom it mentions. */
+	/** chat.aside: the note, who wrote it (an empty name on an aside from before names were recorded), and whom it mentions. */
 	aside?: {
 		asideId: string;
 		text: string;
 		authorUserId: string;
-		authorName?: string;
-		mentions?: Array<{ kind: "person"; userId: string } | { kind: "team"; teamId: string }>;
+		authorName: string;
+		mentions: Array<{ kind: "person" | "team"; userId?: string; teamId?: string; readonly name?: string }>;
 	};
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;

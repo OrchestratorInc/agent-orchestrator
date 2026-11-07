@@ -610,6 +610,8 @@ export interface ChatWorkspaceProps {
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		recoverOnly?: boolean,
+		/** The people and teams the steer mentions. */
+		mentions?: ComposerMention[],
 	) => Promise<ChatSteerOutcome | void>;
 	showSteerButton?: boolean;
 	sendPending?: boolean;
@@ -1321,7 +1323,8 @@ function ChatWorkspaceContent({
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
-		) => stableSteer(text, attachments, clientMessageId, recoverOnly),
+			mentions?: ComposerMention[],
+		) => stableSteer(text, attachments, clientMessageId, recoverOnly, mentions),
 		[stableSteer],
 	);
 	const acceptedClientMessageIds = useMemo(
