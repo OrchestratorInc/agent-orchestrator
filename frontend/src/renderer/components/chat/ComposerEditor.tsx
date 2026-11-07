@@ -52,7 +52,9 @@ import {
 } from "react";
 import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { mentionText, uniqueMentions, type ComposerMention } from "../../lib/cloud-team-collab";
 import { cn } from "../../lib/utils";
+import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
@@ -72,6 +74,8 @@ export type ComposerEditorSnapshot = {
 	trigger?: ComposerTrigger;
 	/** The caret's offset into text; undefined without a selection in the editor. */
 	caret?: number;
+	/** The people and teams the draft's chips name, each once, in order. */
+	mentions?: ComposerMention[];
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -83,7 +87,8 @@ export type ComposerEditorHandle = {
 	setText(text: string, caret?: "start" | "end"): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
-	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Replaces the trigger with a chip: a file or skill by its value, or a person or team. */
+	insertToken(trigger: ComposerTrigger, value: string | ComposerMention): void;
 	/**
 	 * Shows a dictation transcript at the caret (or the end), replacing the one
 	 * shown before it, so the words appear as they are recognized.
@@ -155,7 +160,7 @@ function ComposerImageChip({ path }: { path: string }) {
 	);
 }
 
-type TokenKind = "skill" | "file" | "image";
+type TokenKind = "skill" | "file" | "image" | "person" | "team";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
@@ -285,6 +290,19 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 
 	decorate(): JSX.Element {
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
+		if (this.__kind === "person" || this.__kind === "team") {
+			return (
+				<span
+					data-composer-token={this.__kind}
+					data-value={this.__value}
+					contentEditable={false}
+					className="mx-0.5 inline-flex items-center gap-1 rounded-md bg-interactive-hover py-0.5 pr-1.5 pl-0.5 align-middle text-[0.9em] leading-none text-foreground select-none"
+				>
+					{this.__kind === "person" ? <PersonAvatar name={this.__display} size="xs" /> : <TeamTile name={this.__display} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+					{this.__display}
+				</span>
+			);
+		}
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
 			<span
@@ -313,6 +331,69 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
+/** A person or team chip; its value carries the whole mention, so a restore or send reads it back. */
+function $createMentionNode(mention: ComposerMention): ComposerTokenNode {
+	return new ComposerTokenNode(mention.kind, JSON.stringify(mention), mention.name, mentionText(mention));
+}
+
+function readMention(node: ComposerTokenNode): ComposerMention | undefined {
+	if (node.__kind !== "person" && node.__kind !== "team") return undefined;
+	try {
+		const value = JSON.parse(node.__value) as Partial<ComposerMention>;
+		if (value.kind !== node.__kind || typeof value.id !== "string" || typeof value.name !== "string") return undefined;
+		return value as ComposerMention;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Every mention chip in the draft, each once, in document order. */
+function $draftMentions(): ComposerMention[] {
+	const found: ComposerMention[] = [];
+	const visit = (node: LexicalNode) => {
+		if (node instanceof ComposerTokenNode) {
+			const mention = readMention(node);
+			if (mention) found.push(mention);
+			return;
+		}
+		if ($isElementNode(node)) for (const child of node.getChildren()) visit(child);
+	};
+	visit($getRoot());
+	return uniqueMentions(found);
+}
+
+/**
+ * A line of restored text, with each mention's `@Name` made a chip again:
+ * the draft is saved as text, and the mentions it held beside it.
+ */
+function splitMentions(line: string, mentions: readonly ComposerMention[]): Array<string | ComposerMention> {
+	if (mentions.length === 0 || !line.includes("@")) return [line];
+	// Longest first, so "@Chen Wei" wins over "@Chen".
+	const ordered = [...mentions].sort((a, b) => b.name.length - a.name.length);
+	const parts: Array<string | ComposerMention> = [];
+	let plain = "";
+	let index = 0;
+	while (index < line.length) {
+		// A chip only ever starts the line or follows whitespace, as the @ menu does,
+		// and ends where the name does.
+		if (line[index] === "@" && (index === 0 || /\s/.test(line[index - 1]!))) {
+			const match = ordered.find((mention) => line.startsWith(mentionText(mention), index) &&
+				!/[\p{L}\p{N}_]/u.test(line[index + mentionText(mention).length] ?? " "));
+			if (match) {
+				if (plain) parts.push(plain);
+				plain = "";
+				parts.push(match);
+				index += mentionText(match).length;
+				continue;
+			}
+		}
+		plain += line[index];
+		index += 1;
+	}
+	if (plain) parts.push(plain);
+	return parts;
+}
+
 function $insertComposerReference(path: string, display: string, wire: string): void {
 	let selection = $getSelection();
 	if (!$isRangeSelection(selection)) {
@@ -330,7 +411,7 @@ function $serializeComposer(): string {
 		.join("\n");
 }
 
-function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
+function $insertComposerToken(trigger: ComposerTrigger, value: string | ComposerMention): boolean {
 	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
 	if (!$isTextNode(node)) return false;
 	const text = node.getTextContent();
@@ -339,7 +420,7 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 
 	const before = text.slice(0, trigger.start);
 	const after = text.slice(trigger.end);
-	const token = $createComposerTokenNode(trigger.kind, value);
+	const token = typeof value === "string" ? $createComposerTokenNode(trigger.kind, value) : $createMentionNode(value);
 	const tail = $createTextNode(/^\s/.test(after) ? after : ` ${after}`);
 	if (before) {
 		const head = $createTextNode(before);
@@ -353,19 +434,22 @@ function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean 
 	return true;
 }
 
-function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end"): void {
+function $replaceEditorText(text: string, attached: string[] = [], caret: "start" | "end" = "end", mentions: readonly ComposerMention[] = []): void {
 	const root = $getRoot();
 	root.clear();
 	for (const line of text.split("\n")) {
 		const paragraph = $createParagraphNode();
 		// A restored draft is plain text; paths of still-attached images become chips
-		// again. Any other path stays the text the user typed.
+		// again, and so do the mentions it held. Any other path stays the text the
+		// user typed.
 		for (const segment of splitInlineImagePaths(line, (path) => attached.includes(path))) {
-			paragraph.append(
-				segment.path === undefined
-					? $createTextNode(segment.text)
-					: $createComposerTokenNode("image", segment.path),
-			);
+			if (segment.path !== undefined) {
+				paragraph.append($createComposerTokenNode("image", segment.path));
+				continue;
+			}
+			for (const part of splitMentions(segment.text, mentions)) {
+				paragraph.append(typeof part === "string" ? $createTextNode(part) : $createMentionNode(part));
+			}
 		}
 		root.append(paragraph);
 	}
@@ -500,23 +584,25 @@ function $caretOffset(): number | undefined {
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
 	const caret = $caretOffset();
+	const mentions = $draftMentions();
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0, caret };
+		return { text, hasText: text.trim().length > 0, caret, mentions };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0, caret };
+		return { text, hasText: text.trim().length > 0, caret, mentions };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0, caret };
+	if (!active) return { text, hasText: text.trim().length > 0, caret, mentions };
 	return {
 		text,
 		hasText: text.trim().length > 0,
 		caret,
+		mentions,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,
@@ -551,11 +637,13 @@ const EditorBridge = forwardRef<
 		onEmptyChange: (empty: boolean) => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
+		/** The mentions a restored draft held, made chips again where their text is. */
+		savedMentions: () => readonly ComposerMention[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | ComposerMention | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, savedMentions, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 	/** The dictated letters, after an empty anchor node, and when the last fade ends. */
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
@@ -577,7 +665,7 @@ const EditorBridge = forwardRef<
 			},
 			setText: (text, caret) => {
 				editor.update(() => {
-					$replaceEditorText(text, attachedImages(), caret);
+					$replaceEditorText(text, attachedImages(), caret, savedMentions());
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,
@@ -677,7 +765,7 @@ const EditorBridge = forwardRef<
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
 			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
-		[attachedImages, editor],
+		[attachedImages, editor, savedMentions],
 	);
 
 	useLayoutEffect(() => {
@@ -808,8 +896,10 @@ export const ComposerEditor = forwardRef<
 		menuId: string;
 		activeIndex: number;
 		images?: ComposerImage[];
+		/** The mentions a restored draft held; read when text is set, not at render. */
+		savedMentions?: () => readonly ComposerMention[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | ComposerMention | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 		onCompositionChange: (isComposing: boolean) => void;
 		onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -828,6 +918,7 @@ export const ComposerEditor = forwardRef<
 		menuId,
 		activeIndex,
 		images = [],
+		savedMentions,
 		onChange,
 		onComplete,
 		onEnter,
@@ -865,6 +956,9 @@ export const ComposerEditor = forwardRef<
 	const imagesRef = useRef(images);
 	imagesRef.current = images;
 	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
+	const savedMentionsRef = useRef(savedMentions);
+	savedMentionsRef.current = savedMentions;
+	const readSavedMentions = useCallback(() => savedMentionsRef.current?.() ?? [], []);
 
 	const placeholderNode = useCallback(
 		() => (
@@ -943,6 +1037,7 @@ export const ComposerEditor = forwardRef<
 					onDismissSuggestion={dismissSuggestion}
 					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
+					savedMentions={readSavedMentions}
 					onChange={onChange}
 					onComplete={onComplete}
 					onEnter={onEnter}

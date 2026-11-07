@@ -1,5 +1,6 @@
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
+import type { ComposerMention } from "./cloud-team-collab";
 import { isCloudAttachmentReference } from "./cloud-attachment-reference";
 
 /**
@@ -102,6 +103,8 @@ export interface ChatComposerDelivery {
 	/** Exact verified transcript excerpts attached to this delivery. */
 	excerpts?: ChatDraftExcerptReference[];
 	fileReferences?: ChatFileReference[];
+	/** The people and teams the message mentions, sent beside its text on every attempt. */
+	mentions?: ComposerMention[];
 }
 
 export interface ChatDraftExcerptReference {
@@ -185,6 +188,7 @@ export interface PrepareChatComposerDeliveryInput {
 	attachments: ChatDraftAttachment[];
 	excerpts?: ChatDraftExcerptReference[];
 	fileReferences?: ChatFileReference[];
+	mentions?: ComposerMention[];
 	requestText: string;
 	clientMessageId: string;
 }
@@ -787,6 +791,7 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		(delivery.fileReferences === undefined || (Array.isArray(delivery.fileReferences) && delivery.fileReferences.every(isFileReference))) &&
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
+		(delivery.mentions === undefined || (Array.isArray(delivery.mentions) && delivery.mentions.every(isMention))) &&
 		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
 		(delivery.draft === undefined || (delivery.draft !== null &&
 			typeof delivery.draft === "object" &&
@@ -815,6 +820,12 @@ function isInlineEditDelivery(value: unknown): value is ChatInlineEditDelivery {
 function draftEditRevision(): string {
 	if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
 	return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isMention(value: unknown): value is ComposerMention {
+	if (!value || typeof value !== "object") return false;
+	const mention = value as Partial<ComposerMention>;
+	return (mention.kind === "person" || mention.kind === "team") && typeof mention.id === "string" && typeof mention.name === "string";
 }
 
 function isFileReference(value: unknown): value is ChatFileReference {
@@ -1066,6 +1077,7 @@ export function prepareChatComposerDelivery(
 		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
 		excerpts,
 		fileReferences,
+		...(input.mentions?.length ? { mentions: input.mentions } : {}),
 	};
 	const next: ChatSessionDraft = {
 		...loaded.draft,

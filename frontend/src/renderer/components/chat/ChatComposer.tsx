@@ -74,7 +74,11 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
-import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
+import { MAX_SUGGESTIONS, moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
+import { useTranslation } from "react-i18next";
+import { isPathQuery, mentionSections, type ComposerMention } from "../../lib/cloud-team-collab";
+import type { CloudCpMentionPerson, CloudCpMentionTeam } from "../../lib/cloud-cp/types";
+import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import {
 	isSupportedImageAttachment,
 	useFileAttachments,
@@ -215,7 +219,33 @@ export type ChatComposerHandle = {
 	isEmpty(): boolean;
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
+	/** Adds text after the draft (or makes it the draft when there is none), saved like typed input. */
+	appendDraft(text: string): void;
 };
+
+/**
+ * People and teams for the `@` menu, beside files: the people in the session
+ * first (at most five), then teams, then the rest of the workspace, then
+ * files. A query that reads as a path offers only files.
+ */
+export interface ComposerMentionSource {
+	/** Told what follows "@" while it is not a path (undefined once it is not), to look people and teams up. */
+	onQuery: (query: string | undefined) => void;
+	candidates?: { people: readonly CloudCpMentionPerson[]; teams: readonly CloudCpMentionTeam[] };
+	/** The workspace's name, for "People in <workspace>"; absent reads "People in this workspace". */
+	workspaceName?: string;
+	/** Who has the session open right now, marked "Here now". */
+	presentUserIds?: ReadonlySet<string>;
+	/** The signed-in person, never offered. */
+	selfUserId?: string;
+	/**
+	 * Asked before a send that mentions someone: answers the mentions to send,
+	 * or null to keep the draft unsent. Undefined sends at once.
+	 */
+	confirm?: (mentions: ComposerMention[]) => Promise<ComposerMention[] | null> | undefined;
+	/** The draft changed or Escape was pressed while a confirm was asked: it no longer applies. */
+	cancelConfirm?: () => void;
+}
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -281,7 +311,16 @@ export const ChatComposer = memo(function ChatComposer({
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
 	parkUnsentSends = true,
+	mentions: mentionSource,
+	editorLabel = "Message the agent",
+	onToggleMode,
 }: {
+	/** People and teams in the `@` menu; absent, `@` offers files only. */
+	mentions?: ComposerMentionSource;
+	/** The editor's accessible name. */
+	editorLabel?: string;
+	/** Shift+Tab in the editor switches the composer's mode. */
+	onToggleMode?: () => void;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
@@ -299,6 +338,8 @@ export const ChatComposer = memo(function ChatComposer({
 	fileReferences?: ChatFileReference[],
 		/** With text delivery, the message as typed, before its captures were inlined into `text`. */
 		displayText?: string,
+		/** The people and teams the message mentions. */
+		mentions?: ComposerMention[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -507,6 +548,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	// A send waiting on the person's answer about who its mentions reach, and
+	// the mentions it was then cleared to send.
+	const mentionConfirm = useRef<Promise<void> | null>(null);
+	const confirmedMentions = useRef<ComposerMention[] | null>(null);
+	// Read by the editor's change handler, which outlives a render.
+	const cancelMentionConfirmRef = useRef<() => void>(() => undefined);
+	const readSavedMentions = useCallback(() => (draftScopeKey ? readDraftMentions(draftScopeKey) : []), [draftScopeKey]);
 	const dictation = useDictation({
 		onText: (text) => editor.current?.dictate(text),
 		onEnd: (keep) => editor.current?.endDictation(keep),
@@ -691,6 +739,12 @@ export const ChatComposer = memo(function ChatComposer({
 		];
 	}, [compactUnavailable, onCompact, skills]);
 
+	const { t } = useTranslation();
+	const mentionCandidates = mentionSource?.candidates;
+	const mentionWorkspaceName = mentionSource?.workspaceName;
+	const mentionPresent = mentionSource?.presentUserIds;
+	const mentionSelf = mentionSource?.selfUserId;
+	const mentionsOffered = Boolean(mentionSource);
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
 		// An empty candidate list is the whole reason the sigil stays ordinary: with
@@ -698,8 +752,31 @@ export const ChatComposer = memo(function ChatComposer({
 		if (currentTrigger.kind === "skill") {
 			return rankSkills(slashCommands, currentTrigger.query);
 		}
-		return rankFiles(filePaths, currentTrigger.query);
-	}, [slashCommands, filePaths]);
+		const files = rankFiles(filePaths, currentTrigger.query);
+		// A path query (a slash or a dot) is about files: people and teams hide.
+		if (!mentionsOffered || isPathQuery(currentTrigger.query)) return files;
+		const sections = mentionSections(mentionCandidates, currentTrigger.query, mentionSelf);
+		const person = (person: CloudCpMentionPerson, section: string): Suggestion => ({
+			value: `person:${person.userId}`,
+			label: person.name,
+			section,
+			badge: !person.canOpen ? t("mention.cannotOpen") : mentionPresent?.has(person.userId) ? t("mention.hereNow") : undefined,
+			mention: { kind: "person", id: person.userId, name: person.name, canOpen: person.canOpen },
+		});
+		const workspace = mentionWorkspaceName ? t("mention.section.workspace", { name: mentionWorkspaceName }) : t("mention.section.workspaceUnnamed");
+		return [
+			...sections.inSession.map((row) => person(row, t("mention.section.inSession"))),
+			...sections.teams.map((team): Suggestion => ({
+				value: `team:${team.teamId}`,
+				label: team.name,
+				section: t("mention.section.teams"),
+				badge: t("mention.teamSize", { count: team.memberCount }),
+				mention: { kind: "team", id: team.teamId, name: team.name, memberCount: team.memberCount, membersWithoutAccess: team.membersWithoutAccess },
+			})),
+			...sections.workspace.map((row) => person(row, workspace)),
+			...files.map((file) => ({ ...file, section: t("mention.section.files") })),
+		].slice(0, MAX_SUGGESTIONS);
+	}, [slashCommands, filePaths, mentionsOffered, mentionCandidates, mentionSelf, mentionPresent, mentionWorkspaceName, t]);
 
 	const suggestions: Suggestion[] = useMemo(
 		() => suggestionsFor(trigger),
@@ -709,6 +786,11 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (fileQuery !== undefined) onFileQuery?.(fileQuery);
 	}, [fileQuery, onFileQuery]);
+	const mentionQuery = fileQuery !== undefined && !isPathQuery(fileQuery) ? fileQuery : undefined;
+	const onMentionQuery = mentionSource?.onQuery;
+	useEffect(() => {
+		onMentionQuery?.(mentionQuery);
+	}, [mentionQuery, onMentionQuery]);
 
 	const menuOpen = suggestions.length > 0;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
@@ -900,7 +982,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasQueuedDock &&
 		!hadQueuedDockRef.current &&
 		typeof document !== "undefined" &&
-		document.activeElement?.getAttribute("aria-label") === "Message the agent";
+		document.activeElement?.getAttribute("aria-label") === editorLabel;
 	useLayoutEffect(() => {
 		hadQueuedDockRef.current = hasQueuedDock;
 		if (restoreFocusAfterQueueAppears) editor.current?.focus();
@@ -1329,7 +1411,12 @@ export const ChatComposer = memo(function ChatComposer({
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
-		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
+		if (snapshot.text !== previousText && !historyBrowse.current) {
+			persistComposerText(snapshot.text);
+			if (draftScopeKey) writeDraftMentions(draftScopeKey, snapshot.mentions ?? []);
+		}
+		// The question was about the draft as it was.
+		if (snapshot.text !== previousText) cancelMentionConfirmRef.current();
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
 			draftCaretRef.current = snapshot.caret;
 			onDraftInput?.(snapshot.text, snapshot.caret);
@@ -1357,7 +1444,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
+	}, [draftScopeKey, onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1382,6 +1469,13 @@ export const ChatComposer = memo(function ChatComposer({
 				if (snapshot) onEditorChange(snapshot);
 				editor.current?.focus();
 			},
+			appendDraft: (text: string) => {
+				const current = editor.current?.getSnapshot().text.trimEnd() ?? "";
+				editor.current?.setText(current ? `${current}\n\n${text}` : text);
+				const snapshot = editor.current?.getSnapshot();
+				if (snapshot) onEditorChange(snapshot);
+				editor.current?.focus();
+			},
 		}),
 		[focusEditor, hasDraft, onEditorChange],
 	);
@@ -1389,7 +1483,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		editor.current?.insertToken(currentTrigger, value);
+		const mention = suggestionsFor(currentTrigger).find((suggestion) => suggestion.value === value)?.mention;
+		editor.current?.insertToken(currentTrigger, mention ?? value);
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
 		setTrigger(undefined);
@@ -1397,7 +1492,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+	}, [suggestionsFor]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1430,7 +1525,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [submitting]);
 
 	const completeFromEditor = useCallback(
-		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
+		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | ComposerMention | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
@@ -1442,10 +1537,20 @@ export const ChatComposer = memo(function ChatComposer({
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
-			return chosen.value;
+			return chosen.mention ?? chosen.value;
 		},
 		[onCompact, skills, suggestionsFor],
 	);
+
+	/** A confirm that no longer applies: the draft changed, or Escape. */
+	function cancelMentionConfirm() {
+		if (!mentionConfirm.current) return;
+		if (submitInFlight.current === mentionConfirm.current) submitInFlight.current = null;
+		mentionConfirm.current = null;
+		mentionSource?.cancelConfirm?.();
+	}
+
+	cancelMentionConfirmRef.current = cancelMentionConfirm;
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
@@ -1454,13 +1559,36 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// A send that mentions people may ask first (a big team, someone who can't
+		// open the session). The draft stays as it is, editable, while it asks; an
+		// edit or Escape drops the question and the next send asks again.
+		const asking = !confirmedMentions.current && !durableDelivery && !savingQueuedEdit && !forceSteer
+			? mentionSource?.confirm?.(editor.current?.getSnapshot().mentions ?? [])
+			: undefined;
+		if (asking) {
+			const pending: Promise<void> = asking.then((cleared) => {
+				if (mentionConfirm.current !== pending) return;
+				mentionConfirm.current = null;
+				if (submitInFlight.current === pending) submitInFlight.current = null;
+				if (!cleared) return;
+				confirmedMentions.current = cleared;
+				return submit(undefined, forceSteer);
+			}, () => {
+				if (mentionConfirm.current !== pending) return;
+				mentionConfirm.current = null;
+				if (submitInFlight.current === pending) submitInFlight.current = null;
+			});
+			mentionConfirm.current = pending;
+			submitInFlight.current = pending;
+			return pending;
+		}
 		// Sending keeps what was dictated so far and stops listening.
 		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
-			document.activeElement?.getAttribute("aria-label") === "Message the agent";
+			document.activeElement?.getAttribute("aria-label") === editorLabel;
 		setSubmitting(true);
 		const pending = performSubmit(forceSteer);
 		submitInFlight.current = pending;
@@ -1491,6 +1619,10 @@ export const ChatComposer = memo(function ChatComposer({
 		let currentText = textRef.current;
 		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
+		// What a confirm cleared, else what the chips name now; a retry keeps its own.
+		const draftMentions = confirmedMentions.current ?? editor.current?.getSnapshot().mentions ?? [];
+		confirmedMentions.current = null;
+		const sendMentions = recoveringDelivery ? recoveringDelivery.mentions : draftMentions.length > 0 ? draftMentions : undefined;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
 		setSteerOutcomeNotice(null);
@@ -1652,7 +1784,9 @@ export const ChatComposer = memo(function ChatComposer({
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
-					await onSend(message, sendPayloads(nativePayloads));
+					await onSend(message, sendPayloads(nativePayloads), undefined, undefined, undefined, undefined, undefined, sendMentions);
+				} else if (sendMentions) {
+					await onSend(message, undefined, undefined, undefined, undefined, undefined, undefined, sendMentions);
 				} else {
 					await onSend(message);
 				}
@@ -1703,6 +1837,7 @@ export const ChatComposer = memo(function ChatComposer({
 			),
 			excerpts: recoveringDelivery?.excerpts ?? chatReferences,
 			fileReferences: recoveringDelivery?.fileReferences ?? fileReferences,
+			mentions: sendMentions,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1766,10 +1901,12 @@ export const ChatComposer = memo(function ChatComposer({
      if (fileReferenceDelivery === "text") {
       // The text carries the captures for the agent; they are passed too, so the
       // surface can show the message as typed with its captures beside it.
-      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText);
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText, delivery.mentions);
      } else {
-      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
+      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, undefined, delivery.mentions);
      }
+    } else if (delivery.mentions?.length) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts?.length ? delivery.excerpts : undefined, undefined, undefined, delivery.mentions);
     } else if (delivery.excerpts?.length) {
      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
     } else {
@@ -1870,6 +2007,19 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		// Shift+Tab switches the composer's mode (Agent and Aside), as Claude Code
+		// cycles its modes, instead of moving focus back.
+		if (onToggleMode && event.key === "Tab" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+			event.preventDefault();
+			onToggleMode();
+			return;
+		}
+		if (event.key === "Escape" && mentionConfirm.current) {
+			event.preventDefault();
+			event.stopPropagation();
+			cancelMentionConfirm();
+			return;
+		}
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
 			dictation.detach();
@@ -2259,7 +2409,8 @@ export const ChatComposer = memo(function ChatComposer({
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
-					label="Message the agent"
+					label={editorLabel}
+					savedMentions={readSavedMentions}
 					placeholder={
 						disabledPlaceholder ?? (disabled
 							? "The controller is not connected"

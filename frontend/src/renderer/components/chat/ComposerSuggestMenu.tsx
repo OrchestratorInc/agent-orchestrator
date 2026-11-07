@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CornerDownLeft } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
@@ -109,7 +110,16 @@ export function ComposerSuggestMenu({
 					className="scrollbar-none flex max-h-64 flex-col gap-px overflow-y-auto"
 				>
 					{items.map((item, index) => (
-						<li key={item.value} data-index={index}>
+						<li key={item.value} data-index={index} role="presentation">
+							{item.section && item.section !== items[index - 1]?.section ? (
+								<div
+									aria-hidden="true"
+									className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", index > 0 && "mt-1")}
+									data-suggest-section=""
+								>
+									{item.section}
+								</div>
+							) : null}
 							<Pressable
 								tabIndex={-1}
 								role="option"
@@ -123,7 +133,13 @@ export function ComposerSuggestMenu({
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
 								)}
 							>
-								{kind === "file"
+								{item.mention ? (
+									<span aria-hidden="true" className="flex h-4 shrink-0 items-center">
+										{item.mention.kind === "person"
+											? <PersonAvatar name={item.mention.name} size="xs" />
+											: <TeamTile name={item.mention.name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+									</span>
+								) : kind === "file"
 									? (() => {
 											const Icon = composerFileIcon(item.value);
 											return (

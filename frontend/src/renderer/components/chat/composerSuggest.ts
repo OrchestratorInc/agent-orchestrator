@@ -11,6 +11,7 @@
  * ordinary text for the agent.
  */
 
+import type { ComposerMention } from "../../lib/cloud-team-collab";
 import type { ChatSkill } from "../../types/conversation";
 
 /** What kind of thing the caret is currently completing. */
@@ -53,6 +54,10 @@ export function findActiveTrigger(text: string, caret: number): ActiveTrigger | 
 
 		const preceding = i > 0 ? text[i - 1]! : undefined;
 		const atBoundary = preceding === undefined || TRIGGER_BOUNDARY.test(preceding);
+		// A slash inside a word is part of a path being typed after `@`
+		// (`@src/auth/`), so keep looking for the `@` that started it; with none,
+		// `and/or` and `src/app` stay ordinary words.
+		if (!atBoundary && char === "/") continue;
 		if (!atBoundary) return undefined;
 
 		return {
@@ -97,6 +102,10 @@ export interface Suggestion {
 	detail?: string;
 	/** Right-aligned provenance, e.g. a skill's scope. */
 	badge?: string;
+	/** The @ menu's section this row opens or continues; a heading shows where it changes. */
+	section?: string;
+	/** A person or team: picking it makes a mention chip instead of inserting `value`. */
+	mention?: ComposerMention;
 }
 
 /**

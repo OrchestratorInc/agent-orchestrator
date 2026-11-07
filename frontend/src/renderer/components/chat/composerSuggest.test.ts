@@ -44,6 +44,7 @@ describe("findActiveTrigger", () => {
 	// Otherwise an email address opens a file menu mid-word.
 	it("ignores an at-sign inside a word", () => {
 		expect(findActiveTrigger("mail dhruv@corethink.ai", 23)).toBeUndefined();
+		expect(findActiveTrigger("ana@example.com/path", 20)).toBeUndefined();
 	});
 
 	// Once there is a space the user has moved on to prose; holding the menu open
@@ -51,6 +52,13 @@ describe("findActiveTrigger", () => {
 	it("closes the trigger at whitespace", () => {
 		expect(findActiveTrigger("@src/app more words", 19)).toBeUndefined();
 		expect(findActiveTrigger("/review now", 11)).toBeUndefined();
+	});
+
+	it("keeps a path typed after @ as one file query, slashes included", () => {
+		expect(findActiveTrigger("look at @src/auth/", 18)).toEqual({ kind: "file", start: 8, query: "src/auth/" });
+		expect(findActiveTrigger("install @scope/pkg", 18)).toEqual({ kind: "file", start: 8, query: "scope/pkg" });
+		// Without an @ a slash mid-word is still prose.
+		expect(findActiveTrigger("see https://example.com/a", 25)).toBeUndefined();
 	});
 
 	it("reads the query up to the caret, not to the end of the text", () => {
