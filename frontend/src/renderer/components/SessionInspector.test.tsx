@@ -5013,7 +5013,6 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
   });
 
-  // A squash merge leaves the branch's commits ahead of the base.
   it("offers no Create PR once the session's PR is merged", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
     renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState: pushed(4) })} />);

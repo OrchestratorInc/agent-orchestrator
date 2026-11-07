@@ -59,7 +59,6 @@ export function SessionBranchSummary({
 	title,
 }: {
 	hostId?: string;
-	/** A PR from this session was merged, so pushed commits need no new PR. */
 	merged?: boolean;
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
@@ -329,8 +328,6 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined,
 	}
 	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
 	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	// A squash merge leaves the branch's commits ahead of the base, so they
-	// still count here even though the merged PR already shipped them.
 	if (!merged && facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
