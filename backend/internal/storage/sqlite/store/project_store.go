@@ -349,3 +349,53 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 	})
 	return row, updated, err
 }
+
+// UpdateProjectConfig reads, applies, and persists a focused config patch under
+// one writer lock and transaction. Dry runs use the same current row.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, patch domain.ProjectConfigPatch, dryRun bool) (domain.ProjectConfigPatchResult, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	result := domain.ProjectConfigPatchResult{Changes: []domain.ProjectConfigChange{}}
+	err := s.inTx(ctx, "update project config", func(q *gen.Queries) error {
+		stored, err := q.GetProject(ctx, domain.ProjectID(id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		row := projectRowFromGen(stored)
+		if !row.ArchivedAt.IsZero() {
+			return nil
+		}
+		result.Before = row
+		result.After = row
+		result.Found = true
+		config, changes, err := patch.Apply(row)
+		if err != nil {
+			return err
+		}
+		result.After.Config = config
+		result.Changes = changes
+		if dryRun || len(changes) == 0 {
+			return nil
+		}
+		serialized, err := marshalProjectConfig(config)
+		if err != nil {
+			return err
+		}
+		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
+			ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: serialized,
+		})
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			result.Found = false
+			return nil
+		}
+		result.Applied = true
+		return nil
+	})
+	return result, err
+}
