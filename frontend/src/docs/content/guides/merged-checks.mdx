@@ -1,0 +1,57 @@
+---
+title: Test parallel sessions together
+description: Catch branches that pass alone but break when merged, and duplicate work across sessions, with fanout.
+---
+
+Each worker session has its own worktree and branch, and CI runs on each pull request alone. Two sessions can both pass CI and still break the default branch once both merge: one renames a function the other calls, or both build the same feature. [fanout](https://github.com/Breadstick-Crumbs/fanout) is an open-source (MIT) Claude Code and Codex plugin that tests session branches merged together and keeps sessions from duplicating work. It reads Git, so it sees Orchestrator's worktrees without any Orchestrator setting.
+
+## Install
+
+In Claude Code, install the plugin at user scope. Orchestrator starts Claude Code with your user settings in both Chat and Terminal UI, so every Claude Code worker loads it:
+
+```bash
+claude plugin marketplace add Breadstick-Crumbs/fanout
+claude plugin install fanout@fanout
+```
+
+For Codex and other harnesses that read `AGENTS.md`, run this once in the repository and commit `AGENTS.md`:
+
+```bash
+npx github:Breadstick-Crumbs/fanout init
+```
+
+`init` also installs a Git pre-commit hook that applies the same checks to commits from any harness.
+
+## What workers get
+
+With two or more sessions active in a project, each Claude Code worker:
+
+- is told at start what the other sessions are working on;
+- is stopped before its first edit when another session already has the same task, worded differently or not;
+- receives the diff when another session commits a change to a file it has read or edited.
+
+Codex workers run `fanout start`, `fanout inbox`, and `fanout done` as `AGENTS.md` asks.
+
+## Check before you merge
+
+Before you merge a session's pull request, run this in that session's worktree shell:
+
+```bash
+npx github:Breadstick-Crumbs/fanout done
+```
+
+To have the worker run it, create an agent **Cue** named **Test with other sessions** with the prompt `Run npx github:Breadstick-Crumbs/fanout done and fix anything it reports on your branch`, and run the Cue in the session.
+
+It merges that branch with the other sessions' commits on a scratch copy, runs the tests once, and names the branch whose merge broke them. With `--json`, it prints one object and exits with a code per outcome:
+
+| Exit | `result` | Meaning |
+| --- | --- | --- |
+| 0 | `ok` | The branch works merged with the other sessions' work |
+| 1 | `broke`, `conflict` | This branch breaks the merged tests, or conflicts |
+| 3 | `broke_other`, `conflict_other` | Another session's branch, named in `culprit`, breaks them first |
+| 4 | `base_fails` | The tests already fail on the base branch |
+| 5 | `duplicate` | This session's task duplicates another session's |
+
+To see every session at once, with files that two sessions are both changing, run `npx github:Breadstick-Crumbs/fanout` from the repository.
+
+If the tests need gitignored files such as `.env`, list them in `.worktreeinclude` at the repository root.
