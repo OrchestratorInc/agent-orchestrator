@@ -1,5 +1,6 @@
+import { apiErrorException } from "./api-error-exception";
 import { readAccountHostDirectory, saveAccountRemoteHost } from "./account-remote-hosts";
-import { apiClient, apiErrorMessage } from "./api-client";
+import { apiClient } from "./api-client";
 import { aoBridge } from "./bridge";
 
 // AO Cloud rejects host labels longer than 64 bytes.
@@ -42,7 +43,7 @@ export async function linkThisComputer(
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});
-	if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
+	if (issued.error || !issued.data) throw apiErrorException(issued.error);
 	await saveAccountRemoteHost(cloudBaseUrl, {
 		hostId: issued.data.hostId,
 		label: fitLabel(await aoBridge.remotes.computerName()),

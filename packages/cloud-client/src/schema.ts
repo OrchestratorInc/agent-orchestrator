@@ -3513,6 +3513,13 @@ export interface components {
             sandboxProviderConnectionId?: string;
             /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
             branch?: string;
+            /** @description Coding-agent model the worker runs (harness-native id). One the account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the worker runs the project's worker model; without one, a worker on the orchestrator's harness runs the orchestrator's current model, else the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the worker's opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
         ChatMessageInput: {
             /** @description The message. It may be empty only when attachmentIds names at least one file. */
@@ -3560,6 +3567,10 @@ export interface components {
             defaultEffort?: string;
             /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
             approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
+            /** @description The model the account's provider listed behind this entry: its own ID, or the model an alias such as opus resolves to. Absent when the provider did not confirm the entry for the account, or from an older worker. Only such a confirmation says the account runs the model an alias describes. */
+            providerId?: string;
+            /** @description On a session's own list, a model its worker added only so the session keeps its own selection. The account's provider did not list it, so it is not kept as the account's. */
+            sessionOnly?: boolean;
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
@@ -3572,6 +3583,8 @@ export interface components {
             cliVersion?: string;
             /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
             accountListed?: boolean;
+            /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
+            sessionOnlyMarked?: boolean;
         };
         SendMessageInput: {
             text: string;
@@ -3847,6 +3860,13 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
+            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. The control plane always sends it; an empty string means the harness default. Absent only from older control planes, which predate it; read `model` then. */
+            currentModel?: string;
+            /**
+             * @description Reasoning effort the session's turns run with now: its owner's Chat pick, else the effort it launched with. Omitted when that is the model's default.
+             * @enum {string}
+             */
+            currentReasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
             deniedCommands: string[];
             interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];

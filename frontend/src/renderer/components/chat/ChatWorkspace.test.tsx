@@ -964,7 +964,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(onSessionRenamed).not.toHaveBeenCalled();
 	});
@@ -1133,8 +1133,6 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
-		// The fold names the time, so the answer's own row does not repeat it.
-		expect(document.querySelector("[data-turn-duration]")).toBeNull();
 		// "Worked for" fills the row under the prompt, so no empty one is reserved.
 		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
 
@@ -1142,7 +1140,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
-	it("puts the turn's duration on the action row when there is no work to fold", () => {
+	it("heads a turn with no work to fold with Worked for as plain text", () => {
 		const turnId = "turn-straight-to-answer";
 		const snapshot: ConversationSnapshot = {
 			...chatFixtureEmpty,
@@ -1172,14 +1170,17 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Nothing to fold, so no "Worked for": the time ends the answer's action row instead.
+		// Every settled turn says how long it ran in the same place. With nothing to
+		// fold it is a label: no control and no chevron.
+		const worked = document.querySelector("[data-turn-worked]");
+		expect(worked).toHaveTextContent("Worked for 1m");
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
-		// An empty row of the same height keeps the prompt's hover actions off the answer.
-		expect(document.querySelector("[data-turn-worked-gap]")).toBeInTheDocument();
-		const duration = screen.getByText("1m");
+		expect(worked?.querySelector("svg")).toBeNull();
+		// It fills the row under the prompt, so no empty one is reserved.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
+		// ...and the answer's own row does not repeat the time.
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
-		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.closest("[data-turn-actions]")).not.toHaveTextContent("1m");
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -2181,6 +2182,61 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("offers Restore, not Resume, on a terminated session", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={restore}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		// Archiving is a normal end, not a failure.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Session terminated")).toBeInTheDocument();
+		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
+		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		// A shell here would open in the project root once the worktree is gone.
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Restore session" }));
+		expect(restore).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the composer locked while a terminated session restores", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={vi.fn()}
+				resumingAgent
+			/>,
+		);
+
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		// A message sent now would reach a session the daemon still calls terminated.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("does not wait for a reconnect on a terminated session", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+	});
+
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
 		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
 		const view = render(
@@ -3106,7 +3162,7 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it.each([1200, 300])("preserves the spacer and bottom anchor during a disclosure resize to %ipx", async (height) => {
+	it.each([1200, 300])("lets the prompt spacer take a disclosure resize to %ipx in the latest turn", async (height) => {
 		stubVirtualTimelineGeometry();
 		const originalObserver = window.ResizeObserver;
 		const observers: TestResizeObserver[] = [];
@@ -3124,8 +3180,9 @@ describe("ChatWorkspace timeline", () => {
 			const spacer = screen.getByTestId("chat-prompt-spacer");
 			log.scrollTop = log.scrollHeight - log.clientHeight;
 			fireEvent.scroll(log);
-			const initialSpacer = spacer.style.height;
-			const initialScrollTop = log.scrollTop;
+			const initialSpacer = Number.parseFloat(spacer.style.height) || 0;
+			const initialRange = log.scrollHeight;
+			expect(initialSpacer).toBeGreaterThan(0);
 			const latest = log.querySelector<HTMLElement>('[data-index="99"]')!;
 			expect(latest).toBeInTheDocument();
 			// A disclosure changes row geometry without a new conversation snapshot.
@@ -3135,9 +3192,14 @@ describe("ChatWorkspace timeline", () => {
 					if (observer.targets.has(latest)) observer.callback([entry], observer as unknown as ResizeObserver);
 				}
 			});
-			expect(spacer.style.height).toBe(initialSpacer);
-			// Keep the virtualizer's size compensation without an extra forced pin.
-			expect(log.scrollTop).toBe(initialScrollTop + height - 600);
+			// The spacer under the latest prompt gives up or takes back the room in the same
+			// frame, as without windowing, so the view neither slides with each frame of a
+			// fold's animation nor snaps back when React draws the new height.
+			const change = height - 600;
+			const spacerNow = Number.parseFloat(spacer.style.height) || 0;
+			expect(spacerNow).toBe(Math.max(0, initialSpacer - change));
+			// Only what the spacer could not take changes the scroll range.
+			expect(log.scrollHeight).toBe(initialRange + change + spacerNow - initialSpacer);
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		} finally {
 			window.ResizeObserver = originalObserver;
@@ -3795,7 +3857,7 @@ describe("ChatWorkspace message actions", () => {
 		});
 		expect(editButtons).toHaveLength(1);
 		await user.click(editButtons[0]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 
 		const editor = screen.getByRole("textbox", { name: "Edit message" });
 		await user.clear(editor);
@@ -3859,13 +3921,13 @@ describe("ChatWorkspace message actions", () => {
 
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(2);
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		const disclosure = screen.getByText(/Reconstructed context:/);
-		expect(disclosure).toHaveTextContent(
-			"Reconstructed context: text messages will be replayed into a new agent session. Tool calls, approvals, and workspace history will not be replayed; current worktree files stay as they are.",
+		const branchNote = screen.getByText(/Starts a new conversation branch/);
+		expect(branchNote).toHaveTextContent(
+			"Starts a new conversation branch. Files stay as they are.",
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveAttribute(
 			"aria-describedby",
-			disclosure.id,
+			branchNote.id,
 		);
 	});
 
@@ -3893,7 +3955,7 @@ describe("ChatWorkspace message actions", () => {
 
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(2);
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("requires a prior visible provider turn before offering a native historical fork", () => {
@@ -3916,7 +3978,7 @@ describe("ChatWorkspace message actions", () => {
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(1);
 	});
 
-	it("does not warn about reconstruction when a native fork anchor is visible", async () => {
+	it("shows the same branch note when a native fork anchor is visible", async () => {
 		const user = userEvent.setup();
 		render(
 			<ChatWorkspace
@@ -3930,7 +3992,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("keeps reconstructed ancestor prompts editable when their provider ids belong to the source scope", () => {
@@ -3970,7 +4032,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[0]!);
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("uses the durable native anchor when its prompt is on an older page", async () => {
@@ -3992,7 +4054,7 @@ describe("ChatWorkspace message actions", () => {
 		});
 		expect(editButtons).toHaveLength(1);
 		await user.click(editButtons[0]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("restores the latest composer text after the same session fully remounts", async () => {
@@ -4224,21 +4286,21 @@ describe("ChatWorkspace message actions", () => {
 		const composer = screen.getByLabelText("Message the agent");
 		await typeInLexicalEditor(composer, "retry this exact draft");
 		fireEvent.keyDown(composer, { key: "Enter" });
-		await screen.findByText(/delivery wasn’t confirmed/);
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
 		const firstClientMessageId = onSend.mock.calls[0]?.[2];
 		expect(firstClientMessageId).toEqual(expect.any(String));
 		firstView.unmount();
 
 		const retryView = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
 		const restored = screen.getByLabelText("Message the agent");
-		expect(restored).toHaveTextContent("retry this exact draft");
-		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		expect(restored).toHaveTextContent("");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		expect(onSend.mock.calls[1]?.[2]).toBe(firstClientMessageId);
-		await waitFor(() =>
-			expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(""),
-		);
-		await waitFor(() => expect(restored).toHaveTextContent(""));
+		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).unsent).toBeUndefined());
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+		expect(readChatSessionDraft(snapshot.sessionId).composer.delivery).toBeUndefined();
 		retryView.unmount();
 
 		render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
@@ -4920,7 +4982,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("keep this draft");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -4935,7 +4997,6 @@ describe("ChatWorkspace message actions", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("keep this draft");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
 
 		// An ambiguous provider failure can durably activate the replacement branch.
 		// Keep its journal actionable when that branch refetch arrives: the user still
@@ -5024,7 +5085,7 @@ describe("ChatWorkspace message actions", () => {
 		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
 
 		expect(screen.getByText("2 / 3")).toBeVisible();
-		expect(screen.queryByText(/Reconstructed context/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
 		await user.click(
 			screen.getByRole("button", {
 				name: "Previous conversation branch",
@@ -5529,6 +5590,16 @@ describe("ChatWorkspace shell tabs", () => {
 		);
 		act(() => [...previousTabListeners][0]?.());
 		expect(onSelectChat).toHaveBeenCalledOnce();
+	});
+
+	it("leaves tab shortcuts to the owning strip when the chat header is hidden", () => {
+		const view = render(<ChatWorkspace hideHeader snapshot={idleSnapshot()} />);
+		expect(previousTabListeners.size).toBe(0);
+		expect(nextTabListeners.size).toBe(0);
+		expect(closeShellTerminalListeners.size).toBe(0);
+		expect(closeShellTerminalShortcutStates).toEqual([]);
+		view.unmount();
+		expect(closeShellTerminalShortcutStates).toEqual([]);
 	});
 
 	it("enables the close-shell shortcut and closes the active shell tab", () => {

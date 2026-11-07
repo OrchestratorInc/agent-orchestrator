@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
@@ -24,6 +25,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
+import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
@@ -286,7 +288,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
-			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
+			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
 	};
 
@@ -355,9 +357,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
-				{t("newTask.modelNotice.retry")}
-			</Button>
+			{task.modelWarningRetries ? (
+				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
+			) : null}
 		</div>
 	) : task.modelWarning;
 
@@ -369,12 +373,16 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
+			{/* The placeholder bar above is its drag region; without it (bar-less panel) this keeps the top edge draggable. */}
+			<BareTopbarDragStrip />
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above).
 				key={projectId}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				// The pending launch below tracks its own unanswered send.
+				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.
 				sessionTitle={echo ? echo.text.trim().slice(0, 100) : t("command.newTask")}
 				sessionRole="worker"
@@ -416,6 +424,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
+								cloudOrgId: task.catalogCloudOrgId,
 								hostId,
 								agents: task.agentChoices,
 								disabled: task.agent.disabled,
@@ -449,7 +458,10 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
+	const modelChoices = model.choices.flatMap((choice) => {
+		const listed = catalogModelFor(choice, harness, models);
+		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
+	});
 	const chosen = models.find((item) => item.id === settings.model);
 	const label = chosen ? agentModelDisplayLabel(harness, chosen.displayName) : undefined;
 	const modelValue = modelChoices.find((choice) => choice.value === settings.model)?.value ??

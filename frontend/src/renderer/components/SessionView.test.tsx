@@ -12,7 +12,8 @@ import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
-import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
+import type { BrowserTabsState } from "../../main/browser-view-host";
+import type { ObservedBrowserAgentActivity } from "../hooks/useBrowserView";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -283,6 +284,13 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
 // the split under test.
+// The shared project control stands in as a marker: these tests check where it
+// renders, and SharedProjectPanel.test covers what it shows.
+vi.mock("./SharedProjectPanel", () => ({
+	SharedProjectPanel: ({ orchestrator }: { orchestrator: { id: string } }) => (
+		<button type="button" data-testid="shared-project-control">{orchestrator.id}</button>
+	),
+}));
 vi.mock("./SessionTopbarActions", () => ({
 	SessionTopbarActions: ({
 		sessionAction,
@@ -673,7 +681,7 @@ vi.mock("./CloudWorkspaceDiff", () => ({
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
 	browserDestroy: vi.fn(),
 	browserViewOptions: { current: undefined as { active: boolean; sessionId: string; terminated: boolean } | undefined },
-	browserViewState: { url: "", tabCount: 1, agentBrowserActive: false, agentBrowserActivity: null as BrowserAgentActivityState | null },
+	browserViewState: { url: "", tabCount: 1, agentBrowserActive: false, agentBrowserActivity: null as ObservedBrowserAgentActivity | null },
 }));
 vi.mock("../hooks/useBrowserView", () => ({
 	useBrowserView: (options: { active: boolean; sessionId: string; terminated: boolean }) => {
@@ -1220,6 +1228,41 @@ describe("SessionView", () => {
 		];
 		view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 		expect(cloudSessionPoll).toHaveBeenLastCalledWith(false);
+	});
+
+	it.each(["chat", "terminal"] as const)(
+		"puts a Cloud orchestrator's shared project control in the header, not over the %s",
+		(mode) => {
+			const cloudOrchestrator: WorkspaceSession = {
+				...workerSession("sess-orch"),
+				workspaceId: "cloud-project",
+				workspaceName: "Cloud project",
+				mode: mode === "chat" ? "chat" : undefined,
+				cloud: { orgId: "cloud-org" },
+			};
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudOrchestrator] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-orch" />);
+			const controls = screen.getAllByTestId("shared-project-control");
+			expect(controls).toHaveLength(1);
+			expect(controls[0].closest(".session-topbar-session-chrome")).not.toBeNull();
+		},
+	);
+
+	it("shows no shared project control on a Cloud worker or a local orchestrator", () => {
+		const cloudWorker: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudWorker] },
+		];
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
+		view.unmount();
+		workspaceQueryState.data = workspaces;
+		render(<SessionView projectId="proj-1" sessionId="sess-orch" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -2677,10 +2720,13 @@ describe("SessionView", () => {
 			reviews: [], runs: [],
 		}));
 		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
-		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		// Outside a split, a reviewer chat that is not selected is not kept mounted.
 		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 	});
 
 	it("reveals the primary chat for each palette hit over a file tab", async () => {
@@ -5709,11 +5755,12 @@ describe("SessionView", () => {
 		expect(browserUnseen("sess-orch")).toBe(false);
 	});
 
-	it("reveals the orchestrator Browser when the agent first uses it", () => {
+	it("only badges the orchestrator Browser when the agent first uses it", () => {
 		const { rerender } = render(<SessionView sessionId="sess-orch" />);
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
-		expect(inspectorOpen("sess-orch")).toBe(true);
+		expect(inspectorOpen("sess-orch")).toBe(false);
+		expect(browserUnseen("sess-orch")).toBe(true);
 	});
 
 	it("switches the browser between its dock and the whole app window immediately", () => {
@@ -6147,7 +6194,7 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
 		browserViewState.agentBrowserActive = true;
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-1" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-1", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
@@ -6161,7 +6208,7 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorOpen("sess-1")).toBe(false);
 
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-2" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "command-2", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(navigateMock).not.toHaveBeenCalled();
@@ -6170,7 +6217,7 @@ describe("SessionView", () => {
 	it.each(["snapshot", "click", "fill", "act", "errors"])("only badges Browser for passive %s commands", (action) => {
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
 		browserViewState.agentBrowserActive = true;
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "passive-1" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action, phase: "started", commandId: "passive-1", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 		expect(browserUnseen("sess-1")).toBe(true);
@@ -6178,7 +6225,7 @@ describe("SessionView", () => {
 
 	it("reveals a fast open command even when React only renders its finished event", () => {
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: false, action: "open", phase: "finished", commandId: "fast-1" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: false, action: "open", phase: "finished", commandId: "fast-1", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 		act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
@@ -6186,10 +6233,21 @@ describe("SessionView", () => {
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 	});
 
+	it("does not reveal an open command that started before the user switched in", () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		browserViewState.agentBrowserActive = true;
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action: "open", phase: "finished", commandId: "before-switch-1", startObserved: false };
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorOpen("sess-1")).toBe(false);
+		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
+		expect(browserUnseen("sess-1")).toBe(true);
+	});
+
 	it("does not reveal for an explicit browser command from another view", () => {
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
 		browserViewState.agentBrowserActive = true;
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-2", active: true, action: "open", phase: "started", commandId: "background-1" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-2", active: true, action: "open", phase: "started", commandId: "background-1", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 		expect(navigateMock).not.toHaveBeenCalled();
@@ -6396,7 +6454,7 @@ describe("SessionView", () => {
 		worker.previewUrl = "http://localhost:5173/";
 		worker.previewRevision = 1;
 		browserViewState.agentBrowserActive = true;
-		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action: "open", phase: "started", commandId: "terminated-1" };
+		browserViewState.agentBrowserActivity = { viewId: "browser:sess-1", active: true, action: "open", phase: "started", commandId: "terminated-1", startObserved: true };
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
 		expect(browserUnseen("sess-1")).toBe(false);

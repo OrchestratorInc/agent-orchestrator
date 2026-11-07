@@ -31,18 +31,21 @@ export function TopbarButton({
 	children,
 	className,
 	highlight = true,
+	highlightActive,
 	variant = "action",
 	type = "button",
 	...props
 }: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants> & {
 	/** Joined controls can let their surrounding group own the highlight. */
 	highlight?: boolean;
+	/** Overrides the pressed/expanded highlight, e.g. for a menu that opens on hover. */
+	highlightActive?: boolean;
 }) {
 	// Accent keeps its bordered raised surface; every other utility control
 	// shares the sidebar's hover highlight.
 	const useHighlight = highlight && (variant === "action" || variant === "icon" || variant === "secondary");
-	const active = props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
-		props["aria-expanded"] === true || props["aria-expanded"] === "true";
+	const active = highlightActive ?? (props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
+		props["aria-expanded"] === true || props["aria-expanded"] === "true");
 	return (
 		<Pressable
 			className={cn(topbarButtonVariants({ variant }), useHighlight && NAV_ROW_HIGHLIGHT_HOST_CLASS, useHighlight && "isolate", className)}

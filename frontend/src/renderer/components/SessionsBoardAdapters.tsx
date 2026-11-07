@@ -242,18 +242,18 @@ function DesktopSessionCard({
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					<SessionArchiveDialog
-						onConfirm={(choice) => {
-							setConfirmOpen(false);
-							onTerminate(choice);
-						}}
-						onOpenChange={setConfirmOpen}
-						open={confirmOpen}
-						session={session}
-						trigger={
+		<SessionArchiveDialog
+			onConfirm={(choice) => {
+				setConfirmOpen(false);
+				onTerminate(choice);
+			}}
+			onOpenChange={setConfirmOpen}
+			open={confirmOpen}
+			session={session}
+			trigger={
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex">
 							<Button
 								aria-label={
 									termination.isPending
@@ -283,14 +283,14 @@ function DesktopSessionCard({
 									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
 							</Button>
-						}
-					/>
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
-			</TooltipContent>
-		</Tooltip>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
+					</TooltipContent>
+				</Tooltip>
+			}
+		/>
 	) : undefined;
 
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);

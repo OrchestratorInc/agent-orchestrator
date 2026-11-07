@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
 import { StickyNote } from "lucide-react";
@@ -6,7 +7,7 @@ import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { labelForHost } from "../lib/host-clients";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
@@ -58,7 +59,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 				const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 					params: { path: { id: project.id } },
 				});
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (data?.status !== "ok") return undefined;
 				return data.project;
 			},
