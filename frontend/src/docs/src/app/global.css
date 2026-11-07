@@ -100,3 +100,73 @@
     flex: none;
   }
 }
+
+/* The site footer (src/components/site-footer.tsx). In the docs layout it
+   sits under the article and the table of contents; the sticky sidebar
+   stays beside it. The row is set because auto-placement would put it in
+   the empty table-of-contents row above the article. */
+.docs-footer {
+  grid-row: 4;
+  grid-column: main-start / toc-end;
+  margin-top: 3rem;
+  border-top: 1px solid var(--color-fd-border);
+  padding: 2.5rem 1rem 3rem;
+  font-size: 0.875rem;
+  color: var(--color-fd-muted-foreground);
+}
+
+.docs-footer-inner {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  max-width: var(--fd-layout-width, 97rem);
+  margin-inline: auto;
+}
+
+.docs-footer-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.docs-footer-brand a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  color: var(--color-fd-foreground);
+}
+
+.docs-footer h2 {
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-fd-foreground);
+}
+
+.docs-footer ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-footer ul a {
+  transition: color 0.1s;
+}
+
+.docs-footer ul a:hover {
+  color: var(--color-fd-foreground);
+}
+
+@media (width >= 48rem) {
+  .docs-footer {
+    padding-inline: 1.5rem;
+  }
+
+  .docs-footer-inner {
+    grid-template-columns: 2fr repeat(3, 1fr);
+  }
+}

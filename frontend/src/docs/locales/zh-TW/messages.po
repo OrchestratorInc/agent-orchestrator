@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "代理程式"
 
+msgid "Apache-2.0 License"
+msgstr "Apache-2.0 授權條款"
+
 msgid "Back to the docs home"
 msgstr "返回文件首頁"
+
+msgid "Breadcrumb"
+msgstr "導覽路徑"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "關閉側邊欄"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "收合側邊欄"
+
+msgid "Community"
+msgstr "社群"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "隱藏側邊欄"
 msgid "Installation"
 msgstr "安裝"
 
+msgid "Last updated {formatted}"
+msgstr "最後更新於 {formatted}"
+
+msgid "Legal"
+msgstr "法律資訊"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "下一頁"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "上一頁"
 
+msgid "Privacy"
+msgstr "隱私權"
+
+msgid "Product"
+msgstr "產品"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "閱讀 {markdownUrl}，並回答我關於它的問題。"
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "參考資料"
+
+msgid "Refunds & Cancellations"
+msgstr "退款與取消"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "此頁面有錯誤或遺漏嗎？"
 
 msgid "Suggest a change"
 msgstr "建議修改"
+
+msgid "Support & Contact"
+msgstr "支援與聯絡"
 
 msgctxt "table of contents"
 msgid "Table of contents"

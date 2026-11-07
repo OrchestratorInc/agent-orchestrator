@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "에이전트"
 
+msgid "Apache-2.0 License"
+msgstr "Apache-2.0 라이선스"
+
 msgid "Back to the docs home"
 msgstr "문서 홈으로 돌아가기"
+
+msgid "Breadcrumb"
+msgstr "탐색 경로"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "사이드바 닫기"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "사이드바 접기"
+
+msgid "Community"
+msgstr "커뮤니티"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "사이드바 숨기기"
 msgid "Installation"
 msgstr "설치"
 
+msgid "Last updated {formatted}"
+msgstr "최종 업데이트: {formatted}"
+
+msgid "Legal"
+msgstr "법적 고지"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "다음"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "이전"
 
+msgid "Privacy"
+msgstr "개인정보 처리방침"
+
+msgid "Product"
+msgstr "제품"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "{markdownUrl}을(를) 읽고 이 내용에 대한 질문에 답해 주세요."
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "레퍼런스"
+
+msgid "Refunds & Cancellations"
+msgstr "환불 및 취소"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "이 페이지에 잘못되었거나 빠진 내용이 있나요?"
 
 msgid "Suggest a change"
 msgstr "변경 제안"
+
+msgid "Support & Contact"
+msgstr "지원 및 문의"
 
 msgctxt "table of contents"
 msgid "Table of contents"

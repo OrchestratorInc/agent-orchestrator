@@ -2,6 +2,7 @@ import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import { NotFound } from "@/components/not-found";
 import { Providers } from "@/components/providers";
+import { SiteFooter } from "@/components/site-footer";
 import { siteMetadata } from "@/components/site-root";
 import "./global.css";
 
@@ -18,6 +19,7 @@ export default function NotFoundPage() {
       <body className="min-h-screen bg-background text-foreground antialiased">
         <Providers>
           <NotFound />
+          <SiteFooter />
         </Providers>
       </body>
     </html>

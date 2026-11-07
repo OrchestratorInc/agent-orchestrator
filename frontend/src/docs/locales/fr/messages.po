@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "Agents"
 
+msgid "Apache-2.0 License"
+msgstr "Licence Apache-2.0"
+
 msgid "Back to the docs home"
 msgstr "Retour à l’accueil de la documentation"
+
+msgid "Breadcrumb"
+msgstr "Fil d’Ariane"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "Fermer la barre latérale"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "Réduire la barre latérale"
+
+msgid "Community"
+msgstr "Communauté"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "Masquer la barre latérale"
 msgid "Installation"
 msgstr "Installation"
 
+msgid "Last updated {formatted}"
+msgstr "Dernière mise à jour le {formatted}"
+
+msgid "Legal"
+msgstr "Mentions légales"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "Suivant"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "Précédent"
 
+msgid "Privacy"
+msgstr "Confidentialité"
+
+msgid "Product"
+msgstr "Produit"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "Lis {markdownUrl} et réponds à mes questions à ce sujet."
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "Référence"
+
+msgid "Refunds & Cancellations"
+msgstr "Remboursements et annulations"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "Quelque chose d’erroné ou de manquant sur cette page ?"
 
 msgid "Suggest a change"
 msgstr "Suggérer une modification"
+
+msgid "Support & Contact"
+msgstr "Support et contact"
 
 msgctxt "table of contents"
 msgid "Table of contents"

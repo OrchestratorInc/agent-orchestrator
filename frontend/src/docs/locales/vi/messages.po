@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "Agent"
 
+msgid "Apache-2.0 License"
+msgstr "Giấy phép Apache-2.0"
+
 msgid "Back to the docs home"
 msgstr "Quay lại trang chủ tài liệu"
+
+msgid "Breadcrumb"
+msgstr "Đường dẫn điều hướng"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "Đóng thanh bên"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "Thu gọn thanh bên"
+
+msgid "Community"
+msgstr "Cộng đồng"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "Ẩn thanh bên"
 msgid "Installation"
 msgstr "Cài đặt"
 
+msgid "Last updated {formatted}"
+msgstr "Cập nhật lần cuối: {formatted}"
+
+msgid "Legal"
+msgstr "Pháp lý"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "Tiếp theo"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "Trước"
 
+msgid "Privacy"
+msgstr "Quyền riêng tư"
+
+msgid "Product"
+msgstr "Sản phẩm"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "Hãy đọc {markdownUrl} và trả lời các câu hỏi của tôi về trang này."
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "Tham khảo"
+
+msgid "Refunds & Cancellations"
+msgstr "Hoàn tiền và hủy"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "Trang này có gì sai hoặc thiếu không?"
 
 msgid "Suggest a change"
 msgstr "Đề xuất thay đổi"
+
+msgid "Support & Contact"
+msgstr "Hỗ trợ và liên hệ"
 
 msgctxt "table of contents"
 msgid "Table of contents"

@@ -11,12 +11,14 @@ import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
 import { COMPANY } from "@/lib/constants";
 import { docsIssueUrl } from "@/lib/docs-issue";
+import { lastModified } from "@/lib/last-modified";
 import { markdownPath, sourceUrl } from "@/lib/llms";
 import { articleStructuredData, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
 import { articleLocales, articlePath, localizeHref } from "@/lib/translations";
 import { Card, getMDXComponents } from "./mdx";
 import { PageActions, PageFeedback } from "./page-actions";
+import { LastUpdated, PageBreadcrumbs } from "./page-meta";
 import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
@@ -51,7 +53,9 @@ export function articleRoute(locale: SupportedLocale) {
     const editUrl = sourceUrl(page);
 
     return (
-      <DocsPage toc={page.data.toc} full={page.data.full}>
+      // Our breadcrumbs replace the framework's, which show only the section.
+      <DocsPage toc={page.data.toc} full={page.data.full} breadcrumb={{ enabled: false }}>
+        <PageBreadcrumbs />
         <LocalizedTitle source={page.data.title} />
         <DocsTitle lang={locale}>{page.data.title}</DocsTitle>
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
@@ -66,6 +70,7 @@ export function articleRoute(locale: SupportedLocale) {
             })}
           />
         </DocsBody>
+        <LastUpdated date={lastModified(page.path).toISOString()} />
         <PageFeedback issueUrl={issueUrl} sourceUrl={editUrl} />
         <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale, path: page.path })} />
       </DocsPage>
