@@ -79,7 +79,7 @@ export const performanceHarness = {
 			files: largeReviewFiles.map((file) => ({ ...file, status: "modified" as const })), openable: false, state: "ready",
 		};
 		const noop = () => {};
-		render(<WorkspaceReviewPane annotation={{ targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {} }} target={target} filter="" sessionId="large-review" split={false} />);
+		render(<WorkspaceReviewPane annotation={{ targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {}, consumeOpened: () => false }} target={target} filter="" sessionId="large-review" split={false} />);
 	},
 	async events() {
 		const original = window.EventSource;
