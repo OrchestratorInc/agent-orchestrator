@@ -399,6 +399,28 @@ describe("SessionSearchView", () => {
 		expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
 	});
 
+	// Found in review: two machines' short lists can together outrun one page.
+	// With 20 matches here and 20 on another machine, both ran out on the first
+	// request, the merge held 40, the page showed 25, and "Show more" was hidden
+	// because every machine had run out, stranding the other 15.
+	it("keeps Show more for fetched rows past the page when every machine ran out", async () => {
+		const local = Array.from({ length: 20 }, (_, index) => ({ ...result, sessionId: `proj-${index}`, messageId: `msg-${index}`, sessionName: `Local ${index}` }));
+		getMock.mockResolvedValue(response({ results: local, total: 20 }));
+		const remote = Array.from({ length: 20 }, (_, index) => ({ ...result, sessionId: `air-${index}`, sessionName: `Air ${index}` }));
+		remoteSearchMock.mockReturnValue({
+			answers: [{ hostId: "h_air", label: "MacBook Air", outcome: "searched", results: remote, total: 20, exhausted: true }],
+			settled: true,
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByTestId("session-search-count")).toHaveTextContent("25 of 40 sessions"));
+		await user.click(screen.getByRole("button", { name: /Show 15 more/ }));
+		await waitFor(() => expect(screen.getByTestId("session-search-count")).toHaveTextContent("40 of 40 sessions"));
+		expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+	});
+
 	it("keeps Show more while another machine has more, after this one ran out", async () => {
 		getMock.mockResolvedValue(response({ results: [result], total: 1 }));
 		const remote = Array.from({ length: 25 }, (_, index) => ({

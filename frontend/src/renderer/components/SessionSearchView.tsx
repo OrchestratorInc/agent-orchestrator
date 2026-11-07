@@ -98,27 +98,32 @@ export function SessionSearchView() {
 	const localData = search.isPlaceholderData ? undefined : search.data;
 	// This machine's results show at once; the merged list replaces them once
 	// every machine has answered or timed out, so rows do not jump while read.
-	const results: MachineSearchResult[] = useMemo(() => {
+	// Every row fetched so far, merged; the page shows the first `shown` of them.
+	const merged: MachineSearchResult[] = useMemo(() => {
 		const local = search.data?.results ?? [];
 		if (!localData || !remoteSearch.settled || !remoteSearch.answers.some((answer) => answer.outcome === "searched")) return local;
 		return mergeMachineSearchResults([
 			{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localData.results ?? [], total: localData.total ?? 0 },
 			...remoteSearch.answers,
-		], mergeNewestFirst(localData, sort)).slice(0, shown);
-	}, [localData, remoteSearch, search.data, shown, sort]);
+		], mergeNewestFirst(localData, sort));
+	}, [localData, remoteSearch, search.data, sort]);
+	const results = useMemo(() => merged.slice(0, shown), [merged, shown]);
 	const notSearched = remoteSearch.settled ? machinesNotSearched(remoteSearch.answers, t) : [];
 	const coverage = search.data?.coverage;
 	const remoteTotal = localData && remoteSearch.settled
 		? remoteSearch.answers.reduce((sum, answer) => sum + (answer.outcome === "searched" ? answer.total : 0), 0)
 		: 0;
 	const total = (search.data?.total ?? results.length) + remoteTotal;
-	// "Show more" follows whether each machine ran out, not how many distinct
-	// rows are on screen: a session that moved between pages while new work was
-	// indexed is shown once, so a full page can look short. A failed page stops
-	// paging until it is retried.
+	// "Show more" follows whether there is more to show, not how many distinct
+	// rows are on screen: rows already fetched beyond the page (two machines'
+	// short lists can together outrun one page), or a machine that has not run
+	// out. A session that moved between pages while new work was indexed is
+	// shown once, so a full page can look short. A failed page stops paging
+	// until it is retried.
+	const buffered = merged.length > results.length;
 	const remoteHasMore = remoteSearch.settled &&
 		remoteSearch.answers.some((answer) => answer.outcome === "searched" && answer.exhausted === false);
-	const hasMore = results.length < total && !search.pageError && (!search.exhausted || remoteHasMore);
+	const hasMore = results.length < total && !search.pageError && (buffered || !search.exhausted || remoteHasMore);
 
 	const projectOptions = useMemo(
 		() => [
