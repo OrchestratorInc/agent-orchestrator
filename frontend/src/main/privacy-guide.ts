@@ -54,9 +54,19 @@ export interface PrivacyGuideRequest {
 const GUIDE_SCHEME = "ao-privacy-guide:";
 const MAX_TEXT = 400;
 const MAX_COLOR = 160;
-// A hex color or one CSS color function (oklch(), color-mix(), …): nothing that
-// could end the declaration, the rule, or the style element it lands in.
-const COLOR_PATTERN = /^(?:#[0-9a-f]{3,8}|[a-z-]+\([a-z0-9#.,%/\s()+-]*\))$/i;
+// A hex color, or a CSS color function whose every function (nested ones
+// included, as in color-mix()) is a color function: no url(), var() or other
+// non-color, and nothing that could end the declaration, the rule, or the style
+// element it lands in.
+const HEX_COLOR = /^#[0-9a-f]{3,8}$/i;
+const COLOR_FUNCTION_SHAPE = /^[a-z-]+\([a-z0-9#.,%/\s()+-]*\)$/i;
+const COLOR_FUNCTIONS = new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix"]);
+
+function isColor(value: string): boolean {
+	if (HEX_COLOR.test(value)) return true;
+	if (!COLOR_FUNCTION_SHAPE.test(value)) return false;
+	return [...value.matchAll(/([a-z-]+)\s*\(/gi)].every((match) => COLOR_FUNCTIONS.has(match[1]!.toLowerCase()));
+}
 const COLOR_KEYS: readonly (keyof PrivacyGuideColors)[] = ["bg", "fg", "muted", "border"];
 
 // Used for any color the renderer did not send; they match AO's default theme.
@@ -80,7 +90,7 @@ function text(value: unknown): string | undefined {
 }
 
 function color(value: unknown): string | undefined {
-	return typeof value === "string" && value.length <= MAX_COLOR && COLOR_PATTERN.test(value.trim()) ? value.trim() : undefined;
+	return typeof value === "string" && value.length <= MAX_COLOR && isColor(value.trim()) ? value.trim() : undefined;
 }
 
 /** A bad scheme falls back to dark and a bad color to the scheme's default; neither refuses the request. */

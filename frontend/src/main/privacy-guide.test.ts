@@ -101,6 +101,14 @@ describe("coercePrivacyGuideRequest", () => {
 		expect(coerced?.appearance).toEqual({ scheme: "dark", colors: { muted: "color-mix(in oklch, #fff 40%, oklch(0.3 0 0))" } });
 		expect(coercePrivacyGuideRequest({ ...request, appearance: undefined })?.appearance).toEqual({ scheme: "dark", colors: {} });
 	});
+
+	it("accepts only named color functions, nested ones included", () => {
+		const colorsOf = (colors: Record<string, string>) => coercePrivacyGuideRequest({ ...request, appearance: { scheme: "dark", colors } })?.appearance.colors;
+		// What AO's themes produce: oklch() and color-mix() in the default theme, hex in the catalog.
+		expect(colorsOf({ bg: "oklch(0.3 0.002 250)", fg: "#1e1e2e", muted: "rgb(180 180 180)", border: "#ffffff17" }))
+			.toEqual({ bg: "oklch(0.3 0.002 250)", fg: "#1e1e2e", muted: "rgb(180 180 180)", border: "#ffffff17" });
+		expect(colorsOf({ bg: "url(x)", fg: "var(--x)", muted: "color-mix(in oklch, url(x) 50%, red)", border: "image-set(x)" })).toEqual({});
+	});
 });
 
 describe("parsePrivacyGuideAction", () => {
