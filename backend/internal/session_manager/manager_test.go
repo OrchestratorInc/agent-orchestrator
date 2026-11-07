@@ -4728,6 +4728,32 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 }
 
+func TestRestorePassesTheLastCheckedOutBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state *domain.SessionBranchState
+		want  string
+	}{
+		{"recorded branch", &domain.SessionBranchState{Branch: "b/pr", RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"pushed before the branch was recorded", &domain.SessionBranchState{RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"never observed", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+			rec := st.sessions["mer-1"]
+			rec.BranchState = tc.state
+			st.sessions["mer-1"] = rec
+			if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			if got := ws.restoreConfigs[0]; got.Branch != "b" || got.LastBranch != tc.want {
+				t.Fatalf("workspace restore branch %q, last branch %q; want %q and %q", got.Branch, got.LastBranch, "b", tc.want)
+			}
+		})
+	}
+}
+
 func TestRestoreRejectsUnauthorizedLaunchContext(t *testing.T) {
 	m, st, rt, _ := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})

@@ -141,13 +141,13 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 	}
 	rec := target.rec
-	fingerprint := local + " " + remote + " " + base
+	fingerprint := target.branch + " " + local + " " + remote + " " + base
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
 
 	root := rec.Metadata.WorkspacePath
-	var state domain.SessionBranchState
+	state := domain.SessionBranchState{Branch: target.branch}
 	if base != "" {
 		commits, ok := gitRevListCount(ctx, root, base+".."+local)
 		if !ok {

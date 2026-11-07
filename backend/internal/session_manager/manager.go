@@ -4527,6 +4527,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -4652,6 +4653,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -7353,6 +7355,19 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 
 func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 	return ports.RuntimeHandle{ID: meta.RuntimeHandleID}
+}
+
+// lastCheckedOutBranch is the branch the session's worktree last had checked
+// out. A state observed before the branch was recorded still names a pushed
+// branch through its remote-tracking ref, which the observer reads on origin.
+func lastCheckedOutBranch(rec domain.SessionRecord) string {
+	if rec.BranchState == nil {
+		return ""
+	}
+	if rec.BranchState.Branch != "" {
+		return rec.BranchState.Branch
+	}
+	return strings.TrimPrefix(rec.BranchState.RemoteBranch, "origin/")
 }
 
 func workspaceInfo(rec domain.SessionRecord) ports.WorkspaceInfo {
