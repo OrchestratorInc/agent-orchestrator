@@ -1279,7 +1279,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText("go build ./...")).toBeInTheDocument();
 	});
 
-	it("says Thinking beside the loader between steps, but not while it waits on the reader", () => {
+	it("says Thinking beside the loader between steps, but not while it waits on the reader or writes its reply", () => {
 		const turnId = "live-turn-thinking";
 		const at = "2026-08-11T10:01:00Z";
 		const prompt = {
@@ -1326,6 +1326,66 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.queryByText("Thinking")).toBeNull();
 		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+
+		// Under the reply it is writing, the timer sits alone too.
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "message", id: "reply", turnId, sequence: 3, revision: 0,
+							role: "assistant", origin: "provider", text: "The README covers setup.",
+							streaming: true, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+	});
+
+	it("keeps the live row's label mounted when a step it can open takes over from Thinking", () => {
+		const turnId = "live-turn-stable-row";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const snapshot = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot([])} />);
+		const label = screen.getByTestId("live-working-task");
+		expect(label).toHaveTextContent(/^Thinking$/);
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={snapshot([
+					{
+						kind: "activity", id: "build", turnId, sequence: 2, revision: 0,
+						activityKind: "command", status: "running", summary: "go build ./...",
+						detail: { command: "go build ./..." }, createdAt: at,
+					},
+				])}
+			/>,
+		);
+		// The row now opens onto the command, and its label updated in place rather
+		// than mounting again (and replaying its entrance).
+		expect(screen.getByTestId("live-working-row")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByTestId("live-working-task")).toBe(label);
+		expect(label).toHaveTextContent(/^Building project$/);
 	});
 
 	it("shows each step on the live row first, then moves it up once it has been seen", async () => {
@@ -1397,9 +1457,20 @@ describe("ChatWorkspace timeline", () => {
 			],
 		});
 
-		// Before a sentence of the thought is whole, the row just says Thinking.
+		// Before a sentence of the thought is whole, the row just says Thinking, and
+		// opens onto what the agent has thought so far.
 		const view = render(<ChatWorkspace snapshot={snapshot("The build fails on", "running")} />);
 		const task = () => screen.getByTestId("live-working-task");
+		expect(task()).toHaveTextContent(/^Thinking$/);
+		const row = screen.getByTestId("live-working-row");
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		await user.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on"));
+
+		// The open thought keeps streaming, though its turn only follows the label.
+		view.rerender(<ChatWorkspace snapshot={snapshot("The build fails on a second React co", "running")} />);
+		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on a second React co"));
 		expect(task()).toHaveTextContent(/^Thinking$/);
 
 		// Then it says what the agent is about to do, and keeps saying it once the
@@ -1407,10 +1478,6 @@ describe("ChatWorkspace timeline", () => {
 		const text = "Only one React copy exists. I'll rebuild with NODE_ENV=production to match CI.";
 		view.rerender(<ChatWorkspace snapshot={snapshot(text, "completed")} />);
 		expect(task()).toHaveTextContent(/^I'll rebuild with NODE_ENV=production to match CI$/);
-
-		const row = screen.getByTestId("live-working-row");
-		expect(row).toHaveAttribute("aria-expanded", "false");
-		await user.click(row);
 		expect(await screen.findByText(/Only one React copy exists/)).toBeInTheDocument();
 	});
 

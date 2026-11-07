@@ -131,6 +131,7 @@ import {
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
+	LiveThoughtTexts,
 	isLiveStepKind,
 	liveTaskLabel,
 	reasoningText,
@@ -170,6 +171,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
+import { thoughtHeadline } from "./activity-step";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
@@ -3686,6 +3688,10 @@ export function Timeline({
 			.filter((group) => group.items.length > 0);
 	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// A thought streams in token by token, but its turn's group only follows the
+	// headline the live row shows (sameGroup). The thought opened from that row reads
+	// its full text from here, so a token re-renders that body and not the turn.
+	const liveThoughtTexts = useStableValue(useMemo(() => liveThoughtTextsOf(grouped), [grouped]));
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
@@ -4495,6 +4501,7 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<LiveThoughtTexts.Provider value={liveThoughtTexts}>
 		<div
 			className="relative min-h-0 flex-1"
 			data-testid="chat-timeline"
@@ -4791,6 +4798,7 @@ export function Timeline({
 				</Button>
 			) : null}
 		</div>
+		</LiveThoughtTexts.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -5114,6 +5122,8 @@ const TurnGroup = memo(function TurnGroup({
 		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
+	const tail = workedRuns.at(-1);
+	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -5126,8 +5136,9 @@ const TurnGroup = memo(function TurnGroup({
 				failed={startup?.failed}
 				// Between steps the agent is still working out what to do next, so the row
 				// says "Thinking" beside the loader rather than only a timer. A turn waiting
-				// on the reader's answer is not thinking, so it keeps the timer alone.
-				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked ? "Thinking" : undefined}
+				// on the reader's answer is not thinking, and one writing its reply is
+				// writing, so both keep the timer alone.
+				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveRowStep}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
@@ -5187,8 +5198,6 @@ const TurnGroup = memo(function TurnGroup({
 	// with no scroll box of their own. They go straight into the turn's flat list, so
 	// a step keeps its element as later ones land under it and an image the reader
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
-	const tail = workedRuns.at(-1);
-	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (quietReply && finalRun) {
@@ -5626,6 +5635,29 @@ function attachLiveThoughts(groups: TimelineGroup[], items: ConversationItem[]):
 	});
 }
 
+/** Each live thought's text by id, for the thought opened from the live row (LiveThoughtTexts). */
+function liveThoughtTextsOf(groups: TimelineGroup[]): Record<string, string> {
+	const texts: Record<string, string> = {};
+	for (const group of groups) {
+		const text = group.liveThought ? reasoningText(group.liveThought) : undefined;
+		if (group.liveThought && text) texts[group.liveThought.id] = text;
+	}
+	return texts;
+}
+
+/**
+ * What the live row shows of a turn's thought: its headline, an empty string while
+ * it has text but no whole sentence yet, or nothing before it has text. The full
+ * text grows with every streamed token, and comparing that would re-render the
+ * whole turn on each one. A group kept by this comparison can hold an older copy
+ * of the text, which nothing in the turn reads: the open thought takes it from
+ * LiveThoughtTexts.
+ */
+function liveThoughtGist(group: TimelineGroup): string | undefined {
+	const text = group.liveThought ? reasoningText(group.liveThought) : undefined;
+	return text ? thoughtHeadline(text) ?? "" : undefined;
+}
+
 function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 	return (
 		a.anchor === b.anchor &&
@@ -5635,7 +5667,7 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.rollbackable === b.rollbackable &&
 		a.liveThought?.id === b.liveThought?.id &&
 		a.liveThought?.status === b.liveThought?.status &&
-		(a.liveThought ? reasoningText(a.liveThought) : undefined) === (b.liveThought ? reasoningText(b.liveThought) : undefined) &&
+		liveThoughtGist(a) === liveThoughtGist(b) &&
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
 		sameContent(a.plan, b.plan) &&

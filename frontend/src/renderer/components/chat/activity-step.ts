@@ -214,6 +214,8 @@ function describeSegment(segment: Segment, depth: number): CommandStep | undefin
 			return inner ? describeSegment(inner, depth + 1) ?? fallbackStep(inner.binary) : undefined;
 		}
 		const script = positionals(args)[0];
+		// `bash -` reads its script from stdin, usually a heredoc: there is no file to name.
+		if (script === "-") return fallbackStep(binary);
 		return script ? runFileStep(script) : undefined;
 	}
 
@@ -290,9 +292,15 @@ function sedInPlace(args: string[]): boolean {
 }
 
 function sedFiles(args: string[]): string[] {
+	// BSD sed takes a bare -i's backup suffix as its own word, `sed -i '' 's/a/b/' a.ts`
+	// or `sed -i .bak …`. It is neither the script nor a file. No sed script starts
+	// with a dot, so GNU's `sed -i 's/a/b/' a.ts` keeps its script.
+	const bareInPlace = args.indexOf("-i");
+	const suffix = bareInPlace >= 0 ? args[bareInPlace + 1] : undefined;
+	const words = suffix !== undefined && /^(?:\.[\w.-]*)?$/.test(suffix) ? args.filter((_, index) => index !== bareInPlace + 1) : args;
 	// Without -e or -f the first positional is the script, not a file.
-	const hasScriptFlag = args.some((arg) => arg === "-e" || arg === "-f" || arg === "--expression" || arg === "--file");
-	const rest = positionals(args, SED_VALUE_FLAGS);
+	const hasScriptFlag = words.some((arg) => arg === "-e" || arg === "-f" || arg === "--expression" || arg === "--file");
+	const rest = positionals(words, SED_VALUE_FLAGS);
 	return (hasScriptFlag ? rest : rest.slice(1)).filter(looksLikeFile);
 }
 
@@ -307,7 +315,7 @@ function sedStep(args: string[]): CommandStep {
 }
 
 function readerFiles(binary: string, args: string[]): string[] {
-	let values = positionals(args, READER_VALUE_FLAGS);
+	let values = positionals(args, READER_VALUE_FLAGS[binary]);
 	// jq's first positional is its filter.
 	if (binary === "jq") values = values.slice(1);
 	return values.filter((value) => looksLikeFile(value) && !/^\d+(?:,\d+)?[a-z]*$/i.test(value));
@@ -653,8 +661,10 @@ function interpreterStep(binary: string, args: string[]): CommandStep {
 	// `node -e '…'`, `python -c '…'`: inline code has no file to name.
 	if (args.some((arg) => arg === "-e" || arg === "-c" || arg === "--eval" || arg === "-p")) return fallbackStep(binary);
 	const script = positionals(args, INTERPRETER_VALUE_FLAGS)[0];
-	if (script && TEST_TOOLS.has(binaryName(script))) return testStep();
-	return script ? runFileStep(script) : fallbackStep(binary);
+	// `python3 - <<'PY'` reads its code from stdin, like `-c`: no file to name.
+	if (!script || script === "-") return fallbackStep(binary);
+	if (TEST_TOOLS.has(binaryName(script))) return testStep();
+	return runFileStep(script);
 }
 
 function runFileStep(file: string): CommandStep {
@@ -927,7 +937,14 @@ const TEST_TOOLS = new Set(["vitest", "jest", "mocha", "pytest", "ava", "tap", "
 const LINT_TOOLS = new Set(["eslint", "oxlint", "golangci-lint", "stylelint", "shellcheck", "tslint", "flake8", "pylint", "mypy"]);
 const FORMAT_TOOLS = new Set(["gofmt", "goimports", "black", "rustfmt", "dprint"]);
 const BUILD_TOOLS = new Set(["vite", "webpack", "esbuild", "rollup", "tsup", "turbo"]);
-const READER_VALUE_FLAGS = new Set(["-n", "-c", "--lines", "--bytes", "-r"]);
+// Flags that take the next word as their value, per reader: `head -n 40 a.ts`,
+// `bat -r 1:40 a.ts`. Elsewhere the same letters are switches: `cat -n`, `wc -c`, `jq -r`.
+const HEAD_TAIL_VALUE_FLAGS = new Set(["-n", "-c", "--lines", "--bytes"]);
+const READER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
+	head: HEAD_TAIL_VALUE_FLAGS,
+	tail: HEAD_TAIL_VALUE_FLAGS,
+	bat: new Set(["-r"]),
+};
 const SED_VALUE_FLAGS = new Set(["-e", "-f", "--expression", "--file", "-l"]);
 const SEARCH_VALUE_FLAGS = new Set([
 	"-e", "--regexp", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-A", "-B", "-C",

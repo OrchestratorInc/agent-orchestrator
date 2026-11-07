@@ -47,6 +47,20 @@ describe("describeCommandStep", () => {
 		expect(done("sed -i 's/a/b/' src/a.ts")).toBe("Edited a.ts");
 	});
 
+	it("keeps the file when a reader's flag is a switch, not a value", () => {
+		expect(done("cat -n src/a.ts")).toBe("Read a.ts");
+		expect(done("wc -c a.ts")).toBe("Read a.ts");
+		expect(done("jq -r '.version' package.json")).toBe("Read package.json");
+		expect(done("tail -n 20 server.log")).toBe("Read server.log");
+		expect(done("bat -r 1:40 src/a.ts")).toBe("Read a.ts");
+	});
+
+	it("skips BSD sed's backup suffix after a bare -i", () => {
+		expect(done("sed -i '' 's/a/b/' src/a.ts")).toBe("Edited a.ts");
+		expect(done("sed -i .bak 's/a/b/' src/a.ts")).toBe("Edited a.ts");
+		expect(done("sed -i.bak 's/a/b/' src/a.ts")).toBe("Edited a.ts");
+	});
+
 	it("names listings, searches and finds", () => {
 		expect(done("ls")).toBe("Listed files");
 		expect(done("ls -la .")).toBe("Listed files");
@@ -141,6 +155,10 @@ describe("describeCommandStep", () => {
 		expect(done("docker compose up -d")).toBe("Ran docker");
 		expect(live("docker compose up -d")).toBe("Running docker");
 		expect(done("node -e 'console.log(1)'")).toBe("Ran node");
+		// `-` is stdin, usually a heredoc, not a script named "-".
+		expect(done("python3 - <<'PY'\nprint(1)\nPY")).toBe("Ran python3");
+		expect(done("bash - <<'SH'\necho hi\nSH")).toBe("Ran bash");
+		expect(done("sh -")).toBe("Ran sh");
 		expect(describeCommandStep("docker ps").icon).toBe("run");
 		expect(done("")).toBe("Ran command");
 	});

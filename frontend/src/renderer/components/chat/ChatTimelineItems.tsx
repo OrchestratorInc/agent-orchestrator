@@ -13,7 +13,7 @@ import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -1332,6 +1332,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	children?: ReactNode;
 }) {
 	const reducedMotion = useReducedMotion();
+	const labelId = useId();
 	// Per step: null until the reader decides, so a step that starts printing opens
 	// itself, as its own row did. The next step starts from its own default.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
@@ -1361,6 +1362,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 			</span>
 			<span
+				id={labelId}
 				role={failed ? "alert" : "status"}
 				data-testid="live-working-label"
 				className="flex min-w-0 items-center gap-2 text-sm"
@@ -1404,18 +1406,22 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	);
 	return (
 		<div className="min-w-0">
-			{expandable && step ? (
-				<Pressable
-					onClick={() => setStepChoice({ id: step.id, open: !stepOpen })}
-					aria-expanded={stepOpen}
-					className={cn(rowClass, "group/live w-full")}
-					data-testid="live-working-row"
-				>
-					{row}
-				</Pressable>
-			) : (
-				<div className={rowClass}>{row}</div>
-			)}
+			{/* The row is the same element whether or not it opens, so the loader's beat,
+			    the label's entrance and the status region are not remounted each time a
+			    step with details takes over from Thinking and hands back. When there is
+			    something to open, the toggle lies over the whole row. */}
+			<div className={cn(rowClass, "group/live relative")}>
+				{row}
+				{expandable && step ? (
+					<Pressable
+						onClick={() => setStepChoice({ id: step.id, open: !stepOpen })}
+						aria-expanded={stepOpen}
+						aria-labelledby={labelId}
+						className="absolute inset-0"
+						data-testid="live-working-row"
+					/>
+				) : null}
+			</div>
 			<AnimatePresence initial={false}>
 				{stepOpen && step ? (
 					<motion.div
@@ -1880,16 +1886,27 @@ function liveStepHasDetail(activity: ConversationActivity): boolean {
 	return isLiveStepKind(activity) && genericActivityHasBody(activity);
 }
 
+/**
+ * The newest text of each live thought, by id. A turn's group keeps up with its
+ * thought only as far as the headline the live row shows, so a streamed token does
+ * not re-render the whole turn; the thought opened from the live row reads its
+ * full text from here instead.
+ */
+export const LiveThoughtTexts = createContext<Readonly<Record<string, string>>>({});
+
 /** The step's details, opened from the live row: what its own row would open onto, or the whole thought. */
 function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
-	if (activity.activityKind === "reasoning") {
-		return (
-			<div className="mb-1 border-l-2 border-border-strong py-0.5 pl-3">
-				<ChatMarkdown text={reasoningText(activity) ?? ""} streaming={activity.status === "running"} muted />
-			</div>
-		);
-	}
+	if (activity.activityKind === "reasoning") return <LiveThoughtBody activity={activity} />;
 	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
+}
+
+function LiveThoughtBody({ activity }: { activity: ConversationActivity }) {
+	const text = useContext(LiveThoughtTexts)[activity.id] ?? reasoningText(activity) ?? "";
+	return (
+		<div className="mb-1 border-l-2 border-border-strong py-0.5 pl-3">
+			<ChatMarkdown text={text} streaming={activity.status === "running"} muted />
+		</div>
+	);
 }
 
 /** A thought's text, streamed or settled; see ReasoningBlock. */
