@@ -119,6 +119,7 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
+import { approvalDecisionKind, approvalDecisionLabeler, orderedApprovalDecisions } from "../../lib/approval-decisions";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -3043,15 +3044,7 @@ export function ApprovalCard({
 			decision !== allowOnceDecision &&
 			!alternateAllowDecisions.includes(decision),
 	);
-	// Some agents ask a question through a permission request, offering each
-	// answer as its own option of the same kind. A generic per-kind label would
-	// render identical buttons, so a kind offered more than once keeps the
-	// provider's own wording.
-	const repeatedKinds = repeatedDecisionKinds(decisions);
-	const decisionLabel = (decision: DecisionOption) =>
-		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
-			? decision.label
-			: approvalDecisionLabel(decision, subjectKind);
+	const decisionLabel = approvalDecisionLabeler(decisions, subjectKind);
 	const requestId = activity.requestId ?? "";
 	const cardRef = useRef<HTMLDivElement>(null);
 
@@ -3205,64 +3198,6 @@ function approvalPrompt(subjectKind?: ActivityKind): string {
 	return subjectKind === "file_change"
 		? "Do you want to allow these file changes?"
 		: "Do you want to run this command?";
-}
-
-function approvalDecisionKind(decision: DecisionOption): DecisionOption["kind"] | "unknown" {
-	return decision.kind ?? "unknown";
-}
-
-function approvalDecisionRank(decision: DecisionOption): number {
-	switch (approvalDecisionKind(decision)) {
-		case "reject_once":
-			return 10;
-		case "reject_always":
-			return 15;
-		case "allow_once":
-			return 20;
-		case "allow_always":
-			return 30;
-		default:
-			return 40;
-	}
-}
-
-function approvalDecisionLabel(decision: DecisionOption, subjectKind?: ActivityKind): string {
-	switch (approvalDecisionKind(decision)) {
-		case "allow_always":
-			return subjectKind === "file_change"
-				? "Always allow these file changes"
-				: "Always allow this command";
-		case "allow_once":
-			return "Allow once";
-		case "reject_once":
-			return "Deny";
-		case "reject_always":
-			return "Always deny";
-		default:
-			return decision.label;
-	}
-}
-
-function repeatedDecisionKinds(decisions: DecisionOption[]): Set<string> {
-	const seen = new Set<string>();
-	const repeated = new Set<string>();
-	for (const decision of decisions) {
-		const kind = approvalDecisionKind(decision);
-		if (!kind) continue;
-		if (seen.has(kind)) repeated.add(kind);
-		seen.add(kind);
-	}
-	return repeated;
-}
-
-function orderedApprovalDecisions(decisions: DecisionOption[]): DecisionOption[] {
-	return decisions
-		.map((decision, index) => ({ decision, index }))
-		.sort((left, right) => {
-			const byRank = approvalDecisionRank(left.decision) - approvalDecisionRank(right.decision);
-			return byRank || left.index - right.index;
-		})
-		.map(({ decision }) => decision);
 }
 
 function ResolvedApprovalRow({
