@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,6 +60,30 @@ type recordingReaper struct {
 	graces []time.Duration
 }
 
+type fakeCompatibleClientStore struct {
+	path, hash string
+	managed    bool
+	found      bool
+	deletes    int
+	upserts    int
+}
+
+func (s *fakeCompatibleClientStore) GetTmuxServerClient(context.Context, string) (string, string, bool, bool, error) {
+	return s.path, s.hash, s.managed, s.found, nil
+}
+
+func (s *fakeCompatibleClientStore) UpsertTmuxServerClient(_ context.Context, _ string, path, hash string, managed bool, _ time.Time) error {
+	s.path, s.hash, s.managed, s.found = path, hash, managed, true
+	s.upserts++
+	return nil
+}
+
+func (s *fakeCompatibleClientStore) DeleteTmuxServerClient(context.Context, string) error {
+	s.path, s.hash, s.managed, s.found = "", "", false, false
+	s.deletes++
+	return nil
+}
+
 func (rr *recordingReaper) reap(_ context.Context, pids []int, grace time.Duration) {
 	rr.pids = append(rr.pids, append([]int(nil), pids...))
 	rr.graces = append(rr.graces, grace)
@@ -73,6 +98,15 @@ func newTestRuntime(chunkSize int) (*Runtime, *fakeRunner) {
 	r.enterDelay = 0                           // tests must not pay the real 300ms pre-Enter pause
 	r.reapSessions = (&recordingReaper{}).reap // never signal real processes from unit tests
 	return r, fr
+}
+
+func writeTestTmuxClient(t *testing.T, name, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // countCalls returns how many of fr's recorded calls invoked the given tmux
@@ -901,6 +935,1020 @@ func TestIsAliveKeepsAmbiguousNamedSocketFailureInNamedNamespace(t *testing.T) {
 		if len(call.args) < 2 || call.args[0] != "-L" || call.args[1] != "ao" {
 			t.Fatalf("call %d args = %#v, want named ao socket", i, call.args)
 		}
+	}
+}
+
+func TestIsAliveFallsBackToRetainedClientOnProtocolMismatch(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "tmux")
+	retained := filepath.Join(root, "tmux.retained")
+	if err := os.WriteFile(current, []byte("current-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(retained, []byte("retained-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{}
+	r := New(Options{
+		Binary:                current,
+		RetainedBinary:        retained,
+		SocketName:            "ao",
+		CompatibleClientStore: store,
+		Timeout:               time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if len(fr.calls) != 2 {
+		t.Fatalf("calls = %d, want current then retained client", len(fr.calls))
+	}
+	if fr.calls[0].name != current || fr.calls[1].name != retained {
+		t.Fatalf("client order = [%q, %q], want [%q, %q]", fr.calls[0].name, fr.calls[1].name, current, retained)
+	}
+	if !store.found || store.path != retained || !store.managed || store.upserts != 1 {
+		t.Fatalf("compatible-client association = %+v, want retained managed client", store)
+	}
+	if got := r.attachCommandForSocket("sess-1", "ao")[0]; got != retained {
+		t.Fatalf("attach client = %q, want retained client %q", got, retained)
+	}
+}
+
+func TestIsAliveFallsBackToRetainedClientOnUnexpectedServerExit(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	store := &fakeCompatibleClientStore{}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want retained-client success", alive, err)
+	}
+	if len(fr.calls) != 2 || fr.calls[0].name != current || fr.calls[1].name != retained {
+		t.Fatalf("calls = %#v, want current then retained client", fr.calls)
+	}
+	if !store.found || store.path != retained || !store.managed {
+		t.Fatalf("compatible-client association = %+v, want retained client", store)
+	}
+}
+
+func TestIsAliveRetainedUnexpectedServerExitRemainsInconclusive(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+		t.Fatalf("IsAlive = (%v, %v), want inconclusive", alive, err)
+	}
+	if errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) || errors.Is(err, ports.ErrRuntimeProtocolMismatch) {
+		t.Fatalf("IsAlive err = %v, want only inconclusive classification", err)
+	}
+	if len(fr.calls) != 2 || fr.calls[0].name != current || fr.calls[1].name != retained {
+		t.Fatalf("calls = %#v, want both current and retained clients", fr.calls)
+	}
+}
+
+// An unexpected server exit does not prove tmux rejected the command, so a
+// mutating command must never reach a second client: replaying send-keys or
+// paste-buffer would deliver input twice, and replaying kill-session or
+// respawn-pane would repeat a destructive action.
+func TestMutatingCommandIsNotReplayedAfterUnexpectedServerExit(t *testing.T) {
+	for _, command := range []string{
+		"send-keys", "paste-buffer", "load-buffer", "kill-session", "respawn-pane", "set-option", "new-session",
+	} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			store := &fakeCompatibleClientStore{}
+			r := New(Options{
+				Binary: current, RetainedBinary: retained, SocketName: "ao",
+				CompatibleClientStore: store, Timeout: time.Second,
+			})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+				{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+				{},
+			}}
+			r.runner = fr
+
+			out, err := r.runOnSocket(context.Background(), "ao", command, "-t", "=sess-1")
+			if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+				t.Fatalf("runOnSocket err = %v, want inconclusive", err)
+			}
+			if errors.Is(err, ports.ErrRuntimeProtocolMismatch) || errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+				t.Fatalf("runOnSocket err = %v, want only inconclusive classification", err)
+			}
+			if confirmedAbsentOutput(err, string(out)) {
+				t.Fatalf("output %q classified as confirmed absence", out)
+			}
+			if len(fr.calls) != 2 {
+				t.Fatalf("calls = %#v, want original command then one read-only probe", fr.calls)
+			}
+			if fr.calls[0].name != current || !slices.Contains(fr.calls[0].args, command) {
+				t.Fatalf("first call = %#v, want %s on the current client", fr.calls[0], command)
+			}
+			if fr.calls[1].name != retained || slices.Contains(fr.calls[1].args, command) || !slices.Contains(fr.calls[1].args, "list-sessions") {
+				t.Fatalf("second call = %#v, want a read-only list-sessions probe on the retained client", fr.calls[1])
+			}
+			// The probe still adopts the compatible client for later operations.
+			if !store.found || store.path != retained {
+				t.Fatalf("compatible-client association = %+v, want retained client", store)
+			}
+			if got := r.compatibleBinaryForSocket("ao"); got != retained {
+				t.Fatalf("compatible client = %q, want retained client %q", got, retained)
+			}
+		})
+	}
+}
+
+func TestRetainedMutatingCommandIsNotReplayedAfterUnexpectedServerExit(t *testing.T) {
+	for _, command := range []string{"send-keys", "paste-buffer", "kill-session", "respawn-pane"} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			previous := writeTestTmuxClient(t, "tmux-previous", "previous-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			store := &fakeCompatibleClientStore{path: previous, managed: true, found: true}
+			r := New(Options{
+				Binary: current, RetainedBinary: retained, SocketName: "ao",
+				CompatibleClientStore: store, Timeout: time.Second,
+			})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{},
+			}}
+			r.runner = fr
+
+			out, err := r.runOnSocket(context.Background(), "ao", command, "-t", "=sess-1")
+			for _, call := range fr.calls[2:] {
+				if slices.Contains(call.args, command) {
+					t.Fatalf("%s replayed after retained client exited ambiguously: %#v", command, fr.calls)
+				}
+			}
+			if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) ||
+				errors.Is(err, ports.ErrRuntimeProtocolMismatch) || confirmedAbsentOutput(err, string(out)) {
+				t.Fatalf("runOnSocket = (%q, %v), want original ambiguous output and inconclusive result", out, err)
+			}
+			if string(out) != "server exited unexpectedly" || len(fr.calls) != 4 {
+				t.Fatalf("output = %q, calls = %#v, want two commands then two read-only probes", out, fr.calls)
+			}
+			for i, binary := range []string{current, previous, current, retained} {
+				if fr.calls[i].name != binary {
+					t.Fatalf("call %d = %#v, want client %q", i, fr.calls[i], binary)
+				}
+				if i >= 2 && !slices.Contains(fr.calls[i].args, "list-sessions") {
+					t.Fatalf("call %d = %#v, want read-only compatibility probe", i, fr.calls[i])
+				}
+			}
+			if !store.found || store.path != retained {
+				t.Fatalf("compatible-client association = %+v, want retained client", store)
+			}
+		})
+	}
+}
+
+func TestRetainedMutatingCommandIsNotReplayedAfterTimeout(t *testing.T) {
+	for _, command := range []string{"send-keys", "respawn-pane"} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			previous := writeTestTmuxClient(t, "tmux-previous", "previous-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			store := &fakeCompatibleClientStore{path: previous, managed: true, found: true}
+			r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", CompatibleClientStore: store})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{err: context.DeadlineExceeded},
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{},
+			}}
+			r.runner = fr
+			ctx := context.Background()
+			_, err := r.runOnSocket(ctx, "ao", command, "-t", "=sess-1")
+			if ctx.Err() != nil || !errors.Is(err, ports.ErrRuntimeProbeInconclusive) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("runOnSocket err = %v, want inconclusive timeout with live parent context", err)
+			}
+			if len(fr.calls) != 4 || fr.calls[1].name != previous {
+				t.Fatalf("calls = %#v, want stored client followed by two read-only probes", fr.calls)
+			}
+			for _, call := range fr.calls[2:] {
+				if slices.Contains(call.args, command) || !slices.Contains(call.args, "list-sessions") {
+					t.Fatalf("call after timeout = %#v, want read-only probe", call)
+				}
+			}
+			if r.compatibleBinaryForSocket("ao") != retained {
+				t.Fatal("compatible client was not selected for later commands")
+			}
+		})
+	}
+}
+
+func TestSendMessageDoesNotRepeatChunkAfterUnexpectedServerExit(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	r.rememberSessionSocket("sess-1", "ao")
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+
+	err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "hello")
+	if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+		t.Fatalf("SendMessage err = %v, want inconclusive", err)
+	}
+	sends := 0
+	for _, call := range fr.calls {
+		if slices.Contains(call.args, "send-keys") {
+			sends++
+		}
+	}
+	if sends != 1 {
+		t.Fatalf("send-keys calls = %d (%#v), want the chunk sent exactly once", sends, fr.calls)
+	}
+}
+
+// A protocol mismatch is reported during the client handshake, before tmux
+// runs the command, so even a mutating command is safe to replay.
+func TestMutatingCommandReplaysAfterProtocolMismatch(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+
+	if _, err := r.runOnSocket(context.Background(), "ao", "send-keys", "-t", "sess-1", "Enter"); err != nil {
+		t.Fatalf("runOnSocket: %v", err)
+	}
+	if len(fr.calls) != 2 || fr.calls[1].name != retained || !slices.Contains(fr.calls[1].args, "send-keys") {
+		t.Fatalf("calls = %#v, want send-keys replayed on the retained client", fr.calls)
+	}
+}
+
+func TestReadOnlyCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"has-session", "-t", "=sess-1"}, true},
+		{[]string{"list-sessions"}, true},
+		{[]string{"list-panes", "-s", "-t", "=sess-1"}, true},
+		{[]string{"show-options", "-t", "=sess-1:", "-v", "detach-on-destroy"}, true},
+		{capturePaneArgs("sess-1", 10), true},
+		{panePIDArgs("sess-1"), true},
+		{[]string{"capture-pane", "-t", "sess-1"}, false},
+		{[]string{"display-message", "-t", "sess-1", "hello"}, false},
+		{sendKeysLiteralArgs("sess-1", "hi"), false},
+		{killSessionArgs("sess-1"), false},
+		{setDetachOnDestroyOnArgs("sess-1"), false},
+		{[]string{"paste-buffer", "-t", "sess-1"}, false},
+		{[]string{"unknown-command"}, false},
+		{nil, false},
+	} {
+		if got := readOnlyCommand(tc.args); got != tc.want {
+			t.Errorf("readOnlyCommand(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestProtocolVersionMismatchOutputMatchesBothObservedTmuxDirections(t *testing.T) {
+	for _, output := range []string{
+		"protocol version mismatch (client 7, server 8)",
+		"protocol version mismatch (client 8, server 7)",
+	} {
+		if !protocolVersionMismatchOutput(output) {
+			t.Errorf("protocolVersionMismatchOutput(%q) = false, want true", output)
+		}
+	}
+}
+
+func TestSendInputUsesTheSelectedCompatibleClient(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	r.compatibleClient = retained
+	r.rememberSessionSocket("sess-1", "ao")
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 7, server 8)"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+
+	if err := r.SendInput(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "Escape"); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	// The third call reads the server version, read-only, before anything is
+	// retired. This fake reports none, so the working current client is used
+	// for later commands and the retained client stays on disk.
+	if len(fr.calls) != 3 || fr.calls[0].name != retained || fr.calls[1].name != current {
+		t.Fatalf("calls = %#v, want selected retained client, then current client for replacement server, then version probe", fr.calls)
+	}
+	if !slices.Contains(fr.calls[0].args, "send-keys") || !slices.Contains(fr.calls[1].args, "send-keys") {
+		t.Fatalf("calls = %#v, want send-keys operation on both clients", fr.calls)
+	}
+	if !slices.Contains(fr.calls[2].args, "display-message") || slices.Contains(fr.calls[2].args, "send-keys") {
+		t.Fatalf("third call = %#v, want read-only server version probe", fr.calls[2])
+	}
+	if got := r.compatibleBinaryForSocket("ao"); got != current {
+		t.Fatalf("selected client = %q, want working current client %q", got, current)
+	}
+	if _, err := os.Stat(retained); err != nil {
+		t.Fatalf("retained client: %v, want it kept without version evidence", err)
+	}
+}
+
+func TestRunOnSocketUsesSelectedClientForRuntimeOperations(t *testing.T) {
+	for _, command := range []string{
+		"set-option", "kill-session", "send-keys", "load-buffer", "paste-buffer",
+		"respawn-pane", "resize-pane", "capture-pane",
+	} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+			r.compatibleClient = retained
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{{}}}
+			r.runner = fr
+
+			if _, err := r.runOnSocket(context.Background(), "ao", command, "-t", "=sess-1"); err != nil {
+				t.Fatalf("runOnSocket: %v", err)
+			}
+			if len(fr.calls) != 1 || fr.calls[0].name != retained {
+				t.Fatalf("calls = %#v, want selected retained client", fr.calls)
+			}
+		})
+	}
+}
+
+func TestIsAliveCleansRetainedClientWhenItsProbeConfirmsServerGone(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "tmux")
+	retained := filepath.Join(root, "tmux.retained")
+	if err := os.WriteFile(current, []byte("current-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(retained, []byte("retained-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{
+		path: retained, hash: retainedHash, managed: true, found: true,
+	}
+	r := New(Options{
+		Binary:                current,
+		RetainedBinary:        retained,
+		SocketName:            "ao",
+		CompatibleClientStore: store,
+		Timeout:               time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+		{out: []byte("no server running on /tmp/tmux-501/ao"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeUnavailable) {
+		t.Fatalf("IsAlive = (%v, %v), want unavailable", alive, err)
+	}
+	if _, err := os.Stat(retained); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained client stat error = %v, want not-exist", err)
+	}
+	if store.found || store.deletes != 1 {
+		t.Fatalf("compatible-client association = %+v, want one deletion", store)
+	}
+}
+
+func TestIsAliveCurrentClientConfirmsServerGoneAndClearsRetainedAssociation(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{
+		path: retained, hash: retainedHash, managed: true, found: true,
+	}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{{
+		out: []byte("no server running on /tmp/tmux-501/ao"), err: &exec.ExitError{},
+	}}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeUnavailable) {
+		t.Fatalf("IsAlive = (%v, %v), want unavailable", alive, err)
+	}
+	if store.found || store.deletes != 1 {
+		t.Fatalf("compatible-client association = %+v, want one deletion", store)
+	}
+	if _, err := os.Stat(retained); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained client stat error = %v, want not-exist", err)
+	}
+	if len(fr.calls) != 1 || fr.calls[0].name != current {
+		t.Fatalf("probe calls = %#v, want only current client", fr.calls)
+	}
+}
+
+// versionedClients is a runner for two or more tmux releases sharing one
+// server. Every client reaches the server; versions decides each client's
+// `tmux -V`, and the server's #{version} and #{pid} come from serverVersion.
+type versionedClients struct {
+	calls         []runnerCall
+	versions      map[string]string
+	serverVersion string
+	serverErr     error
+	// respond scripts any other command; nil means success with no output.
+	respond func(name string, args []string) ([]byte, error)
+}
+
+func (v *versionedClients) Run(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
+	v.calls = append(v.calls, runnerCall{env: append([]string(nil), env...), name: name, args: append([]string(nil), args...)})
+	if len(args) == 1 && args[0] == "-V" {
+		if version, ok := v.versions[name]; ok {
+			return []byte("tmux " + version + "\n"), nil
+		}
+		return []byte("unknown option"), &exec.ExitError{}
+	}
+	if slices.Contains(args, "#{version} #{pid}") {
+		if v.serverErr != nil {
+			return nil, v.serverErr
+		}
+		return []byte(v.serverVersion + " 4242\n"), nil
+	}
+	if v.respond != nil {
+		return v.respond(name, args)
+	}
+	return nil, nil
+}
+
+func (v *versionedClients) count(name, subcommand string) int {
+	n := 0
+	for _, call := range v.calls {
+		if call.name == name && slices.Contains(call.args, subcommand) {
+			n++
+		}
+	}
+	return n
+}
+
+// The reviewer's live pair: a 3.7b client runs has-session against a surviving
+// 3.5a server but cannot attach. has-session success alone must not retire
+// the only client that can attach.
+func TestIsAliveKeepsRetainedClientWhileServerVersionDiffers(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "client-3.7b")
+	retained := writeTestTmuxClient(t, "tmux-retained", "client-3.5a")
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{path: retained, hash: retainedHash, managed: true, found: true}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	fr := &versionedClients{versions: map[string]string{current: "3.7b", retained: "3.5a"}, serverVersion: "3.5a"}
+	r.runner = fr
+	r.serverExecutable = func(context.Context, int) (string, error) { return current, nil }
+	r.rememberSessionSocket("sess-1", "ao")
+
+	for probe := 1; probe <= 2; probe++ {
+		alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+		if err != nil || !alive {
+			t.Fatalf("IsAlive #%d = (%v, %v), want (true, nil)", probe, alive, err)
+		}
+		if _, err := os.Stat(retained); err != nil {
+			t.Fatalf("retained 3.5a client after IsAlive #%d: %v, want it kept", probe, err)
+		}
+		if got := r.compatibleBinaryForSocket("ao"); got != retained {
+			t.Fatalf("selected client after IsAlive #%d = %q, want retained 3.5a %q", probe, got, retained)
+		}
+	}
+	if !store.found || store.path != retained || !store.managed || store.deletes != 0 {
+		t.Fatalf("compatible-client association = %+v, want retained managed client kept", store)
+	}
+	argv, err := r.prepareAttach(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil {
+		t.Fatalf("prepareAttach: %v", err)
+	}
+	if argv[0] != retained {
+		t.Fatalf("attach client = %q, want retained 3.5a %q", argv[0], retained)
+	}
+	if n := fr.count(current, "-V") + fr.count(retained, "-V"); n != 2 {
+		t.Fatalf("tmux -V runs = %d, want one per client (cached)", n)
+	}
+}
+
+func TestIsAliveCurrentClientSuccessRetiresRetainedClientOnceVersionsMatch(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current-b", "client-b")
+	retained := writeTestTmuxClient(t, "tmux-retained-a", "client-a")
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{
+		path: retained, hash: retainedHash, managed: true, found: true,
+	}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	// The server that only A could serve is gone; B started this one.
+	r.runner = &versionedClients{versions: map[string]string{current: "3.7b", retained: "3.5a"}, serverVersion: "3.7b"}
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if _, err := os.Stat(retained); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old retained A stat error = %v, want not-exist", err)
+	}
+	currentHash, err := fileSHA256(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.found || store.path != current || store.hash != currentHash || store.managed || store.upserts != 1 {
+		t.Fatalf("compatible-client association = %+v, want current B after clearing A", store)
+	}
+	if got := r.compatibleBinaryForSocket("ao"); got != current {
+		t.Fatalf("selected client = %q, want current %q", got, current)
+	}
+}
+
+func TestIsAliveKeepsRetainedClientWhenServerVersionIsUnavailable(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "client-b")
+	retained := writeTestTmuxClient(t, "tmux-retained", "client-a")
+	store := &fakeCompatibleClientStore{}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	r.runner = &versionedClients{
+		versions:  map[string]string{current: "3.7b", retained: "3.5a"},
+		serverErr: &exec.ExitError{},
+	}
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if _, err := os.Stat(retained); err != nil {
+		t.Fatalf("retained client: %v, want it kept without version evidence", err)
+	}
+	if store.upserts != 0 || store.deletes != 0 {
+		t.Fatalf("compatible-client association = %+v, want no change without version evidence", store)
+	}
+}
+
+func TestIsAliveCurrentClientSuccessAfterInPlaceReStageClearsSamePathRetention(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-stable", "client-c")
+	retained := writeTestTmuxClient(t, "tmux-stable.retained", "client-b")
+	oldHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{
+		path: current, hash: oldHash, managed: false, found: true,
+	}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	r.confirmedClient = current // the daemon survived Electron's in-place re-stage
+	r.runner = &versionedClients{versions: map[string]string{current: "3.7b", retained: "3.5a"}, serverVersion: "3.7b"}
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if _, err := os.Stat(retained); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("obsolete same-path retained client stat error = %v, want not-exist", err)
+	}
+	currentHash, err := fileSHA256(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.path != current || store.hash != currentHash || store.managed || store.upserts != 1 {
+		t.Fatalf("compatible-client association = %+v, want refreshed current client", store)
+	}
+}
+
+func TestIsAliveAfterInPlaceReStageKeepsSamePathRetentionForOlderServer(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-stable", "client-c")
+	retained := writeTestTmuxClient(t, "tmux-stable.retained", "client-b")
+	store := &fakeCompatibleClientStore{}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	r.confirmedClient = current // confirmed before Electron replaced the bytes
+	r.runner = &versionedClients{versions: map[string]string{current: "3.7b", retained: "3.5a"}, serverVersion: "3.5a"}
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if _, err := os.Stat(retained); err != nil {
+		t.Fatalf("retained client: %v, want it kept for the older server", err)
+	}
+	if got := r.compatibleBinaryForSocket("ao"); got != retained || store.path != retained || !store.managed {
+		t.Fatalf("selected = %q, association = %+v, want retained managed client", got, store)
+	}
+}
+
+// After an app-version upgrade the new staged path has no retained copy, but
+// the previous version's staged binary is still what the server runs from.
+func TestPrepareAttachUsesServerExecutableAfterAppVersionUpgrade(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "0.14.0-darwin-arm64", "tmux")
+	previous := filepath.Join(root, "0.13.0-darwin-arm64", "tmux")
+	for path, contents := range map[string]string{current: "client-3.7b", previous: "client-3.5a"} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &fakeCompatibleClientStore{}
+	r := New(Options{Binary: current, SocketName: "ao", CompatibleClientStore: store, Timeout: time.Second})
+	fr := &versionedClients{versions: map[string]string{current: "3.7b", previous: "3.5a"}, serverVersion: "3.5a"}
+	r.runner = fr
+	var askedPID int
+	r.serverExecutable = func(_ context.Context, pid int) (string, error) {
+		askedPID = pid
+		return previous, nil
+	}
+	r.rememberSessionSocket("sess-1", "ao")
+
+	if alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	argv, err := r.prepareAttach(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil {
+		t.Fatalf("prepareAttach: %v", err)
+	}
+	if argv[0] != previous || askedPID != 4242 {
+		t.Fatalf("attach client = %q (pid %d), want server executable %q (pid 4242)", argv[0], askedPID, previous)
+	}
+	if store.path != previous || store.managed {
+		t.Fatalf("compatible-client association = %+v, want previous version's client, unmanaged", store)
+	}
+	// A later probe keeps the matching client rather than reverting to current.
+	if alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil || !alive {
+		t.Fatalf("second IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if got := r.compatibleBinaryForSocket("ao"); got != previous {
+		t.Fatalf("selected client after second IsAlive = %q, want %q", got, previous)
+	}
+
+	// Once the server is gone the association is cleared, but AO never deletes
+	// another app version's staged binary.
+	fr.respond = func(_ string, args []string) ([]byte, error) {
+		if slices.Contains(args, "has-session") {
+			return []byte("no server running on /tmp/tmux-501/ao"), &exec.ExitError{}
+		}
+		return nil, nil
+	}
+	if _, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); !errors.Is(err, ports.ErrRuntimeUnavailable) {
+		t.Fatalf("IsAlive after server exit err = %v, want unavailable", err)
+	}
+	if _, err := os.Stat(previous); err != nil {
+		t.Fatalf("previous version's staged client: %v, want it left in place", err)
+	}
+	if store.found || r.compatibleBinaryForSocket("ao") != current {
+		t.Fatalf("association = %+v, selected = %q, want cleared back to current", store, r.compatibleBinaryForSocket("ao"))
+	}
+}
+
+// Main fails here too: new-session used to be forced through the current
+// client, which a newer surviving server rejects with "server exited
+// unexpectedly", and new-session is never replayed after that.
+func TestCreateSendsNewSessionThroughSelectedRetainedClient(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "client-3.5a")
+	retained := writeTestTmuxClient(t, "tmux-retained", "client-3.7b")
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{path: retained, hash: retainedHash, managed: true, found: true}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao", Shell: "/bin/sh",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	r.compatibleClient, r.confirmedClient = retained, retained
+	workspace := t.TempDir()
+	created := map[string]bool{}
+	fr := &versionedClients{
+		versions:      map[string]string{current: "3.5a", retained: "3.7b"},
+		serverVersion: "3.7b",
+		respond: func(name string, args []string) ([]byte, error) {
+			if name == current {
+				return []byte("server exited unexpectedly"), &exec.ExitError{}
+			}
+			switch {
+			case slices.Contains(args, "has-session"):
+				target := args[len(args)-1]
+				if created[strings.TrimPrefix(target, "=")] {
+					return nil, nil
+				}
+				return []byte("can't find session: " + target), &exec.ExitError{}
+			case slices.Contains(args, "new-session"):
+				created[args[slices.Index(args, "-s")+1]] = true
+				return nil, nil
+			case slices.Contains(args, "display-message"):
+				return []byte(workspace + "\n"), nil
+			}
+			return nil, nil
+		},
+	}
+	r.runner = fr
+
+	for _, id := range []string{"sess-a", "sess-b", "sess-c"} {
+		handle, err := r.Create(context.Background(), ports.RuntimeConfig{
+			SessionID: domain.SessionID(id), WorkspacePath: workspace, Argv: []string{"sh"},
+		})
+		if err != nil {
+			t.Fatalf("Create(%s): %v", id, err)
+		}
+		if handle.ID != id {
+			t.Fatalf("Create handle = %q, want %q", handle.ID, id)
+		}
+	}
+	if n := fr.count(current, "new-session"); n != 0 {
+		t.Fatalf("new-session on current client = %d, want 0", n)
+	}
+	if n := fr.count(retained, "new-session"); n != 3 {
+		t.Fatalf("new-session on retained client = %d, want 3", n)
+	}
+	if got := r.compatibleBinaryForSocket("ao"); got != retained {
+		t.Fatalf("selected client = %q, want retained %q", got, retained)
+	}
+}
+
+func TestCreateProbesWithCurrentClientBeforeNewSession(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "client-b")
+	retained := writeTestTmuxClient(t, "tmux-retained", "client-a")
+	retainedHash, err := fileSHA256(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCompatibleClientStore{path: retained, hash: retainedHash, managed: true, found: true}
+	r := New(Options{
+		Binary: current, RetainedBinary: retained, SocketName: "ao", Shell: "/bin/sh",
+		CompatibleClientStore: store, Timeout: time.Second,
+	})
+	r.compatibleClient, r.confirmedClient = retained, retained
+	workspace := t.TempDir()
+	serverUp := true
+	fr := &versionedClients{
+		versions: map[string]string{current: "3.7b", retained: "3.5a"},
+		respond: func(name string, args []string) ([]byte, error) {
+			switch {
+			case slices.Contains(args, "has-session") && !serverUp:
+				return []byte("no server running on /tmp/tmux-501/ao"), &exec.ExitError{}
+			case slices.Contains(args, "new-session"):
+				serverUp = true
+			case slices.Contains(args, "display-message"):
+				return []byte(workspace + "\n"), nil
+			}
+			return nil, nil
+		},
+	}
+	fr.serverVersion = "3.7b"
+	serverUp = false // the 3.5a server is gone; current must start the next one
+	r.runner = fr
+
+	if _, err := r.Create(context.Background(), ports.RuntimeConfig{
+		SessionID: "sess-new", WorkspacePath: workspace, Argv: []string{"sh"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if fr.calls[0].name != current || !slices.Contains(fr.calls[0].args, "has-session") {
+		t.Fatalf("first call = %#v, want has-session on the current client", fr.calls[0])
+	}
+	if fr.count(current, "new-session") != 1 || fr.count(retained, "new-session") != 0 {
+		t.Fatalf("calls = %#v, want new-session on the current client after the old server is gone", fr.calls)
+	}
+	if _, err := os.Stat(retained); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained client stat error = %v, want removed once its server is gone", err)
+	}
+}
+
+func TestCreateFailsWithoutEffectWhenNoClientCanReachServer(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "client-b")
+	retained := writeTestTmuxClient(t, "tmux-retained", "client-a")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Shell: "/bin/sh", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+
+	_, err := r.Create(context.Background(), ports.RuntimeConfig{
+		SessionID: "sess-1", WorkspacePath: t.TempDir(), Argv: []string{"sh"},
+	})
+	if !errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+		t.Fatalf("Create err = %v, want compatible-client-unavailable", err)
+	}
+	var effect interface {
+		EffectOutcome() ports.RuntimeEffectOutcome
+	}
+	if !errors.As(err, &effect) || effect.EffectOutcome() != ports.RuntimeEffectNone {
+		t.Fatalf("Create err = %v, want a no-effect failure", err)
+	}
+	for _, call := range fr.calls {
+		if slices.Contains(call.args, "new-session") {
+			t.Fatalf("new-session ran without a compatible client: %#v", fr.calls)
+		}
+	}
+}
+
+func TestNewDerivesRetainedClientFromBinaryAndSocketNotEnvironment(t *testing.T) {
+	staged := filepath.Join(t.TempDir(), "tmux")
+	t.Setenv("AO_TMUX_SOCKET_NAME", "")
+	t.Setenv("AO_TMUX_RETAINED_BINARY", staged+".ao.retained")
+	for _, tc := range []struct {
+		binary, socket, want string
+	}{
+		{staged, "ao", staged + ".ao.retained"},
+		{staged, "ao-term-it", staged + ".ao-term-it.retained"},
+		{staged, "", ""},
+		{staged, "../ao", ""},
+		{"tmux", "ao", ""},
+	} {
+		r := New(Options{Binary: tc.binary, SocketName: tc.socket, LegacyBinary: "tmux"})
+		if r.retainedBinary != tc.want {
+			t.Errorf("New(binary %q, socket %q) retained = %q, want %q", tc.binary, tc.socket, r.retainedBinary, tc.want)
+		}
+	}
+}
+
+// The reviewer's case: an AO worker inherits the daemon's AO_TMUX_* variables
+// and runs a runtime on its own socket that has no server.
+func TestIsAliveOnUnrelatedSocketKeepsAppRetainedClient(t *testing.T) {
+	staged := writeTestTmuxClient(t, "tmux", "client-b")
+	appRetained := staged + ".ao.retained"
+	if err := os.WriteFile(appRetained, []byte("client-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AO_TMUX_BINARY", staged)
+	t.Setenv("AO_TMUX_SOCKET_NAME", "ao")
+	t.Setenv("AO_TMUX_RETAINED_BINARY", appRetained)
+	r := New(Options{SocketName: "ao-term-dod-it", Timeout: time.Second})
+	if r.binary != staged {
+		t.Fatalf("binary = %q, want inherited staged client %q", r.binary, staged)
+	}
+	r.runner = &fakeRunnerSequence{results: []fakeRunnerResult{{
+		out: []byte("no server running on /tmp/tmux-501/ao-term-dod-it"), err: &exec.ExitError{},
+	}}}
+	r.rememberSessionSocket("sess-1", "ao-term-dod-it")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeUnavailable) {
+		t.Fatalf("IsAlive = (%v, %v), want unavailable", alive, err)
+	}
+	if _, err := os.Stat(appRetained); err != nil {
+		t.Fatalf("app's retained client: %v, want it untouched", err)
+	}
+}
+
+func TestIsAliveReportsDistinctErrorWhenCurrentAndRetainedClientsFail(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "tmux")
+	retained := filepath.Join(root, "tmux.retained")
+	if err := os.WriteFile(current, []byte("current-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(retained, []byte("retained-client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := New(Options{
+		Binary:         current,
+		RetainedBinary: retained,
+		SocketName:     "ao",
+		Timeout:        time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+		t.Fatalf("IsAlive = (%v, %v), want compatible-client-unavailable", alive, err)
+	}
+	if !errors.Is(err, ports.ErrRuntimeProtocolMismatch) {
+		t.Fatalf("IsAlive err = %v, want protocol-mismatch cause", err)
+	}
+	if len(fr.calls) != 2 {
+		t.Fatalf("calls = %d, want exactly current and retained probes", len(fr.calls))
+	}
+	for _, call := range fr.calls {
+		if slices.Contains(call.args, "kill-server") {
+			t.Fatalf("unexpected kill-server call: %#v", call.args)
+		}
+	}
+}
+
+func TestIsAliveReportsRecoveryErrorWhenRetainedClientIsMissingOrCorrupt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writeFile bool
+		contents  string
+	}{
+		{name: "missing"},
+		{name: "corrupt", writeFile: true, contents: "changed-retained-client"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			retained := filepath.Join(root, "tmux-retained")
+			if tc.writeFile {
+				if err := os.WriteFile(retained, []byte(tc.contents), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := &fakeCompatibleClientStore{
+				path: retained, hash: strings.Repeat("a", 64), managed: true, found: true,
+			}
+			r := New(Options{
+				Binary: current, RetainedBinary: retained, SocketName: "ao",
+				CompatibleClientStore: store, Timeout: time.Second,
+			})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{{
+				out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{},
+			}}}
+			r.runner = fr
+			r.rememberSessionSocket("sess-1", "ao")
+
+			alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+			if alive || !errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+				t.Fatalf("IsAlive = (%v, %v), want explicit compatible-client recovery error", alive, err)
+			}
+			if errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+				t.Fatalf("IsAlive error unexpectedly classified as inconclusive: %v", err)
+			}
+			if len(fr.calls) != 1 {
+				t.Fatalf("calls = %d, want only current-client probe when retained file is unusable", len(fr.calls))
+			}
+		})
+	}
+}
+
+func TestIsAliveKeepsServerExitedUnexpectedlyProbeInconclusive(t *testing.T) {
+	r := New(Options{Binary: "tmux-test", SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{{
+		out: []byte("server exited unexpectedly"), err: &exec.ExitError{},
+	}}}
+	r.runner = fr
+	r.rememberSessionSocket("sess-1", "ao")
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if alive || !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+		t.Fatalf("IsAlive = (%v, %v), want probe-inconclusive", alive, err)
+	}
+	if errors.Is(err, ports.ErrRuntimeProtocolMismatch) || errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+		t.Fatalf("IsAlive err = %v, want only existing inconclusive classification", err)
 	}
 }
 
@@ -2035,6 +3083,29 @@ func TestGetOutputArgs(t *testing.T) {
 	}
 	if got, want := fr.calls[0].args, capturePaneArgs("sess-1", 10); !reflect.DeepEqual(got, want) {
 		t.Fatalf("capture-pane args = %#v, want %#v", got, want)
+	}
+}
+
+func TestCapturePreservesSuccessfulDiagnosticText(t *testing.T) {
+	for _, phrase := range []string{"protocol version mismatch", "server exited unexpectedly"} {
+		for _, styled := range []bool{false, true} {
+			t.Run(phrase+"/styled="+strconv.FormatBool(styled), func(t *testing.T) {
+				current := writeTestTmuxClient(t, "tmux-current", "current-client")
+				r := New(Options{Binary: current, SocketName: "ao"})
+				r.rememberSessionSocket("sess-1", "ao")
+				want := "agent output: " + phrase + "\n"
+				fr := &fakeRunner{outputs: [][]byte{[]byte(want)}}
+				r.runner = fr
+				capture := r.GetOutput
+				if styled {
+					capture = r.GetStyledOutput
+				}
+				out, err := capture(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, 10)
+				if err != nil || out != want {
+					t.Fatalf("capture = (%q, %v), want (%q, nil)", out, err, want)
+				}
+			})
+		}
 	}
 }
 
