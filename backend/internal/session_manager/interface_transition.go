@@ -104,6 +104,9 @@ func (m *Manager) InterfaceTransitionStatus(
 	if rec.IsTerminated {
 		status.ReasonCode = "SESSION_TERMINATED"
 		status.Reason = "Terminated sessions must be restored before switching interfaces."
+	} else if rec.ProvisionState.IsProvisioning() {
+		status.ReasonCode = "WORKSPACE_PROVISIONING"
+		status.Reason = "This session is still starting. Switch interfaces once setup finishes."
 	} else if interfaceWorkspaceUnavailable(rec) {
 		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
 		status.Reason = "This session's workspace was never set up. Retry start before switching interfaces."
@@ -158,10 +161,25 @@ func (m *Manager) InterfaceTransitionStatus(
 
 // interfaceWorkspaceUnavailable reports a session whose start failed before
 // its workspace existed. Neither controller can launch without one, so a switch
-// would only fail and leave both stopped. A session still provisioning is not
-// refused: its workspace is on the way.
+// would only fail and leave both stopped. A session still provisioning is
+// refused separately by interfaceWorkspaceNotReady.
 func interfaceWorkspaceUnavailable(rec domain.SessionRecord) bool {
 	return strings.TrimSpace(rec.Metadata.WorkspacePath) == "" && !rec.ProvisionState.IsProvisioning()
+}
+
+// interfaceWorkspaceNotReady refuses a switch the session's workspace cannot
+// carry yet. While provisioning (fetch, worktree, setup commands) the workspace
+// path is not recorded and the start will launch the source controller itself,
+// so nothing would wait for it: the target and the rollback would both launch
+// without a workspace and leave the switch in recovery.
+func interfaceWorkspaceNotReady(rec domain.SessionRecord, id domain.SessionID) error {
+	if rec.ProvisionState.IsProvisioning() {
+		return fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceProvisioning, id)
+	}
+	if interfaceWorkspaceUnavailable(rec) {
+		return fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
+	}
+	return nil
 }
 
 // StartInterfaceTransition durably claims the session and starts the handoff in
@@ -202,8 +220,8 @@ func (m *Manager) StartInterfaceTransition(
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s is already in %s mode",
 			ErrInterfaceAlreadySelected, id, source)
 	}
-	if interfaceWorkspaceUnavailable(rec) {
-		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
+	if err := interfaceWorkspaceNotReady(rec, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
 	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
 	// A hermes Chat session whose adapter never declared the compatible
