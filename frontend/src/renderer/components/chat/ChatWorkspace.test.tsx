@@ -1651,6 +1651,20 @@ describe("ChatWorkspace timeline", () => {
 		).not.toBeInTheDocument();
 	});
 
+	it("docks a pending question whose row lost its turn link instead of hiding it (#7658)", () => {
+		const snapshot = withUserInput("pending");
+		const input = snapshot.items.find((item) => item.id === "input-1");
+		if (!input || input.kind !== "activity") throw new Error("missing input activity");
+		// The daemon can store a pending question with no turn (a replay across a
+		// controller restart). The timeline hides pending questions, so dropping
+		// this one would leave the agent blocked on an answer no UI can send.
+		input.turnId = undefined;
+		render(<ChatWorkspace snapshot={snapshot} onResolveInput={vi.fn()} />);
+
+		expect(screen.getByTestId("elicitation-composer-dock")).toBeInTheDocument();
+		expect(screen.getByRole("group", { name: "Agent question" })).toBeInTheDocument();
+	});
+
 	it("answers a Codex structured question through the real elicitation dock instead of an empty command approval", async () => {
 		const user = userEvent.setup();
 		const onResolveInput = vi.fn();
