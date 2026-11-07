@@ -92,6 +92,9 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
+	// ResolveHarnessBinary resolves a harness executable through its agent
+	// adapter, exactly as the daemon does for `ao agent ls`. Tests replace it.
+	ResolveHarnessBinary func(ctx context.Context, harness string) (string, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -114,6 +117,7 @@ func DefaultDeps() Deps {
 		ProcessAlive:          processalive.Alive,
 		LookPath:              exec.LookPath,
 		CommandOutput:         commandOutput,
+		ResolveHarnessBinary:  resolveAgentHarnessBinary,
 		CommandOutputInDir:    commandOutputInDir,
 		RunInteractiveCommand: runInteractiveCommand,
 		ReadSecret:            readSecret,
@@ -162,6 +166,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.CommandOutput == nil {
 		d.CommandOutput = def.CommandOutput
+	}
+	if d.ResolveHarnessBinary == nil {
+		d.ResolveHarnessBinary = def.ResolveHarnessBinary
 	}
 	if d.CommandOutputInDir == nil {
 		d.CommandOutputInDir = def.CommandOutputInDir

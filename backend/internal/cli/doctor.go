@@ -21,9 +21,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -59,6 +61,9 @@ const (
 	gitlabDoctorUserAgent       = "ao-agent-orchestrator/doctor"
 	defaultDoctorGitHubRESTBase = "https://api.github.com"
 	defaultDoctorGitLabRESTBase = "https://gitlab.com/api/v4"
+	// harnessResolveTimeout bounds an adapter-resolved harness probe. It matches
+	// the daemon's OpenCode install-check budget, which also probes candidates.
+	harnessResolveTimeout = 12 * time.Second
 )
 
 type harnessProbe struct {
@@ -66,12 +71,19 @@ type harnessProbe struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
+	// ResolveBinary, when set, is the harness adapter's own executable
+	// resolution. Harnesses that share one binary name across incompatible
+	// versions use it so doctor sees the same install the daemon sees.
+	ResolveBinary func(context.Context) (string, error)
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
+	// UseAgentResolver asks doctor to resolve the harness through its adapter
+	// instead of probing PATH directly.
+	UseAgentResolver bool
 }
 
 // harnessProbeSpecs overrides per-harness probe settings for agent harnesses whose
@@ -80,7 +92,13 @@ type harnessProbeSpec struct {
 var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"claude-code": {BinaryName: "claude", VersionArg: "--version"},
 	"codex":       {BinaryName: "codex", VersionArg: "--version"},
-	"opencode":    {BinaryName: "opencode", VersionArg: "--version"},
+	// OpenCode 1 and OpenCode 2 are separate harnesses behind one `opencode`
+	// executable name, and each requires its own major version. A PATH probe
+	// reports whichever major is installed for both harnesses, so resolve them
+	// through the adapters that enforce the version contract; doctor then agrees
+	// with `ao agent ls` about which harness is installed.
+	"opencode":    {BinaryName: "opencode", VersionArg: "--version", UseAgentResolver: true},
+	"opencode-v2": {BinaryName: "opencode", VersionArg: "--version", UseAgentResolver: true},
 	"muse":        {BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
 	"aider":       {BinaryName: "aider", VersionArg: "--version"},
 	"goose":       {BinaryName: "goose", VersionArg: "--version"},
@@ -221,12 +239,19 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		if binaryName == "" {
 			binaryName = id
 		}
-		checks = append(checks, c.checkHarness(ctx, harnessProbe{
+		probe := harnessProbe{
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
-		}))
+		}
+		if spec.UseAgentResolver {
+			harness := id
+			probe.ResolveBinary = func(ctx context.Context) (string, error) {
+				return c.deps.ResolveHarnessBinary(ctx, harness)
+			}
+		}
+		checks = append(checks, c.checkHarness(ctx, probe))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
 	return checks
@@ -544,20 +569,32 @@ func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 }
 
 func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
-	path, err := c.deps.LookPath(harness.BinaryName)
+	path, err := c.resolveHarnessBinary(ctx, harness)
 	if err != nil || path == "" {
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
-			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
+			Message: harnessUnavailableMessage(harness, err),
 		}
 	}
 	if harness.VersionArg == "" {
 		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s", harness.BinaryName, path)}
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	// An adapter-resolved harness was already version-probed during resolution,
+	// under that adapter's own budget, so the display probe must not use the
+	// shorter PATH-probe budget and turn an installed harness into a warning.
+	timeout := probeTimeout
+	if harness.ResolveBinary != nil {
+		timeout = harnessResolveTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := c.deps.CommandOutput(reqCtx, path, harness.VersionArg)
 	if err != nil {
+		if harness.ResolveBinary != nil {
+			// The adapter resolved this binary, so it is installed; only the
+			// version label is missing.
+			return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s", harness.BinaryName, path)}
+		}
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
 			Message: fmt.Sprintf("%s resolves to %s, but `%s %s` failed: %v", harness.BinaryName, path, harness.BinaryName, harness.VersionArg, err),
@@ -574,6 +611,53 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 		}
 	}
 	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s (%s)", harness.BinaryName, path, version)}
+}
+
+// resolveAgentHarnessBinary resolves a harness executable through its adapter,
+// the same resolution the daemon's readiness coordinator runs, so doctor and
+// `ao agent ls` cannot disagree about whether a harness is installed.
+func resolveAgentHarnessBinary(ctx context.Context, harness string) (string, error) {
+	for _, ha := range registry.Harnessed() {
+		if string(ha.Harness) != harness {
+			continue
+		}
+		resolver, ok := ha.Agent.(ports.AgentBinaryResolver)
+		if !ok {
+			return "", fmt.Errorf("%s: installation checks are not supported for this harness", harness)
+		}
+		return resolver.ResolveBinary(ctx)
+	}
+	return "", fmt.Errorf("%s: unknown harness", harness)
+}
+
+// resolveHarnessBinary resolves the harness executable the same way the daemon
+// does. Harnesses without an adapter resolver keep doctor's cheaper PATH probe.
+func (c *commandContext) resolveHarnessBinary(ctx context.Context, harness harnessProbe) (string, error) {
+	if harness.ResolveBinary == nil {
+		return c.deps.LookPath(harness.BinaryName)
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, harnessResolveTimeout)
+	defer cancel()
+	return harness.ResolveBinary(reqCtx)
+}
+
+// harnessUnavailableMessage explains why a harness has no usable binary, using
+// the same wording readiness shows in `ao agent ls` so the two commands cannot
+// describe the same install differently.
+func harnessUnavailableMessage(harness harnessProbe, err error) string {
+	if harness.ResolveBinary == nil || err == nil {
+		return fmt.Sprintf("%s not found in PATH", harness.BinaryName)
+	}
+	if errors.Is(err, ports.ErrAgentBinaryNotFound) {
+		return fmt.Sprintf("%s not found in PATH", harness.BinaryName)
+	}
+	var mismatch *opencode.IncompatibleVersionError
+	if errors.As(err, &mismatch) {
+		if replaced := mismatch.ReplacedOpenCode1Message(); replaced != "" {
+			return replaced
+		}
+	}
+	return err.Error()
 }
 
 // checkCodexLaunchFlags smoke-tests AO's codex launch surface against the
