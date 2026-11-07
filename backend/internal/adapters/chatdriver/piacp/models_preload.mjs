@@ -95,13 +95,21 @@ function mergedModelsPath(modelsJsonPath, authStorage, builtInProviders) {
 if (out && own) {
 	try {
 		const { ModelRegistry, getAgentDir } = await import(Bun.resolveSync("@earendil-works/pi-coding-agent", dirname(entry)));
-		const { getProviders } = await import(Bun.resolveSync("@earendil-works/pi-ai", dirname(entry)));
+		// Built-in providers only refine the merge, so a missing pi-ai must not
+		// turn the whole merge off.
+		let builtIn = new Set();
+		try {
+			const { getProviders } = await import(Bun.resolveSync("@earendil-works/pi-ai", dirname(entry)));
+			if (typeof getProviders === "function") builtIn = new Set(getProviders());
+		} catch (error) {
+			warn(error);
+		}
 		if (ModelRegistry && typeof ModelRegistry.create === "function" && typeof getAgentDir === "function") {
 			const create = ModelRegistry.create;
 			ModelRegistry.create = function (authStorage, modelsJsonPath = join(getAgentDir(), "models.json")) {
 				let path = modelsJsonPath;
 				try {
-					path = mergedModelsPath(modelsJsonPath, authStorage, new Set(getProviders())) ?? modelsJsonPath;
+					path = mergedModelsPath(modelsJsonPath, authStorage, builtIn) ?? modelsJsonPath;
 				} catch (error) {
 					warn(error);
 				}

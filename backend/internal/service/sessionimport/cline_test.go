@@ -52,6 +52,25 @@ func TestClineDiscoveryReadsOnlyConversationText(t *testing.T) {
 	}
 }
 
+func TestClineDropsInjectedContextBlocksFromTypedTurn(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	path := clineFixture(t, root, cwd, `{
+  "version":1, "sessionId":"`+clineTestID+`",
+  "messages":[
+    {"role":"user","content":[{"type":"text","text":"build a greeting"},{"type":"text","text":"<environment_details>secret cwd listing</environment_details>"}],"ts":1790848800000},
+    {"role":"assistant","content":[{"type":"text","text":"Hello"}],"ts":1790848860000}
+  ]
+}`)
+	got, err := readTranscript(context.Background(), domain.HarnessCline, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: build a greeting", "assistant: Hello")
+	if got.title != "build a greeting" {
+		t.Fatalf("title = %q", got.title)
+	}
+}
+
 func TestClineOversizedAndTornDocument(t *testing.T) {
 	oldRecord, oldString := maxRecordBytes, maxSkimString
 	maxRecordBytes, maxSkimString = 512, 128

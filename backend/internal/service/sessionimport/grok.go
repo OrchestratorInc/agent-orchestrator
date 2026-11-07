@@ -31,7 +31,7 @@ func discoverGrok(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil, err
 	}
 	defer func() { _ = r.Close() }()
-	byID := map[string]sourceFiles{}
+	var out []sourceFiles
 	err = fs.WalkDir(r.FS(), "sessions", func(path string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -50,16 +50,12 @@ func discoverGrok(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil //nolint:nilerr // Skip unreadable or non-regular transcript files.
 		}
-		if old, ok := byID[id]; ok && !info.ModTime().After(old.modTime) {
-			return nil
-		}
-		byID[id] = sourceFiles{harness: domain.HarnessGrok, root: root, key: id, paths: []string{filepath.Join(root, path)}, modTime: info.ModTime(), size: info.Size()}
+		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
+		// AO's own newer copy, in an AO worktree's bucket, would hide the
+		// eligible original with the same id.
+		out = append(out, sourceFiles{harness: domain.HarnessGrok, root: root, key: id, paths: []string{filepath.Join(root, path)}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
-	var out []sourceFiles
-	for _, file := range byID {
-		out = append(out, file)
-	}
 	return out, err
 }
 
@@ -107,14 +103,18 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	if info, err := os.Stat(t.path); err == nil {
 		fallback = info.ModTime()
 	}
-	var role, text string
+	// Grok streams a reply in token-sized chunks, so they are joined in a
+	// builder rather than by repeated string concatenation.
+	var role string
+	var text strings.Builder
 	var at time.Time
 	flush := func() {
-		if strings.TrimSpace(text) != "" {
-			items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
-			held += len(text)
+		if joined := text.String(); strings.TrimSpace(joined) != "" {
+			items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: joined, At: at}})
+			held += len(joined)
 		}
-		role, text = "", ""
+		role = ""
+		text.Reset()
 		// Keep stable prompt indexes until all rewinds have been applied. Drop
 		// old text under the same memory budget without deleting its boundary.
 		for held > maxHeldText && drop < len(items) {
@@ -197,8 +197,8 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 			role = next
 			at = eventAt
 		}
-		if len(text)+len(u.Content.Text) <= maxVisibleBytes {
-			text += u.Content.Text
+		if text.Len()+len(u.Content.Text) <= maxVisibleBytes {
+			text.WriteString(u.Content.Text)
 		} else {
 			t.shortened = true
 		}

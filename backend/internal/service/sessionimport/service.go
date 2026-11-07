@@ -714,14 +714,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if source.SourceTranscriptPath != "" {
 		path = source.SourceTranscriptPath
 	}
-	if source.Fingerprint != "" {
-		selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
-		if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil {
-			return err
-		}
-	}
+	selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
 	if !ok {
-		return nil
+		return s.checkSourceFingerprint(ctx, selected, projects)
 	}
 	paths := []string{path}
 	if rec.Harness == domain.HarnessCodex {
@@ -736,6 +731,11 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	}
 	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, projects, paths...)
 	if err != nil {
+		return err
+	}
+	// Checked after the read, as Import does, so a turn added meanwhile cannot
+	// reach the archive beyond the pinned history.
+	if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil {
 		return err
 	}
 	if fresh.nativeID != source.NativeID {
@@ -844,13 +844,26 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			group.Go(func() error {
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
 				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
-				if reads[i].err == nil {
-					reads[i].err = s.checkSourceFingerprint(ctx, item.source, projects)
-				}
 				return nil
 			})
 		}
 		_ = group.Wait()
+		// After the reads, each provider store is discovered once for the whole
+		// batch rather than once per chat, which made large imports quadratic.
+		discovered := map[[2]string]discovery{}
+		for i, id := range chunk {
+			item, selected := s.selections[id]
+			if !selected || item.candidate.SessionID != "" || reads[i].err != nil || item.source.fingerprint == "" || ctx.Err() != nil {
+				continue
+			}
+			key := [2]string{string(item.source.harness), canonical(item.source.root)}
+			found, ok := discovered[key]
+			if !ok {
+				found.files, found.err = s.discoverFor(ctx, item.source.harness, item.source.root, projects)
+				discovered[key] = found
+			}
+			reads[i].err = found.match(item.source)
+		}
 		for i, id := range chunk {
 			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err))
 		}

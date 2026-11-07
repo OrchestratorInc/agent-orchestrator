@@ -15,12 +15,28 @@ func (s *Service) checkSourceFingerprint(ctx context.Context, source transcript,
 	if source.fingerprint == "" {
 		return nil
 	}
-	files, err := s.discoverFor(ctx, source.harness, source.root, projects)
-	if err != nil {
-		return err
+	var d discovery
+	d.files, d.err = s.discoverFor(ctx, source.harness, source.root, projects)
+	return d.match(source)
+}
+
+// discovery is one provider store's discovered sources, shared by every
+// selected chat from that store.
+type discovery struct {
+	files []sourceFiles
+	err   error
+}
+
+// match reports whether the store still holds the source's selected history.
+func (d discovery) match(source transcript) error {
+	if source.fingerprint == "" {
+		return nil
+	}
+	if d.err != nil {
+		return d.err
 	}
 	found := false
-	for _, file := range files {
+	for _, file := range d.files {
 		if file.nativeID() != source.nativeID || canonical(file.root) != canonical(source.root) {
 			continue
 		}

@@ -187,7 +187,7 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 	t.Setenv("AO_FAKE_OPENCODE_EXPORT", env.export)
 	t.Setenv("AO_FAKE_OPENCODE_LOG", env.log)
 	t.Setenv("AO_FAKE_OPENCODE_BIND", "")
-	return &Plugin{resolvedBinary: exe}, env
+	return &Plugin{resolvedBinary: exe, importBinary: exe}, env
 }
 
 func (e fakeOpenCodeEnv) relocation() ports.ImportedSessionRelocation {

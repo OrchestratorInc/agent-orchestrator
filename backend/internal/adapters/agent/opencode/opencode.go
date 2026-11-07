@@ -66,6 +66,8 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	// importBinary replaces the OpenCode 1 lookup in import tests.
+	importBinary string
 }
 
 // New returns a ready-to-register opencode adapter.
@@ -372,7 +374,7 @@ func opencodeDBAuthStatus(ctx context.Context, path string) (status ports.AgentA
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(1000)")
+	db, err := sql.Open("sqlite", ReadOnlyDSN(path, 1000))
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}

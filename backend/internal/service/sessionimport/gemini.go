@@ -139,6 +139,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 	var metadata geminiRecord
 	var order []string
 	messages := map[string]geminiMessage{}
+	evicted := map[string]bool{}
 	held := 0
 	add := func(msg geminiMessage) {
 		if msg.ID == "" {
@@ -163,6 +164,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			held -= len(messages[id].Content)
 			delete(messages, id)
 			order = append(order[:1], order[2:]...)
+			evicted[id] = true
 			t.shortened = true
 		}
 	}
@@ -182,7 +184,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			t.last = rec.LastUpdated
 		}
 		if rec.Messages != nil {
-			order, messages, held = nil, map[string]geminiMessage{}, 0
+			order, messages, evicted, held = nil, map[string]geminiMessage{}, map[string]bool{}, 0
 			for _, msg := range *rec.Messages {
 				add(msg)
 			}
@@ -191,7 +193,13 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			apply(*rec.Set)
 		}
 		if rec.Rewind != nil {
-			keep := 0
+			// A rewind to a message evicted by the bound above drops everything
+			// after the opening message, which stays. An id never seen changes
+			// nothing.
+			keep := len(order)
+			if evicted[*rec.Rewind] {
+				keep = min(1, len(order))
+			}
 			for i, id := range order {
 				if id == *rec.Rewind {
 					keep = i
@@ -308,8 +316,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 }
 
 func discoverGeminiWithProjects(ctx context.Context, root string, projects []string) ([]sourceFiles, error) {
-	byID := map[string]sourceFiles{}
-	activity := map[string]time.Time{}
+	var files []sourceFiles
 	err := filepath.WalkDir(filepath.Join(root, "tmp"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -325,16 +332,11 @@ func discoverGeminiWithProjects(ctx context.Context, root string, projects []str
 		if err != nil {
 			return nil //nolint:nilerr // Files removed or made unreadable during discovery are ineligible.
 		}
-		file := sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()}
-		if _, ok := byID[t.nativeID]; !ok || t.last.After(activity[t.nativeID]) {
-			byID[t.nativeID] = file
-			activity[t.nativeID] = t.last
-		}
+		// Keep every copy until Scan applies project eligibility. Otherwise AO's
+		// own newer copy, under an AO worktree's project, would hide the eligible
+		// original with the same id.
+		files = append(files, sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
-	files := make([]sourceFiles, 0, len(byID))
-	for _, file := range byID {
-		files = append(files, file)
-	}
 	return files, err
 }

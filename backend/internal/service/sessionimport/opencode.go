@@ -52,7 +52,7 @@ func openCodeDB(root string) (*sql.DB, error) {
 		return nil, err
 	}
 	// mode=ro never creates or migrates; busy_timeout rides out OpenCode's writes.
-	return sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(2000)")
+	return sql.Open("sqlite", opencode.ReadOnlyDSN(path, 2000))
 }
 
 // discoverOpenCode lists top-level, non-archived conversations newest first. A

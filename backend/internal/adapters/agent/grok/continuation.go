@@ -169,13 +169,21 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSe
 			var summary map[string]json.RawMessage
 			err = json.NewDecoder(io.LimitReader(in, 4<<20)).Decode(&summary)
 			if err == nil {
-				var identity struct{ ID, CWD string }
-				err = json.Unmarshal(summary["info"], &identity)
-				if err == nil && identity.ID != cfg.NativeSessionID {
+				// Only cwd changes; every other info key is kept as Grok wrote it.
+				var info map[string]json.RawMessage
+				err = json.Unmarshal(summary["info"], &info)
+				var id string
+				if err == nil {
+					err = json.Unmarshal(info["id"], &id)
+				}
+				if err == nil && id != cfg.NativeSessionID {
 					err = errors.New("grok summary identity mismatch")
 				}
 				if err == nil {
-					summary["info"], err = json.Marshal(map[string]string{"id": identity.ID, "cwd": cwd})
+					info["cwd"], err = json.Marshal(cwd)
+				}
+				if err == nil {
+					summary["info"], err = json.Marshal(info)
 				}
 				if err == nil {
 					err = json.NewEncoder(out).Encode(summary)

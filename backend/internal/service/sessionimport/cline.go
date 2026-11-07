@@ -183,20 +183,19 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 	var items []tagged
 	body, err = clineDocument(ctx, provider, t.root, paths[1], func(raw []byte) {
 		var m struct {
-			Role    string      `json:"role"`
-			Content contentText `json:"content"`
-			TS      int64       `json:"ts"`
-			Omitted bool        `json:"aoOmitted"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+			TS      int64           `json:"ts"`
+			Omitted bool            `json:"aoOmitted"`
 		}
 		if json.Unmarshal(raw, &m) != nil || m.Role != "user" && m.Role != "assistant" {
 			return
 		}
-		text := string(m.Content)
+		var text string
 		if m.Role == "user" {
-			text = codexPrompt(text)
-			if strings.HasPrefix(strings.TrimSpace(text), "<system-reminder>") || strings.HasPrefix(strings.TrimSpace(text), "<environment_details>") {
-				return
-			}
+			text = codexPrompt(clineUserText(m.Content))
+		} else {
+			text = visibleText(m.Content)
 		}
 		t.shortened = t.shortened || m.Omitted || strings.Contains(text, omittedText)
 		text = strings.ReplaceAll(text, omittedText, "")
@@ -239,4 +238,33 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 		t.messages = append(t.messages, item.Message)
 	}
 	return t, nil
+}
+
+// clineUserText is a user turn's typed text. Cline appends the context it
+// injects as separate blocks of the same turn, so each block is filtered on
+// its own; filtering the joined text would let a trailing block through.
+func clineUserText(content json.RawMessage) string {
+	var text string
+	if json.Unmarshal(content, &text) == nil {
+		if clineInjected(text) {
+			return ""
+		}
+		return text
+	}
+	var blocks []textBlock
+	if json.Unmarshal(content, &blocks) != nil {
+		return ""
+	}
+	kept := blocks[:0]
+	for _, b := range blocks {
+		if !clineInjected(b.Text) {
+			kept = append(kept, b)
+		}
+	}
+	return blockText(kept)
+}
+
+func clineInjected(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasPrefix(trimmed, "<system-reminder>") || strings.HasPrefix(trimmed, "<environment_details>")
 }

@@ -3106,11 +3106,20 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 			}
 			meta.WorkspacePath, meta.WorkspaceRepoPath, meta.Branch = ws.Path, ws.RepoPath, ws.Branch
 		}
+		// A failed first launch leaves its runtime ids behind. The session was
+		// terminated, so that runtime is gone; keeping the ids would make every
+		// later open refuse with "agent not exited".
+		meta.RuntimeHandleID, meta.RuntimeLaunchID = "", ""
 		if err := m.lcm.MarkSpawned(ctx, id, meta); err != nil {
 			return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 		}
 		current, err := m.getRecord(ctx, id)
 		return RestoreResult{Session: current, Mode: RestoreModeNative}, err
+	}
+	// An adopted import resumes the user's own chat, which may have been
+	// continued in the agent's own app since the session was archived.
+	if rec.Metadata.ImportSource != nil && adoptedOwnedElsewhere(ctx, rec) {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionOpenElsewhere)
 	}
 	// Mirror Kill's incomplete-handle guard: a session whose spawn failed before
 	// the workspace landed has neither WorkspacePath nor Branch, and there is

@@ -91,7 +91,12 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session changed since it was selected; scan again before importing: %w", err)
 	}
 
-	binary, err := p.opencodeBinary(ctx)
+	// The copy must be written by the same major version that resumes it, and
+	// OpenCode 2 must never touch OpenCode 1's store.
+	binary := p.importBinary
+	if binary == "" {
+		binary, err = ResolveBinaryForMajor(ctx, 1)
+	}
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
@@ -296,7 +301,7 @@ func openOpenCodeStore(configDir string) (*sql.DB, error) {
 		}
 		return nil, err
 	}
-	return sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
+	return sql.Open("sqlite", ReadOnlyDSN(dbPath, 2000))
 }
 
 func sameOpenCodeDir(stored, launch string) bool {
