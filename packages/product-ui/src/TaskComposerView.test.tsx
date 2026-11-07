@@ -394,4 +394,36 @@ describe("TaskComposerView", () => {
 		expect(screen.getByTestId("host-notice")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
 	});
+
+	it("allows dropping plain text into the prompt textarea", () => {
+		const onPromptChange = vi.fn();
+		render(<TaskComposerView {...viewProps({ onPromptChange, initialPrompt: "Initial: " })} />);
+		const textarea = screen.getByRole("textbox", { name: "Task" }) as HTMLTextAreaElement;
+		textarea.setSelectionRange(9, 9);
+
+		fireEvent.drop(textarea, {
+			dataTransfer: {
+				types: ["text/plain"],
+				getData: (format: string) => (format === "text/plain" ? "dropped task text" : ""),
+				files: [],
+			},
+		});
+
+		expect(textarea.value).toBe("Initial: dropped task text");
+		expect(onPromptChange).toHaveBeenCalledWith("Initial: dropped task text");
+	});
+
+	it("does not treat text dragover as file drag", () => {
+		const { container } = render(<TaskComposerView {...viewProps()} />);
+		const form = container.querySelector("form")!;
+
+		const dragOverEvent = new Event("dragover", { bubbles: true, cancelable: true });
+		Object.defineProperty(dragOverEvent, "dataTransfer", {
+			value: { types: ["text/plain"] },
+		});
+		form.dispatchEvent(dragOverEvent);
+
+		expect(form).not.toHaveAttribute("data-dragging");
+		expect(dragOverEvent.defaultPrevented).toBe(true);
+	});
 });
