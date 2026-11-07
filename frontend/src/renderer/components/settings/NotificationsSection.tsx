@@ -1,4 +1,3 @@
-import { Lock } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -6,9 +5,7 @@ import { useNotificationPreferences } from "../../hooks/useNotificationPreferenc
 import type { CloudCpNotificationPreference, CloudCpNotificationScope } from "../../lib/cloud-cp/types";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import { Switch } from "../ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -53,16 +50,12 @@ function kindLabel(kind: string, t: TFunction): string {
 	return knownKind(kind) ? t(KINDS[kind].label) : kind.replace(/_/g, " ");
 }
 
-// The control columns, shared by each group's heading and its rows so they line up.
-const SCOPE_COLUMN = "w-28";
-const CHANNEL_COLUMN = "w-14 flex justify-center";
-
 /**
- * Settings › Notifications, for a control plane with team notifications:
- * the desktop's sound switch (the same setting as in General), then each kind
- * of notification by group, with whose sessions it covers and whether it
- * shows in the app and on the desktop. Kinds that block someone keep their
- * in-app notification on, shown with a lock.
+ * Settings › Notifications, for a control plane with team notifications. Two
+ * decisions, nothing more: whose sessions notify you (one choice for every
+ * kind), and which kinds also alert the desktop (one switch each). Everything
+ * always shows in the bell; how closely you follow one session is set from
+ * that session's Following menu.
  */
 export function NotificationsSection({ titleHidden }: { titleHidden: boolean }) {
 	const { t } = useTranslation();
@@ -76,24 +69,19 @@ export function NotificationsSection({ titleHidden }: { titleHidden: boolean }) 
 		{ value: "following", label: t("settings.notifications.scope.following") },
 		{ value: "mine", label: t("settings.notifications.scope.mine") },
 	] satisfies Array<{ value: CloudCpNotificationScope; label: string }>;
+	const items = preferences.preferences ?? [];
+	// One scope for every kind: "only mine" once every kind says so.
+	const scope: CloudCpNotificationScope = items.length > 0 && items.every((preference) => preference.scope === "mine") ? "mine" : "following";
 
-	const change = (preference: CloudCpNotificationPreference, next: Partial<Pick<CloudCpNotificationPreference, "inApp" | "desktop" | "scope">>) => {
+	const save = (changes: CloudCpNotificationPreference[]) => {
 		setSaveFailed(false);
-		void preferences.save([{
+		void preferences.save(changes.map((preference) => ({
 			kind: preference.kind,
-			inApp: next.inApp ?? preference.inApp,
-			desktop: next.desktop ?? preference.desktop,
-			scope: next.scope ?? preference.scope,
-		}]).catch(() => setSaveFailed(true));
+			inApp: true,
+			desktop: preference.desktop,
+			scope: preference.scope,
+		}))).catch(() => setSaveFailed(true));
 	};
-
-	const columns = (
-		<div className="flex items-center gap-2 text-caption text-settings-muted" aria-hidden="true">
-			<span className={SCOPE_COLUMN}>{t("settings.notifications.column.scope")}</span>
-			<span className={CHANNEL_COLUMN}>{t("settings.notifications.column.inApp")}</span>
-			<span className={CHANNEL_COLUMN}>{t("settings.notifications.column.desktop")}</span>
-		</div>
-	);
 
 	return (
 		<>
@@ -109,6 +97,16 @@ export function NotificationsSection({ titleHidden }: { titleHidden: boolean }) 
 						onCheckedChange={(next) => { void setSoundEnabled(next); }}
 					/>
 				</SettingsRow>
+				{preferences.preferences ? (
+					<SettingsRow label={t("settings.notifications.scope.label")}>
+						<SettingsOptionMenu
+							aria-label={t("settings.notifications.scope.label")}
+							onChange={(next) => save(items.map((preference) => ({ ...preference, scope: next })))}
+							options={scopeOptions}
+							value={scope}
+						/>
+					</SettingsRow>
+				) : null}
 			</SettingsSection>
 			{preferences.isError ? (
 				<SettingsSection title={t("settings.notifications.events")} grouped>
@@ -118,58 +116,22 @@ export function NotificationsSection({ titleHidden }: { titleHidden: boolean }) 
 				</SettingsSection>
 			) : preferences.preferences ? (
 				<>
+					<p className="px-(--settings-row-inset) text-control text-settings-muted">{t("settings.notifications.desktopIntro")}</p>
 					{saveFailed ? <p className="px-(--settings-row-inset) text-control text-error" role="alert">{t("settings.notifications.saveFailed")}</p> : null}
 					{GROUPS.map((group) => {
-						const rows = (preferences.preferences ?? []).filter((preference) => kindGroup(preference) === group.id);
+						const rows = items.filter((preference) => kindGroup(preference) === group.id);
 						if (rows.length === 0) return null;
 						return (
-							<SettingsSection action={columns} key={group.id} title={t(group.title)} grouped>
+							<SettingsSection key={group.id} title={t(group.title)} grouped>
 								{rows.map((preference) => {
 									const label = kindLabel(preference.kind, t);
 									return (
-										<SettingsRow
-											data-notification-kind={preference.kind}
-											key={preference.kind}
-											label={(
-												<span className="inline-flex items-center gap-1.5">
-													{label}
-													{preference.locked ? (
-														<Tooltip>
-															<TooltipTrigger asChild>
-																<Lock aria-label={t("settings.notifications.locked")} className="size-icon-xs text-settings-muted" role="img" />
-															</TooltipTrigger>
-															<TooltipContent>{t("settings.notifications.locked")}</TooltipContent>
-														</Tooltip>
-													) : null}
-												</span>
-											)}
-										>
-											<div className="flex items-center gap-2">
-												<div className={SCOPE_COLUMN}>
-													<SettingsOptionMenu
-														aria-label={t("settings.notifications.scopeFor", { kind: label })}
-														onChange={(scope) => change(preference, { scope })}
-														options={scopeOptions}
-														triggerClassName="w-full"
-														value={preference.scope}
-													/>
-												</div>
-												<div className={CHANNEL_COLUMN}>
-													<Checkbox
-														aria-label={t("settings.notifications.inAppFor", { kind: label })}
-														checked={preference.locked || preference.inApp}
-														disabled={preference.locked}
-														onCheckedChange={(checked) => change(preference, { inApp: checked === true })}
-													/>
-												</div>
-												<div className={CHANNEL_COLUMN}>
-													<Checkbox
-														aria-label={t("settings.notifications.desktopFor", { kind: label })}
-														checked={preference.desktop}
-														onCheckedChange={(checked) => change(preference, { desktop: checked === true })}
-													/>
-												</div>
-											</div>
+										<SettingsRow data-notification-kind={preference.kind} key={preference.kind} label={label}>
+											<Switch
+												aria-label={t("settings.notifications.desktopFor", { kind: label })}
+												checked={preference.desktop}
+												onCheckedChange={(desktop) => save([{ ...preference, desktop, scope }])}
+											/>
 										</SettingsRow>
 									);
 								})}

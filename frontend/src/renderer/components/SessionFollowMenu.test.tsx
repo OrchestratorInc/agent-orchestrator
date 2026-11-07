@@ -59,16 +59,11 @@ describe("SessionFollowMenu", () => {
 		await userEvent.click(trigger);
 		const menu = await screen.findByRole("menu");
 		const levels = within(menu).getAllByRole("menuitemradio");
-		expect(levels.map((item) => item.textContent)).toEqual([
-			"Needs you onlyApprovals and questions",
-			"ParticipatingPlus PR, CI and failures",
-			"All activityPlus every finished turn",
-			"MutedOnly what’s addressed to you",
-		]);
-		expect(within(menu).getByRole("menuitemradio", { name: /^Participating/ })).toHaveAttribute("aria-checked", "true");
+		expect(levels.map((item) => item.textContent)).toEqual(["Default", "Everything", "Muted"]);
+		expect(within(menu).getByRole("menuitemradio", { name: "Default" })).toHaveAttribute("aria-checked", "true");
 		expect(await within(menu).findByText("Who gets notified · 2")).toBeInTheDocument();
 		const people = within(menu).getAllByRole("listitem").map((item) => item.textContent);
-		expect(people).toEqual(["YouOwner, Prompted", "Ben OrtizMentioned"]);
+		expect(people).toEqual(["You", "Ben Ortiz"]);
 	});
 
 	it("sets the person's level", async () => {

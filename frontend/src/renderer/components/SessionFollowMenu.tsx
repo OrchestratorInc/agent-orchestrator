@@ -2,7 +2,7 @@ import { Bell, BellOff, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionFollow } from "../hooks/useSessionFollow";
-import type { CloudCpFollowLevel, CloudCpFollowReason, CloudCpSessionFollower } from "../lib/cloud-cp/types";
+import type { CloudCpFollowLevel, CloudCpSessionFollower } from "../lib/cloud-cp/types";
 import { TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
@@ -14,22 +14,16 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
+/**
+ * Three choices: the default (what involves you), everything, or nothing but
+ * what is addressed to you. The control plane's narrower "needs you" level
+ * stays valid for anyone who already set it; it just isn't offered here.
+ */
 const LEVELS = [
-	{ level: "needs_you", label: "follow.level.needsYou", description: "follow.level.needsYouDescription" },
-	{ level: "participating", label: "follow.level.participating", description: "follow.level.participatingDescription" },
-	{ level: "all", label: "follow.level.all", description: "follow.level.allDescription" },
-	{ level: "muted", label: "follow.level.muted", description: "follow.level.mutedDescription" },
-] as const satisfies ReadonlyArray<{ level: CloudCpFollowLevel; label: string; description: string }>;
-
-const REASON_KEYS = {
-	creator: "follow.reason.creator",
-	prompted: "follow.reason.prompted",
-	asided: "follow.reason.asided",
-	mentioned: "follow.reason.mentioned",
-	handoff: "follow.reason.handoff",
-	reviewer: "follow.reason.reviewer",
-	manual: "follow.reason.manual",
-} as const satisfies Record<CloudCpFollowReason, string>;
+	{ level: "participating", label: "follow.level.default" },
+	{ level: "all", label: "follow.level.everything" },
+	{ level: "muted", label: "follow.level.muted" },
+] as const satisfies ReadonlyArray<{ level: CloudCpFollowLevel; label: string }>;
 
 function isFollowLevel(value: string): value is CloudCpFollowLevel {
 	return LEVELS.some((item) => item.level === value);
@@ -37,8 +31,8 @@ function isFollowLevel(value: string): value is CloudCpFollowLevel {
 
 /**
  * The session header's Following menu for a cloud session: how closely the
- * signed-in person hears about it, and who else does and why. Shown only on a
- * control plane with team notifications, once the person's level is known.
+ * signed-in person hears about it, and who else does. Shown only on a control
+ * plane with team notifications, once the person's level is known.
  */
 export function SessionFollowMenu({ orgId, sessionId }: { orgId: string; sessionId: string }) {
 	const { t } = useTranslation();
@@ -50,8 +44,6 @@ export function SessionFollowMenu({ orgId, sessionId }: { orgId: string; session
 	const Icon = level === "muted" ? BellOff : Bell;
 	const nameOf = (person: CloudCpSessionFollower) =>
 		person.userId === follow.me ? t("follow.you") : person.name || t("chat.shared.someone");
-	const reasonsOf = (person: CloudCpSessionFollower) =>
-		person.reasons.map((reason) => t(REASON_KEYS[reason])).join(", ");
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
@@ -66,7 +58,7 @@ export function SessionFollowMenu({ orgId, sessionId }: { orgId: string; session
 					<ChevronDown className="size-icon-sm" aria-hidden="true" />
 				</TopbarButton>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-80">
+			<DropdownMenuContent align="end" className="w-60">
 				<DropdownMenuLabel>{t("follow.menuTitle")}</DropdownMenuLabel>
 				<DropdownMenuRadioGroup
 					value={level}
@@ -77,10 +69,7 @@ export function SessionFollowMenu({ orgId, sessionId }: { orgId: string; session
 				>
 					{LEVELS.map((item) => (
 						<DropdownMenuRadioItem disabled={follow.saving} key={item.level} value={item.level}>
-							<span className="flex min-w-0 flex-col">
-								<span>{t(item.label)}</span>
-								<span className="text-xs text-muted-foreground">{t(item.description)}</span>
-							</span>
+							{t(item.label)}
 						</DropdownMenuRadioItem>
 					))}
 				</DropdownMenuRadioGroup>
@@ -96,9 +85,8 @@ export function SessionFollowMenu({ orgId, sessionId }: { orgId: string; session
 				) : (
 					<ul className="flex flex-col" data-session-followers>
 						{(follow.followers ?? []).map((person) => (
-							<li className="flex min-w-0 items-center justify-between gap-3 px-2 py-1.5 text-sm" key={person.userId}>
-								<span className="min-w-0 truncate text-muted-foreground">{nameOf(person)}</span>
-								<span className="shrink-0 text-xs text-muted-foreground">{reasonsOf(person)}</span>
+							<li className="min-w-0 truncate px-2 py-1 text-sm text-muted-foreground" key={person.userId}>
+								{nameOf(person)}
 							</li>
 						))}
 					</ul>

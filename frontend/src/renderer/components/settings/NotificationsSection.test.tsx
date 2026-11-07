@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe("NotificationsSection", () => {
-	it("groups each kind under Needs you, Agents and Pull requests with its channels", async () => {
+	it("groups each kind under Needs you, Agents and Pull requests with one desktop switch", async () => {
 		renderSection();
 		await waitFor(() => expect(rowOf("approval_needed")).toBeTruthy());
 
@@ -70,34 +70,34 @@ describe("NotificationsSection", () => {
 		expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
 			"Notifications", "Needs you", "Agents", "Pull requests",
 		]);
+		expect(screen.getByText("Everything shows in the bell. Choose what also alerts your desktop.")).toBeInTheDocument();
 		expect(within(rowOf("approval_needed")).getByText("Approval needed")).toBeInTheDocument();
-		expect(within(rowOf("turn_finished")).getByRole("checkbox", { name: "Turn finished on the desktop" })).not.toBeChecked();
-		expect(within(rowOf("pr_merged")).getByRole("checkbox", { name: "PR merged in app" })).toBeChecked();
+		expect(within(rowOf("turn_finished")).getByRole("switch", { name: "Turn finished on the desktop" })).not.toBeChecked();
+		expect(within(rowOf("approval_needed")).getByRole("switch", { name: "Approval needed on the desktop" })).toBeChecked();
+		// No other control per row: no in-app box, no per-kind sessions menu.
+		expect(document.querySelectorAll("[data-notification-kind] [role=checkbox]")).toHaveLength(0);
+		expect(within(rowOf("agent_failed")).queryByRole("button")).not.toBeInTheDocument();
 	});
 
-	it("keeps a blocking kind on in the app, shown with a lock", async () => {
-		renderSection();
-		await waitFor(() => expect(rowOf("approval_needed")).toBeTruthy());
-		const row = within(rowOf("approval_needed"));
-
-		expect(row.getByRole("img", { name: "Always on in the app, so an agent never waits unseen" })).toBeInTheDocument();
-		expect(row.getByRole("checkbox", { name: "Approval needed in app" })).toBeChecked();
-		expect(row.getByRole("checkbox", { name: "Approval needed in app" })).toBeDisabled();
-		expect(row.getByRole("checkbox", { name: "Approval needed on the desktop" })).toBeEnabled();
-		expect(within(rowOf("agent_failed")).queryByRole("img")).not.toBeInTheDocument();
-	});
-
-	it("saves one kind's channel and scope as they change", async () => {
+	it("saves a kind's desktop switch, keeping it in the app", async () => {
 		renderSection();
 		await waitFor(() => expect(rowOf("agent_failed")).toBeTruthy());
 
-		await userEvent.click(within(rowOf("agent_failed")).getByRole("checkbox", { name: "Agent failed on the desktop" }));
+		await userEvent.click(within(rowOf("agent_failed")).getByRole("switch", { name: "Agent failed on the desktop" }));
 		expect(setNotificationPreferences).toHaveBeenLastCalledWith([{ kind: "agent_failed", inApp: true, desktop: false, scope: "following" }]);
-		await waitFor(() => expect(within(rowOf("agent_failed")).getByRole("checkbox", { name: "Agent failed on the desktop" })).not.toBeChecked());
+		await waitFor(() => expect(within(rowOf("agent_failed")).getByRole("switch", { name: "Agent failed on the desktop" })).not.toBeChecked());
+	});
 
-		await userEvent.click(within(rowOf("agent_failed")).getByRole("button", { name: "Sessions for Agent failed" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Mine" }));
-		expect(setNotificationPreferences).toHaveBeenLastCalledWith([{ kind: "agent_failed", inApp: true, desktop: false, scope: "mine" }]);
+	it("sets whose sessions notify the person, for every kind at once", async () => {
+		renderSection();
+		await waitFor(() => expect(rowOf("agent_failed")).toBeTruthy());
+
+		await userEvent.click(screen.getByRole("button", { name: "Notify me about" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Only my sessions" }));
+		const saved = setNotificationPreferences.mock.lastCall?.[0] as CloudCpNotificationPreferenceInput[];
+		expect(saved).toHaveLength(preferences.length);
+		expect(saved.every((item) => item.scope === "mine" && item.inApp)).toBe(true);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Notify me about" })).toHaveTextContent("Only my sessions"));
 	});
 
 	it("says so when a change can't be saved, and puts the choice back", async () => {
@@ -105,10 +105,10 @@ describe("NotificationsSection", () => {
 		renderSection();
 		await waitFor(() => expect(rowOf("pr_merged")).toBeTruthy());
 
-		await userEvent.click(within(rowOf("pr_merged")).getByRole("checkbox", { name: "PR merged on the desktop" }));
+		await userEvent.click(within(rowOf("pr_merged")).getByRole("switch", { name: "PR merged on the desktop" }));
 
 		expect(await screen.findByText("Could not save notification settings.")).toBeInTheDocument();
-		expect(within(rowOf("pr_merged")).getByRole("checkbox", { name: "PR merged on the desktop" })).not.toBeChecked();
+		expect(within(rowOf("pr_merged")).getByRole("switch", { name: "PR merged on the desktop" })).not.toBeChecked();
 	});
 
 	it("shares the sound switch with General", async () => {
