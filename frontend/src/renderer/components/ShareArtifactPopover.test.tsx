@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import type { CloudShareHistoryInspection, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
 import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
@@ -316,6 +316,139 @@ describe("ShareArtifactButton", () => {
 		await openPopover();
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy());
+	});
+
+	describe("version history", () => {
+		const supported: CloudShareLinks = { ...links, versionHistory: true };
+		const older: CloudShareHistoryInspection = {
+			versions: [
+				{ version: 2, sha256: "b".repeat(64), size: 10, createdAt: "2026-10-02T00:00:00Z" },
+				{ version: 1, sha256: "a".repeat(64), size: 10, createdAt: "2026-10-01T00:00:00Z" },
+			],
+			secretFindings: [],
+		};
+		const published = { ...inspection, shareId: SHARE_ID, publishedFingerprint: inspection.fingerprint };
+		const live: CloudShareLinks = { ...supported, shares: [share] };
+
+		it("is off by default, so only what is published shows", async () => {
+			const { publishSpy } = stub(inspection, supported, { status: "published", share, replaced: false });
+			await openPopover();
+			const toggle = await screen.findByRole("switch", { name: "Include version history" });
+			expect(toggle).not.toBeChecked();
+			expect(screen.getByText("Only this version will be visible.")).toBeTruthy();
+			await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+			await waitFor(() => expect(publishSpy).toHaveBeenCalled());
+			expect(publishSpy.mock.calls[0]![0].history).toBeUndefined();
+		});
+
+		it("is not offered by a control plane without it", async () => {
+			stub(inspection, links);
+			await openPopover();
+			await screen.findByRole("button", { name: "Publish" });
+			expect(screen.queryByRole("switch")).toBeNull();
+		});
+
+		it("publishes the older versions it showed", async () => {
+			const { publishSpy } = stub(inspection, supported, { status: "published", share: { ...share, includeHistory: true }, replaced: false });
+			const spy = vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue(older);
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			expect(await screen.findByText("Anyone with the link can see 2 earlier versions.")).toBeTruthy();
+			expect(spy).toHaveBeenCalledTimes(1);
+			await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+			await waitFor(() => expect(publishSpy.mock.calls[0]![0].history).toEqual(older.versions));
+		});
+
+		it("warns about a credential in an older version before publishing", async () => {
+			stub(inspection, supported);
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue({ ...older, secretFindings: ["AWS access key"] });
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			expect((await screen.findByRole("alert")).textContent).toContain("AWS access key");
+		});
+
+		it("does not publish while the versions are being checked", async () => {
+			stub(inspection, supported);
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockReturnValue(new Promise(() => undefined));
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			expect(await screen.findByText("Checking earlier versions…")).toBeTruthy();
+			expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+		});
+
+		it("publishes without history when the check fails", async () => {
+			const { publishSpy } = stub(inspection, supported, { status: "published", share, replaced: false });
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockRejectedValue(new Error("daemon away"));
+			await openPopover();
+			const toggle = await screen.findByRole("switch", { name: "Include version history" });
+			await userEvent.click(toggle);
+			expect(await screen.findByText(/daemon away/)).toBeTruthy();
+			expect(toggle).not.toBeChecked();
+			await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+			await waitFor(() => expect(publishSpy.mock.calls[0]![0].history).toBeUndefined());
+		});
+
+		it("shows on a published link when its history could not be sent", async () => {
+			stub(inspection, supported, { status: "published", share, replaced: false, historyError: "The bucket is down." });
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue(older);
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			await screen.findByText("Anyone with the link can see 2 earlier versions.");
+			await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+			expect((await screen.findByRole("alert")).textContent).toContain("The bucket is down.");
+			expect(screen.getByRole("switch", { name: "Include version history" })).not.toBeChecked();
+		});
+
+		it("asks before showing a live link's history, and can back out", async () => {
+			stub(published, live);
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue(older);
+			const shareHistory = vi.spyOn(aoBridge.cloudShare, "shareHistory").mockResolvedValue({ status: "published", share: { ...share, includeHistory: true }, replaced: true });
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			expect(await screen.findByText("Share version history?")).toBeTruthy();
+			expect(shareHistory).not.toHaveBeenCalled();
+			await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+			expect(await screen.findByRole("switch", { name: "Include version history" })).not.toBeChecked();
+
+			await userEvent.click(screen.getByRole("switch", { name: "Include version history" }));
+			await userEvent.click(await screen.findByRole("button", { name: "Share history" }));
+			await waitFor(() => expect(shareHistory.mock.calls[0]![0]).toMatchObject({ shareId: SHARE_ID, history: older.versions }));
+			expect(await screen.findByRole("switch", { name: "Include version history" })).toBeChecked();
+		});
+
+		it("turns a live link's history off at once, keeping the link", async () => {
+			stub(published, { ...supported, shares: [{ ...share, includeHistory: true }] });
+			const unshare = vi.spyOn(aoBridge.cloudShare, "unshareHistory").mockResolvedValue({ ...share, includeHistory: false });
+			await openPopover();
+			const toggle = await screen.findByRole("switch", { name: "Include version history" });
+			expect(toggle).toBeChecked();
+			await userEvent.click(toggle);
+			await waitFor(() => expect(unshare).toHaveBeenCalledWith("https://cp.test", SHARE_ID));
+			await waitFor(() => expect(screen.getByRole("switch", { name: "Include version history" })).not.toBeChecked());
+			expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
+		});
+
+		it("brings a link's history up to date when it republishes", async () => {
+			const changed = { ...published, fingerprint: "fp-2" };
+			const { publishSpy } = stub(changed, { ...supported, shares: [{ ...share, includeHistory: true }] }, { status: "published", share: { ...share, includeHistory: true }, replaced: true });
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue(older);
+			await openPopover();
+			await screen.findByText("Anyone with the link can see 2 earlier versions.");
+			await userEvent.click(screen.getByRole("button", { name: "Republish" }));
+			await waitFor(() => expect(publishSpy.mock.calls[0]![0]).toMatchObject({ shareId: SHARE_ID, history: older.versions }));
+		});
+
+		it("waits for Republish to show a changed file's history", async () => {
+			const changed = { ...published, fingerprint: "fp-2" };
+			stub(changed, live);
+			vi.spyOn(aoBridge.cloudShare, "inspectHistory").mockResolvedValue(older);
+			const shareHistory = vi.spyOn(aoBridge.cloudShare, "shareHistory");
+			await openPopover();
+			await userEvent.click(await screen.findByRole("switch", { name: "Include version history" }));
+			await screen.findByText("Anyone with the link can see 2 earlier versions.");
+			expect(screen.queryByText("Share version history?")).toBeNull();
+			expect(shareHistory).not.toHaveBeenCalled();
+		});
 	});
 
 	it("disables Share for a video", async () => {

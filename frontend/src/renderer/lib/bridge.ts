@@ -127,6 +127,15 @@ export const aoBridge: AoBridge =
 			inspect: async () => {
 				throw new Error("Sharing needs the AO desktop app.");
 			},
+			inspectHistory: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			shareHistory: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			unshareHistory: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
 			list: async () => {
 				throw new Error("Sharing needs the AO desktop app.");
 			},

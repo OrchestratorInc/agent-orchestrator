@@ -38,6 +38,26 @@ export interface CloudShareFile {
 	shareId?: string;
 	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */
 	fingerprint?: string;
+	/**
+	 * Show these older versions on the link too: the ones the person was shown
+	 * by inspectHistory. Absent leaves the link's history as it is.
+	 */
+	history?: CloudShareHistoryVersion[];
+}
+
+/** One older version of a file, numbered as in the file's own history. */
+export interface CloudShareHistoryVersion {
+	version: number;
+	sha256: string;
+	size: number;
+	createdAt: string;
+}
+
+/** What the share popover shows before the person shares a file's older versions. */
+export interface CloudShareHistoryInspection {
+	versions: CloudShareHistoryVersion[];
+	/** Kinds of credential any of them looks like it holds, even if a later version removed it. */
+	secretFindings: string[];
 }
 
 /** One committed file of a cloud session. */
@@ -60,6 +80,8 @@ export interface CloudShareLink {
 	createdAt: string;
 	updatedAt: string;
 	revokedAt?: string;
+	/** Anyone with the link can also read the file's older versions. */
+	includeHistory?: boolean;
 }
 
 /** The signed-in user's links and what their plan allows. */
@@ -70,6 +92,8 @@ export interface CloudShareLinks {
 	used: number;
 	/** The user's plan has no link limit. Files have no size limit on any plan. */
 	unlimited: boolean;
+	/** Links can show older versions; a control plane that predates that leaves this unset. */
+	versionHistory?: boolean;
 }
 
 /** What the share popover shows before the person publishes. */
@@ -93,7 +117,8 @@ export interface CloudShareInspection {
 }
 
 export type CloudSharePublishResult =
-	| { status: "published"; share: CloudShareLink; replaced: boolean }
+	/** With historyError, the link is live but shows only its latest version. */
+	| { status: "published"; share: CloudShareLink; replaced: boolean; historyError?: string }
 	/** The person cancelled before the upload finished; nothing was published. */
 	| { status: "cancelled" }
 	/** The file changed since it was inspected; nothing was uploaded. Show this inspection instead. */

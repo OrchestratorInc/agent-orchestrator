@@ -3479,6 +3479,7 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.

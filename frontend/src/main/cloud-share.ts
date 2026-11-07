@@ -13,7 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareHistoryVersion, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -93,6 +93,81 @@ export async function resolveShareFile(dataDir: string, sessionId: unknown, relP
 	const stat = await fs.stat(realFile);
 	if (!stat.isFile()) throw new CloudShareError("invalid_file", "Only files can be shared.");
 	return { realPath: realFile, name: path.basename(realFile), relativePath: segments.join("/"), size: stat.size, dev: stat.dev, ino: stat.ino };
+}
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+/** The most older versions one link shows; the control plane's limit too. */
+export const MAX_HISTORY_VERSIONS = 50;
+
+/**
+ * Resolves one kept version of a file: the blob the daemon stores it in,
+ * <artifacts>/.versions/blobs/<sha256[0:2]>/<sha256>. Only the person's choice
+ * to share a file's history reads this folder, so resolveShareFile still
+ * refuses it. A blob is named by its content, so what the person was shown is
+ * what this names. Anything that resolves elsewhere is refused.
+ */
+export async function resolveShareVersion(dataDir: string, sessionId: unknown, sha256: unknown, name: string): Promise<ResolvedShareFile> {
+	if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId) || sessionId === "." || sessionId === "..") {
+		throw new CloudShareError("invalid_file", "Not a session's artifact.");
+	}
+	if (typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) throw new CloudShareError("invalid_file", "Not a kept version.");
+	let realBlobs: string;
+	let realFile: string;
+	try {
+		realBlobs = await fs.realpath(path.join(dataDir, "artifacts", sessionId, VERSIONS_DIR, "blobs"));
+		realFile = await fs.realpath(path.join(realBlobs, sha256.slice(0, 2), sha256));
+	} catch {
+		throw new CloudShareError("file_missing", "A version of this file is no longer available.");
+	}
+	const relative = path.relative(realBlobs, realFile);
+	if (relative !== path.join(sha256.slice(0, 2), sha256)) throw new CloudShareError("invalid_file", "Not a kept version.");
+	const stat = await fs.stat(realFile);
+	if (!stat.isFile()) throw new CloudShareError("invalid_file", "Not a kept version.");
+	return { realPath: realFile, name, relativePath: relative, size: stat.size, dev: stat.dev, ino: stat.ino };
+}
+
+/** The SHA-256 of a whole file. */
+export async function hashShareFile(file: ResolvedShareFile): Promise<string> {
+	const handle = await openResolved(file);
+	try {
+		const hash = createHash("sha256");
+		const buffer = Buffer.alloc(READ_CHUNK);
+		for (;;) {
+			const { bytesRead } = await handle.read(buffer, 0, READ_CHUNK, null);
+			if (bytesRead === 0) return hash.digest("hex");
+			hash.update(buffer.subarray(0, bytesRead));
+		}
+	} finally {
+		await handle.close();
+	}
+}
+
+interface KeptVersion {
+	version: number;
+	fileFingerprint: string;
+	size: number;
+	createdAt: string;
+}
+
+/**
+ * A file's older versions, newest first, given all it keeps, newest first:
+ * every one but the file as it is now, up to what a link shows.
+ */
+export function olderVersions(kept: KeptVersion[], currentSha256: string): CloudShareHistoryVersion[] {
+	const older = kept[0]?.fileFingerprint === currentSha256 ? kept.slice(1) : kept;
+	return older.slice(0, MAX_HISTORY_VERSIONS).map(({ version, fileFingerprint, size, createdAt }) => ({ version, sha256: fileFingerprint, size, createdAt }));
+}
+
+/** Asks the daemon to record the file as it is now, and returns the versions it keeps, newest first. */
+export async function listLocalVersions(daemonFetch: typeof fetch, port: number | undefined, sessionId: string, relativePath: string): Promise<KeptVersion[]> {
+	if (!port) throw new CloudShareError("daemon_unavailable", "AO daemon is not ready.");
+	const response = await daemonFetch(`http://127.0.0.1:${port}/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-versions/sync`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ path: relativePath }),
+	});
+	if (!response.ok) throw new CloudShareError(`http_${response.status}`, `Reading the file's versions failed (${response.status}).`, response.status);
+	return ((await response.json()) as { versions?: KeptVersion[] }).versions ?? [];
 }
 
 const SECRET_PATTERNS: Array<[string, RegExp]> = [
@@ -331,6 +406,81 @@ export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, sh
 	await callApi<void>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}`);
 }
 
+interface ShareHistoryResult {
+	share: CloudShareLink;
+	missing: number[];
+	revision: number;
+}
+
+/**
+ * Sets the older versions a link shows: see putArtifactShareHistory. Without
+ * revision it starts an update; with the one that returned, it finishes it,
+ * and the control plane refuses it if the person turned history off since.
+ */
+export function putShareHistory(api: CloudShareApi, baseUrl: string, shareId: string, versions: CloudShareHistoryVersion[], signal?: AbortSignal, revision?: number): Promise<ShareHistoryResult> {
+	return callApi<ShareHistoryResult>(api, baseUrl, "PUT", `/me/artifact-shares/${shareId}/history`, { versions, ...(revision ? { revision } : {}) }, signal);
+}
+
+/** Stops a link showing older versions and deletes its copies of them. */
+export async function deleteShareHistory(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareLink> {
+	if (!/^[0-9a-f-]{36}$/i.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
+	return (await callApi<ShareHistoryResult>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}/history`)).share;
+}
+
+export interface LocalHistoryInput {
+	baseUrl: string;
+	shareId: string;
+	sessionId: string;
+	name: string;
+	versions: CloudShareHistoryVersion[];
+	dataDir: string;
+	snapshotDir: string;
+	/** Bytes of the versions dealt with so far. */
+	onProgress: (doneBytes: number) => void;
+	signal?: AbortSignal;
+}
+
+/**
+ * Shows a local file's older versions on its link. Versions are uploaded one
+ * at a time and the link shows them only once all have arrived, so stopping
+ * part of the way leaves viewers seeing what they saw before.
+ */
+export async function shareLocalHistory(api: CloudShareApi, input: LocalHistoryInput): Promise<CloudShareLink> {
+	const { baseUrl, shareId, versions, signal } = input;
+	const first = await putShareHistory(api, baseUrl, shareId, versions, signal);
+	const missing = new Set(first.missing);
+	let done = versions.filter((version) => !missing.has(version.version)).reduce((sum, version) => sum + version.size, 0);
+	input.onProgress(done);
+	if (missing.size === 0) return first.share;
+	for (const version of versions) {
+		if (!missing.has(version.version)) continue;
+		if (signal?.aborted) throw new CloudShareError("cancelled", "Sharing was cancelled.");
+		const resolved = await resolveShareVersion(input.dataDir, input.sessionId, version.sha256, input.name);
+		const snapshot = await snapshotShareFile(resolved, input.snapshotDir, { signal });
+		try {
+			if (snapshot.sha256 !== version.sha256) throw new CloudShareError("invalid_file", "A version of this file changed while it was being shared.");
+			const before = done;
+			await uploadShare(api, {
+				baseUrl,
+				snapshot,
+				name: input.name,
+				project: "",
+				feature: "",
+				shareId,
+				historyVersion: version.version,
+				historyRevision: first.revision,
+				createdAt: version.createdAt,
+			}, (sent) => input.onProgress(before + sent), signal);
+			done += version.size;
+		} finally {
+			await fs.rm(snapshot.path, { force: true });
+		}
+	}
+	const last = await putShareHistory(api, baseUrl, shareId, versions, signal, first.revision);
+	if (last.missing.length > 0) throw new CloudShareError("upload_failed", "Some versions of this file did not reach the link.");
+	return last.share;
+}
+
 /** One committed file of a cloud session, named by its organization, session and path. */
 export interface CloudSessionArtifactRef {
 	orgId: string;
@@ -391,6 +541,46 @@ export async function inspectCloudSessionArtifact(
 }
 
 /**
+ * Finds a cloud session's file's older versions and looks for credentials in
+ * each. A version is read through the control plane's version route, which
+ * returns the start of its text, so less of it is checked than of a local
+ * version.
+ */
+export async function inspectCloudSessionHistory(
+	api: CloudShareApi,
+	baseUrl: string,
+	ref: CloudSessionArtifactRef & { sha256: string; name: string },
+): Promise<{ versions: CloudShareHistoryVersion[]; secretFindings: string[] }> {
+	const sessionPath = sessionApiPath(ref);
+	const query = `path=${encodeURIComponent(ref.path)}`;
+	const { versions: kept } = await callApi<{ versions: KeptVersion[] }>(api, baseUrl, "GET", `${sessionPath}/artifacts/versions?${query}`);
+	const versions = olderVersions(kept, ref.sha256);
+	const scanner = new SecretScanner(ref.name);
+	const scanned = new Set<string>();
+	for (const version of versions) {
+		if (scanned.has(version.sha256)) continue;
+		scanned.add(version.sha256);
+		const { content } = await callApi<{ content: string }>(api, baseUrl, "GET", `${sessionPath}/artifacts/versions/${version.version}?${query}`);
+		scanner.push(new TextEncoder().encode(content));
+	}
+	return { versions, secretFindings: scanner.list() };
+}
+
+/** Shows older versions of a cloud session's file on its link: the control plane copies them. */
+export async function shareCloudSessionHistory(
+	api: CloudShareApi,
+	baseUrl: string,
+	ref: CloudSessionArtifactRef & { shareId: string; versions: CloudShareHistoryVersion[] },
+): Promise<CloudShareLink> {
+	const { share } = await callApi<ShareHistoryResult>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share/history`, {
+		path: ref.path,
+		shareId: ref.shareId,
+		versions: ref.versions.map(({ version, sha256 }) => ({ version, sha256 })),
+	});
+	return share;
+}
+
+/**
  * Publishes a cloud session's file as a share link. The control plane copies
  * the file's committed version to the link inside its bucket, so nothing is
  * uploaded from here. It refuses (artifact_share_source_changed) when the
@@ -415,6 +605,12 @@ export interface ShareUploadInput {
 	feature: string;
 	/** Update this active link instead. */
 	shareId?: string;
+	/** With shareId, this is that older version of the link's file, which the link goes on not serving as its latest. */
+	historyVersion?: number;
+	/** The update historyVersion belongs to: see putShareHistory. */
+	historyRevision?: number;
+	/** When the file held historyVersion. */
+	createdAt?: string;
 }
 
 interface UploadStart {
@@ -461,7 +657,13 @@ export async function uploadShare(
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	const { baseUrl, snapshot } = input;
 	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", input.shareId
-		? { name: input.name, size: snapshot.size, sha256: snapshot.sha256, shareId: input.shareId }
+		? {
+			name: input.name,
+			size: snapshot.size,
+			sha256: snapshot.sha256,
+			shareId: input.shareId,
+			...(input.historyVersion ? { historyVersion: input.historyVersion, historyRevision: input.historyRevision, createdAt: input.createdAt } : {}),
+		}
 		: { name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature }, signal);
 	const handle = await fs.open(snapshot.path, "r");
 	// One failed part stops the others before the upload is aborted and the
