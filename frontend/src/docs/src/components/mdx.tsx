@@ -110,7 +110,7 @@ export function Accordion({ title, children, open = false }: { title: ReactNode;
 
 export function Steps({ children }: { children: ReactNode }) {
   return (
-    <div className="my-6 ml-3 border-l border-border/80 pl-6 [counter-reset:step] [&>*]:relative [&>*]:mb-6 [&>*]:before:absolute [&>*]:before:-left-[2.1rem] [&>*]:before:grid [&>*]:before:size-6 [&>*]:before:place-items-center [&>*]:before:rounded-full [&>*]:before:border [&>*]:before:border-border [&>*]:before:bg-background [&>*]:before:text-xs [&>*]:before:text-muted-foreground [&>*]:before:[counter-increment:step] [&>*]:before:[content:counter(step)]">
+    <div className="my-6 ml-3 border-l border-border/80 pl-6 [counter-reset:step] [&>*]:relative [&>*]:mb-6 [&>*]:before:absolute [&>*]:before:-left-[2.1rem] [&>*]:before:grid [&>*]:before:size-6 [&>*]:before:place-items-center [&>*]:before:rounded-full [&>*]:before:border [&>*]:before:border-border [&>*]:before:bg-background [&>*]:before:text-xs [&>*]:before:text-muted-foreground [&>*]:before:[counter-increment:step] [&>*]:before:content-[counter(step)]">
       {children}
     </div>
   );
@@ -141,7 +141,7 @@ export function Card({
       <div className="mt-1 text-sm text-muted-foreground">{description ?? children}</div>
     </>
   );
-  const cls = "block rounded-xl border border-border bg-muted/30 p-4 no-underline transition-colors hover:bg-muted/45";
+  const cls = "block rounded-xl border border-border bg-muted/30 not-prose p-4 no-underline transition-colors hover:bg-muted/45";
 
   return href ? (
     <Link href={href} className={cls}>
@@ -172,7 +172,7 @@ export function PluginCard({
   return (
     <Link
       href={href}
-      className="flex items-start gap-3.5 rounded-xl border border-border bg-muted/30 p-4 no-underline transition-colors hover:bg-muted/45"
+      className="flex items-start gap-3.5 rounded-xl border border-border bg-muted/30 not-prose p-4 no-underline transition-colors hover:bg-muted/45"
     >
       <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background">
         <Logo name={logo} size={22} />
