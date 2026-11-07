@@ -715,8 +715,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		path = source.SourceTranscriptPath
 	}
 	selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
-	if !ok {
-		return s.checkSourceFingerprint(ctx, selected, projects)
+	// A source that already changed is refused without reading it.
+	if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil || !ok {
+		return err
 	}
 	paths := []string{path}
 	if rec.Harness == domain.HarnessCodex {
@@ -733,8 +734,8 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if err != nil {
 		return err
 	}
-	// Checked after the read, as Import does, so a turn added meanwhile cannot
-	// reach the archive beyond the pinned history.
+	// Checked again after the read, as Import does, so a turn added meanwhile
+	// cannot reach the archive beyond the pinned history.
 	if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil {
 		return err
 	}
