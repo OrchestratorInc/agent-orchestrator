@@ -179,8 +179,6 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 }
 
-// openRawDB opens a second connection to a test store's file for seeding rows
-// the store has no write method for.
 func openRawDB(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db")+"?_pragma=busy_timeout(5000)")
@@ -200,10 +198,6 @@ func countRows(t *testing.T, raw *sql.DB, query string, args ...any) int {
 	return n
 }
 
-// Branch parents, fork points, replaced turns and retry sources are ON DELETE
-// RESTRICT. The cascade deletes the older row first, so a chat with an edited
-// or retried turn used to fail with "FOREIGN KEY constraint failed" and stay
-// forever, with retention retrying the whole cascade on every pass.
 func TestDeleteTerminatedSessionWithEditedAndRetriedTurns(t *testing.T) {
 	dir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dir)
@@ -237,9 +231,6 @@ func TestDeleteTerminatedSessionWithEditedAndRetriedTurns(t *testing.T) {
 	}
 }
 
-// A session's provider events and activities are deleted in batches before the
-// final transaction. Every batch must run, and a refused delete must not touch
-// the history of the session it refuses.
 func TestDeleteTerminatedSessionClearsHistoryInBatches(t *testing.T) {
 	dir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dir)

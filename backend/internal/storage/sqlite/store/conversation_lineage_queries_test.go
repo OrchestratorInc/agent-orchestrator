@@ -250,10 +250,7 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 					t.Fatalf("%s: %v", name, err)
 				}
 
-				// Plan: the lineage lookups seek the conversation's own range,
-				// or, once statistics exist, the one turn through its turn_id
-				// index, which is narrower still (16.5 -> 1.3 ms on a real
-				// 379-turn chat). Never a scan.
+				// Plan: the lineage lookups seek the conversation's own range or one turn.
 				plan := probe.plan(t)
 				for _, table := range []string{"lineage_message", "lineage_activity"} {
 					found := false

@@ -873,14 +873,8 @@ WHERE id = ?
 // standaloneSessionIDPrefix is the id prefix of sessions with no project.
 const standaloneSessionIDPrefix = "standalone"
 
-// sessionDeleteBatch bounds each transaction that clears a deleted session's
-// bulk rows. About 1000 provider events or activities take under 100 ms, so
-// writes waiting on writeMu run between batches instead of after the session.
 const sessionDeleteBatch = 1000
 
-// sessionDeleteDrains delete one batch of a session's bulk rows, and only while
-// the session is still terminated. The cascade would delete the same rows, but
-// in one transaction that held the only writer for seconds on a real database.
 var sessionDeleteDrains = []string{
 	`DELETE FROM conversation_provider_events WHERE id IN (
     SELECT id FROM conversation_provider_events WHERE session_id = ?1 LIMIT ?2
@@ -896,14 +890,9 @@ var sessionDeleteDrains = []string{
 // conversations, cleanup facts, PR facts and the other per-session rows go with
 // it through ON DELETE CASCADE. Callers decide whether the session's workspace
 // is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history. The final
-// transaction checks both again, so a concurrent restore cannot slip between
+// domain.ErrSessionHistoryShared, shared conversation history, all in one
+// transaction so a concurrent restore cannot slip between
 // the checks and the delete.
-//
-// Before that transaction, the session's provider events and activities are
-// deleted in short batches, each holding writeMu only for its own batch. A
-// delete stopped part way (by ctx) leaves the session archived with part of
-// its history; deleting it again finishes the job.
 //
 // The session's number is recorded in session_num_floors so the next spawn
 // never reuses its id (or its branch name). Its usage events cascade away with
@@ -949,11 +938,6 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
-	// Branch parents, fork points, replaced turns and retry sources are ON
-	// DELETE RESTRICT, which SQLite enforces row by row inside the cascade. A
-	// chat with an edited or retried turn could then never be deleted, and
-	// retention retried it on every pass. Unlink them inside the session's own
-	// conversations only; a link from another conversation still refuses.
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_branches
 SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
@@ -990,9 +974,6 @@ type rowQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// deletableTerminatedSession reads a terminated session's project and number.
-// ok is false when id names no terminated session; shared conversation
-// history is domain.ErrSessionHistoryShared.
 func deletableTerminatedSession(ctx context.Context, q rowQueryer, id domain.SessionID) (sql.NullString, int64, bool, error) {
 	var projectID sql.NullString
 	var num int64
@@ -1023,8 +1004,6 @@ SELECT EXISTS (
 	return projectID, num, true, nil
 }
 
-// drainSessionRows runs one of sessionDeleteDrains until it deletes less than
-// a full batch, taking writeMu for each batch alone.
 func (s *Store) drainSessionRows(ctx context.Context, query string, id domain.SessionID) error {
 	for {
 		if err := s.writeMu.LockContext(ctx); err != nil {
