@@ -1,0 +1,24 @@
+name: CI retarget
+
+on:
+  pull_request:
+    types: [edited]
+
+permissions:
+  actions: write
+
+jobs:
+  rerun:
+    if: github.event.changes.base && github.base_ref == 'main' && !github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Re-run CI for the new base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" -w ci.yml -c "$SHA" -e pull_request -L 1 --json databaseId -q '.[0].databaseId')
+          test -n "$id"
+          gh run watch "$id" -R "$GITHUB_REPOSITORY" > /dev/null
+          gh run rerun "$id" -R "$GITHUB_REPOSITORY"

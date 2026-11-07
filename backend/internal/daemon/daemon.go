@@ -208,6 +208,9 @@ func Run(buildVersion string) error {
 	// lifecycle stack) are not covered: a predecessor stuck in one past the
 	// wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, systeminstall.DefaultShutdownTimeout())
+	if cfg.InstallerShutdownTimeout > 0 {
+		installerShutdownTimeout = max(cfg.ShutdownTimeout, cfg.InstallerShutdownTimeout)
+	}
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
 		return err
