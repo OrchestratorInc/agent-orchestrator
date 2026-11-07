@@ -5136,7 +5136,9 @@ func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
 	started := map[string]any{"status": "started", "reason": "manual"}
 	for name, test := range map[string]struct {
 		failed map[string]any
-		want   string
+		// after are updates sent once the failure is reported.
+		after []map[string]any
+		want  string
 	}{
 		"provider message": {
 			failed: map[string]any{"status": "failed", "error": map[string]any{
@@ -5145,11 +5147,16 @@ func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
 			want: "Compaction summary did not match the required template",
 		},
 		"no message": {failed: map[string]any{"status": "failed"}, want: "Compaction failed"},
+		"unknown status after the failure": {
+			failed: map[string]any{"status": "failed"},
+			after:  []map[string]any{{"status": "aborted"}, {"reason": "manual"}},
+			want:   "Compaction failed",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			agent, opened := compactionFailureTestDriver(t)
 			agent.mu.Lock()
-			agent.customPrompt = compactionStatusPrompt(agent, started, test.failed)
+			agent.customPrompt = compactionStatusPrompt(agent, append([]map[string]any{started, test.failed}, test.after...)...)
 			agent.mu.Unlock()
 
 			if _, err := opened.(ports.ChatCompactor).Compact(context.Background()); err != nil {

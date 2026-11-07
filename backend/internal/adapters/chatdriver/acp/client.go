@@ -1249,11 +1249,17 @@ func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any)
 		return
 	}
 	failure := ""
-	if status, _ := compaction["status"].(string); status == "failed" {
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+	case "failed":
 		failure, _ = nestedMap(compaction, "error")["message"].(string)
 		if failure = strings.TrimSpace(failure); failure == "" {
 			failure = "Compaction failed"
 		}
+	default:
+		// OpenCode only sends the three statuses above. Leave the recorded
+		// outcome alone rather than guess what a new one means.
+		return
 	}
 	c.mu.Lock()
 	if c.compactingTurnID == turnID {
