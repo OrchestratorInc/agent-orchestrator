@@ -3944,11 +3944,14 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device    bool       `json:"device"`
-	Email     string     `json:"email,omitempty"`
-	Plan      string     `json:"plan,omitempty"`
-	Default   bool       `json:"default"`
+	Device  bool   `json:"device"`
+	Email   string `json:"email,omitempty"`
+	Plan    string `json:"plan,omitempty"`
+	Default bool   `json:"default"`
+	// SignedIn is a subscription sign-in; LoggedIn is any login the CLI
+	// launches with, an API key included.
 	SignedIn  bool       `json:"signedIn"`
+	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
 	Problem string                     `json:"problem,omitempty"`
