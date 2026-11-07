@@ -372,8 +372,10 @@ describe("useCloudNotifications on a control plane with team notifications", () 
 		await act(() => result.current.clearAll());
 		expect(changeNotificationState.mock.calls.map(([change]) => change)).toEqual([
 			{ ids: ["merged", "approve"], read: true },
+			// One blocking row is dismissed on its own...
 			{ ids: ["approve"], done: true },
-			{ ids: ["merged", "approve", "handled"], done: true },
+			// ...but Clear all leaves it: it clears when someone handles it.
+			{ ids: ["merged", "handled"], done: true },
 		]);
 		expect(window.localStorage.length).toBe(0);
 	});

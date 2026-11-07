@@ -156,12 +156,15 @@ export function useCloudNotifications({ live = false }: UseCloudNotificationsOpt
 	}, [changeState, client, invalidateLegacy, loadedRows, mode, orgId]);
 
 	// Clearing is server-side done on a control plane with team notifications,
-	// so it holds on every device. An older one has no delete or done: clearing
-	// marks rows read there and hides them on this device.
+	// so it holds on every device. Clear all leaves what still blocks someone (an
+	// approval or question nobody has answered): it clears when it is handled,
+	// or when the person dismisses that one row. An older control plane has no
+	// delete or done: clearing marks rows read there and hides them on this
+	// device.
 	const legacyClearAll = legacy.clearAll;
 	const legacyClearOne = legacy.clearOne;
 	const clearAll = useCallback(async () => {
-		if (mode === "inbox") return setDone(loadedRows.map((row) => row.id), true);
+		if (mode === "inbox") return setDone(loadedRows.filter((row) => !isLegacyCloudNeedsYou(row)).map((row) => row.id), true);
 		if (mode !== "legacy" || orgId === "") return;
 		await legacyClearAll(markAllRead);
 	}, [legacyClearAll, loadedRows, markAllRead, mode, orgId, setDone]);
