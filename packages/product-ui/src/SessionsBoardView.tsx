@@ -15,6 +15,7 @@ import { motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
 	ChevronIcon,
+	CircleDotIcon,
 	GitBranchIcon,
 	GitPullRequestIcon,
 	LoaderCircleIcon,
@@ -68,7 +69,7 @@ export type BoardSessionPresentation = {
 	status: SessionStatus;
 	statusPresentation?: BoardSessionStatusPresentation;
 	title: string;
-	trackerIssueId?: string;
+	trackerIssue?: BoardTrackerIssue;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -114,6 +115,13 @@ export type BoardPullRequestPresentation = {
 	number: number;
 	reviewers?: BoardReviewerPresentation[];
 	state: BoardPullRequestState;
+	url: string;
+};
+
+export type BoardTrackerIssue = {
+	number: number;
+	/** owner/repo, or the GitLab group path. */
+	repo: string;
 	url: string;
 };
 
@@ -272,7 +280,7 @@ export function SessionCardView({
 	branchIcon,
 	branchLabel,
 	error,
-	externalLink,
+	externalLink: ExternalLink,
 	footer,
 	interactive = true,
 	labels,
@@ -397,10 +405,21 @@ export function SessionCardView({
 					</div>
 				)}
 			</div>
-			{prs.length > 0 && (
+			{(session.trackerIssue || prs.length > 0) && (
 				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
-					{prs.length > 0 && (
+					{(session.trackerIssue || prs.length > 0) && (
 						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
+							{session.trackerIssue ? (
+								<ExternalLink
+									ariaLabel={labels.intakeIssue(`${session.trackerIssue.repo}#${session.trackerIssue.number}`)}
+									className="inline-flex min-w-0 max-w-full items-center gap-x-2 self-start py-0.5 hover:underline"
+									href={session.trackerIssue.url}
+									stopPropagation
+								>
+									<CircleDotIcon className="size-icon-sm shrink-0" />
+									<span className="truncate font-sans text-xs font-medium text-foreground">#{session.trackerIssue.number}</span>
+								</ExternalLink>
+							) : null}
 							{groupBoardPullRequests(prs).flatMap((group) => {
 								const compact = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
 								const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
@@ -410,7 +429,7 @@ export function SessionCardView({
 								];
 							}).map((group) => (
 								<BoardPullRequestGroup
-									externalLink={externalLink}
+									externalLink={ExternalLink}
 									group={group}
 									key={`${group.state}-${group.prs.map((pr) => pr.url || pr.number).join("-")}`}
 									labels={labels.pr}

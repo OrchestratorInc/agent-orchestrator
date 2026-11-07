@@ -27,7 +27,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
+import { sessionArtifacts, trackerIssueLink } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -87,7 +87,7 @@ export function toBoardSessionPresentation(
 		statusReadiness: session.statusReadiness,
 		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
-		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		trackerIssue: trackerIssueLink(session.issueId),
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};

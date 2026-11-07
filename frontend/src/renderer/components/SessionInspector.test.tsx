@@ -4942,6 +4942,20 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
   });
 
+  it("links an intake issue above the branch and leaves a typed task id plain", () => {
+    mockGitState({});
+    const view = renderWithQuery(<SessionInspector session={session([], { issueId: "gitlab:acme/platform/api#7@gitlab.internal" })} />);
+
+    const issue = branch().getByRole("link", { name: "Intake issue: acme/platform/api#7" });
+    expect(issue).toHaveAttribute("href", "https://gitlab.internal/acme/platform/api/-/issues/7");
+    expect(issue).toHaveAttribute("target", "_blank");
+    expect(branch().getByText("feat/ns")).toBeInTheDocument();
+    view.unmount();
+
+    renderWithQuery(<SessionInspector session={session([], { issueId: "Fix the login redirect" })} />);
+    expect(branch().queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("opens the Files tab from a status row", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
     renderWithQuery(<SessionInspector session={session([])} />);

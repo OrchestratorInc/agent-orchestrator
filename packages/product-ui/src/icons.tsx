@@ -81,6 +81,15 @@ export function CheckIcon(props: IconProps) {
 	);
 }
 
+export function CircleDotIcon(props: IconProps) {
+	return (
+		<Icon name="circle-dot" {...props}>
+			<circle cx="12" cy="12" r="10" />
+			<circle cx="12" cy="12" r="1" />
+		</Icon>
+	);
+}
+
 export function FileCodeIcon(props: IconProps) {
 	return (
 		<Icon name="file-code-2" {...props}>
