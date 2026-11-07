@@ -47,11 +47,8 @@ type Snapshot struct {
 	// released is kept before the daemon deletes it (Settings, General). 0, the
 	// default, keeps it.
 	SessionRetentionDays int
-	// AccountHandoff moves a Chat session refused for a usage limit to another
-	// signed-in account with quota and retries the prompt there once
-	// (Settings, Agent accounts). Off by default.
-	AccountHandoff bool
-	UpdatedAt      time.Time
+	AccountHandoff       bool
+	UpdatedAt            time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -108,7 +105,6 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
-	// accountHandoff caches the durable toggle the same way.
 	accountHandoff atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
 	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
@@ -155,9 +151,7 @@ func (s *Service) cacheAccountHandoff(enabled bool) {
 	}
 }
 
-// AccountHandoffEnabled reports the "Move to another account at a usage
-// limit" toggle. The scheduler asks every tick, so it reads the store once and
-// then serves the cached value; an unreadable store counts as off.
+// AccountHandoffEnabled reports the "Move to another account at a usage limit" setting.
 func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
 	switch s.accountHandoff.Load() {
 	case 1:
@@ -173,8 +167,7 @@ func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
 	return snapshot.AccountHandoff
 }
 
-// SetAccountHandoff changes whether usage-limited Chat sessions move to
-// another account automatically. Moves already underway finish either way.
+// SetAccountHandoff turns the usage-limit account handoff on or off.
 func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err

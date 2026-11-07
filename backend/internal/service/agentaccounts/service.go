@@ -1098,11 +1098,7 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
-// HandoffTarget picks the account a session refused for a usage limit moves
-// to: another signed-in account of its harness's provider whose native limits,
-// read now rather than from the display cache, verify room in the meters a
-// request for model draws on. The one with the most room wins; "" means none
-// qualifies. exclude names accounts the session must not move to.
+// HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
 func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string, exclude map[string]bool) (string, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
@@ -1174,15 +1170,12 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	return accounts[best].ID, nil
 }
 
-// sessionPinStore is the "Stay on this account" choice, optional so the
-// narrow account store port and its fakes do not grow.
 type sessionPinStore interface {
 	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
 	SetSessionAccountPinned(context.Context, domain.SessionID, bool, time.Time) error
 }
 
-// SessionStaysOnAccount reports whether the user asked the session to stay on
-// its account, so a usage limit never moves it automatically.
+// SessionStaysOnAccount reports the session's "Stay on this account" choice.
 func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID) (bool, error) {
 	pins, ok := s.store.(sessionPinStore)
 	if !ok {
@@ -1191,8 +1184,7 @@ func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID
 	return pins.SessionAccountPinned(ctx, id)
 }
 
-// SetSessionStaysOnAccount records or clears the session's "Stay on this
-// account" choice.
+// SetSessionStaysOnAccount records or clears the session's "Stay on this account" choice.
 func (s *Service) SetSessionStaysOnAccount(ctx context.Context, id domain.SessionID, stay bool) error {
 	pins, ok := s.store.(sessionPinStore)
 	if !ok {

@@ -40,8 +40,7 @@ function switchedSnapshot(): ConversationSnapshot {
 	};
 }
 
-/** turn-1 was refused for a usage limit; AO moved the session to acct-b. */
-function handoffSnapshot(retried: boolean): ConversationSnapshot {
+function handoffSnapshot(retried: boolean, retry?: "sent" | "skipped"): ConversationSnapshot {
 	const at = chatFixture.items[0]!.createdAt;
 	const source = chatFixture.turns.find((turn) => turn.id === "turn-1")!;
 	return {
@@ -69,7 +68,7 @@ function handoffSnapshot(retried: boolean): ConversationSnapshot {
 				activityKind: "system",
 				status: "completed",
 				summary: "Moved account",
-				detail: { event: "account.limit_handoff", accountId: "acct-b" },
+				detail: { event: "account.limit_handoff", accountId: "acct-b", retry },
 				createdAt: at,
 			},
 		],
@@ -95,17 +94,22 @@ describe("ChatWorkspace usage-limit account handoff", () => {
 	it("names the account a usage limit moved the session to", () => {
 		renderWithAccounts(handoffSnapshot(false));
 		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
-		expect(screen.getByText(/retries the refused prompt once on this account/)).toBeInTheDocument();
-		// The limit stays in the thread's history.
+		expect(screen.queryByText(/refused prompt/)).toBeNull();
 		expect(screen.getAllByTestId("usage-limit-notice").length).toBeGreaterThan(0);
 	});
 
 	it("offers no usage-limit recovery once AO has retried the prompt", () => {
-		renderWithAccounts(handoffSnapshot(true));
+		renderWithAccounts(handoffSnapshot(true, "sent"));
 		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
+		expect(screen.getByText("AO sent the refused prompt again on this account.")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
+	});
+
+	it("says when AO did not send the refused prompt again", () => {
+		renderWithAccounts(handoffSnapshot(false, "skipped"));
+		expect(screen.getByText("AO did not send the refused prompt again. Send it yourself if you still need it.")).toBeInTheDocument();
 	});
 });
 

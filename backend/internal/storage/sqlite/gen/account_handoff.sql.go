@@ -12,11 +12,9 @@ import (
 )
 
 const getSessionAccountPin = `-- name: GetSessionAccountPin :one
-
 SELECT COUNT(*) FROM session_account_pins WHERE session_id = ?1
 `
 
-// "Stay on this account" and the automatic usage-limit account handoff.
 func (q *Queries) GetSessionAccountPin(ctx context.Context, sessionID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, getSessionAccountPin, sessionID)
 	var count int64
@@ -50,8 +48,6 @@ WHERE t.state = 'failed' AND t.completed_at >= ?1
 ORDER BY t.completed_at, t.id
 `
 
-// Recent failed turns of chat sessions with no retry yet. The caller
-// recognizes usage-limit refusals from the error text.
 func (q *Queries) SelectAccountHandoffCandidateTurns(ctx context.Context, since sql.NullTime) ([]ConversationTurn, error) {
 	rows, err := q.db.QueryContext(ctx, selectAccountHandoffCandidateTurns, since)
 	if err != nil {

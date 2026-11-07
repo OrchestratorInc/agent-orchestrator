@@ -2376,7 +2376,7 @@ func agentOperations() []operation {
 			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}/stay", id: "setSessionStayOnAccount", tag: "agents",
 			summary: "Keep a session on its account, or let a usage limit move it", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
 			reqBody: controllers.SetSessionStayOnAccountRequest{},
-			resps:   []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",

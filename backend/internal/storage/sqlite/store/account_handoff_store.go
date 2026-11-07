@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -22,6 +25,11 @@ func (s *Store) SessionAccountPinned(ctx context.Context, id domain.SessionID) (
 func (s *Store) SetSessionAccountPinned(ctx context.Context, id domain.SessionID, pinned bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if _, err := s.qw.GetSession(ctx, id); errors.Is(err, sql.ErrNoRows) {
+		return ports.ErrSessionNotFound
+	} else if err != nil {
+		return fmt.Errorf("read session %s: %w", id, err)
+	}
 	var err error
 	if pinned {
 		err = s.qw.PinSessionAccount(ctx, gen.PinSessionAccountParams{SessionID: string(id), PinnedAt: now})
@@ -34,8 +42,7 @@ func (s *Store) SetSessionAccountPinned(ctx context.Context, id domain.SessionID
 	return nil
 }
 
-// AccountHandoffCandidateTurns lists chat turns that failed since the time and
-// have no retry yet.
+// AccountHandoffCandidateTurns lists recent failed chat turns that have no retry yet.
 func (s *Store) AccountHandoffCandidateTurns(ctx context.Context, since time.Time) ([]domain.ConversationTurn, error) {
 	rows, err := s.qr.SelectAccountHandoffCandidateTurns(ctx, timeToNullTime(since))
 	if err != nil {

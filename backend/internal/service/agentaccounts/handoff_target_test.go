@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// handoffLimitsProvider answers each folder's limits from a fixed table; reads
-// run in parallel, so it holds no mutable state.
 type handoffLimitsProvider struct {
 	*fakeClaude
 	used map[string]float64
@@ -53,8 +51,6 @@ func TestHandoffTargetPicksMostVerifiedRoomForTheModel(t *testing.T) {
 		exclude map[string]bool
 		want    string
 	}{
-		// The current account, a signed-out one, one signed in as someone else,
-		// and one near its limit never qualify.
 		{"most room wins", "claude-sonnet-5", nil, "c"},
 		{"excluded account is skipped", "claude-sonnet-5", map[string]bool{"c": true}, "b"},
 		{"the model's full meter rules every account out", "claude-opus-5", nil, ""},

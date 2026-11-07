@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -49,8 +50,6 @@ func (a *fakeHandoffAccounts) HandoffTarget(_ context.Context, _ domain.SessionI
 	return a.target, nil
 }
 
-// fakeHandoffMover stands in for Session Manager: it claims a real transition
-// row, and the test commits (binding the target) or rolls it back.
 type fakeHandoffMover struct {
 	st       *sqlite.Store
 	now      func() time.Time
@@ -192,6 +191,31 @@ func handoffNotes(t *testing.T, h *harness, turnID string) int {
 	return notes
 }
 
+func handoffNoteRetry(t *testing.T, h *harness, turnID string) string {
+	t.Helper()
+	conversation, err := h.st.ConversationForSession(context.Background(), testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := h.st.LoadConversationSnapshot(context.Background(), conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, activity := range rows.Activities {
+		if activity.ProviderItemID == "account-handoff:"+turnID {
+			var detail struct {
+				Retry string `json:"retry"`
+			}
+			if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			return detail.Retry
+		}
+	}
+	t.Fatal("no handoff note")
+	return ""
+}
+
 var bothAccountHarnesses = []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
 
 func TestAccountHandoffMovesAndRetriesExactlyOnce(t *testing.T) {
@@ -208,7 +232,6 @@ func TestAccountHandoffMovesAndRetriesExactlyOnce(t *testing.T) {
 			if !hh.accounts.excluded[0][handoffSource] {
 				t.Fatalf("the refused account was a candidate: %v", hh.accounts.excluded[0])
 			}
-			// A running move only waits; nothing retries before the commit.
 			hh.tick(t)
 			if got := len(hh.conv.sentMessages()); got != 1 {
 				t.Fatalf("dispatches before commit = %d", got)
@@ -232,6 +255,9 @@ func TestAccountHandoffMovesAndRetriesExactlyOnce(t *testing.T) {
 			}
 			if notes := handoffNotes(t, hh.harness, source.ID); notes != 1 {
 				t.Fatalf("handoff notes = %d", notes)
+			}
+			if got := handoffNoteRetry(t, hh.harness, source.ID); got != "sent" {
+				t.Fatalf("handoff note retry = %q", got)
 			}
 			if len(hh.mover.moves()) != 1 || hh.boundAccount(t) != handoffTarget {
 				t.Fatalf("moves=%d account=%s", len(hh.mover.moves()), hh.boundAccount(t))
@@ -287,7 +313,6 @@ func TestAccountHandoffRollbackKeepsAccount(t *testing.T) {
 					t.Fatalf("dispatches after rollback = %d", got)
 				}
 				stored, _ := hh.st.TurnByID(context.Background(), source.ID)
-				// Only a move that failed on its own falls back to auto-resume.
 				if want := phase == domain.SessionInterfaceTransitionFailed; stored.UsageLimit.AutoResume != want {
 					t.Fatalf("auto-resume = %v, want %v", stored.UsageLimit.AutoResume, want)
 				}
@@ -315,6 +340,13 @@ func TestAccountHandoffRespectsStayOnAccount(t *testing.T) {
 	}
 }
 
+func TestStayOnAccountRejectsUnknownSession(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	if err := hh.st.SetSessionAccountPinned(context.Background(), "missing-session", true, hh.now()); !errors.Is(err, ports.ErrSessionNotFound) {
+		t.Fatalf("pin unknown session: %v", err)
+	}
+}
+
 func TestAccountHandoffOffClaimsNothing(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessCodex)
 	hh.enabled.Store(false)
@@ -323,7 +355,6 @@ func TestAccountHandoffOffClaimsNothing(t *testing.T) {
 	if len(hh.accounts.excluded) != 0 {
 		t.Fatal("claimed with the setting off")
 	}
-	// Turned on later, a failure older than the window stays the person's.
 	hh.enabled.Store(true)
 	hh.advance(11 * time.Minute)
 	hh.tick(t)
@@ -347,7 +378,6 @@ func TestAccountHandoffDoesNotPingPong(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The retry on the new account is refused too: the prompt does not move again.
 	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID,
 		TurnState: domain.TurnStateFailed, Err: errors.New(usageLimitMessage(domain.HarnessCodex, true, hh.now()))})
 	failedTurnSnapshot(t, hh.harness, retryID)
@@ -367,7 +397,6 @@ func TestAccountHandoffExcludesRecentlyLeftAccount(t *testing.T) {
 	hh.tick(t)
 	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
 	hh.tick(t)
-	// A new prompt on the target account is refused before acct-a resets.
 	retryID, _, _ := hh.st.RetryTurnIDForSource(context.Background(), first.ConversationID, first.ID)
 	retry, _ := hh.st.TurnByID(context.Background(), retryID)
 	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted})
@@ -389,7 +418,6 @@ func TestAccountHandoffWithdrawsRetryForNewerPrompt(t *testing.T) {
 	ctx := context.Background()
 	source := failUsageLimitedTurn(t, hh.harness, timedUsageLimit)
 	hh.tick(t)
-	// The person sends something else while the move runs.
 	if _, err := hh.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "never mind", ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginHuman}); err != nil {
 		t.Fatal(err)
 	}
@@ -401,10 +429,11 @@ func TestAccountHandoffWithdrawsRetryForNewerPrompt(t *testing.T) {
 	if got := len(hh.conv.sentMessages()); got != 2 {
 		t.Fatalf("dispatches = %d", got)
 	}
+	if got := handoffNoteRetry(t, hh.harness, source.ID); got != "skipped" {
+		t.Fatalf("handoff note retry = %q", got)
+	}
 }
 
-// The handoff lives in memory: a restart mid-move forgets it, so the session
-// ends up on the new account and the prompt is the person's to resend.
 func TestAccountHandoffRestartLeavesThePromptToThePerson(t *testing.T) {
 	for _, agentHarness := range bothAccountHarnesses {
 		t.Run(string(agentHarness), func(t *testing.T) {
@@ -419,7 +448,7 @@ func TestAccountHandoffRestartLeavesThePromptToThePerson(t *testing.T) {
 
 			hh.advance(time.Second)
 			provider := newFakeConversation()
-			provider.turnSeq = 100 // the provider's turn ids continue after a restart
+			provider.turnSeq = 100
 			svc := chatsvc.New(chatsvc.Options{
 				Store: hh.st, Reader: fullSnapshotReader(hh.st), PageReader: boundedSnapshotReader(hh.st), Sessions: hh.st,
 				Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, NewID: uuid.NewString, Now: hh.now,
@@ -463,8 +492,6 @@ func TestAccountHandoffSkipsRetryWhenTheSessionLeftTheTarget(t *testing.T) {
 	}
 }
 
-// A committed move whose retry has not run yet survives the session sleeping
-// and a failed wake: the prompt is retried once, after the backoff.
 func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	resumed := newFakeConversation()
 	resumed.turnSeq = 100
@@ -505,7 +532,7 @@ func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 	if notes := handoffNotes(t, h, source.ID); notes != 1 {
 		t.Fatalf("handoff notes = %d", notes)
 	}
-	hh.tick(t) // inside the backoff: no second wake
+	hh.tick(t)
 	if wakes.Load() != 1 {
 		t.Fatalf("wakes inside backoff = %d", wakes.Load())
 	}

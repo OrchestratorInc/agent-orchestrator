@@ -57,9 +57,7 @@ type AgentAccountLimitWindow struct {
 	UsedPercent     float64    `json:"usedPercent" minimum:"0" maximum:"100"`
 	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
 	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
-	// Scope names the model a meter limits, such as "opus" or a Codex model's
-	// own bucket; empty for a meter every request draws on.
-	Scope string `json:"-"`
+	Scope           string     `json:"-"`
 }
 
 // AgentLimitReading is one limit window's value as read at one moment.
@@ -93,17 +91,10 @@ type AgentAccountLimits struct {
 	FetchedAt time.Time             `json:"fetchedAt"`
 }
 
-// HandoffMaxUsedPercent is the fullest a relevant meter may be for an account
-// to receive a session moved off a usage limit, so the retry is not refused at once.
+// HandoffMaxUsedPercent is the fullest a relevant meter may be on an account that receives a moved session.
 const HandoffMaxUsedPercent = 90
 
-// HandoffHeadroom is the percent left in the fullest meter a request for model
-// draws on, and whether the reading verifies room for it. Every request draws
-// on unscoped meters; a scoped one counts when it and model name each other
-// ("opus" and "claude-opus-5"). An unknown model
-// counts every Claude meter, as the default may be any of them, and only the
-// overall Codex bucket, as Codex model buckets belong to non-default models. A
-// reading with no relevant meter verifies nothing.
+// HandoffHeadroom reports the room left in the meters a request for model draws on.
 func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
 	model = normalizeLimitScope(model)
 	fullest, relevant := 0.0, false

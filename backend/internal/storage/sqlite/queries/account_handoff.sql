@@ -1,5 +1,3 @@
--- "Stay on this account" and the automatic usage-limit account handoff.
-
 -- name: GetSessionAccountPin :one
 SELECT COUNT(*) FROM session_account_pins WHERE session_id = sqlc.arg(session_id);
 
@@ -10,8 +8,6 @@ ON CONFLICT (session_id) DO NOTHING;
 -- name: UnpinSessionAccount :exec
 DELETE FROM session_account_pins WHERE session_id = sqlc.arg(session_id);
 
--- Recent failed turns of chat sessions with no retry yet. The caller
--- recognizes usage-limit refusals from the error text.
 -- name: SelectAccountHandoffCandidateTurns :many
 SELECT t.* FROM conversation_turns t
 JOIN sessions s ON s.id = t.handled_by_session_id

@@ -12,25 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AccountHandoffEvent marks, on a turn refused for a usage limit, the account
-// the session moved to before retrying the prompt there.
+// AccountHandoffEvent is the thread note event of an automatic usage-limit account move.
 const AccountHandoffEvent = "account.limit_handoff"
 
 const (
-	// A failure older than this is left to the person: the handoff is for the
-	// moment the limit hits, not for history found when the setting turns on.
-	accountHandoffWindow = 10 * time.Minute
-	// An account left with no known reset stays out for one session window.
+	accountHandoffWindow   = 10 * time.Minute
 	accountHandoffCooldown = 5 * time.Hour
-	// A step that keeps failing transiently is given up after this long.
-	accountHandoffGiveUp  = 10 * time.Minute
-	accountHandoffBackoff = 15 * time.Second
-	// Each worker may read every account's limits and wake a provider.
-	accountHandoffWorkers = 4
+	accountHandoffGiveUp   = 10 * time.Minute
+	accountHandoffBackoff  = 15 * time.Second
+	accountHandoffWorkers  = 4
+
+	accountHandoffRetrySent    = "sent"
+	accountHandoffRetrySkipped = "skipped"
 )
 
-// accountHandoffStore is optional so the narrow Store port and its fakes do
-// not grow; production's SQLite store implements it.
 type accountHandoffStore interface {
 	AccountHandoffCandidateTurns(context.Context, time.Time) ([]domain.ConversationTurn, error)
 	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
@@ -55,13 +50,6 @@ type accountHandoffDeps struct {
 	mover    AccountHandoffMover
 }
 
-// accountHandoff is one refused turn's handoff. It lives only in memory: the
-// map entry is the once-only claim, and a daemon restart forgets it, which
-// leaves the prompt for the person to resend on whatever account the session
-// reached. Failures from before this process started are never picked up.
-//
-// A worker owns the fields below busy while busy is set; handoffMu guards the
-// rest, because other workers read them.
 type accountHandoff struct {
 	turnID         string
 	conversationID string
@@ -70,22 +58,18 @@ type accountHandoff struct {
 	resetsAt       *time.Time
 	claimedAt      time.Time
 
-	busy    bool
-	done    bool
-	retryAt time.Time
-	// moved is set once the session runs on the target account.
-	moved bool
-	// leftUntil keeps the session from moving back to the source account.
+	busy      bool
+	done      bool
+	retryAt   time.Time
+	moved     bool
 	leftUntil time.Time
 
 	targetAccount string
 	transitionID  string
-	// stepAt is when the current step began, for giving up on it.
-	stepAt time.Time
+	stepAt        time.Time
 }
 
-// SetAccountHandoff wires the setting, the accounts, and the move the
-// automatic handoff uses. Without it the handoff never runs.
+// SetAccountHandoff wires the automatic usage-limit account handoff.
 func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts AccountHandoffAccounts, mover AccountHandoffMover) {
 	s.handoffMu.Lock()
 	defer s.handoffMu.Unlock()
@@ -93,15 +77,7 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 	s.handoffSince = s.now()
 }
 
-// HandoffUsageLimitedTurns advances every automatic account handoff by one
-// step, and, while the setting is on, claims recent usage-limit refusals:
-//
-//  1. Claim the turn, then pick another signed-in account of the same harness
-//     whose native limits verify room for the request's model. None, or a
-//     session told to stay on its account, keeps the account and falls back
-//     to auto-resume at a known reset.
-//  2. Session Manager's account move runs; it commits or rolls back.
-//  3. A note names the new account, then the prompt is retried once.
+// HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
 func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	store, ok := s.store.(accountHandoffStore)
 	s.handoffMu.Lock()
@@ -177,8 +153,6 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// claimAccountHandoffs finds recent usage-limit refusals of account harnesses
-// this process has not handled yet.
 func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps) ([]*accountHandoff, error) {
 	s.handoffMu.Lock()
 	since := s.handoffSince
@@ -222,8 +196,6 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 	return claimed, nil
 }
 
-// stepAccountHandoff runs the handoff's next step and reports whether it is
-// over. An error with done unset leaves it for a later tick.
 func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	switch {
 	case h.transitionID == "":
@@ -260,7 +232,6 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	} else if pinned {
 		return s.stayOnAccount(ctx, source, "This session stays on its account.")
 	}
-	// One move per prompt: a retry the last handoff made, refused again, stays.
 	if source.RetryOfTurnID != "" && s.accountHandoffRetried(source.RetryOfTurnID) {
 		return s.stayOnAccount(ctx, source, "The retry on the new account was refused for a usage limit too.")
 	}
@@ -293,8 +264,6 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
 }
 
-// accountsLeftBySession lists the source account and every account the session
-// moved away from that has not reset yet.
 func (s *Service) accountsLeftBySession(h *accountHandoff) map[string]bool {
 	exclude := map[string]bool{h.sourceAccount: true}
 	now := s.now()
@@ -333,8 +302,6 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		return false, nil
 	}
 	if transition.Phase != domain.SessionInterfaceTransitionCompleted {
-		// Only a move that failed on its own falls back; a cancelled one was a
-		// person's call, and one needing recovery shows its own notice.
 		if transition.Phase == domain.SessionInterfaceTransitionFailed {
 			if source, err := s.store.TurnByID(ctx, h.turnID); err == nil {
 				s.armUsageLimitFallback(ctx, source)
@@ -357,7 +324,7 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 	if bound != h.targetAccount {
 		return true, nil
 	}
-	if err := s.noteAccountHandoff(ctx, h); err != nil {
+	if err := s.noteAccountHandoff(ctx, h, ""); err != nil {
 		return false, err
 	}
 	h.stepAt = s.now()
@@ -367,14 +334,16 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 	return s.retryAccountHandoff(ctx, store, h)
 }
 
-// noteAccountHandoff writes the durable thread note on the refused turn. Its
-// provider item id makes a repeat replace, not duplicate, it.
-func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff) error {
+func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, retry string) error {
 	source, err := s.store.TurnByID(ctx, h.turnID)
 	if err != nil {
 		return err
 	}
-	detail, err := json.Marshal(map[string]string{"event": AccountHandoffEvent, "accountId": h.targetAccount, "fromAccountId": h.sourceAccount})
+	fields := map[string]string{"event": AccountHandoffEvent, "accountId": h.targetAccount, "fromAccountId": h.sourceAccount}
+	if retry != "" {
+		fields["retry"] = retry
+	}
+	detail, err := json.Marshal(fields)
 	if err != nil {
 		return fmt.Errorf("encode account handoff: %w", err)
 	}
@@ -388,19 +357,23 @@ func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff) err
 	}, s.now())
 }
 
+func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHandoff, retry string) {
+	if err := s.noteAccountHandoff(ctx, h, retry); err != nil {
+		s.log.Warn("account handoff: note not updated", "session", h.sessionID, "turn", h.turnID, "retry", retry, "error", err)
+	}
+}
+
 func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, h *accountHandoff) (bool, error) {
-	// A message sent during the move is delivered after it; it comes first,
-	// and the latest-turn check then withdraws the retry.
 	if pending, err := store.ListPendingSessionInterfaceTransitionMessages(ctx, h.transitionID); err != nil {
 		return false, err
 	} else if len(pending) > 0 {
-		return s.giveUpAfter(h, errors.New("messages sent during the move are still being delivered"))
+		return s.giveUpRetry(ctx, h, errors.New("messages sent during the move are still being delivered"))
 	}
-	// Hibernation recovery already permits a 60-second native wake.
 	attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	err := s.retryAccountHandoffOnController(attemptCtx, h)
 	cancel()
 	if err == nil {
+		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySent)
 		return true, nil
 	}
 	if ctx.Err() != nil {
@@ -408,9 +381,18 @@ func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffS
 	}
 	if permanentUsageLimitResumeError(err) {
 		s.log.Info("account handoff: retry withdrawn", "session", h.sessionID, "turn", h.turnID, "error", err)
+		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
 		return true, nil
 	}
-	return s.giveUpAfter(h, err)
+	return s.giveUpRetry(ctx, h, err)
+}
+
+func (s *Service) giveUpRetry(ctx context.Context, h *accountHandoff, cause error) (bool, error) {
+	done, err := s.giveUpAfter(h, cause)
+	if done {
+		s.recordAccountHandoffRetry(ctx, h, accountHandoffRetrySkipped)
+	}
+	return done, err
 }
 
 func (s *Service) retryAccountHandoffOnController(ctx context.Context, h *accountHandoff) error {
@@ -423,8 +405,6 @@ func (s *Service) retryAccountHandoffOnController(ctx context.Context, h *accoun
 	return err
 }
 
-// validateAccountHandoffSource is the auto-resume check without a deadline:
-// the move, not the reset, makes the retry useful.
 func (s *Service) validateAccountHandoffSource(ctx context.Context, source domain.ConversationTurn) error {
 	store, ok := s.store.(usageLimitStore)
 	if !ok {
@@ -436,9 +416,6 @@ func (s *Service) validateAccountHandoffSource(ctx context.Context, source domai
 	return validateUsageLimitRetry(ctx, s.store, store, source)
 }
 
-// retryAccountHandoffTurn dispatches the refused prompt on the new account. It
-// rechecks lineage under the send lock, so a person's own retry or newer
-// message withdraws it.
 func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	if !c.sendMu.TryLock() {
 		return domain.ConversationTurn{}, ErrTurnRunning
@@ -462,9 +439,6 @@ func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string)
 	return c.retryTurnLocked(ctx, turnID, false)
 }
 
-// stayOnAccount keeps the session where it is and applies the existing
-// usage-limit recovery: auto-resume at a known reset, or nothing to do but the
-// person's own retry when the reset is unknown.
 func (s *Service) stayOnAccount(ctx context.Context, source domain.ConversationTurn, detail string) (bool, error) {
 	s.armUsageLimitFallback(ctx, source)
 	s.log.Info("account handoff: session stays", "session", source.HandledBySessionID, "turn", source.ID, "detail", detail)
@@ -481,8 +455,6 @@ func (s *Service) armUsageLimitFallback(ctx context.Context, source domain.Conve
 	}
 }
 
-// giveUpAfter keeps a transient failure for the next tick, until the current
-// step has been stuck too long; then recovery is the person's.
 func (s *Service) giveUpAfter(h *accountHandoff, cause error) (bool, error) {
 	if s.now().Sub(h.stepAt) < accountHandoffGiveUp {
 		return false, cause
