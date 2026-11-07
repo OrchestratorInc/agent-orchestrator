@@ -1,12 +1,17 @@
 package conpty
 
 import (
+	"bytes"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // MaxOutputLines is the rolling line-buffer cap, matching MAX_OUTPUT_LINES in pty-host.ts.
 const MaxOutputLines = 1000
+
+// MaxPartialLineBytes bounds retained redraw output from TUIs that rarely emit newlines.
+const MaxPartialLineBytes = 256 << 10
 
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
@@ -29,10 +34,42 @@ func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	text := r.partialLine + string(raw)
+	partial := r.partialLine
+	truncated := false
+	if bytes.IndexByte(raw, '\n') < 0 && len(partial)+len(raw) > MaxPartialLineBytes {
+		// Only this tail can survive. Discard the excess before concatenating
+		// so repeated redraws copy and scan at most the cap, not their history.
+		truncated = true
+		if len(raw) >= MaxPartialLineBytes {
+			partial = ""
+			raw = raw[len(raw)-MaxPartialLineBytes:]
+		} else {
+			partial = partial[len(partial)+len(raw)-MaxPartialLineBytes:]
+		}
+	}
+	text := partial + string(raw)
 	parts := strings.Split(text, "\n")
 	// The last element is either "" (text ended with \n) or an incomplete line.
 	r.partialLine = parts[len(parts)-1]
+	if len(r.partialLine) > MaxPartialLineBytes {
+		r.partialLine = r.partialLine[len(r.partialLine)-MaxPartialLineBytes:]
+		truncated = true
+	}
+	if truncated {
+		start := 0
+		for start < len(r.partialLine) && !utf8.RuneStart(r.partialLine[start]) {
+			start++
+		}
+		// Prefer a repaint/control boundary near the cut rather than replaying
+		// the middle of an escape sequence. The search stays bounded to 4 KiB.
+		end := min(start+(4<<10), len(r.partialLine))
+		if i := strings.IndexAny(r.partialLine[start:end], "\r\x1b"); i >= 0 {
+			start += i
+		}
+		// A suffix of a large newline-containing chunk must not retain that
+		// chunk's entire backing allocation.
+		r.partialLine = strings.Clone(r.partialLine[start:])
+	}
 	for _, line := range parts[:len(parts)-1] {
 		r.lines = append(r.lines, line+"\n")
 	}
