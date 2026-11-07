@@ -4633,6 +4633,7 @@ export interface components {
             email?: string;
             id: string;
             limits?: components["schemas"]["AgentAccountLimits"];
+            loggedIn: boolean;
             plan?: string;
             problem?: string;
             /** @enum {string} */
