@@ -44,6 +44,31 @@ export function mobileInterfaceTransitionIsActive(transition?: InterfaceTransiti
 	return Boolean(transition && activePhases.has(transition.phase));
 }
 
+/**
+ * Whether a switch away from this screen has finished on the daemon but the
+ * route has not caught up yet. The route picks Chat or Terminal from the
+ * board's session row, and that row only learns the new mode on its next poll,
+ * so for a moment the screen still shows the source it just stopped: a
+ * terminal whose PTY exited reads as "Session terminated". Keeping the switch
+ * card up through that gap makes the handoff one continuous wait.
+ *
+ * Only for a switch this screen watched while it was live (`watchedId`), so an
+ * old completed transition never brings the card back on a later visit.
+ */
+export function interfaceHandoffPending(
+	transition: { id: string; phase: string; targetMode: string } | undefined,
+	screenMode: "chat" | "tui",
+	watchedId: string | undefined,
+): boolean {
+	return Boolean(
+		transition &&
+			watchedId !== undefined &&
+			transition.id === watchedId &&
+			transition.phase === "completed" &&
+			transition.targetMode !== screenMode,
+	);
+}
+
 export function mobileInterfaceTransitionRecoveryMessage(transition?: InterfaceTransition): string | undefined {
 	if (!mobileInterfaceTransitionIsActive(transition) || transition?.errorCode !== "TARGET_STOP_UNCONFIRMED") return undefined;
 	return transition.errorDetail || "Orchestrator could not confirm the target controller stopped. Restart Orchestrator on your computer to retry recovery. This session remains blocked; other sessions can still be used.";

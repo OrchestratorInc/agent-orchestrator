@@ -54,6 +54,9 @@ import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 import { useTerminalMux } from "./useTerminalMux";
+import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
+import { createPaintDetector } from "./terminalPaint";
+import { useInterfaceHandoff } from "./useInterfaceHandoff";
 
 const FONT_SIZE = 12;
 
@@ -546,6 +549,9 @@ true;
 `;
 
 
+/** How long the start loader waits for a first paint before showing the grid anyway. */
+const TERMINAL_PAINT_WAIT_MS = 15_000;
+
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining":
@@ -558,6 +564,8 @@ function terminalInterfacePhaseLabel(phase?: string): string {
 			return "Resuming the same native conversation in Chat.";
 		case "activating":
 			return "Opening the Chat interface.";
+		case "completed":
+			return "Chat is ready. Opening it now.";
 		default:
 			return "Checking that Chat can resume this agent's native conversation.";
 	}
@@ -628,6 +636,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
+	// Set while the session is switching to Chat. The switch stops this
+	// terminal's PTY on purpose, so its exit is part of the handoff, not news.
+	const switchingRef = useRef(false);
+	// Whether the terminal has drawn anything yet. A fresh attach is empty until
+	// the agent's TUI paints, which after a switch from Chat takes a few seconds.
+	const [painted, setPainted] = useState(false);
+	const [paintWaitOver, setPaintWaitOver] = useState(false);
+	const paintedRef = useRef(false);
+	const [detectPaint] = useState(createPaintDetector);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
 	const known =
@@ -650,8 +667,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		events: {
 			onStatus: setStatus,
 			onExited: (code) => {
-				showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
+				if (!switchingRef.current) showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
 				setNotFound(true);
+			},
+			onOutput: (bytes) => {
+				if (paintedRef.current || !detectPaint(bytes)) return;
+				paintedRef.current = true;
+				setPainted(true);
 			},
 			// A missing PTY means the session is terminated - offer Restore
 			// instead of surfacing it as a raw error notice.
@@ -689,6 +711,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceStatusRef = useRef(interfaceSwitch.status);
 	interfaceStatusRef.current = interfaceSwitch.status;
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	// The switch has finished but the route still shows this screen until the
+	// board's next poll; the card stays up through that gap.
+	const handoffPending = useInterfaceHandoff(interfaceSwitch.transition, "tui");
+	const switchCardShown = interfaceTransitionActive || handoffPending;
+	switchingRef.current = switchCardShown || interfaceSwitch.starting;
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
@@ -818,6 +845,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Android killed the WebView's renderer: the grid is black for good. Held as
 	// state, not a notice, because a snackbar would leave before the problem does.
 	const [viewGone, setViewGone] = useState(false);
+	// A terminal that really is blank (a cleared shell, an empty alt screen)
+	// must not hide behind the loader for good, so it gives up after a while.
+	useEffect(() => {
+		const timer = setTimeout(() => setPaintWaitOver(true), TERMINAL_PAINT_WAIT_MS);
+		return () => clearTimeout(timer);
+	}, []);
+	const startLoaderShown = !painted && !paintWaitOver && !dead && !viewGone && !switchCardShown && status !== "error";
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
@@ -1206,7 +1240,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		agentSession: !shellOnly,
 		chatReady: Boolean(interfaceSwitch.status?.supported),
 		checkingChat: rechecking,
-		switchingToChat: interfaceSwitch.starting || interfaceTransitionActive,
+		switchingToChat: interfaceSwitch.starting || switchCardShown,
 		previewReady: hasPreview,
 		artifactCount,
 		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
@@ -1215,7 +1249,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		// A dead session's way back is Restore, in the overlay; a dead shell can
 		// still be closed.
 		close: reviewerPane ? "reviewer" : shellOnly ? "shell" : dead ? undefined : "archive",
-	}), [artifactCount, dead, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, interfaceTransitionActive, rechecking, reviewerPane, shellOnly, unpaired]);
+	}), [artifactCount, dead, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, rechecking, reviewerPane, shellOnly, switchCardShown, unpaired]);
 	// The bar holds only "⋯", as Chat's does: switch, preview and files buttons
 	// beside it cut the iOS title to about nine characters. Chat opens its
 	// actions as a sheet; the terminal keeps the platform's menu.
@@ -1354,7 +1388,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				{/* The connection says something only while it is not live. It floats
 				    over the grid rather than taking a row, so the grid keeps its
 				    rows when the link comes and goes. */}
-				{status !== "open" && !dead ? (
+				{status !== "open" && !dead && !switchCardShown && !startLoaderShown ? (
 					<View pointerEvents="none" style={styles.statusSlot}>
 						<View style={styles.statusPill} accessibilityLiveRegion="polite">
 							{status === "error" ? <AppSymbol name="offline" size={iconSize.sm} color={t.red} /> : <Spinner size={iconSize.sm} />}
@@ -1365,46 +1399,27 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					</View>
 				) : null}
 				{canScrollTop && !dead && !viewGone ? <ScrollTopButton onPress={scrollToTop} /> : null}
-				{interfaceTransitionActive ? (
-					<View style={styles.interfaceOverlay}>
-						<View style={styles.interfaceCard}>
-							{/* The system's own indicator while the switch runs: a turning
-							    glyph that never turned read as frozen. */}
-							{interfaceRecoveryMessage ? (
-								<AppSymbol name="warning" size={iconSize.xl} color={t.red} />
-							) : (
-								<Spinner size="large" />
-							)}
-							<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} style={styles.interfaceTitle}>
-								{interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}
-							</Text>
-							<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.interfaceCopy}>
-								{interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}
-							</Text>
-							{mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition) ? (
-								<Button
-									variant="secondary"
-									title="Cancel switch"
-									loading={interfaceSwitch.cancelling}
-									onPress={() => void interfaceSwitch.cancel().catch(() => {})}
-									style={styles.interfaceAction}
-								/>
-							) : null}
-							{interfaceSwitch.error ? (
-								<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.interfaceError}>{interfaceSwitch.error}</Text>
-							) : null}
-							{interfaceSwitch.fetchFailed || interfaceRecoveryMessage ? (
-								<Button
-									variant="secondary"
-									title="Retry"
-									icon="refresh"
-									loading={rechecking}
-									onPress={() => void retryInterfaceCheck()}
-									style={styles.interfaceAction}
-								/>
-							) : null}
-						</View>
+				{startLoaderShown ? (
+					<View pointerEvents="none" style={styles.startLoader} accessibilityLiveRegion="polite">
+						<Spinner size="large" />
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.startLoaderText}>
+							{status === "open" ? "Starting terminal…" : TERMINAL_STATUS_LABEL[status]}
+						</Text>
 					</View>
+				) : null}
+				{switchCardShown ? (
+					<InterfaceSwitchCard
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}
+						message={interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						blocked={Boolean(interfaceRecoveryMessage)}
+						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
+						cancelling={interfaceSwitch.cancelling}
+						onCancel={() => void interfaceSwitch.cancel().catch(() => {})}
+						error={interfaceSwitch.error}
+						retryable={interfaceSwitch.fetchFailed || Boolean(interfaceRecoveryMessage)}
+						retrying={rechecking}
+						onRetry={() => void retryInterfaceCheck()}
+					/>
 				) : null}
 				{viewGone ? (
 					// Ahead of a dead session's overlay: Restore would reattach to a
@@ -1418,7 +1433,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							action={<Button title="Go back" onPress={leave} />}
 						/>
 					</View>
-				) : dead && (
+				) : dead && !switchCardShown && (
 					<View style={styles.deadOverlay}>
 						<EmptyState
 							icon={TERMINATED_GLYPH}
@@ -1441,7 +1456,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					value={msg}
 					onChangeText={setMsg}
 					onSend={sendPrompt}
-					sending={sending || interfaceTransitionActive}
+					sending={sending || switchCardShown}
 					target={sendTarget}
 					onTargetChange={setSendTarget}
 					targetLocked={shellOnly}
@@ -1503,28 +1518,15 @@ const makeStyles = (t: Theme) =>
 		borderTopColor: t.borderSubtle,
 		backgroundColor: t.bgBase,
 	},
-	// The size of the button it stands in for, so the items beside it hold still.
-	interfaceOverlay: {
+	// Over the empty grid until the terminal first draws; the page's own
+	// surface, so the blank grid behind it never shows.
+	startLoader: {
 		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
-		paddingHorizontal: space.xxl,
-		backgroundColor: t.scrim,
-	},
-	// A surface on the scrim needs no outline of its own.
-	interfaceCard: {
-		width: "100%",
-		maxWidth: 340,
-		alignItems: "center",
 		gap: space.sm,
-		paddingHorizontal: space.xl,
-		paddingVertical: space.xxl,
-		borderRadius: radius.lg, borderCurve: "continuous",
-		backgroundColor: t.bgSurface,
+		backgroundColor: t.bgBase,
 	},
-	interfaceTitle: { ...type.headline, color: t.textPrimary, textAlign: "center" },
-	interfaceCopy: { ...type.footnote, color: t.textSecondary, textAlign: "center" },
-	interfaceAction: { marginTop: space.xxs, alignSelf: "stretch" },
-	interfaceError: { ...type.footnote, color: t.red, textAlign: "center" },
+	startLoaderText: { ...type.footnote, color: t.textSecondary, textAlign: "center" },
 	deadOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
 });

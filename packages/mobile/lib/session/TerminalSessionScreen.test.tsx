@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type Handlers = {
 	onStatus: (status: string) => void;
 	onTerminalResize: (id: string, cols: number, rows: number) => void;
+	onTerminalData: (id: string, bytes: Uint8Array) => void;
+	onTerminalExited: (id: string, code: number) => void;
 };
 
 const fixtures = vi.hoisted(() => {
@@ -178,6 +180,7 @@ vi.mock("./NoticeDismissButton", async () => {
 });
 
 import TerminalScreen from "./TerminalSessionScreen";
+import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 
 let renderer: ReactTestRenderer | undefined;
@@ -355,5 +358,55 @@ describe("the terminal grid's overlays", () => {
 		expect(find("TerminalNotice")[0].props.notice).toBeNull();
 		act(() => (state.props.action as ReactElement<{ title: string; onPress: () => void }>).props.onPress());
 		expect(fixtures.backOr).toHaveBeenCalledWith(fixtures.router);
+	});
+});
+
+describe("opening and leaving the terminal", () => {
+	const texts = () => find("Text").map((text) => text.props.children);
+	const output = async (text: string) => {
+		await act(async () => fixtures.mux!.handlers.onTerminalData("worker-1", new TextEncoder().encode(text)));
+	};
+	const titles = () => find("EmptyState").map((state) => state.props.title);
+
+	it("holds a loader over the empty grid until the terminal first draws", async () => {
+		await mount();
+		expect(texts()).toContain("Connecting…");
+		await act(async () => fixtures.mux!.handlers.onStatus("open"));
+		expect(texts()).toContain("Starting terminal…");
+		// The attach handshake and a blank repaint draw nothing yet.
+		await output("\x1bc\x1b[?1049h\x1b[2J\x1b[H");
+		expect(texts()).toContain("Starting terminal…");
+		await output("> ready");
+		expect(texts()).not.toContain("Starting terminal…");
+	});
+
+	it("keeps the switch card up, not a terminated session, while the switch stops the terminal", async () => {
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "source_stopping", targetMode: "chat" };
+		await mount();
+		await act(async () => fixtures.mux!.handlers.onTerminalExited("worker-1", 0));
+		expect(find(InterfaceSwitchCard as never)).toHaveLength(1);
+		expect(titles()).not.toContain("Session terminated");
+		expect(find("TerminalNotice")[0].props.notice).toBeNull();
+
+		// Finished on the daemon, but the route has not swapped to Chat yet.
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "completed", targetMode: "chat" };
+		await act(async () => renderer!.update(<TerminalScreen />));
+		const card = find(InterfaceSwitchCard as never);
+		expect(card).toHaveLength(1);
+		expect(card[0].props.message).toBe("Chat is ready. Opening it now.");
+		expect(titles()).not.toContain("Session terminated");
+	});
+
+	it("still reports a terminal that exited on its own", async () => {
+		await mount();
+		await act(async () => fixtures.mux!.handlers.onTerminalExited("worker-1", 1));
+		expect(titles()).toContain("Session terminated");
+		expect(find("TerminalNotice")[0].props.notice).not.toBeNull();
+	});
+
+	it("does not resurrect the card for a switch that completed before this visit", async () => {
+		fixtures.interfaceSwitch.transition = { id: "t-0", phase: "completed", targetMode: "chat" };
+		await mount();
+		expect(find(InterfaceSwitchCard as never)).toHaveLength(0);
 	});
 });
