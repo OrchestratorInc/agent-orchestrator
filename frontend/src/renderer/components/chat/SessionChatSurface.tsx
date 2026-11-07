@@ -477,15 +477,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		}
 	}, [navigateToAnnotation, onSelectChat]);
 	useEffect(() => {
-		const reveal = takeSessionSearchReveal(session.id);
-		if (reveal) {
-			applyReveal(reveal);
-			return;
-		}
-		return subscribeSessionSearchReveal(session.id, () => {
-			const next = takeSessionSearchReveal(session.id);
-			if (next) applyReveal(next);
-		});
+		const revealPending = () => {
+			const reveal = takeSessionSearchReveal(session.id);
+			if (reveal) applyReveal(reveal);
+		};
+		// The target that opened the session, then every later one: picking another
+		// result in this session keeps the surface mounted, so this effect does not
+		// run again to pick it up.
+		revealPending();
+		return subscribeSessionSearchReveal(session.id, revealPending);
 	}, [applyReveal, session.id]);
 
 	const findOpen = Boolean(find);

@@ -484,6 +484,25 @@ describe("SessionChatSurface search reveal", () => {
 		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
 	});
 
+	// Found in review: a session first opened from a result consumed that target
+	// and never listened for the next, so picking another result in the same
+	// session (navigation keeps the surface mounted) left it pending.
+	it("follows a second result in the session a result opened, without remounting", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky" });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
+
+		act(() => requestSessionSearchReveal("sess-1", { messageId: "msg-2", text: "timeout" }));
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-2"));
+		expect(screen.getByTestId("annotation-text")).toHaveTextContent("timeout");
+		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
+	});
+
 	function mockMatches(byQuery: Record<string, Array<{ messageId: string; snippet: string; highlights: Array<{ start: number; end: number }> }>>) {
 		getMock.mockImplementation(async (path: string, options?: { params?: { query?: { q?: string } } }) => {
 			if (path === "/api/v1/sessions/{sessionId}/search/matches") {
