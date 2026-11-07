@@ -116,8 +116,6 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	}
 	reconcile(domain.SessionBranchState{Branch: "ao/s1/feature", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 
-	// A new branch on the same commit moves no tip, but it is still the
-	// branch a restore has to come back on.
 	runGit(t, worktree, "checkout", "-b", "ao/s1/pr")
 	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 }

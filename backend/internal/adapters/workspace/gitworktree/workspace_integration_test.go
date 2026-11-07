@@ -63,10 +63,6 @@ func TestWorkspaceIntegrationCreateRestoreDestroy(t *testing.T) {
 	}
 }
 
-// Archiving a session removes its worktree together with the git registration,
-// so Restore cannot read from git which branch the agent last had checked out.
-// It must come back on that branch while it still exists and is free, and on
-// the session branch otherwise.
 func TestWorkspaceIntegrationRestoreUsesLastCheckedOutBranch(t *testing.T) {
 	git := requireGit(t)
 	const sessionBranch, prBranch = "ao/sess/root", "ao/sess/fix"

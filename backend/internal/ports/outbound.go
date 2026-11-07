@@ -567,10 +567,7 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
-	// LastBranch is the branch the session's worktree last had checked out,
-	// such as a PR branch the agent switched to. Restore recreates a removed
-	// worktree on it while it still exists locally, instead of on Branch.
-	LastBranch string
+	LastBranch    string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
 	FreshBranch      bool

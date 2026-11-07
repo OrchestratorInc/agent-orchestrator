@@ -307,8 +307,7 @@ type ReviewerTerminator interface {
 	RestoreReviewer(ctx context.Context, workerID domain.SessionID) error
 }
 
-// BranchStateRecorder persists the branch a session's worktree has checked
-// out. The session service implements it and is assembled after the manager.
+// BranchStateRecorder records the branch a session's worktree has checked out.
 type BranchStateRecorder interface {
 	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
 }
@@ -418,8 +417,7 @@ type Manager struct {
 	backgroundTaskUsage BackgroundTaskUsage
 	usageFlusher        UsageFlusher
 	importArchive       ImportArchiveRefresher
-	// branchStates is late-bound by SetBranchStateRecorder.
-	branchStates BranchStateRecorder
+	branchStates        BranchStateRecorder
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -683,8 +681,7 @@ func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
 	m.usageFlusher = flusher
 }
 
-// SetBranchStateRecorder completes daemon wiring before request handling
-// begins. Nil skips the branch record a kill takes before teardown.
+// SetBranchStateRecorder completes daemon wiring before request handling begins.
 func (m *Manager) SetBranchStateRecorder(recorder BranchStateRecorder) {
 	m.branchStates = recorder
 }
@@ -2888,10 +2885,6 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		}
 		releaseTerminals = release
 	}
-	// Nothing in the worktree can switch its branch any more. Record that
-	// branch before the row is terminated, because the branch observer skips
-	// terminated sessions and its 30 s tick can miss a switch the agent made
-	// just before the archive. Restore recreates the worktree on it.
 	if ws.Path != "" && !workspaceProject && m.branchStates != nil {
 		if err := m.branchStates.ReconcileSessionBranchState(ctx, id); err != nil {
 			m.logger.Warn("kill: record worktree branch failed", "sessionID", id, "error", err)
@@ -3268,6 +3261,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 }
 
 func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo) (RestoreResult, error) {
+	if rec.Metadata.Branch != "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
+		ws.Branch = rec.Metadata.Branch
+	}
 	result, err := m.relaunchSession(ctx, "restore", rec, project, ws, nil)
 	if err != nil {
 		return RestoreResult{}, err
@@ -7591,9 +7587,6 @@ func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 	return ports.RuntimeHandle{ID: meta.RuntimeHandleID}
 }
 
-// lastCheckedOutBranch is the branch the session's worktree last had checked
-// out. A state observed before the branch was recorded still names a pushed
-// branch through its remote-tracking ref, which the observer reads on origin.
 func lastCheckedOutBranch(rec domain.SessionRecord) string {
 	if rec.BranchState == nil {
 		return ""

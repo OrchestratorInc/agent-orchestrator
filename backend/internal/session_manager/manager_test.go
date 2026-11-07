@@ -1271,7 +1271,8 @@ type fakeWorkspace struct {
 	calls []string
 	// sharedLog, when non-nil, receives entries alongside calls so ordering
 	// tests can compare workspace calls against store calls in one sequence.
-	sharedLog *[]string
+	sharedLog      *[]string
+	restoredBranch string
 }
 
 type fetchDefaultBranchCall struct {
@@ -1425,7 +1426,11 @@ func (w *fakeWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) 
 		w.calls = append(w.calls, entry)
 		return ports.WorkspaceInfo{Path: cfg.Path, Branch: cfg.Branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: cfg.RepoPath}, nil
 	}
-	return w.Create(ctx, cfg)
+	info, err := w.Create(ctx, cfg)
+	if w.restoredBranch != "" {
+		info.Branch = w.restoredBranch
+	}
+	return info, err
 }
 func (w *fakeWorkspace) ForceDestroy(_ context.Context, info ports.WorkspaceInfo) error {
 	entry := "ForceDestroy:" + string(info.SessionID)
@@ -4389,9 +4394,6 @@ func (f *fakeBranchStateRecorder) ReconcileSessionBranchState(_ context.Context,
 	return nil
 }
 
-// The branch observer skips terminated sessions and ticks every 30 s, so a
-// branch the agent switched to just before the archive is recorded by the kill
-// itself, while the row is live and the worktree still exists.
 func TestKill_RecordsTheWorktreeBranchBeforeTeardown(t *testing.T) {
 	m, st, _, ws := newManager()
 	recorder := &fakeBranchStateRecorder{st: st, ws: ws}
@@ -4804,6 +4806,18 @@ func TestRestorePassesTheLastCheckedOutBranch(t *testing.T) {
 				t.Fatalf("workspace restore branch %q, last branch %q; want %q and %q", got.Branch, got.LastBranch, "b", tc.want)
 			}
 		})
+	}
+}
+
+func TestRestoreOnTheLastBranchKeepsTheSessionBranch(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.restoredBranch = "b/pr"
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b/root", AgentSessionID: "agent-x"})
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Branch; got != "b/root" {
+		t.Fatalf("session branch after restore = %q, want b/root", got)
 	}
 }
 

@@ -1476,9 +1476,6 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 			recreateBranch = rec.Branch
 		}
 	} else if cfg.LastBranch != "" && cfg.LastBranch != cfg.Branch {
-		// Archiving removed the registration with the worktree, so git no
-		// longer knows the branch it had. Take the last branch AO saw checked
-		// out there while it still exists and no other worktree holds it.
 		exists, err := w.refExists(ctx, repo, "refs/heads/"+cfg.LastBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
