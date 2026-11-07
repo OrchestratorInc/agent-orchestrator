@@ -188,7 +188,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
+	wantEvents := []string{"session-start", "active", "pre-tool-use", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -212,6 +212,190 @@ process.stdin.on("end", () => {
 	missing.Env = append(envWithoutPath(os.Environ()), "PATH="+t.TempDir(), "AO_RUNTIME_LAUNCH_ID=launch-missing")
 	if output, err := missing.CombinedOutput(); err != nil {
 		t.Fatalf("plugin harness failed with ao missing: %v\n%s", err, output)
+	}
+}
+
+func TestManagedV2PluginFiltersChildSessionsByParentID(t *testing.T) {
+	// Subagents arrive on the same bus; the embedded plugin must track them from
+	// session.created(parentID) and never report a child id as the identity.
+	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "resolveSessionID"} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin does not filter child sessions (%q missing)", marker)
+		}
+	}
+}
+
+func TestManagedV2PluginFiltersChildSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "subagents")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	// Child execution/tool activity folds onto the parent as plain active; child
+	// permission dialogs surface on the parent; child turn boundaries are
+	// dropped. The parent turn still emits its own start/activity/stop.
+	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "active", "post-tool-use", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	payloads := make([]map[string]any, len(calls))
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		if strings.Contains(calls[i].Input, "ses_child") || strings.Contains(calls[i].Input, "ses_grandchild") {
+			t.Fatalf("call %d leaked a child session id: %s", i, calls[i].Input)
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payloads[i]); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		if payloads[i]["session_id"] != "ses_parent" {
+			t.Fatalf("call %d session_id = %#v, want the parent id", i, payloads[i]["session_id"])
+		}
+	}
+	// A child tool must not donate its tool identity to the parent's flight.
+	if got, ok := payloads[2]["tool_name"]; ok && got != "" {
+		t.Fatalf("child tool active carried tool_name %#v, want none", got)
+	}
+	// Parent tools keep the identity the step timeline needs.
+	if payloads[6]["tool_name"] != "read" || payloads[6]["tool_use_id"] != "tool_parent" {
+		t.Fatalf("parent tool payload = %#v, want read/tool_parent", payloads[6])
+	}
+}
+
+func TestManagedV2PluginWiresToolEvents(t *testing.T) {
+	// Tool calls must be reported as tool-use events with the upstream call id:
+	// the lifecycle only tracks flights and steps for these event names.
+	for _, marker := range []string{`report("pre-tool-use"`, `"post-tool-use-failure"`, `input.status === "error"`, "input.id"} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin missing tool-event wiring %q", marker)
+		}
+	}
+	if strings.Contains(v2PluginSource, "input.input") {
+		t.Fatal("managed v2 plugin forwards tool arguments")
+	}
+}
+
+func TestManagedV2PluginReportsToolEvents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "tools")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	wantEvents := []string{"session-start", "pre-tool-use", "post-tool-use", "pre-tool-use", "post-tool-use-failure", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		if payload["session_id"] != "ses_tools" {
+			t.Fatalf("call %d session_id = %#v", i, payload["session_id"])
+		}
+		for _, leaked := range []string{"args", "input", "result", "error"} {
+			if _, ok := payload[leaked]; ok {
+				t.Fatalf("call %d forwarded tool payload field %q: %#v", i, leaked, payload)
+			}
+		}
+	}
+	// The call id is stable across the pair, so the step opens and closes.
+	for i, want := range []struct {
+		name string
+		id   string
+	}{
+		{"bash", "call_1"},
+		{"bash", "call_1"},
+		{"read", "call_2"},
+		{"read", "call_2"},
+	} {
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i+1].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", i+1, err)
+		}
+		if payload["tool_name"] != want.name || payload["tool_use_id"] != want.id {
+			t.Fatalf("call %d = %#v, want %s/%s", i+1, payload, want.name, want.id)
+		}
 	}
 }
 
@@ -318,6 +502,38 @@ const cleanup = await loaded.default.setup(context);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 if (mode === "single") {
   await callbacks["tool:execute.before"]({ sessionID: "ses_native_v2", tool: "read" });
+} else if (mode === "subagents") {
+  emit({ type: "session.created", data: { sessionID: "ses_parent" } });
+  await flush();
+  emit({ type: "session.created", data: { sessionID: "ses_child", parentID: "ses_parent" } });
+  await flush();
+  emit({ type: "session.created", data: { sessionID: "ses_grandchild", parentID: "ses_child" } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_child" } });
+  await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_child", tool: "read", id: "tool_child" });
+  emit({ type: "permission.asked", data: { sessionID: "ses_child", id: "per_child" } });
+  await flush();
+  emit({ type: "permission.replied", data: { sessionID: "ses_child", requestID: "per_child", reply: "once" } });
+  await flush();
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" } });
+  await flush();
+  emit({ type: "session.status", data: { sessionID: "ses_child", status: { type: "idle" } } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_parent" } });
+  await flush();
+  await callbacks["tool:execute.after"]({ sessionID: "ses_parent", tool: "read", id: "tool_parent" });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_parent" } });
+  await flush();
+} else if (mode === "tools") {
+  emit({ type: "session.created", data: { sessionID: "ses_tools" } });
+  await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_tools", tool: "bash", id: "call_1", input: { command: "rm -rf /" } });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_tools", tool: "bash", id: "call_1", status: "completed", result: { output: "ok" } });
+  await callbacks["tool:execute.before"]({ sessionID: "ses_tools", tool: "read", id: "call_2" });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_tools", tool: "read", id: "call_2", status: "error", error: { message: "nope" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_tools" } });
+  await flush();
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
   await flush();
