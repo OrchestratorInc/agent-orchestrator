@@ -6,7 +6,7 @@ import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { isLegacyPairingCode, parsePairingCode } from "./pairingCode";
 import type { RaceOutcome } from "./race";
 
-type SavedHost = Pick<Host, "id" | "name" | "appearance">;
+type SavedHost = Pick<Host, "id" | "name" | "appearance"> & Partial<Pick<Host, "endpoints">>;
 
 export type PairSuccess = {
 	ok: true;
@@ -45,7 +45,7 @@ export type PairDeps = {
 	chooseName: (suggested: string, appearance: MachineAppearance, hostId: string) => Promise<MachineNameChoice | null>;
 	/** The saved pairing for a machine, if this phone has one. */
 	findHost: (id: string) => Promise<SavedHost | null>;
-	saveHost: (host: Host) => Promise<void>;
+	saveHost: (host: Host, options?: { replaceLegacy?: boolean }) => Promise<void>;
 	setActiveHost: (id: string) => Promise<void>;
 };
 
@@ -53,7 +53,8 @@ export type MachineNameChoice = { name: string; appearance: MachineAppearance };
 
 export type PairOptions = {
 	/** The saved pairing the user chose to reconnect. A code for any other
-	 * machine still pairs, as that machine, and leaves this one untouched. */
+	 * machine still pairs, as that machine, and leaves this one untouched. An
+	 * id-less target can adopt the verified identity at its saved address. */
 	repairHost?: SavedHost;
 };
 
@@ -90,15 +91,16 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	}
 
 	const hostId = offer.hostId || outcome.hostId;
-	// The pairing to refresh is chosen by the identity the code carries, never
-	// by where the scan started: a code for another machine pointed at the
-	// reconnect screen is still what the user wants connected now, and saving
-	// it under the machine they started from would hand that entry B's token.
-	// Compared with the id being saved, not the code's own field: an id-less
-	// legacy pairing and an id-less code would otherwise "match" on "" while
-	// the machine is saved under the id it reported (#7346).
 	const repair = options.repairHost;
-	const repairing = repair !== undefined && repair.id === hostId;
+	// Only an explicitly selected, id-less pairing may adopt a scanned identity.
+	// Prove its saved address belongs to the scanned machine independently of
+	// the main race: LAN can win before a saved Tailscale address answers.
+	// This probe checks identity only; the scanned credential verified above.
+	const legacyProof = repair?.id === "" && hostId !== "" && repair.endpoints?.length
+		? await deps.race(repair.endpoints, hostId)
+		: null;
+	const replacingLegacy = legacyProof?.ok === true;
+	const repairing = repair !== undefined && (repair.id === hostId || replacingLegacy);
 	const saved = repairing ? repair : hostId ? await deps.findHost(hostId) : null;
 	let name = saved?.name.trim() ?? "";
 	let appearance = saved?.appearance;
@@ -123,7 +125,8 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 		token: offer.token,
 		lastConnected: Date.now(),
 	};
-	await deps.saveHost(host);
+	if (replacingLegacy) await deps.saveHost(host, { replaceLegacy: true });
+	else await deps.saveHost(host);
 	await deps.setActiveHost(host.id);
 
 	return {
