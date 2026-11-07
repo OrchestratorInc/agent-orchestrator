@@ -53,6 +53,16 @@ type sessionStore interface {
 	UpdatePRLastNudgeSignature(ctx context.Context, prURL, payload string) error
 }
 
+type semanticDeliveryActivityStore interface {
+	UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+		context.Context,
+		domain.SessionRecord,
+		int64,
+		string,
+		string,
+	) (bool, error)
+}
+
 // controllerEpochStore is the atomic persistence primitive used by
 // CommitControllerEpoch. It stays optional on the broad lifecycle store so
 // focused reducer fakes do not need controller-transition methods; production
@@ -568,6 +578,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	}
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
+	s.CoordinationID = strings.TrimSpace(s.CoordinationID)
 	if s.SubagentID != "" {
 		// Child hook identity and transcript are not the root conversation's
 		// resumable identity or history checkpoint.
@@ -582,6 +593,8 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	if !s.ConversationCheckpointOrigin.Valid() {
 		s.ConversationCheckpointOrigin = domain.ConversationCheckpointOriginUnknown
 	}
+	var semanticDeliveryStore semanticDeliveryActivityStore
+	semanticDeliverySignal := s.Event == "user-prompt-submit" && s.SubagentID == "" && s.CoordinationID != ""
 	// The hook event is the provenance boundary for provider text. Native hook
 	// payloads repeat similarly named aliases on tool, lifecycle, and subagent
 	// events, so accepting a field merely because it is non-empty can promote an
@@ -681,6 +694,18 @@ retryProjection:
 		(mode != domain.SessionModeChat && s.ControllerGeneration != "") {
 		m.mu.Unlock()
 		return nil
+	}
+	if semanticDeliverySignal && mode != domain.SessionModeChat {
+		if s.LaunchID == "" {
+			m.mu.Unlock()
+			return fmt.Errorf("lifecycle: semantic delivery %s has no runtime launch", s.CoordinationID)
+		}
+		var ok bool
+		semanticDeliveryStore, ok = m.store.(semanticDeliveryActivityStore)
+		if !ok {
+			m.mu.Unlock()
+			return fmt.Errorf("lifecycle: semantic delivery acceptance storage is unavailable")
+		}
 	}
 	if s.ExpectedRevision != nil && rec.Revision != *s.ExpectedRevision {
 		m.mu.Unlock()
@@ -940,7 +965,13 @@ retryProjection:
 	stepsBeforeProjection := m.stepsSnapshotLocked(id)
 	m.recordStepLocked(id, s, now)
 	project := func(next domain.SessionRecord) (applied, retry bool, err error) {
-		applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
+		if semanticDeliveryStore != nil {
+			applied, err = semanticDeliveryStore.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+				ctx, next, observedRevision, s.LaunchID, s.CoordinationID,
+			)
+		} else {
+			applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
+		}
 		if applied {
 			return applied, false, err
 		}
