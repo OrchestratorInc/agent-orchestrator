@@ -758,7 +758,8 @@ export interface paths {
         get: operations["listSessionArtifacts"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** @description Deletes one of the session's artifact files: its row, its stored object version, and, through a request to a connected worker, the file on the worker's disk (a worker that is not connected removes it when it next starts). An invalid path answers 400 invalid_path. Only the person who started the session (Session.createdByUserId) deletes a file; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        delete: operations["deleteSessionArtifact"];
         options?: never;
         head?: never;
         patch?: never;
@@ -795,7 +796,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Only the person who started the session (Session.createdByUserId) saves an edit: any other member of its organization, who may still read the file, gets 403 artifact_not_owner, as does everyone for a session with no creator on record. Present only when the deployment reports offering.artifacts; otherwise 404. */
         put: operations["saveSessionArtifact"];
         post?: never;
         delete?: never;
@@ -857,7 +858,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. */
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. Only the person who started the session restores a version; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. */
         post: operations["restoreSessionArtifactVersion"];
         delete?: never;
         options?: never;
@@ -3559,6 +3560,10 @@ export interface components {
             defaultEffort?: string;
             /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
             approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
+            /** @description The model the account's provider listed behind this entry: its own ID, or the model an alias such as opus resolves to. Absent when the provider did not confirm the entry for the account, or from an older worker. Only such a confirmation says the account runs the model an alias describes. */
+            providerId?: string;
+            /** @description On a session's own list, a model its worker added only so the session keeps its own selection. The account's provider did not list it, so it is not kept as the account's. */
+            sessionOnly?: boolean;
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
@@ -3571,6 +3576,8 @@ export interface components {
             cliVersion?: string;
             /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
             accountListed?: boolean;
+            /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
+            sessionOnlyMarked?: boolean;
         };
         SendMessageInput: {
             text: string;
@@ -3865,7 +3872,7 @@ export interface components {
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
-             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact). Omitted when none is on record.
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
              */
             createdByUserId?: string;
             /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
@@ -6400,6 +6407,30 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionArtifactList"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteSessionArtifact: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

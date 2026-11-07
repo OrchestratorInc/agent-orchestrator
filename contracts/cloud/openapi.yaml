@@ -1189,6 +1189,30 @@ paths:
                 $ref: "#/components/schemas/SessionArtifactList"
         default:
           $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Deletes one of the session's artifact files: its row, its stored
+        object version, and, through a request to a connected worker, the file
+        on the worker's disk (a worker that is not connected removes it when
+        it next starts). An invalid path answers 400 invalid_path. Only the
+        person who started the session (Session.createdByUserId) deletes a
+        file; anyone else gets 403 artifact_not_owner, as for
+        saveSessionArtifact. Present only when the deployment reports
+        offering.artifacts; otherwise 404.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "204":
+          description: The file was deleted.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -1224,8 +1248,12 @@ paths:
         the app, when the committed file still has expectedSha256 (409
         artifact_changed otherwise). The save is kept as the file's newest
         version and reaches the session's worker, which writes it to its disk
-        unless the file changed there since. Present only when the deployment
-        reports offering.artifacts; otherwise 404.
+        unless the file changed there since. Only the person who started the
+        session (Session.createdByUserId) saves an edit: any other member of
+        its organization, who may still read the file, gets 403
+        artifact_not_owner, as does everyone for a session with no creator on
+        record. Present only when the deployment reports offering.artifacts;
+        otherwise 404.
       requestBody:
         required: true
         content:
@@ -1312,6 +1340,8 @@ paths:
         Makes a kept version the committed file again, kept as its newest
         version (restoredFrom names the one it restored), and hands it to the
         session's worker. Restoring the committed version changes nothing.
+        Only the person who started the session restores a version; anyone
+        else gets 403 artifact_not_owner, as for saveSessionArtifact.
       requestBody:
         required: true
         content:
@@ -6319,6 +6349,20 @@ components:
           items:
             type: string
             enum: [default, accept-edits, auto, bypass-permissions]
+        providerId:
+          description: >-
+            The model the account's provider listed behind this entry: its own
+            ID, or the model an alias such as opus resolves to. Absent when the
+            provider did not confirm the entry for the account, or from an
+            older worker. Only such a confirmation says the account runs the
+            model an alias describes.
+          type: string
+        sessionOnly:
+          description: >-
+            On a session's own list, a model its worker added only so the
+            session keeps its own selection. The account's provider did not
+            list it, so it is not kept as the account's.
+          type: boolean
     ChatModelsResponse:
       type: object
       additionalProperties: false
@@ -6344,6 +6388,12 @@ components:
             On a session's list, true when its worker listed the models for
             the signed-in account rather than from the CLI's built-in list.
             Only such a list becomes the user's catalog.
+          type: boolean
+        sessionOnlyMarked:
+          description: >-
+            On a session's list, true when its worker marks the models it
+            added for the session (sessionOnly). A Claude Code list without it
+            does not become the user's catalog.
           type: boolean
     SendMessageInput:
       type: object
@@ -6939,7 +6989,10 @@ components:
           description: >-
             The person who started the session (for a spawned worker, its
             orchestrator's). Only they share its files as public links
-            (shareSessionArtifact). Omitted when none is on record.
+            (shareSessionArtifact) and change them (saveSessionArtifact,
+            restoreSessionArtifactVersion, deleteSessionArtifact); every other
+            member of the organization sees them read-only. Omitted when none
+            is on record.
         requestedBy:
           type: object
           additionalProperties: false

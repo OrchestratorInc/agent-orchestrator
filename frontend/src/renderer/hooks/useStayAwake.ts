@@ -1,11 +1,14 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
-type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean };
+// idleFallback: the sidebar asked for wake, not specifically closed-lid wake,
+// so a lid setup failure must still leave idle wake on.
+type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; idleFallback?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
 /** The desktop and mobile controls share intent, pending state, and ownership. */
@@ -17,7 +20,7 @@ export function useStayAwake(enabled = true) {
 		enabled,
 		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET("/api/v1/mobile/status", { signal });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Mobile status is unavailable");
 			return data;
 		},
@@ -63,9 +66,25 @@ export function useStayAwake(enabled = true) {
 				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed && r.lidClosed)) || current?.lidActive;
 			const updateMobile = async (on: boolean, lidClosed: boolean) => {
 				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: on, lidClosed } });
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+			};
+			// The lid POST answers before the native helper acknowledges its lease
+			// (two-second scan), so its response says "starting". Re-read until the
+			// helper settles; otherwise that transient reason stays cached.
+			const confirmLid = async () => {
+				const deadline = Date.now() + 5_000;
+				while (isLatest() && cache.getQueryData<MobileStatus>(mobileStatusQueryKey)?.keepAwake?.lidReason === "starting" && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 500));
+					try {
+						const { data } = await apiClient.GET("/api/v1/mobile/status");
+						if (!data) break;
+						cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+					} catch {
+						break;
+					}
+				}
 			};
 			const start = async () => {
 				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
@@ -120,8 +139,17 @@ export function useStayAwake(enabled = true) {
 				} else await updateMobile(true, false);
 			} else if (change.lidClosed === true) {
 				// Reject a failed lid opt-in before creating or resuming desktop ownership.
-				await updateMobile(true, true);
+				try {
+					await updateMobile(true, true);
+				} catch (e) {
+					if (!change.idleFallback) throw e;
+					// Helper setup can fail (launchctl, incompatible helper). The
+					// sidebar worked without the helper before, so keep idle wake.
+					await ensureDesktop();
+					return;
+				}
 				await ensureDesktop();
+				await confirmLid();
 			} else {
 				await ensureDesktop();
 				if (change.rememberMobile) await updateMobile(true, false);
@@ -144,7 +172,10 @@ export function useStayAwake(enabled = true) {
 			const requested = current?.sessions?.some((s) => !s.endedAt)
 				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed))
 				|| current?.active || mobileState?.keepAwake?.enabled || mobileState?.keepAwake?.active;
-			change({ on: !(latestChange()?.on ?? requested) });
+			const on = !(latestChange()?.on ?? requested);
+			// Sidebar and Settings are one switch: where closed-lid wake is
+			// supported, turning on here arms the same mode Settings shows.
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on });
 		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),

@@ -36,6 +36,8 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -138,6 +140,11 @@ export function BoardSessionCardAdapter({
 	);
 }
 
+/** The board card for a session, rendered static for a sidebar hover preview. */
+export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
+	return <DesktopSessionCard interactive={false} session={session} still />;
+}
+
 export function ArchivedSessionCardAdapter({
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -201,6 +208,7 @@ function DesktopSessionCard({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -216,6 +224,7 @@ function DesktopSessionCard({
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
+	still?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -226,24 +235,25 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	// Archiving is the owner workspace's; a guest's archive would always be refused.
+	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					<SessionArchiveDialog
-						onConfirm={(choice) => {
-							setConfirmOpen(false);
-							onTerminate(choice);
-						}}
-						onOpenChange={setConfirmOpen}
-						open={confirmOpen}
-						session={session}
-						trigger={
+		<SessionArchiveDialog
+			onConfirm={(choice) => {
+				setConfirmOpen(false);
+				onTerminate(choice);
+			}}
+			onOpenChange={setConfirmOpen}
+			open={confirmOpen}
+			session={session}
+			trigger={
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex">
 							<Button
 								aria-label={
 									termination.isPending
@@ -273,16 +283,17 @@ function DesktopSessionCard({
 									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
 							</Button>
-						}
-					/>
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
-			</TooltipContent>
-		</Tooltip>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
+					</TooltipContent>
+				</Tooltip>
+			}
+		/>
 	) : undefined;
 
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
 		<SessionCardView
 			action={action}
@@ -338,6 +349,8 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			still={still}
+			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);

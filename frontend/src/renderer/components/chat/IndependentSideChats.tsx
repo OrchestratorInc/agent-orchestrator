@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
@@ -134,7 +135,6 @@ export function SideComposer({
 		Boolean(draft.text.trim() || files.length || draft.attachments.length || draft.references.length);
 	return (
 		<div className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
-			<div aria-hidden="true" className="chat-composer-fade" />
 			<div className="mx-auto w-full max-w-3xl">
 				{queuedDock}
 				<form
@@ -1119,7 +1119,7 @@ export function useIndependentSideChats(
 					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
 						await aoBridge.sideChats.capture(sideId, true);
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
-					throw new Error(apiErrorMessage(requestError));
+					throw apiErrorException(requestError);
 				}
 				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {
@@ -1281,8 +1281,6 @@ export function useIndependentSideChats(
 	);
 	const {
 		scrollRef: tabStripRef,
-		showLeftFade,
-		showRightFade,
 		scrollToEnd,
 	} = useTabScrollEdges([sides.length, visible]);
 	const previousTabCount = useRef(sides.length);
@@ -1330,7 +1328,7 @@ export function useIndependentSideChats(
 					role="tablist"
 					aria-label={t("sideChat.tabs")}
 					onKeyDown={handleTabListKeyDown}
-					className="browser-panel__tab-strip"
+					className="browser-panel__tab-strip edge-fade edge-fade-x"
 				>
 					{sides.map((side) => {
 						const tab = (
@@ -1416,10 +1414,6 @@ export function useIndependentSideChats(
 						);
 					})}
 				</div>
-				{showLeftFade ? (
-					<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
-				) : null}
-				{showRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 			</div>
 			<Pressable
 				type="button"

@@ -29,7 +29,7 @@ import {
 	type SessionMode,
 	type SpawnAttachmentInput,
 } from "./api";
-import { isConfigured, machineIdentity, type ServerConfig } from "./config";
+import { hostMachineIdentity, isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
@@ -69,6 +69,9 @@ import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummar
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
+import { emulatedHostSnapshots, useEmulatedMachines } from "./emulatedMachines";
+import type { ApprovalMode } from "./spawnApproval";
+import { viewMachine } from "./viewMachine";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
 
@@ -86,6 +89,10 @@ export type SpawnOptions = {
 	prompt?: string;
 	harness?: string;
 	model?: string;
+	/** The model's effort level; omitted runs the model's default. */
+	effort?: string;
+	/** The worker's starting approval mode; omitted keeps the project's. */
+	approvalMode?: ApprovalMode;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -93,8 +100,26 @@ export type SpawnOptions = {
 };
 
 type AppState = {
+	/**
+	 * The verified endpoint and credential for this machine: what requests use.
+	 * Null in the background and while endpoints are raced, so a LAN address
+	 * that now belongs to another machine never receives the bearer. Never
+	 * decide what to render, or key display state, on it: see `machine`.
+	 */
 	config: ServerConfig | null;
 	configured: boolean;
+	/**
+	 * Which machine this view is about, as `machineIdentity` spells it. Unlike
+	 * `config` it survives backgrounding and endpoint races, and changes only
+	 * when the user pairs, forgets or switches machines. Screens, caches and
+	 * component keys belong to this. "" when no machine is selected.
+	 */
+	machine: string;
+	/**
+	 * Whether this view has a paired machine, independent of whether it is
+	 * reachable right now. Null only until the first resolution says.
+	 */
+	paired: boolean | null;
 	/** Paired machine owning this view, even while its endpoint is offline. */
 	currentHostId: string | undefined;
 	selectedHostName: string | null;
@@ -199,6 +224,8 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			...app,
 			config,
 			configured: !!config && isConfigured(config),
+			machine: config && isConfigured(config) ? machineIdentity(config) : host ? hostMachineIdentity(host.hostId) : "",
+			paired: host ? true : app.configResolved ? false : null,
 			currentHostId: host?.hostId,
 			selectedHostName: host?.name ?? null,
 			activeEndpoints: host?.endpoints ?? [],
@@ -235,6 +262,22 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 	return <AppContext.Provider value={scoped}>{children}</AppContext.Provider>;
 }
 
+/**
+ * While `frozen`, everything below sees the state as it was when it froze, so a
+ * poll does not re-render it. It catches up as soon as it thaws.
+ *
+ * The board's tabs all stay mounted, each keeping its list and scroll position,
+ * but only the one on screen has to follow the store. Unlike react-freeze, which
+ * hides what it freezes, the content stays drawn: a tab the platform switches
+ * to natively shows what it had until the switch reaches JS.
+ */
+export function FrozenAppScope({ frozen, children }: { frozen: boolean; children: ReactNode }) {
+	const app = useApp();
+	const held = useRef(app);
+	if (!frozen) held.current = app;
+	return <AppContext.Provider value={held.current}>{children}</AppContext.Provider>;
+}
+
 function HostConversationTransport({ config }: { config: ServerConfig }) {
 	useConversationEventTransport(config);
 	return null;
@@ -242,7 +285,7 @@ function HostConversationTransport({ config }: { config: ServerConfig }) {
 
 // Convenience selectors -------------------------------------------------------
 
-export function useVisibleSessions(): DashboardSession[] {
+function useVisibleSessions(): DashboardSession[] {
 	const { sessions, activeProjectId } = useApp();
 	return useMemo(
 		() => (activeProjectId === "all" ? sessions : sessions.filter((s) => s.projectId === activeProjectId)),
@@ -292,19 +335,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const promotedConfigRef = useRef<ServerConfig | null>(null);
 	const primarySnapshotRef = useRef<HostSnapshot | null>(null);
 	const configResolution = useRef(0);
-	// The machine the board was showing when the app went to the background.
-	// Backgrounding drops the connection (see the AppState effect), and without
-	// this the board hid its rows until the endpoint race finished, so a
-	// one-second trip to another app came back to a full-screen loader. Rows
-	// are still keyed to this machine, so they show only while it is the one
-	// selected. "" means nothing is held. The ref keeps the host id for
-	// reloadConfig, which must not wipe rows for the same host on resume.
-	const [heldMachine, setHeldMachine] = useState("");
-	const heldHostIdRef = useRef<string | null>(null);
-	const releaseHeld = useCallback(() => {
-		heldHostIdRef.current = null;
-		setHeldMachine("");
-	}, []);
+	// The selected machine as of the last commit. reloadConfig compares the
+	// newly read selection with it: the same machine coming back from the
+	// background (or a re-race) keeps its rows, a different one clears them.
+	const selectedHostIdRef = useRef<string | null>(null);
+	useLayoutEffect(() => {
+		selectedHostIdRef.current = selectedHostId;
+	}, [selectedHostId]);
 	// Gate for the connected event: emit only on the not-open -> open transition,
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
@@ -412,9 +449,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (resolution !== configResolution.current) return null;
 			setSelectedHostName(selected?.name ?? null);
 			setSelectedHostId(selected?.id ?? null);
-			const currentHostId = cfgRef.current ? cfgRef.current.hostId : heldHostIdRef.current;
+			const currentHostId = cfgRef.current ? cfgRef.current.hostId : selectedHostIdRef.current;
 			if ((selected?.id ?? "") !== (currentHostId ?? "")) {
-				releaseHeld();
 				// Hide the previous machine's board and stop its in-flight polls
 				// before waiting for the newly selected machine to answer.
 				cfgRef.current = null;
@@ -456,8 +492,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (next !== prev) primaryLoadRef.current?.controller.abort();
 			cfgRef.current = next;
 			setConfig(next);
-			// Connected again: the live config names the machine from here on.
-			if (next && isConfigured(next)) releaseHeld();
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
@@ -470,7 +504,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (!(cause instanceof IncompatibleHostVersionError)) throw cause;
 			if (resolution !== configResolution.current) return null;
 			cfgRef.current = null;
-			releaseHeld();
 			setConfig(null);
 			setError(cause.message);
 			setErrorStatus(426);
@@ -490,7 +523,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				}
 			}
 		}
-	}, [releaseHeld, recordLink]);
+	}, [recordLink]);
 
 	useEffect(() => {
 		const sub = RNAppState.addEventListener("change", (state) => {
@@ -500,14 +533,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (!active) {
 				primaryLoadRef.current?.controller.abort();
 				cancelAccountHostSync();
-				// A LAN address can point at a different machine when the phone wakes.
-				// Keep display rows, but never reuse its old bearer connection.
+				// A LAN address can point at a different machine when the phone wakes,
+				// so the verified connection goes and resume races again. The machine
+				// does not: `machine` stays put, so its rows and every screen keyed on
+				// it stay mounted instead of falling back to a loader.
 				configResolution.current++;
 				promotedConfigRef.current = null;
-				if (cfgRef.current && isConfigured(cfgRef.current)) {
-					heldHostIdRef.current = cfgRef.current.hostId ?? "";
-					setHeldMachine(machineIdentity(cfgRef.current));
-				}
 				cfgRef.current = null;
 				setConfig(null);
 				setConfigResolved(false);
@@ -576,7 +607,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		primaryLoadRef.current?.controller.abort();
 		promotedConfigRef.current = null;
 		cfgRef.current = null;
-		releaseHeld();
 		setConfig(null);
 		setConfigResolved(false);
 		try {
@@ -586,7 +616,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			throw error;
 		}
 		await reloadConfig();
-	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig, releaseHeld]);
+	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig]);
 
 	useEffect(() => {
 		void reloadConfig();
@@ -966,11 +996,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		AsyncStorage.setItem(ACTIVE_PROJECT_KEY, id).catch(() => {});
 	}, []);
 
-	// During a re-pair, the previous machine's retained list is not evidence
-	// about the new machine. Keep it hidden until the active machine answers.
-	// While resuming, the held machine stands in so the rows already on screen
-	// stay up instead of a loader (see heldMachine).
-	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : heldMachine;
+	// Which machine this view is about. Rows are keyed to it, so after a re-pair
+	// the previous machine's retained list stays hidden until the new one
+	// answers, while the same machine coming back from the background, or
+	// racing to another of its endpoints, keeps what is already on screen.
+	const { configured, machine: activeMachine, paired } = viewMachine({ config, selectedHostId, configResolved });
 	const visibleSessions = useMemo(
 		() => sessionRowsForMachine(sessions, sessionMachine, activeMachine),
 		[sessions, sessionMachine, activeMachine],
@@ -1023,6 +1053,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			? hostStates.find((host) => host.hostId === selectedHostId) ?? null
 			: null;
 	}, [hostStates, selectedHostId]);
+	// A dev build's fake machines join only the fleet the UI reads: nothing
+	// polls, refreshes, spawns on or streams from them.
+	const emulatingMachines = useEmulatedMachines();
+	const shownHostStates = useMemo(
+		() => emulatingMachines ? [...hostStates, ...emulatedHostSnapshots()] : hostStates,
+		[emulatingMachines, hostStates],
+	);
 	const [sessionRows] = useState(() => createHostedRowsCache<DashboardSession>());
 	const [projectRows] = useState(() => createHostedRowsCache<ProjectInfo>());
 	const [orchestratorRows] = useState(() => createHostedRowsCache<OrchestratorLink>());
@@ -1055,12 +1092,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1072,6 +1109,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					brief: prompt ?? "",
 					agent: harness,
 					model,
+					effort,
+					approvalMode,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
@@ -1171,10 +1210,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<AppState>(
 		() => ({
 			config,
-			configured: !!config && isConfigured(config),
+			configured,
+			machine: activeMachine,
+			paired,
 			currentHostId: selectedHostId ?? undefined,
 			selectedHostName,
-			hostStates,
+			hostStates: shownHostStates,
 			allSessions,
 			allProjects,
 			allOrchestrators,
@@ -1220,9 +1261,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}),
 		[
 			config,
+			configured,
+			paired,
 			selectedHostId,
 			selectedHostName,
-			hostStates,
+			shownHostStates,
 			allSessions,
 			allProjects,
 			allOrchestrators,

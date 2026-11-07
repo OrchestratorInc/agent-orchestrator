@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect, useState } from "react";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { queryClient } from "../lib/query-client";
 
 export type LinkPreview = components["schemas"]["LinkPreviewResponse"];
@@ -35,7 +36,7 @@ async function fetchLinkPreview(url: string): Promise<LinkPreview> {
 	});
 	if (error) {
 		if (response?.status === 502) rememberUpstreamFailure(url);
-		throw new Error(apiErrorMessage(error, "Could not load link preview"));
+		throw apiErrorException(error, "Could not load link preview");
 	}
 	negativePreviews.delete(url);
 	return data;

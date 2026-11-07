@@ -619,12 +619,13 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
@@ -713,12 +714,13 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([

@@ -1,4 +1,5 @@
 import type { FirstRunPromptAction } from "../lib/experiments";
+import { apiErrorException } from "../lib/api-error-exception";
 import { AppLink } from "./AppLink";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -737,7 +738,7 @@ export function CreateProjectFlow({
 							stepwise: true,
 						},
 				});
-				if (apiError || !data) throw new Error(apiErrorMessage(apiError, t("createProject.couldNotAdd")));
+				if (apiError || !data) throw apiErrorException(apiError, t("createProject.couldNotAdd"));
 				setProjectPrepEvents((current) => mergePreparationEvents(current, data.events));
 				setProjectValidation(data.validation);
 				setProjectApprovedActions(data.validation.root.requiredActions);
@@ -1077,7 +1078,7 @@ function safeProjectCreationError(message: string, fallback: string, code?: stri
 
 async function validateImportFolder(path: string, importKind: "project" | "workspace", hostId?: string): Promise<ImportValidationResult> {
 	const { data, error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/imports/validate", { body: { importKind, path } });
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not validate this folder."));
+	if (error || !data) throw apiErrorException(error, "Could not validate this folder.");
 	return data;
 }
 
