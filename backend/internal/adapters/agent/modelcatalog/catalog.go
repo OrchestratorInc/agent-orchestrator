@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,22 @@ type commandSpec struct {
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
+	// env adds to the environment of the model command.
+	env map[string]string
+	// killTree stops the command's children too when it times out, for CLIs
+	// whose launcher waits on the real binary.
+	killTree bool
+}
+
+func (s commandSpec) command(ctx context.Context, binary, workingDir string, env map[string]string) *exec.Cmd {
+	merged := make(map[string]string, len(env)+len(s.env))
+	maps.Copy(merged, env)
+	maps.Copy(merged, s.env)
+	cmd := modelCommand(ctx, binary, s.args, workingDir, merged)
+	if s.killTree {
+		aoprocess.ConfigureTreeCancellation(cmd)
+	}
+	return cmd
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -131,7 +148,15 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseProviderIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
+	"mimo-code": {
+		args:   []string{"models"},
+		parser: parseMiMoModels,
+		// Every MiMo command but --version copies all Claude Code history into
+		// MiMo's database at startup, so a listing must not start that scan.
+		env: map[string]string{"MIMOCODE_DISABLE_CLAUDE_IMPORT": "1"},
+		// `mimo` is a Node wrapper that waits on the real binary.
+		killTree: true,
+	},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
@@ -475,13 +500,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
-	output, err := cmd.CombinedOutput()
+	output, err := spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
 		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
 		defer cancel()
-		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+		output, err = spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
