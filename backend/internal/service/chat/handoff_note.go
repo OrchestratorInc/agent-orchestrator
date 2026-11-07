@@ -134,6 +134,78 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 	return domain.BuildHandoffNote(input), nil
 }
 
+// replacementHandoffNote builds the note a project orchestrator starts with
+// when it takes over a provider branch another orchestrator left: the project
+// conversation keeps its history, but the new provider session starts fresh.
+// Turns are read from the conversation itself, since after the rebind the
+// previous owner no longer resolves to it. A request the previous orchestrator
+// never answered is carried as unfinished. It returns "" when the note cannot
+// be built; a note is never worth failing a spawn.
+func (s *Service) replacementHandoffNote(ctx context.Context, cfg StartConfig, conversationID string, previousID domain.SessionID) string {
+	if s.sessions == nil || s.reader == nil {
+		return ""
+	}
+	note, err := func() (string, error) {
+		previous, found, err := s.sessions.GetSession(ctx, previousID)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ports.ErrSessionNotFound
+		}
+		rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
+		if err != nil {
+			return "", fmt.Errorf("load conversation %s turns: %w", conversationID, err)
+		}
+		turns := chatHandoffTurns(rows.Turns, rows.Messages, rows.Activities)
+		stored, err := s.store.ListTerminalTurns(ctx, previous.ID)
+		if err != nil {
+			return "", err
+		}
+		turns = append(turns, stored...)
+		sort.SliceStable(turns, func(i, j int) bool { return turns[i].At.Before(turns[j].At) })
+		input := s.handoffNoteInputWithTurns(ctx, previous, cfg.Harness, "", turns)
+		input.UnansweredRequest = unansweredHandoffRequest(rows.Turns, rows.Messages)
+		input.ChangedFiles = handoffChangedFiles(ctx, previous.Metadata.WorkspacePath, previous.Metadata.DiffBaseSHA)
+		return domain.BuildHandoffNote(input), nil
+	}()
+	if err != nil {
+		s.log.Warn("build replacement orchestrator handoff note", "session", cfg.SessionID, "previous", previousID, "error", err)
+		return ""
+	}
+	return note
+}
+
+// unansweredHandoffRequest returns the latest request a person or automation
+// sent that no agent answered, when it came after the last answered one: the
+// turn was cut off (stopped, failed, or still running when its orchestrator
+// was replaced). Queued and cancelled turns are not unanswered requests.
+func unansweredHandoffRequest(turns []domain.ConversationTurn, messages []domain.ConversationMessage) string {
+	states := make(map[string]domain.TurnState, len(turns))
+	for _, turn := range turns {
+		if turn.RolledBackAt == nil {
+			states[turn.ID] = turn.State
+		}
+	}
+	var latest *domain.ConversationMessage
+	for index := range messages {
+		message := &messages[index]
+		state, ok := states[message.TurnID]
+		if !ok || message.Streaming || message.Role != domain.MessageRoleUser || strings.TrimSpace(message.Text) == "" ||
+			(message.Origin != domain.MessageOriginHuman && message.Origin != domain.MessageOriginAutomation) ||
+			state == domain.TurnStateQueued || state == domain.TurnStateCancelled {
+			continue
+		}
+		if latest == nil || message.Sequence > latest.Sequence {
+			latest = message
+		}
+	}
+	if latest == nil || states[latest.TurnID] == domain.TurnStateCompleted {
+		return ""
+	}
+	return latest.Text
+}
+
 // handoffNoteInput is the note's input without the changed files, which need
 // git and can run while the outgoing provider stops.
 func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {
@@ -141,6 +213,10 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	if err != nil {
 		return domain.HandoffNoteInput{}, err
 	}
+	return s.handoffNoteInputWithTurns(ctx, record, target, switchID, turns), nil
+}
+
+func (s *Service) handoffNoteInputWithTurns(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string, turns []domain.HandoffTurn) domain.HandoffNoteInput {
 	artifactDir, artifacts := s.handoffArtifacts(ctx, record)
 	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
@@ -157,7 +233,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
 		HistoryFiles:  s.handoffHistoryFiles(record, turns),
-	}, nil
+	}
 }
 
 // handoffArtifacts returns the session's artifact directory and its files,

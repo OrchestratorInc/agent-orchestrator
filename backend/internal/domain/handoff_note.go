@@ -76,7 +76,10 @@ type HandoffNoteInput struct {
 	ArtifactDir string
 	Artifacts   []SessionArtifactFile
 	Turns       []HandoffTurn
-	Terminal    bool
+	// UnansweredRequest is the last request the source agent was cut off
+	// before answering, such as one in flight when its orchestrator was replaced.
+	UnansweredRequest string
+	Terminal          bool
 	// HistoryFiles point at the agent's own record for an agent whose answers
 	// AO did not record, because it reports no turns through hooks.
 	HistoryFiles []HandoffHistoryFile
@@ -166,7 +169,11 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	// said, such as a value they asked it to remember.
 	fmt.Fprintf(&b, "You are %s, taking over this AO session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 		handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
-	b.WriteString("- AO copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
+	if strings.TrimSpace(in.UnansweredRequest) != "" {
+		b.WriteString("- AO copied this record from that conversation. Requests in it were already handled, except the unanswered one at the end; do not carry them out again.\n")
+	} else {
+		b.WriteString("- AO copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
+	}
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
 
@@ -223,6 +230,11 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		latest := recent[len(recent)-1]
 		user, agent := budgetHandoffTurn(latest, handoffLatestTurnBudget, handoffLatestUserCap, false)
 		fmt.Fprintf(&b, "\n## Latest turn\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(latest), agent)
+	}
+
+	if request := strings.TrimSpace(in.UnansweredRequest); request != "" {
+		fmt.Fprintf(&b, "\n## Unanswered request\nThe user sent this last, and %s stopped before answering it. It is not done, or only partly done; check the workspace. Do not start on it by yourself: wait for the user to say whether to continue.\n%s\n",
+			handoffHarnessLabel(in.SourceHarness), quoteHandoffText(request, handoffLatestUserCap, handoffClipMarker))
 	}
 
 	if len(in.HistoryFiles) > 0 {
