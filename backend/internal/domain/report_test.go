@@ -67,3 +67,23 @@ func TestReportRecordValidatesSettlementDeadline(t *testing.T) {
 		t.Fatal("expected missing settlement deadline to fail")
 	}
 }
+
+func TestIsCoordinationMessage(t *testing.T) {
+	tests := []struct {
+		message string
+		want    bool
+	}{
+		{message: WrapReportDelivery("report-1", "worker finished"), want: true},
+		{message: "  " + WrapSessionDelivery("send-1", "hello"), want: true},
+		{message: `<ao-handoff-request id="1">`, want: true},
+		{message: "AO transferred the previous agent's context in hidden system instructions. Continue.", want: true},
+		{message: "fix the login bug"},
+		{message: "please mention <ao-handoff-request in the docs"},
+		{message: ""},
+	}
+	for _, tt := range tests {
+		if got := IsCoordinationMessage(tt.message); got != tt.want {
+			t.Errorf("IsCoordinationMessage(%q) = %v, want %v", tt.message, got, tt.want)
+		}
+	}
+}
