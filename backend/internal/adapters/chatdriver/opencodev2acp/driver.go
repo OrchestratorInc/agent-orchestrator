@@ -10,6 +10,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
@@ -47,6 +48,10 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	dataHome, err := opencodev2.DataHome(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opencode-v2 ACP: prepare data home: %w", err)
+	}
+	content, err = opencode.AddConfigPlugins(content, opencode.ClaudePlanPluginKey(2), opencode.ClaudePlanPlugins(ctx, 2, dataHome))
+	if err != nil {
+		return nil, nil, err
 	}
 	env := map[string]string{"OPENCODE_CONFIG_CONTENT": content, "XDG_DATA_HOME": dataHome}
 	return []string{"acp"}, env, nil
