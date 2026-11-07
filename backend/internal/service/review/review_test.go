@@ -267,8 +267,8 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-// AO never sends the worker a separate verdict message: the reviewer's posted
-// review reaches the worker through the SCM observer like any other review. A
+// The reviewer's posted findings reach the worker through the SCM observer
+// like any other review; the service never stamps a run delivered. A
 // submitted result is recorded and stays complete.
 func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 	st := &fakeStore{
@@ -287,6 +287,34 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
 			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
 		}
+	}
+}
+
+type fakeDoneNotifier struct {
+	calls []domain.SessionID
+	err   error
+}
+
+func (f *fakeDoneNotifier) DeliverReviewDoneNotices(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, id)
+	return f.err
+}
+
+// Submitting a result hands the worker's "review done" notice to lifecycle at
+// once; a delivery failure leaves it to the sweep and never fails the submit.
+func TestSubmitAsksForTheReviewDoneNotice(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+	}
+	notifier := &fakeDoneNotifier{err: errors.New("pane gone")}
+	svc := New(nil, st, WithReviewDoneNotifier(notifier))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "LGTM", "987"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(notifier.calls) != 1 || notifier.calls[0] != "mer-1" {
+		t.Fatalf("notifier calls = %v, want one for the worker", notifier.calls)
 	}
 }
 
