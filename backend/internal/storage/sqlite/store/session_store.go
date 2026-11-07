@@ -890,8 +890,8 @@ var sessionDeleteDrains = []string{
 // conversations, cleanup facts, PR facts and the other per-session rows go with
 // it through ON DELETE CASCADE. Callers decide whether the session's workspace
 // is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history, all in one
-// transaction so a concurrent restore cannot slip between
+// domain.ErrSessionHistoryShared, shared conversation history. The final
+// transaction checks both again, so a concurrent restore cannot slip between
 // the checks and the delete.
 //
 // The session's number is recorded in session_num_floors so the next spawn
