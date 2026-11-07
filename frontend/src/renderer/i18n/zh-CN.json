@@ -3924,7 +3924,7 @@
 	"settings.apiKeys.removed": "已移除。智能体保存在自身设置中的副本会保留。",
 	"settings.apiKeys.removeFailed": "无法移除密钥。",
 	"settings.apiKeys.keepSaved": "留空以保留已保存的密钥",
-	"settings.apiKeys.device": "也为 AO 之外的应用设置",
+	"settings.apiKeys.device": "与其他应用共享",
 	"settings.apiKeys.deviceHint": "将密钥写入你的用户环境，你运行的其他应用都能读取它。重启已打开的应用后生效。",
 	"settings.apiKeys.checkAndSave": "检查并保存",
 	"settings.apiKeys.save": "保存",

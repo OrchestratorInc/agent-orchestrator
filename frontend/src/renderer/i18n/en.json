@@ -3856,7 +3856,7 @@
 	"settings.apiKeys.removed": "Removed. Copies an agent saved in its own settings stay there.",
 	"settings.apiKeys.removeFailed": "Could not remove the key.",
 	"settings.apiKeys.keepSaved": "Leave empty to keep the saved key",
-	"settings.apiKeys.device": "Also set for apps outside AO",
+	"settings.apiKeys.device": "Share with other apps",
 	"settings.apiKeys.deviceHint": "Writes the key to your user environment, where other apps you run can read it. Restart open apps to pick it up.",
 	"settings.apiKeys.checkAndSave": "Check and save",
 	"settings.apiKeys.save": "Save",

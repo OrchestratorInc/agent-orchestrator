@@ -3942,7 +3942,7 @@
 	"settings.apiKeys.removed": "削除しました。エージェントが独自の設定に保存したコピーは残ります。",
 	"settings.apiKeys.removeFailed": "キーを削除できませんでした。",
 	"settings.apiKeys.keepSaved": "空のままにすると保存済みのキーを維持します",
-	"settings.apiKeys.device": "AO 外のアプリにも設定する",
+	"settings.apiKeys.device": "他のアプリと共有",
 	"settings.apiKeys.deviceHint": "キーをユーザー環境に書き込みます。実行する他のアプリからも読み取れます。開いているアプリは再起動すると反映されます。",
 	"settings.apiKeys.checkAndSave": "確認して保存",
 	"settings.apiKeys.save": "保存",

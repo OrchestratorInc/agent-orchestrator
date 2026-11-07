@@ -3942,7 +3942,7 @@
 	"settings.apiKeys.removed": "Entfernt. Kopien, die ein Agent in seinen eigenen Einstellungen gespeichert hat, bleiben dort.",
 	"settings.apiKeys.removeFailed": "Der Schlüssel konnte nicht entfernt werden.",
 	"settings.apiKeys.keepSaved": "Leer lassen, um den gespeicherten Schlüssel zu behalten",
-	"settings.apiKeys.device": "Auch für Apps außerhalb von AO setzen",
+	"settings.apiKeys.device": "Mit anderen Apps teilen",
 	"settings.apiKeys.deviceHint": "Schreibt den Schlüssel in deine Benutzerumgebung, wo andere von dir gestartete Apps ihn lesen können. Starte geöffnete Apps neu, damit sie ihn übernehmen.",
 	"settings.apiKeys.checkAndSave": "Prüfen und speichern",
 	"settings.apiKeys.save": "Speichern",

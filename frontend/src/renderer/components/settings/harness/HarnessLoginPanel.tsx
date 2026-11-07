@@ -13,7 +13,8 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { CatalogProviderPickerSkeleton } from "./CatalogProviderPicker";
-import { DeviceEnvToggle, KeyWarning, providerKeyNeedsModel, savedKeySummary } from "../providerKeyUi";
+import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyWarning, providerKeyNeedsModel, savedKeySummary } from "../providerKeyUi";
+import { cn } from "../../../lib/utils";
 
 const CATALOG_METHOD = "provider_key";
 
@@ -387,7 +388,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const fieldLabelClass = "block text-xs leading-4 text-settings-muted";
 	// Pickers take the same surface, height and inset as the shared Input so
 	// the provider, key and model fields read as one form.
-	const fieldTriggerClass = "h-control-md w-full justify-between rounded-md bg-input/50 px-3 text-sm hover:bg-input/70 data-[state=open]:bg-input/70";
+	const fieldTriggerClass = "h-control-form w-full justify-between rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 text-control text-settings-label";
 	// The chosen catalog provider, so its key variable can show beside the key field.
 	const chosenProvider = catalog?.find((provider) => provider.id === catalogProvider);
 	// While a key form is open its errors show inside it, next to the field.
@@ -405,20 +406,26 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{methodGroups.map((group) => <div key={group.id} className="space-y-1.5">
 				{methodGroups.length > 1 && <p className="text-xs leading-4 text-settings-muted">{group.title}</p>}
-				{/* Rows run flush to the card's edges with hairlines between them: no second outlined card inside the Account card. */}
-				<div className="-mx-3 flex flex-col divide-y divide-border border-y border-border">
+				{/* Rows run flush to the card's edges with hairlines between them: no second outlined card inside the Account card.
+				    With no group caption above them they start at the card's top edge, not under an empty strip. */}
+				<div className={cn("-mx-3 flex flex-col divide-y divide-border border-y border-border", methodGroups.length === 1 && !remote && "-mt-3 border-t-0")}>
 				{group.items.map((item) => {
 					const key = methodKey(item.id);
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.id === "native" ? Terminal : item.secret ? KeyRound : item.id.startsWith("device_code") ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
 					const selected = selectedMethodId === item.id;
 					const open = item.secret && selected;
+					// Save sits beside the last field: the key, or the model when one follows it.
+					const saveButton = <Button type="submit" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
+						{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+						{t("settings.harness.loginUi.save")}
+					</Button>;
 					// One line per method. A sign-in's hint only restates its label, so it is
 					// read to screen readers; a key row shows its saved state instead.
 					const trailing = item.id === CATALOG_METHOD ? (catalog ? t("settings.harness.loginUi.catalogCount", { total: catalog.length }) : "")
 						: item.id.startsWith("env_") ? savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet")
 						: "";
-					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:bg-(--color-interactive-hover)/50 aria-expanded:hover:bg-(--color-interactive-hover)/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 						<MethodIcon className="size-3.5 shrink-0 text-settings-muted group-aria-expanded/method:text-settings-label" aria-hidden="true" />
 						<span className={`min-w-0 flex-1 truncate text-control leading-5 ${secondaryMethod(item.id) ? "text-settings-muted group-hover/method:text-settings-label" : "text-settings-label"}`}>{label}</span>
 						<span id={titleId + "-" + item.id} className={trailing ? "shrink-0 truncate text-xs leading-4 text-settings-muted" : "sr-only"}>{trailing || methodHint(item, key)}</span>
@@ -427,7 +434,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 							: item.id === "native" ? <ChevronRight className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
 							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
 					</button>
-					{open && <div ref={secretRowRef} className="grid scroll-mb-4 grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 bg-(--color-interactive-hover)/50 pt-1 pr-3 pb-3 pl-9" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
+					{open && <div ref={secretRowRef} className="grid scroll-mb-4 grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 pt-0.5 pr-3 pb-3.5 pl-9" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
 						{item.id === CATALOG_METHOD && <>
 							<span id={titleId + "-provider"} className={fieldLabelClass}>{t("settings.harness.loginUi.catalogProvider")}</span>
 							{catalog
@@ -437,28 +444,26 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						</>}
 						<>
 							<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
-							<Input id={titleId + "-secret"} className="h-control-md font-mono text-control placeholder:font-mono placeholder:text-settings-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id) ?? (item.id === CATALOG_METHOD ? chosenProvider?.env : selectedKey?.name)} onChange={(event) => { setSecret(event.target.value); setModels([]); discardModelRequest(); setError(""); }} />
+							<div className="flex min-w-0 items-center gap-2">
+							<Input id={titleId + "-secret"} className={`${KEY_FIELD_CLASS} min-w-0 flex-1`} type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id) ?? (item.id === CATALOG_METHOD ? chosenProvider?.env : selectedKey?.name)} onChange={(event) => { setSecret(event.target.value); setModels([]); discardModelRequest(); setError(""); }} />
+							{needsModel ? null : saveButton}
+							</div>
 						</>
 						{needsModel && <>
 							<span id={titleId + "-model"} className={fieldLabelClass}>{t("settings.apiKeys.model")}</span>
 							<div className="flex items-center gap-2">
 								{models.length > 0
 									? <SettingsOptionMenu aria-label={t("settings.apiKeys.model")} value={model} options={models.map((id) => ({ value: id, label: id }))} onChange={setModel} searchable searchPlaceholder={t("settings.apiKeys.searchModels")} disabled={locked} triggerClassName={`${fieldTriggerClass} min-w-0 flex-1 font-mono`} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width)" />
-									: <Input aria-labelledby={titleId + "-model"} className="min-w-0 flex-1 font-mono text-[13px] placeholder:font-sans focus-visible:ring-2 focus-visible:ring-ring/30" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
-								{selectedKey?.checkable && models.length === 0 && <Button type="button" size="sm" variant="secondary" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
+									: <Input aria-labelledby={titleId + "-model"} className={`${KEY_FIELD_CLASS} min-w-0 flex-1 placeholder:font-sans`} value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
+								{selectedKey?.checkable && models.length === 0 && <Button type="button" variant="outline" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
 									{loadingModels && <LoaderCircle className="animate-spin" aria-hidden="true" />}{t("settings.apiKeys.loadModels")}
 								</Button>}
+								{saveButton}
 							</div>
 						</>}
 						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <KeyWarning className="col-start-2">{t("settings.apiKeys.claudeBilling")}</KeyWarning>}
 						{error && <p role="alert" className="col-start-2 text-xs leading-4 text-error">{error}</p>}
-						<div className="col-start-2 flex min-h-7 items-center gap-3">
-							{selectedKey ? <DeviceEnvToggle checked={device} disabled={locked} onChange={setDevice} /> : null}
-							<Button type="submit" size="sm" className="ml-auto" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
-								{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
-								{t("settings.harness.loginUi.save")}
-							</Button>
-						</div>
+						{selectedKey ? <DeviceEnvToggle className="col-start-2" checked={device} disabled={locked} onChange={setDevice} /> : null}
 					</div>}
 					</div>;
 				})}
@@ -513,14 +518,15 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		</form>}
 		{status && !running && !verifying && !connected && <p role="status" className="text-[13px] leading-5 text-settings-muted">{status}</p>}
 		{error && !errorInForm && <p role="alert" className="text-[13px] leading-5 text-error">{error}</p>}
-		<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-			{!connected && availableMethods.length === 0 && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-			{!connected && availableMethods.length > 0 && operation?.nativePrompt !== "terminal_required" && <Button className="-ml-2" variant="quiet" size="xs" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-			<div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+		{/* The panel's own actions sit together at the trailing edge, as outline
+		    buttons like Log in again and Log out on the Account card. */}
+		<div className="flex flex-wrap items-center justify-end gap-2">
+			{!connected && (availableMethods.length === 0 || operation?.nativePrompt !== "terminal_required") && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+			<div className="flex flex-wrap items-center justify-end gap-2">
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
 				{running && operation?.nativePrompt === "terminal_required" && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-				<Button variant={connected ? "primary" : "quiet"} size={connected ? "sm" : "xs"} disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
+				<Button variant={connected ? "primary" : "outline"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
 			</div>
 		</div>
 	</section>;

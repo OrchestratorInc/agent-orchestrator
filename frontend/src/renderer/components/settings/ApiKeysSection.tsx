@@ -1,11 +1,11 @@
 import { LoaderCircle } from "lucide-react";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { checkProviderKey, removeProviderKey, saveProviderKey, useInvalidateProviderKeys, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
 import { agentLabel } from "../../lib/agent-options";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { DeviceEnvToggle, KeyStatusDot, savedKeySummary } from "./providerKeyUi";
+import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyStatusDot, savedKeySummary } from "./providerKeyUi";
 import { SettingsSearch } from "./SettingsSearch";
 import { SettingsSection } from "./SettingsSection";
 
@@ -83,6 +83,14 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 }) {
 	const { t } = useTranslation();
 	const [checking, setChecking] = useState(false);
+	// The row's button is hidden while its editor is open; when the editor
+	// closes with focus inside it, focus comes back to the button.
+	const editButtonRef = useRef<HTMLButtonElement>(null);
+	const wasEditing = useRef(editing);
+	useEffect(() => {
+		if (wasEditing.current && !editing && (!document.activeElement || document.activeElement === document.body)) editButtonRef.current?.focus();
+		wasEditing.current = editing;
+	}, [editing]);
 	// Success messages clear themselves; errors stay until the next action.
 	useEffect(() => {
 		if (notice?.tone !== "status") return;
@@ -119,14 +127,16 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 		{notice ? <span role={notice.tone === "error" ? "alert" : "status"} className={`max-w-[45%] truncate text-xs leading-4 ${notice.tone === "error" ? "text-error" : "text-success"}`} title={notice.text}>{notice.text}</span>
 			: key.configured ? <SavedKeyBadge providerKey={key} />
 			: null}
-		<div className="flex shrink-0 items-center">
-			{key.configured && key.checkable && !editing ? <Button type="button" size="xs" variant="quiet" disabled={checking} onClick={() => void check()}>
+		{/* Outline buttons, like Log in again and Log out on a harness's Account card.
+		    While the editor is open its own Cancel and Save replace them. */}
+		{editing ? null : <div className="flex shrink-0 items-center gap-1.5">
+			{key.configured && key.checkable ? <Button type="button" size="sm" variant="outline" disabled={checking} onClick={() => void check()}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.apiKeys.check")}
 			</Button> : null}
-			<Button type="button" size="xs" variant={key.configured || editing ? "quiet" : "ghost"} aria-expanded={editing} aria-label={`${t(editing ? "settings.apiKeys.close" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")} · ${key.label}`} onClick={onEdit}>
-				{t(editing ? "settings.apiKeys.cancel" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
+			<Button ref={editButtonRef} type="button" size="sm" variant="outline" aria-expanded={false} aria-label={`${t(key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")} · ${key.label}`} onClick={onEdit}>
+				{t(key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
 			</Button>
-		</div>
+		</div>}
 	</div>;
 }
 
@@ -193,13 +203,15 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 		} finally { setBusy(false); }
 	};
 
-	return <form className="flex flex-col gap-2 px-(--settings-row-inset) pt-0.5 pb-3" onSubmit={(event) => void submit(event)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(); } }}>
-		<div className="flex items-center gap-1.5">
+	// The key field and its two actions on one line; the device opt-in under
+	// the field, starting at its left edge.
+	return <form className="flex flex-col gap-2.5 px-(--settings-row-inset) pt-0.5 pb-3" onSubmit={(event) => void submit(event)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(); } }}>
+		<div className="flex items-center gap-2">
 			<Input
 				id={inputId}
 				autoFocus
 				aria-label={key.label}
-				className="h-control-md min-w-0 flex-1 font-mono text-control placeholder:font-mono placeholder:text-settings-muted/70"
+				className={`${KEY_FIELD_CLASS} min-w-0 flex-1`}
 				type="password"
 				value={secret}
 				disabled={busy}
@@ -210,15 +222,16 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 				placeholder={key.configured ? t("settings.apiKeys.keepSaved") : key.name}
 				onChange={(event) => { setSecret(event.target.value); setError(""); }}
 			/>
-			<Button type="submit" size="sm" disabled={busy || !changed || (!typed && !key.configured)}>
+			<Button type="button" variant="outline" disabled={busy} onClick={() => onDone()}>{t("settings.apiKeys.cancel")}</Button>
+			<Button type="submit" disabled={busy || !changed || (!typed && !key.configured)}>
 				{busy && !confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 				{t(typed && key.checkable ? "settings.apiKeys.checkAndSave" : "settings.apiKeys.save")}
 			</Button>
 		</div>
 		{error ? <p role="alert" className="text-xs leading-4 text-error">{error}</p> : null}
-		<div className="flex min-h-6 items-center gap-3">
-			<DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} />
-			{key.configured ? <Button type="button" size="xs" variant="destructive-ghost" className="ml-auto" disabled={busy} onClick={() => void remove()}>
+		<div className="flex min-h-7 items-start gap-3">
+			<DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} className="flex-1 pt-1" />
+			{key.configured ? <Button type="button" size="sm" variant="destructive-ghost" disabled={busy} onClick={() => void remove()}>
 				{busy && confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 				{t(confirmRemove ? "settings.apiKeys.confirmRemove" : "settings.apiKeys.remove")}
 			</Button> : null}

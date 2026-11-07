@@ -1,11 +1,13 @@
-import { TriangleAlert } from "lucide-react";
-import type { ReactNode } from "react";
+import { Info, TriangleAlert } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { ProviderKey } from "../../hooks/useProviderKeys";
 import type { AgentId } from "../../lib/agent-options";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 
 // Pieces shared by the API keys page and a harness's Account login panel, so
 // a saved key reads and behaves the same on both.
@@ -34,6 +36,13 @@ export function KeyStatusDot({ configured }: { configured: boolean }) {
 	/>;
 }
 
+/**
+ * A key, token or model field: the settings input surface and edge, the same
+ * as the settings search field, at its 32px height so it lines up with the
+ * buttons beside it.
+ */
+export const KEY_FIELD_CLASS = "h-control-form rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 font-mono text-control text-settings-label placeholder:font-mono placeholder:text-settings-muted focus-visible:ring-2 focus-visible:ring-ring/30";
+
 /** Opt-in to publish a key to the OS user environment, with its consequence stated. */
 export function DeviceEnvToggle({ checked, disabled, onChange, className }: {
 	checked: boolean;
@@ -42,15 +51,44 @@ export function DeviceEnvToggle({ checked, disabled, onChange, className }: {
 	className?: string;
 }) {
 	const { t } = useTranslation();
-	// The consequence (other apps can read the key) only matters once it is
-	// turned on, so it shows then, not as standing helper copy.
-	return <label className={cn("flex min-w-0 cursor-pointer items-start gap-2 has-disabled:cursor-default", className)}>
-		<Checkbox checked={checked} className="mt-px" disabled={disabled} onCheckedChange={(next) => onChange(next === true)} />
-		<span className="min-w-0 flex-1">
-			<span className="block text-xs leading-4 text-settings-muted">{t("settings.apiKeys.device")}</span>
-			{checked ? <span className="mt-0.5 block text-xs leading-4 text-settings-muted/80">{t("settings.apiKeys.deviceHint")}</span> : null}
-		</span>
-	</label>;
+	const [hintOpen, setHintOpen] = useState(false);
+	const hint = t("settings.apiKeys.deviceHint");
+	// While the tooltip is open, Escape closes only the tooltip. Focus is
+	// usually still in the key field, whose form closes on Escape, so catch it
+	// on the document before it reaches the form.
+	useEffect(() => {
+		if (!hintOpen) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			event.stopPropagation();
+			setHintOpen(false);
+		};
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [hintOpen]);
+	// The box is centred on its label's line and starts at the field's left
+	// edge. What sharing does lives only in the ⓘ tooltip (hover, focus or
+	// click), not as text on the page. The ⓘ sits outside the <label> so
+	// clicking it never toggles the box.
+	return <div className={cn("flex min-w-0 items-center gap-1", className)}>
+		<label className="flex w-fit cursor-pointer items-center gap-2 has-disabled:cursor-default">
+			<Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(next === true)} />
+			<span className="text-control leading-5 text-settings-label">{t("settings.apiKeys.device")}</span>
+		</label>
+		<TooltipProvider>
+			<Tooltip open={hintOpen} onOpenChange={setHintOpen}>
+				<TooltipTrigger asChild>
+					{/* Radix closes a tooltip on press; a click here opens it instead. */}
+					<Button type="button" size="icon-xs" variant="quiet" className="-my-1" aria-label={hint}
+						onPointerDown={(event) => event.preventDefault()}
+						onClick={(event) => { event.preventDefault(); setHintOpen(true); }}>
+						<Info className="size-3.5" aria-hidden="true" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-72">{hint}</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	</div>;
 }
 
 /** A consequence the user should read before saving, such as billing. */

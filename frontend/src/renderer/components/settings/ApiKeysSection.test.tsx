@@ -23,35 +23,56 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe("ApiKeysSection", () => {
-	it("lists every key in one list with its state and a saved count", () => {
+	it("lists every key in one list with who reads it, its saved state and a saved count", () => {
 		render(<ApiKeysSection titleHidden />);
 		expect(screen.getAllByTestId("settings-section")).toHaveLength(1);
 		expect(screen.getByText("1 of 2 saved")).toBeVisible();
-		expect(screen.getByText(/Saved, ending abcd · Used by/)).toBeVisible();
-		expect(screen.getByText(/Not set · Used by/)).toBeVisible();
+		expect(screen.getByTitle("Goose, Crush")).toHaveTextContent("Goose, Crush");
+		// A saved key shows its last four; screen readers get the whole state.
+		expect(screen.getByText("••••abcd")).toBeVisible();
+		expect(screen.getByText("Saved, ending abcd")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit · OpenAI" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Add key · Tavily" })).toBeVisible();
 		expect(document.querySelector('[data-key-status="saved"]')).not.toBeNull();
 		expect(document.querySelector('[data-key-status="unset"]')).not.toBeNull();
 	});
 
-	it("adds a check result under the key's state instead of replacing it, then clears it", async () => {
+	it("shows a check result on the key's row, then brings its saved state back", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 		vi.mocked(checkProviderKey).mockResolvedValue({ status: "valid" } as Awaited<ReturnType<typeof checkProviderKey>>);
 		render(<ApiKeysSection titleHidden />);
 		await user.click(screen.getByRole("button", { name: "Check" }));
 		expect(await screen.findByText("The provider accepted this key.")).toHaveAttribute("role", "status");
-		expect(screen.getByText(/Saved, ending abcd · Used by/)).toBeVisible();
 		await act(async () => { vi.advanceTimersByTime(6_000); });
 		expect(screen.queryByText("The provider accepted this key.")).toBeNull();
+		expect(screen.getByText("••••abcd")).toBeVisible();
 	});
 
-	it("opens an editor with a labelled key field and the device-environment opt-in", async () => {
+	it("opens an editor with the key field, Cancel and Save on one line and the share opt-in", async () => {
 		const user = userEvent.setup();
 		render(<ApiKeysSection titleHidden />);
-		await user.click(screen.getByRole("button", { name: "Add key" }));
-		const form = screen.getByLabelText("API key").closest("form")!;
-		expect(within(form).getByText("TAVILY_API_KEY")).toBeVisible();
-		expect(within(form).getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
+		await user.click(screen.getByRole("button", { name: "Add key · Tavily" }));
+		const input = screen.getByLabelText("Tavily");
+		expect(input).toHaveAttribute("type", "password");
+		expect(input).toHaveAttribute("placeholder", "TAVILY_API_KEY");
+		const form = input.closest("form")!;
+		expect(within(form).getByRole("checkbox", { name: "Share with other apps" })).not.toBeChecked();
 		expect(within(form).getByRole("button", { name: "Save" })).toBeDisabled();
+		// The editor's own Cancel replaces the row's button while it is open.
+		expect(screen.queryByRole("button", { name: "Add key · Tavily" })).toBeNull();
+		await user.click(within(form).getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByLabelText("Tavily")).toBeNull();
+		expect(screen.getByRole("button", { name: "Add key · Tavily" })).toHaveFocus();
+	});
+
+	it("explains sharing only in the ⓘ tooltip, without ticking the box", async () => {
+		const user = userEvent.setup();
+		render(<ApiKeysSection titleHidden />);
+		await user.click(screen.getByRole("button", { name: "Add key · Tavily" }));
+		expect(screen.queryByText(/Writes the key to your user environment/)).toBeNull();
+		await user.click(screen.getByRole("button", { name: /Writes the key to your user environment/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(/Writes the key to your user environment/);
+		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).not.toBeChecked();
 	});
 });

@@ -4012,7 +4012,7 @@
 	"settings.apiKeys.removed": "Eliminada. Las copias que un agente guardó en su propia configuración se mantienen.",
 	"settings.apiKeys.removeFailed": "No se pudo eliminar la clave.",
 	"settings.apiKeys.keepSaved": "Déjalo vacío para conservar la clave guardada",
-	"settings.apiKeys.device": "Definir también para apps fuera de AO",
+	"settings.apiKeys.device": "Compartir con otras apps",
 	"settings.apiKeys.deviceHint": "Escribe la clave en tu entorno de usuario, donde otras apps que ejecutes pueden leerla. Reinicia las apps abiertas para que la usen.",
 	"settings.apiKeys.checkAndSave": "Comprobar y guardar",
 	"settings.apiKeys.save": "Guardar",

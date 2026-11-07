@@ -4012,7 +4012,7 @@
 	"settings.apiKeys.removed": "Supprimée. Les copies qu'un agent a enregistrées dans ses propres réglages y restent.",
 	"settings.apiKeys.removeFailed": "Impossible de supprimer la clé.",
 	"settings.apiKeys.keepSaved": "Laissez vide pour conserver la clé enregistrée",
-	"settings.apiKeys.device": "Définir aussi pour les apps hors d'AO",
+	"settings.apiKeys.device": "Partager avec d'autres apps",
 	"settings.apiKeys.deviceHint": "Écrit la clé dans votre environnement utilisateur, où les autres apps que vous lancez peuvent la lire. Redémarrez les apps ouvertes pour qu'elles la prennent en compte.",
 	"settings.apiKeys.checkAndSave": "Vérifier et enregistrer",
 	"settings.apiKeys.save": "Enregistrer",

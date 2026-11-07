@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
@@ -68,7 +68,7 @@ describe("HarnessLoginPanel", () => {
 		const onProviderKeysChanged = vi.fn();
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[{ name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, checkable: false, agents: ["goose"] }]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/Saved, ending abcd · Also set outside AO/);
-		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).toBeChecked();
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "", undefined, undefined, true);
 		await waitFor(() => expect(onProviderKeysChanged).toHaveBeenCalled());
@@ -76,15 +76,16 @@ describe("HarnessLoginPanel", () => {
 	it("warns that a Claude Code API key can replace the subscription", () => {
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
-		// The billing note sits above Save as a warning, not as muted help text.
-		expect(screen.getByText(/instead of your Claude subscription/).closest("p")).toHaveClass("bg-warning/8");
-		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
+		// The billing note is a warning with its icon, not muted help text.
+		expect(screen.getByText(/instead of your Claude subscription/).closest("p")?.querySelector("svg.text-warning")).not.toBeNull();
+		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).not.toBeChecked();
 	});
 	it("offers the harness's provider catalog and needs a provider before saving", async () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([{ id: "zeta", name: "Zeta AI", env: "ZETA_API_KEY", models: 2 }]);
 		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }, { id: "native", label: "Other native sign-in", secret: false }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await waitFor(() => expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription(/Choose from 1 providers in OpenCode's catalog/));
+		// Once the catalog loads, the row says how many providers it offers.
+		await waitFor(() => expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription(/^1 provider/));
 		expect(fetchCatalogProviders).toHaveBeenCalledWith("opencode", undefined);
 		await user.type(screen.getByLabelText("API key"), "zeta-secret");
 		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
@@ -121,7 +122,7 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription("Choose a provider from OpenCode's catalog. The key is saved in OpenCode's own settings.");
 		expect(screen.getAllByText("Loading OpenCode's providers…")).toHaveLength(1);
 	});
-	it("picks a catalog provider from the inline list and saves its key", async () => {
+	it("picks a catalog provider from the searchable menu and saves its key", async () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([
 			{ id: "zai", name: "Z.AI", env: "ZAI_API_KEY", models: 14 },
@@ -130,16 +131,16 @@ describe("HarnessLoginPanel", () => {
 		]);
 		vi.mocked(startCatalogKeyLogin).mockResolvedValue({ ...snapshot, agentId: "opencode", method: "provider_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		const list = await screen.findByRole("listbox", { name: "Provider" });
-		expect(within(list).getAllByRole("option")).toHaveLength(3);
-		expect(within(list).getByRole("option", { name: /Groq/ })).toHaveTextContent("1 model");
-		await user.type(screen.getByRole("combobox", { name: "Provider" }), "coding");
-		expect(within(list).getAllByRole("option")).toHaveLength(1);
-		await user.keyboard("{Enter}");
-		expect(within(list).getByRole("option", { name: /Z.AI Coding Plan/ })).toHaveAttribute("aria-selected", "true");
-		expect(screen.getByText("ZAI_API_KEY")).toBeVisible();
-		await user.clear(screen.getByRole("combobox", { name: "Provider" }));
-		await user.click(within(list).getByRole("option", { name: /^Groq/ }));
+		await user.click(await screen.findByRole("button", { name: "Provider" }));
+		expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+		await user.type(screen.getByRole("searchbox", { name: "Search provider" }), "coding");
+		expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+		await user.click(screen.getByRole("menuitem", { name: "Z.AI Coding Plan" }));
+		expect(screen.getByRole("button", { name: "Provider" })).toHaveTextContent("Z.AI Coding Plan");
+		// The chosen provider's key variable is the key field's placeholder.
+		expect(screen.getByLabelText("API key")).toHaveAttribute("placeholder", "ZAI_API_KEY");
+		await user.click(screen.getByRole("button", { name: "Provider" }));
+		await user.click(screen.getByRole("menuitem", { name: "Groq" }));
 		await user.type(screen.getByLabelText("API key"), "groq-secret");
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 		expect(startCatalogKeyLogin).toHaveBeenCalledWith("opencode", "groq", "groq-secret", undefined);
@@ -218,7 +219,7 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: `${agentId} account in browser` })).toBeVisible();
 		expect(screen.queryByRole("button", { name: "Continue in browser" })).toBeNull();
 		expect(screen.queryByText("Use your ChatGPT account.")).toBeNull();
-		expect(screen.getByRole("button", { name: "Open terminal login" })).not.toBeVisible();
+		expect(screen.getByRole("button", { name: "Open terminal login" })).toBeVisible();
 	});
 
 	it.each(["opencode", "opencode-v2"] as const)("offers %s provider keys as masked inline methods", async (agentId) => {
@@ -292,14 +293,13 @@ describe("HarnessLoginPanel", () => {
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "select", undefined);
 	});
 
-	it.each([undefined, "local"])("explains local sign-in methods and keeps terminal login under other options (%s)", async (hostId) => {
-		const { user } = setup(hostId);
+	it.each([undefined, "local"])("explains local sign-in methods and offers terminal login beside Cancel (%s)", (hostId) => {
+		setup(hostId);
 		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toHaveAccessibleDescription("Use your ChatGPT account.");
 		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toBeEnabled();
 		expect(screen.queryByRole("button", { name: "Continue in browser" })).toBeNull();
-		expect(screen.getByRole("button", { name: "Open terminal login" })).not.toBeVisible();
-		await user.click(screen.getByText("Other options"));
 		expect(screen.getByRole("button", { name: "Open terminal login" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
 	});
 
 	it("uses device-code or credentials on a remote host instead of a localhost browser callback", async () => {
@@ -432,7 +432,6 @@ describe("HarnessLoginPanel", () => {
 		const { user, onTerminal } = setup();
 		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		await screen.findByText("ABCD-EFGHI");
-		await user.click(screen.getByText("Other options"));
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", undefined);
 		expect(onTerminal).not.toHaveBeenCalled();
@@ -445,7 +444,6 @@ describe("HarnessLoginPanel", () => {
 		const { user, onClose, onTerminal } = setup();
 		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		await screen.findByText("ABCD-EFGHI");
-		await user.click(screen.getByText("Other options"));
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Login is still stopping");
 		expect(onTerminal).not.toHaveBeenCalled();
