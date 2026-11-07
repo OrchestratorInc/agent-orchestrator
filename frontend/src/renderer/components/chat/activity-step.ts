@@ -108,6 +108,34 @@ export function activityToolStep(activity: ConversationActivity): CommandStep | 
 }
 
 /**
+ * The gist of a thought, for the live row beside the loader: what the agent is
+ * working on, in its own words. Codex heads each part of its reasoning summary
+ * with a bold line ("**Designing the cadence strip**"), and the newest one is the
+ * part it is on. Claude Code writes prose that ends on what it will do next ("…
+ * I'm creating the to-do list next."), so its last whole sentence is used. A
+ * sentence still being written is skipped, and with nothing whole yet there is
+ * no gist.
+ */
+export function thoughtHeadline(text: string | undefined): string | undefined {
+	if (!text?.trim()) return undefined;
+	const headings = [...text.matchAll(/^[ \t]*\*\*([^*\n]+?)\*\*[ \t]*$/gm)]
+		.map((match) => match[1]!.trim())
+		.filter(Boolean);
+	if (headings.length > 0) return headings.at(-1);
+	const plain = text
+		.replace(/`([^`\n]*)`/g, "$1")
+		.replace(/\*\*|__/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	// A sentence ends at . ! or ? followed by a space and a capital, a digit or an
+	// opening quote, so "Node.js" and "26.13.0" do not split one.
+	const sentences = plain.split(/(?<=[.!?]["')\]”’]?)\s+(?=[A-Z0-9"'“‘(\[])/);
+	const whole = sentences.filter((sentence) => /[.!?]["')\]”’]?$/.test(sentence));
+	const last = whole.at(-1)?.trim();
+	return last ? last.replace(/\.$/, "") : undefined;
+}
+
+/**
  * A tool call that only looks at things: a read, a search, a fetch. A run made
  * only of these says "Explored", the way a run of `cat` and `rg` does.
  */

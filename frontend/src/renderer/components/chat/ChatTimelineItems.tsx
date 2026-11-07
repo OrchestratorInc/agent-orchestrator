@@ -139,7 +139,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, thoughtHeadline, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1275,7 +1275,7 @@ export function AssistantMessage({
 
 /** What the live row says the agent is doing right now, in the words its own row uses. */
 export function liveTaskLabel(activity: ConversationActivity): string {
-	if (activity.activityKind === "reasoning") return "Thinking";
+	if (activity.activityKind === "reasoning") return thoughtHeadline(reasoningText(activity)) ?? "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
 	if (activity.activityKind === "mcp_tool") {
 		const step = activityToolStep(activity);
@@ -1873,15 +1873,28 @@ export function isLiveStepKind(activity: ConversationActivity): boolean {
 	);
 }
 
-/** Whether the running step on the live row has details to open: command, output, patch or payload. */
+/** Whether the step on the live row has details to open: command, output, patch, payload or thought. */
 function liveStepHasDetail(activity: ConversationActivity): boolean {
+	if (activity.activityKind === "reasoning") return Boolean(reasoningText(activity));
 	if (activity.activityKind === "mcp_tool") return mcpToolHasBody(activity);
 	return isLiveStepKind(activity) && genericActivityHasBody(activity);
 }
 
-/** The running step's details, opened from the live row: what its own row would open onto. */
+/** The step's details, opened from the live row: what its own row would open onto, or the whole thought. */
 function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
+	if (activity.activityKind === "reasoning") {
+		return (
+			<div className="mb-1 border-l-2 border-border-strong py-0.5 pl-3">
+				<ChatMarkdown text={reasoningText(activity) ?? ""} streaming={activity.status === "running"} muted />
+			</div>
+		);
+	}
 	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
+}
+
+/** A thought's text, streamed or settled; see ReasoningBlock. */
+export function reasoningText(activity: ConversationActivity): string | undefined {
+	return activity.detail?.text?.trim() || activity.detail?.reason?.trim() || undefined;
 }
 
 /**

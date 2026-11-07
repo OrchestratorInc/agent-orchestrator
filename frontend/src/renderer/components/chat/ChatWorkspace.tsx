@@ -133,6 +133,7 @@ import {
 	LiveResponseStatus,
 	isLiveStepKind,
 	liveTaskLabel,
+	reasoningText,
 	reconnectCopy,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
@@ -3669,11 +3670,14 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		const groups = groupByTurn({ ...snapshot, items: timelineItems })
-			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
-			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
-				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
-				: group);
+		const groups = attachLiveThoughts(
+			groupByTurn({ ...snapshot, items: timelineItems })
+				.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+				.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
+					? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
+					: group),
+			snapshot.items,
+		);
 		if (!workerUpdates) return groups;
 		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
 		if (spawnedIds.size === 0) return groups;
@@ -5028,7 +5032,12 @@ const TurnGroup = memo(function TurnGroup({
 	// opens onto its command and output; its own row joins the steps above when it
 	// is done and has had its moment on the live row.
 	const liveStep = useLiveRowStep(group);
-	const liveTask = liveStep ?? currentTask;
+	// Between steps, when the newest thing in the turn is a thought, the live row
+	// names what the agent is working on in its own words, as Claude's own app does,
+	// rather than a bare "Thinking". Once it writes or starts a step, that takes over.
+	const liveTask = liveStep ?? currentTask ?? group.liveThought;
+	// The row opens onto a thought too, when it names one that has text.
+	const liveRowStep = liveStep ?? (liveTask?.activityKind === "reasoning" && reasoningText(liveTask) ? liveTask : undefined);
 	// Only the run the agent is working in stays open while the turn runs; earlier
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
@@ -5119,7 +5128,7 @@ const TurnGroup = memo(function TurnGroup({
 				// says "Thinking" beside the loader rather than only a timer. A turn waiting
 				// on the reader's answer is not thinking, so it keeps the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked ? "Thinking" : undefined}
-				step={liveStep}
+				step={liveRowStep}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -5587,6 +5596,36 @@ const groupKey = (group: TimelineGroup): string => group.key;
  * group object — and with it the previous plan — so a checklist would stop ticking
  * until something else in the turn happened to change.
  */
+/**
+ * Gives each running turn its newest thought, when nothing has come after it: no
+ * message, step or other row with a later sequence. A subagent's thoughts are its
+ * own and are left out.
+ */
+function attachLiveThoughts(groups: TimelineGroup[], items: ConversationItem[]): TimelineGroup[] {
+	const liveTurns = new Set(groups.filter((group) => group.live && group.turnId).map((group) => group.turnId!));
+	if (liveTurns.size === 0) return groups;
+	const thoughts = new Map<string, ConversationActivity>();
+	for (const item of items) {
+		if (
+			item.kind !== "activity" ||
+			item.activityKind !== "reasoning" ||
+			!item.turnId ||
+			!liveTurns.has(item.turnId) ||
+			item.detail?.parentProviderItemId
+		) continue;
+		const newest = thoughts.get(item.turnId);
+		if (!newest || item.sequence > newest.sequence) thoughts.set(item.turnId, item);
+	}
+	return groups.map((group) => {
+		const thought = group.live && group.turnId ? thoughts.get(group.turnId) : undefined;
+		if (!thought) return group;
+		const later = group.items.some(
+			(item) => item.sequence > thought.sequence && !(item.kind === "activity" && item.activityKind === "plan"),
+		);
+		return later ? group : { ...group, liveThought: thought };
+	});
+}
+
 function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 	return (
 		a.anchor === b.anchor &&
@@ -5594,6 +5633,9 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.live === b.live &&
 		a.liveStartupLabel === b.liveStartupLabel &&
 		a.rollbackable === b.rollbackable &&
+		a.liveThought?.id === b.liveThought?.id &&
+		a.liveThought?.status === b.liveThought?.status &&
+		(a.liveThought ? reasoningText(a.liveThought) : undefined) === (b.liveThought ? reasoningText(b.liveThought) : undefined) &&
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
 		sameContent(a.plan, b.plan) &&
@@ -5669,6 +5711,11 @@ type TimelineGroup = {
 	blocked?: boolean;
 	/** A live provider failure replaces the generic Working label until the turn settles. */
 	liveProviderFailure?: ConversationActivity;
+	/**
+	 * A running turn's newest thought, when nothing has come after it. The timeline
+	 * leaves reasoning out (see readableItems); the live row names it.
+	 */
+	liveThought?: ConversationActivity;
 	/** The provider accepted this turn, so there is history it can be asked to drop. */
 	rollbackable?: boolean;
 	/** An account switch stopped this turn; its notice replaces the outcome. */

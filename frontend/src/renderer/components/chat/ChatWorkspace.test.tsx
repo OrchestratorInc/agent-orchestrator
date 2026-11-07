@@ -1369,6 +1369,51 @@ describe("ChatWorkspace timeline", () => {
 		expect(task()).toHaveTextContent(/^Thinking$/);
 	});
 
+	it("names the live row by the agent's newest thought, and opens onto it", async () => {
+		const user = userEvent.setup();
+		const turnId = "live-turn-thought";
+		const at = "2026-08-11T10:01:00Z";
+		const thought = (text: string, status: "running" | "completed") => ({
+			kind: "activity" as const, id: "thought", turnId, sequence: 3, revision: 1,
+			activityKind: "reasoning" as const, status, summary: "Reasoning", detail: { text }, createdAt: at,
+		});
+		const snapshot = (text: string, status: "running" | "completed"): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "status", turnId, sequence: 2, revision: 1,
+					activityKind: "command", status: "completed", summary: "git status",
+					detail: { command: "git status" }, createdAt: at,
+				},
+				thought(text, status),
+			],
+		});
+
+		// Before a sentence of the thought is whole, the row just says Thinking.
+		const view = render(<ChatWorkspace snapshot={snapshot("The build fails on", "running")} />);
+		const task = () => screen.getByTestId("live-working-task");
+		expect(task()).toHaveTextContent(/^Thinking$/);
+
+		// Then it says what the agent is about to do, and keeps saying it once the
+		// thought settles, until the agent writes or starts a step.
+		const text = "Only one React copy exists. I'll rebuild with NODE_ENV=production to match CI.";
+		view.rerender(<ChatWorkspace snapshot={snapshot(text, "completed")} />);
+		expect(task()).toHaveTextContent(/^I'll rebuild with NODE_ENV=production to match CI$/);
+
+		const row = screen.getByTestId("live-working-row");
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		await user.click(row);
+		expect(await screen.findByText(/Only one React copy exists/)).toBeInTheDocument();
+	});
+
 	it("gives the step back its row once it finishes", () => {
 		const turnId = "live-turn-finished-step";
 		const at = "2026-08-11T10:01:00Z";
