@@ -464,6 +464,14 @@ export interface AOActionDetail {
 	prNumber?: number;
 	prTitle?: string;
 	error?: string;
+	/** worker.report: the report state (`done`, `needs_input`, `stuck`, `information`, ...). */
+	state?: string;
+	/** worker.report: the note or free-form message, exactly as the batch renderer writes it. */
+	text?: string;
+	/** worker.report: the project id of the worker's session, for its session link. */
+	projectId?: string;
+	/** worker.report: each reported output, rendered as `kind: reference` body lines. */
+	outputs?: { kind: string; reference: string }[];
 }
 
 /**
