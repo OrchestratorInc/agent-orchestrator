@@ -4120,10 +4120,12 @@ paths:
       operationId: createSessionSuggestion
       tags: [Sessions]
       description: >-
-        Suggests an aside to whoever drives the session, as its text or the
-        text given. Anyone who may open the session may suggest, a viewer too.
-        An aside has one pending suggestion: suggesting it again returns that
-        one (200). A chat.suggestion_created event tells the session.
+        Suggests an aside to whoever drives the session. The suggestion says
+        what the aside says, credited to the aside's author; the driver may
+        edit it when sending it, as their own message. Anyone who may open the
+        session may suggest, a viewer too. An aside has one pending suggestion:
+        suggesting it again returns that one (200). A chat.suggestion_created
+        event tells the session.
       parameters:
         - $ref: "#/components/parameters/OrgId"
         - $ref: "#/components/parameters/SessionId"
@@ -4140,11 +4142,6 @@ paths:
                 asideId:
                   type: string
                   format: uuid
-                text:
-                  type: string
-                  minLength: 1
-                  maxLength: 65536
-                  description: The suggestion in other words than the aside's.
       responses:
         "201":
           description: The suggestion was made.
@@ -4165,13 +4162,16 @@ paths:
       operationId: sendSessionSuggestion
       tags: [Sessions]
       description: >-
-        Sends a pending suggestion to the agent as the caller's own message,
-        with its text or the edited text given. Only the driver may: someone who
-        may write to the agent and holds the composer lease (composerEpoch), or
-        finds it free with nobody waiting, exactly as for any message (409
-        COMPOSER_LOCKED otherwise). A retry with the same Idempotency-Key
-        returns the same message; a suggestion already sent or dismissed is 409
-        suggestion_resolved.
+        Sends a pending suggestion to the agent as the caller's own message:
+        the body is a message as POST .../messages takes it, whose text is the
+        suggestion's when empty and may be edited; mentions notify and
+        attachments are placed exactly as on any message. Only the driver may:
+        someone who may write to the agent and holds the composer lease
+        (composerEpoch), or finds it free with nobody waiting, exactly as for
+        any message (409 COMPOSER_LOCKED otherwise). A retry with the same
+        Idempotency-Key returns the same message; a suggestion already sent or
+        dismissed is 409 suggestion_resolved; a deleted session is 409
+        SESSION_TERMINATED.
       parameters:
         - $ref: "#/components/parameters/OrgId"
         - $ref: "#/components/parameters/SessionId"
@@ -4182,28 +4182,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              properties:
-                text:
-                  type: string
-                  minLength: 1
-                  maxLength: 65536
-                composerEpoch:
-                  type: integer
-                  format: int64
-                  minimum: 0
-                model:
-                  type: string
-                  pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
-                reasoningEffort:
-                  type: string
-                  enum: [none, minimal, low, medium, high, xhigh, max, ultra]
-                mode:
-                  $ref: "#/components/schemas/SessionMode"
-                approvalMode:
-                  type: string
-                  enum: [default, accept-edits, auto, bypass-permissions]
+              $ref: "#/components/schemas/ChatMessageInput"
       responses:
         "202":
           description: The message was sent and the suggestion is sent.
@@ -4228,7 +4207,8 @@ paths:
         Dismisses a pending suggestion. Its maker may withdraw it; anyone else
         must be the driver, as for sending, and keeps the lease. Its maker is
         notified (kind suggestion_dismissed) when someone else dismisses it.
-        Dismissing a dismissed suggestion changes nothing.
+        Dismissing a dismissed suggestion changes nothing. A deleted session's
+        suggestions can be neither sent nor dismissed (409 SESSION_TERMINATED).
       parameters:
         - $ref: "#/components/parameters/OrgId"
         - $ref: "#/components/parameters/SessionId"
@@ -5150,15 +5130,15 @@ components:
               memberCount:
                 type: integer
                 minimum: 0
-                description: Everyone in the team, invitations not yet accepted included.
+                description: How many people a mention of the team from the caller names, everyone in it but the caller, invitations not yet accepted included.
               membersWithoutAccess:
                 type: integer
                 minimum: 0
-                description: How many of them a mention would not reach (they can't open the session, or have no account yet).
+                description: How many of those people (never the caller) the mention would not reach, because they can't open the session or have no account yet.
               namesWithoutAccess:
                 type: array
                 maxItems: 5
-                description: Names of some of them, people the workspace already knows.
+                description: Names of some of those people (never the caller), only ones the workspace already knows.
                 items:
                   type: string
     FeedItem:
@@ -5208,7 +5188,7 @@ components:
           type: object
           additionalProperties: false
           required: [index, of, orchestratorTitle]
-          description: Set for a session an orchestrator spawned.
+          description: Set for a session an orchestrator spawned, when the caller may open that orchestrator. index and of count its live workers.
           properties:
             index:
               type: integer
@@ -5237,7 +5217,7 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [number, url, sessionId, orgId]
+            required: [number, url, sessionId, orgId, projectId]
             properties:
               number:
                 type: integer
@@ -5249,18 +5229,24 @@ components:
               orgId:
                 type: string
                 format: uuid
+              projectId:
+                type: string
+                format: uuid
         failed:
           type: array
           maxItems: 20
           items:
             type: object
             additionalProperties: false
-            required: [sessionId, orgId, title]
+            required: [sessionId, orgId, projectId, title]
             properties:
               sessionId:
                 type: string
                 format: uuid
               orgId:
+                type: string
+                format: uuid
+              projectId:
                 type: string
                 format: uuid
               title:
@@ -5269,7 +5255,7 @@ components:
           type: object
           additionalProperties: false
           required: [count, names]
-          description: Sessions others started.
+          description: Live sessions others started.
           properties:
             count:
               type: integer

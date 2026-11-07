@@ -2621,7 +2621,7 @@ export interface paths {
         /** @description The session's pending suggestions, oldest first. The driver's composer shows the first. */
         get: operations["listSessionSuggestions"];
         put?: never;
-        /** @description Suggests an aside to whoever drives the session, as its text or the text given. Anyone who may open the session may suggest, a viewer too. An aside has one pending suggestion: suggesting it again returns that one (200). A chat.suggestion_created event tells the session. */
+        /** @description Suggests an aside to whoever drives the session. The suggestion says what the aside says, credited to the aside's author; the driver may edit it when sending it, as their own message. Anyone who may open the session may suggest, a viewer too. An aside has one pending suggestion: suggesting it again returns that one (200). A chat.suggestion_created event tells the session. */
         post: operations["createSessionSuggestion"];
         delete?: never;
         options?: never;
@@ -2638,7 +2638,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Sends a pending suggestion to the agent as the caller's own message, with its text or the edited text given. Only the driver may: someone who may write to the agent and holds the composer lease (composerEpoch), or finds it free with nobody waiting, exactly as for any message (409 COMPOSER_LOCKED otherwise). A retry with the same Idempotency-Key returns the same message; a suggestion already sent or dismissed is 409 suggestion_resolved. */
+        /** @description Sends a pending suggestion to the agent as the caller's own message: the body is a message as POST .../messages takes it, whose text is the suggestion's when empty and may be edited; mentions notify and attachments are placed exactly as on any message. Only the driver may: someone who may write to the agent and holds the composer lease (composerEpoch), or finds it free with nobody waiting, exactly as for any message (409 COMPOSER_LOCKED otherwise). A retry with the same Idempotency-Key returns the same message; a suggestion already sent or dismissed is 409 suggestion_resolved; a deleted session is 409 SESSION_TERMINATED. */
         post: operations["sendSessionSuggestion"];
         delete?: never;
         options?: never;
@@ -2655,7 +2655,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Dismisses a pending suggestion. Its maker may withdraw it; anyone else must be the driver, as for sending, and keeps the lease. Its maker is notified (kind suggestion_dismissed) when someone else dismisses it. Dismissing a dismissed suggestion changes nothing. */
+        /** @description Dismisses a pending suggestion. Its maker may withdraw it; anyone else must be the driver, as for sending, and keeps the lease. Its maker is notified (kind suggestion_dismissed) when someone else dismisses it. Dismissing a dismissed suggestion changes nothing. A deleted session's suggestions can be neither sent nor dismissed (409 SESSION_TERMINATED). */
         post: operations["dismissSessionSuggestion"];
         delete?: never;
         options?: never;
@@ -3024,11 +3024,11 @@ export interface components {
                 /** Format: uuid */
                 teamId: string;
                 name: string;
-                /** @description Everyone in the team, invitations not yet accepted included. */
+                /** @description How many people a mention of the team from the caller names, everyone in it but the caller, invitations not yet accepted included. */
                 memberCount: number;
-                /** @description How many of them a mention would not reach (they can't open the session, or have no account yet). */
+                /** @description How many of those people (never the caller) the mention would not reach, because they can't open the session or have no account yet. */
                 membersWithoutAccess: number;
-                /** @description Names of some of them, people the workspace already knows. */
+                /** @description Names of some of those people (never the caller), only ones the workspace already knows. */
                 namesWithoutAccess: string[];
             }[];
         };
@@ -3055,7 +3055,7 @@ export interface components {
             following: boolean;
             /** Format: date-time */
             updatedAt: string;
-            /** @description Set for a session an orchestrator spawned. */
+            /** @description Set for a session an orchestrator spawned, when the caller may open that orchestrator. index and of count its live workers. */
             worker?: {
                 index: number;
                 of: number;
@@ -3075,15 +3075,19 @@ export interface components {
                 sessionId: string;
                 /** Format: uuid */
                 orgId: string;
+                /** Format: uuid */
+                projectId: string;
             }[];
             failed: {
                 /** Format: uuid */
                 sessionId: string;
                 /** Format: uuid */
                 orgId: string;
+                /** Format: uuid */
+                projectId: string;
                 title: string;
             }[];
-            /** @description Sessions others started. */
+            /** @description Live sessions others started. */
             started: {
                 count: number;
                 names: string[];
@@ -10138,8 +10142,6 @@ export interface operations {
                 "application/json": {
                     /** Format: uuid */
                     asideId: string;
-                    /** @description The suggestion in other words than the aside's. */
-                    text?: string;
                 };
             };
         };
@@ -10183,17 +10185,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": {
-                    text?: string;
-                    /** Format: int64 */
-                    composerEpoch?: number;
-                    model?: string;
-                    /** @enum {string} */
-                    reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-                    mode?: components["schemas"]["SessionMode"];
-                    /** @enum {string} */
-                    approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
-                };
+                "application/json": components["schemas"]["ChatMessageInput"];
             };
         };
         responses: {
