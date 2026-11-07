@@ -62,6 +62,25 @@ afterEach(() => {
 });
 
 describe("NotificationsSection", () => {
+	it("lists mentions under Needs you, with a desktop switch that is on by default and can be turned off", async () => {
+		preferences = [
+			...preferences,
+			{ kind: "mentioned", inApp: true, desktop: true, scope: "following", locked: false, tier: 0 },
+		];
+		renderSection();
+		await waitFor(() => expect(rowOf("mentioned")).toBeTruthy());
+		// Between the Needs you heading and the next group's.
+		const after = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(after(screen.getByRole("heading", { level: 2, name: "Needs you" }), rowOf("mentioned"))).toBe(true);
+		expect(after(rowOf("mentioned"), screen.getByRole("heading", { level: 2, name: "Agents" }))).toBe(true);
+		expect(within(rowOf("mentioned")).getByText("Mentioned")).toBeInTheDocument();
+		const toggle = within(rowOf("mentioned")).getByRole("switch", { name: "Mentioned on the desktop" });
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeEnabled();
+		await userEvent.click(toggle);
+		await waitFor(() => expect(setNotificationPreferences).toHaveBeenCalledWith([expect.objectContaining({ kind: "mentioned", desktop: false, inApp: true })]));
+	});
+
 	it("groups each kind under Needs you, Agents and Pull requests with one desktop switch", async () => {
 		renderSection();
 		await waitFor(() => expect(rowOf("approval_needed")).toBeTruthy());

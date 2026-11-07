@@ -17,6 +17,8 @@ const KINDS = {
 	approval_needed: { label: "settings.notifications.kind.approvalNeeded", group: "needsYou" },
 	needs_input: { label: "settings.notifications.kind.needsInput", group: "needsYou" },
 	merge_requested: { label: "settings.notifications.kind.mergeRequested", group: "needsYou" },
+	mentioned: { label: "settings.notifications.kind.mentioned", group: "needsYou" },
+	suggestion_dismissed: { label: "settings.notifications.kind.suggestionDismissed", group: "agents" },
 	agent_failed: { label: "settings.notifications.kind.agentFailed", group: "agents" },
 	turn_finished: { label: "settings.notifications.kind.turnFinished", group: "agents" },
 	ci_failed: { label: "settings.notifications.kind.ciFailed", group: "pullRequests" },

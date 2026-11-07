@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
+import { useTeamCollabSupport } from "../hooks/useTeamCollab";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -44,6 +45,7 @@ import {
 	Smartphone,
 	Trash2,
 	User,
+	Users,
 	X,
 	ArrowLeft,
 } from "lucide-react";
@@ -532,6 +534,7 @@ function useSelection() {
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
+	const goTeam = useCallback(() => void navigate({ to: "/team" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
@@ -558,6 +561,7 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isTeam: pathname === "/team",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -566,6 +570,7 @@ function useSelection() {
 		goHome,
 		goAutomations,
 		goArtifacts,
+		goTeam,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
@@ -733,6 +738,7 @@ export function Sidebar({
 	const { t } = useTranslation();
 	const remoteNavigate = useNavigate();
 	const selection = useSelection();
+	const teamFeed = useTeamCollabSupport() === "supported";
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
@@ -1139,6 +1145,18 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					{/* What the team's agents are doing, on a control plane with the team feed. */}
+					{teamFeed ? (
+						<SidebarMenuItem>
+							<SidebarTopNavRow
+								active={selection.isTeam}
+								icon={<Users aria-hidden="true" />}
+								label={t("shell.team")}
+								onClick={selection.goTeam}
+								tooltip={isCollapsed ? t("shell.team") : undefined}
+							/>
+						</SidebarMenuItem>
+					) : null}
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isAutomations}

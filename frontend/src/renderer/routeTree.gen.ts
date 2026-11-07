@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as ShellIndexRouteImport } from './routes/_shell.index'
+import { Route as ShellTeamRouteImport } from './routes/_shell.team'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
 import { Route as ShellSessionsRouteImport } from './routes/_shell.sessions'
 import { Route as ShellNewRouteImport } from './routes/_shell.new'
@@ -32,6 +33,11 @@ const ShellRoute = ShellRouteImport.update({
 const ShellIndexRoute = ShellIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellTeamRoute = ShellTeamRouteImport.update({
+  id: '/team',
+  path: '/team',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellSettingsRoute = ShellSettingsRouteImport.update({
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/new': typeof ShellNewRoute
   '/sessions': typeof ShellSessionsRouteWithChildren
   '/settings': typeof ShellSettingsRoute
+  '/team': typeof ShellTeamRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
   '/sessions/': typeof ShellSessionsIndexRoute
@@ -126,6 +133,7 @@ export interface FileRoutesByTo {
   '/automations': typeof ShellAutomationsRoute
   '/new': typeof ShellNewRoute
   '/settings': typeof ShellSettingsRoute
+  '/team': typeof ShellTeamRoute
   '/': typeof ShellIndexRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -144,6 +152,7 @@ export interface FileRoutesById {
   '/_shell/new': typeof ShellNewRoute
   '/_shell/sessions': typeof ShellSessionsRouteWithChildren
   '/_shell/settings': typeof ShellSettingsRoute
+  '/_shell/team': typeof ShellTeamRoute
   '/_shell/': typeof ShellIndexRoute
   '/_shell/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/_shell/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -163,6 +172,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/sessions'
     | '/settings'
+    | '/team'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/sessions/'
@@ -177,6 +187,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/new'
     | '/settings'
+    | '/team'
     | '/'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
@@ -194,6 +205,7 @@ export interface FileRouteTypes {
     | '/_shell/new'
     | '/_shell/sessions'
     | '/_shell/settings'
+    | '/_shell/team'
     | '/_shell/'
     | '/_shell/projects/$projectId'
     | '/_shell/sessions/$sessionId'
@@ -223,6 +235,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof ShellIndexRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/team': {
+      id: '/_shell/team'
+      path: '/team'
+      fullPath: '/team'
+      preLoaderRoute: typeof ShellTeamRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/settings': {
@@ -339,6 +358,7 @@ interface ShellRouteChildren {
   ShellNewRoute: typeof ShellNewRoute
   ShellSessionsRoute: typeof ShellSessionsRouteWithChildren
   ShellSettingsRoute: typeof ShellSettingsRoute
+  ShellTeamRoute: typeof ShellTeamRoute
   ShellIndexRoute: typeof ShellIndexRoute
   ShellProjectsProjectIdRoute: typeof ShellProjectsProjectIdRoute
   ShellProjectsProjectIdSettingsRoute: typeof ShellProjectsProjectIdSettingsRoute
@@ -354,6 +374,7 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellNewRoute: ShellNewRoute,
   ShellSessionsRoute: ShellSessionsRouteWithChildren,
   ShellSettingsRoute: ShellSettingsRoute,
+  ShellTeamRoute: ShellTeamRoute,
   ShellIndexRoute: ShellIndexRoute,
   ShellProjectsProjectIdRoute: ShellProjectsProjectIdRoute,
   ShellProjectsProjectIdSettingsRoute: ShellProjectsProjectIdSettingsRoute,

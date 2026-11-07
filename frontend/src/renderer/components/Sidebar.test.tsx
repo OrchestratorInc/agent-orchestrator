@@ -65,6 +65,7 @@ const {
 	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
+	teamCollab,
 } = vi.hoisted(
 	() => ({
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
@@ -90,6 +91,7 @@ const {
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
 		commandPaletteEnabled: { current: true },
+		teamCollab: { support: "unknown" as "unknown" | "supported" | "unsupported" },
 	}),
 );
 
@@ -147,6 +149,7 @@ vi.mock("../hooks/useCloudLocalAuth", () => ({
 		},
 	}),
 }));
+vi.mock("../hooks/useTeamCollab", () => ({ useTeamCollabSupport: () => teamCollab.support }));
 vi.mock("../hooks/useCommandPaletteEnabled", () => ({
 	useCommandPaletteEnabled: () => commandPaletteEnabled.current,
 }));
@@ -515,6 +518,7 @@ beforeEach(() => {
 	dragStarts.clear();
 	document.documentElement.style.removeProperty("--ao-sidebar-w");
 	commandPaletteEnabled.current = true;
+	teamCollab.support = "unknown";
 	cloudGateState.cloudEnabled = true;
 	cloudGateState.localEnabled = true;
 	cloudGateState.client = "";
@@ -721,6 +725,35 @@ describe("Sidebar", () => {
 
 		await user.click(artifacts);
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/artifacts" });
+	});
+
+	it("shows Team under Search only on a control plane with the team feed", async () => {
+		const user = userEvent.setup();
+		// Undecided, then a control plane without it: no row.
+		renderSidebar();
+		expect(screen.queryByRole("button", { name: "Team" })).toBeNull();
+		cleanup();
+		teamCollab.support = "unsupported";
+		renderSidebar();
+		expect(screen.queryByRole("button", { name: "Team" })).toBeNull();
+		cleanup();
+		teamCollab.support = "supported";
+		renderSidebar();
+		const team = screen.getByRole("button", { name: "Team" });
+		const search = screen.getByRole("button", { name: "Search" });
+		const automations = screen.getByRole("button", { name: "Automations" });
+		expect(search.compareDocumentPosition(team) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(team.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(team).not.toHaveAttribute("aria-current");
+		await user.click(team);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/team" });
+	});
+
+	it("marks Team active on its route", () => {
+		teamCollab.support = "supported";
+		mockLocation.pathname = "/team";
+		renderSidebar();
+		expect(screen.getByRole("button", { name: "Team" })).toHaveAttribute("aria-current", "page");
 	});
 
 	it("omits the Artifacts count when there are none and marks the row active on its route", () => {

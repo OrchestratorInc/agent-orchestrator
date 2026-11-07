@@ -1415,6 +1415,36 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 			expect.stringContaining("Cloud checkout needs approval"),
 		]));
 	});
+
+	it("shows a mention like any other Needs you row: an @ mark, the author's line, an excerpt and its project", async () => {
+		const mention: CloudCpNotification = {
+			id: "cn-mention", source: "cloud", orgId: "org-2", projectId: "cproj-1", sessionId: "csess-1",
+			type: "mentioned", tier: 0, title: "Chen Wei mentioned you in Cloud checkout", body: "can you sanity check the rotation test?",
+			status: "unread", reason: "mentioned", actor: { userId: "u3", name: "Chen Wei" }, desktop: true,
+			createdAt: "2026-07-21T13:00:00Z", updatedAt: "2026-07-21T13:00:00Z",
+		};
+		cloudNotificationsMock.mockReturnValue(inboxResult([mention, approval], [merged]));
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		expect(panel.getByText("Needs you")).toBeInTheDocument();
+		const rows = panel.getAllByRole("listitem");
+		const row = rows[0]!;
+		expect(row).toHaveTextContent("Chen Wei mentioned you in Cloud checkout");
+		expect(row).toHaveTextContent("can you sanity check the rotation test?");
+		expect(row).toHaveTextContent("acme/cloud");
+		expect(row.querySelector(".lucide-at-sign")).not.toBeNull();
+		expect(row.querySelector(".lucide-at-sign")?.parentElement).toHaveClass("text-status-needs-you");
+		// Updates follow the Needs you rows.
+		expect(rows.findIndex((candidate) => candidate.textContent?.includes("PR #12 merged"))).toBe(2);
+	});
+
+	it("opens when another surface asks it to", async () => {
+		renderNotificationCenter();
+		expect(screen.queryByRole("dialog", { name: "Notifications" })).not.toBeInTheDocument();
+		act(() => useUiStore.getState().requestNotificationCenterOpen());
+		expect(await screen.findByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+	});
 });
 
 describe("NotificationRuntime desktop notifications for cloud", () => {

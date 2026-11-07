@@ -192,6 +192,9 @@ export type UiState = {
 	/** Cloud sessions: leave teammates' asides out of the timeline, on this device. */
 	hideAsides: boolean;
 	setHideAsides: (hide: boolean) => void;
+	/** Bumped to open the notification center from elsewhere (the feed's "need you" line). */
+	notificationCenterOpenRequest: number;
+	requestNotificationCenterOpen: () => void;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
@@ -451,6 +454,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
 	hideAsides: getLocalStorage()?.getItem(hideAsidesStorageKey) === "true",
+	notificationCenterOpenRequest: 0,
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
@@ -563,6 +567,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(hideAsidesStorageKey, String(hideAsides));
 		set({ hideAsides });
 	},
+	requestNotificationCenterOpen: () => set((state) => ({ notificationCenterOpenRequest: state.notificationCenterOpenRequest + 1 })),
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),

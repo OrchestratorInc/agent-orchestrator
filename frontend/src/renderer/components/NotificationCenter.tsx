@@ -5,6 +5,7 @@ import type { TFunction } from "i18next";
 import { useParams } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
+	AtSign,
 	Bell,
 	BellRing,
 	Check,
@@ -24,6 +25,7 @@ import {
 	MailOpen,
 	MessageSquareDiff,
 	MessageSquareDot,
+	MessageSquareX,
 	SlidersHorizontal,
 	X,
 } from "lucide-react";
@@ -365,6 +367,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// when visibleUnreadKey is unchanged (removing ids from the ref alone does not).
 	const [ackRetryNonce, setAckRetryNonce] = useState(0);
 	const [open, setOpen] = useState(false);
+	// Another surface (the team feed's "need you" line) can ask the bell to open.
+	const openRequest = useUiStore((state) => state.notificationCenterOpenRequest);
+	const handledOpenRequest = useRef(openRequest);
 	// Opening marks unread as read, which would drop the highlight under the
 	// cursor. Keep the open-time unread ids highlighted until the panel closes.
 	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
@@ -600,6 +605,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
 	}, [needsYouTabCount, queryClient]);
+	useEffect(() => {
+		if (handledOpenRequest.current === openRequest) return;
+		handledOpenRequest.current = openRequest;
+		setPanelOpen(true);
+	}, [openRequest, setPanelOpen]);
 
 	const retryMarkRead = () => {
 		setMarkReadError(null);
@@ -1760,6 +1770,10 @@ function notificationIcon(type: string) {
 	switch (type) {
 		case "approval_needed":
 			return Hand;
+		case "mentioned":
+			return AtSign;
+		case "suggestion_dismissed":
+			return MessageSquareX;
 		case "needs_input":
 			return MessageSquareDot;
 		case "merge_requested":
@@ -1797,6 +1811,7 @@ function notificationIconClass(type: string): string {
 	switch (type) {
 		case "approval_needed":
 		case "merge_requested":
+		case "mentioned":
 			return "text-status-needs-you";
 		case "needs_input":
 		case "review_feedback":
