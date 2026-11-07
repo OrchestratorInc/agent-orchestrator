@@ -20404,7 +20404,10 @@ export interface operations {
     getSessionPanes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
             path: {
                 /** @description Session identifier, e.g. project-1. */
                 sessionId: string;
@@ -20420,6 +20423,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ControllersPaneLayoutResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Conflict */
@@ -20463,7 +20475,10 @@ export interface operations {
     commandSessionPanes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
             path: {
                 /** @description Session identifier, e.g. project-1. */
                 sessionId: string;
@@ -20487,6 +20502,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20544,7 +20568,10 @@ export interface operations {
     typeIntoSessionPane: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
             path: {
                 /** @description Session identifier, e.g. project-1. */
                 sessionId: string;
@@ -20566,6 +20593,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20628,7 +20664,10 @@ export interface operations {
                 /** @description How many of the last lines to return. Defaults to 200. */
                 lines?: null | number;
             };
-            header?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
             path: {
                 /** @description Session identifier, e.g. project-1. */
                 sessionId: string;
@@ -20648,6 +20687,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

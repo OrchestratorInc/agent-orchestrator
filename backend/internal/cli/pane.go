@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -73,7 +74,6 @@ type paneLayoutResponseDTO struct {
 }
 
 func newPaneCommand(ctx *commandContext) *cobra.Command {
-	var sessionFlag string
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "pane",
@@ -98,10 +98,9 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
   ao pane ungroup`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return ctx.showPanes(cmd.Context(), cmd.OutOrStdout(), sessionFlag, asJSON)
+			return ctx.showPanes(cmd.Context(), cmd.OutOrStdout(), asJSON)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&sessionFlag, "session", "", "session id (defaults to $AO_SESSION_ID)")
 	cmd.PersistentFlags().BoolVar(&asJSON, "json", false, "print the layout as JSON")
 
 	cmd.AddCommand(&cobra.Command{
@@ -110,7 +109,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short:   "List this session's tabs and splits",
 		Args:    noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return ctx.showPanes(cmd.Context(), cmd.OutOrStdout(), sessionFlag, asJSON)
+			return ctx.showPanes(cmd.Context(), cmd.OutOrStdout(), asJSON)
 		},
 	})
 
@@ -134,17 +133,17 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 				req.Side = &side
 			}
 			if runAfterSplit == "" {
-				return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, req, asJSON)
+				return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), req, asJSON)
 			}
 			if args[0] == "session" || strings.HasPrefix(args[0], "file:") || strings.HasPrefix(args[0], "reviewer") {
 				return usageError{fmt.Errorf("--run needs a terminal: split terminal, or an existing terminal tab")}
 			}
-			layout, err := ctx.paneCommandLayout(cmd.Context(), sessionFlag, req)
+			layout, err := ctx.paneCommandLayout(cmd.Context(), req)
 			if err != nil {
 				return err
 			}
 			// The split focuses the tab it placed, so the selection is the terminal.
-			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), sessionFlag, layout.Layout.Selected, runAfterSplit, runWait)
+			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), layout.Layout.Selected, runAfterSplit, runWait)
 		},
 	}
 	split.Flags().StringVar(&beside, "beside", "", "key of the tab to split beside (defaults to the tab on screen)")
@@ -164,7 +163,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 			"before the tab: ao pane run --timeout 60s <tab> npm test -- --watch=false",
 		Args: usageArgs(cobra.MinimumNArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), sessionFlag, args[0], strings.Join(args[1:], " "), runFlags)
+			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), args[0], strings.Join(args[1:], " "), runFlags)
 		},
 	}
 	runFlags.register(run)
@@ -178,7 +177,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Print what one of this session's terminal tabs shows",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			out, err := ctx.readPane(cmd.Context(), sessionFlag, args[0], readLines)
+			out, err := ctx.readPane(cmd.Context(), args[0], readLines)
 			if err != nil {
 				return err
 			}
@@ -196,7 +195,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
 			enter := !noEnter
-			return ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Text: &text, Enter: &enter})
+			return ctx.sendPaneInput(cmd.Context(), paneInputAPIRequest{Tab: args[0], Text: &text, Enter: &enter})
 		},
 	}
 	send.Flags().BoolVar(&noEnter, "no-enter", false, "type the text without pressing Enter (answers to prompts, TUI keys)")
@@ -208,7 +207,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Close one of this session's terminal tabs, running or exited",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ctx.closePaneTerminal(cmd.Context(), sessionFlag, args[0]); err != nil {
+			if err := ctx.closePaneTerminal(cmd.Context(), args[0]); err != nil {
 				return err
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Closed %s\n", args[0])
@@ -221,7 +220,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Send Ctrl-C to a terminal tab",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Interrupt: true})
+			return ctx.sendPaneInput(cmd.Context(), paneInputAPIRequest{Tab: args[0], Interrupt: true})
 		},
 	})
 
@@ -230,7 +229,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Take a tab out of its split; the rest of the split stays on screen",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, paneCommandAPIRequest{Action: "remove", Tab: &args[0]}, asJSON)
+			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), paneCommandAPIRequest{Action: "remove", Tab: &args[0]}, asJSON)
 		},
 	})
 
@@ -243,7 +242,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 			if len(args) == 1 {
 				req.Group = &args[0]
 			}
-			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, req, asJSON)
+			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), req, asJSON)
 		},
 	})
 
@@ -252,88 +251,76 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Bring a tab on screen (with its split, if it is in one)",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, paneCommandAPIRequest{Action: "focus", Tab: &args[0]}, asJSON)
+			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), paneCommandAPIRequest{Action: "focus", Tab: &args[0]}, asJSON)
 		},
 	})
 	return cmd
 }
 
-func sessionPanesPath(sessionFlag string) (string, error) {
-	sessionID := strings.TrimSpace(sessionFlag)
+// paneRequest calls this session's pane API. Like `ao browser`, it proves the
+// session with the capability AO injects into that session's agent only.
+func (c *commandContext) paneRequest(ctx context.Context, method, suffix string, body, out any) error {
+	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
-		sessionID = strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
+		return usageError{errors.New("ao pane must run inside an AO session (AO_SESSION_ID is not set)")}
 	}
-	if sessionID == "" {
-		return "", usageError{errors.New("ao pane needs a session: run it inside an AO session or pass --session")}
+	capability := strings.TrimSpace(os.Getenv("AO_BROWSER_CAPABILITY"))
+	if capability == "" {
+		return usageError{errors.New("ao pane requires the owning session capability (AO_BROWSER_CAPABILITY is not set)")}
 	}
-	return "sessions/" + url.PathEscape(sessionID) + "/panes", nil
+	return c.doJSONPathWithHeaders(ctx, method, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/panes"+suffix, body, out,
+		map[string]string{browserCapabilityHeader: capability})
 }
 
-func (c *commandContext) showPanes(ctx context.Context, w io.Writer, sessionFlag string, asJSON bool) error {
-	path, err := sessionPanesPath(sessionFlag)
-	if err != nil {
-		return err
-	}
+func (c *commandContext) showPanes(ctx context.Context, w io.Writer, asJSON bool) error {
 	var out paneLayoutResponseDTO
-	if err := c.getJSON(ctx, path, &out); err != nil {
+	if err := c.paneRequest(ctx, http.MethodGet, "", nil, &out); err != nil {
 		return err
 	}
 	return writePaneLayout(w, out, asJSON)
 }
 
-func (c *commandContext) paneCommand(ctx context.Context, w io.Writer, sessionFlag string, req paneCommandAPIRequest, asJSON bool) error {
-	out, err := c.paneCommandLayout(ctx, sessionFlag, req)
+func (c *commandContext) paneCommand(ctx context.Context, w io.Writer, req paneCommandAPIRequest, asJSON bool) error {
+	out, err := c.paneCommandLayout(ctx, req)
 	if err != nil {
 		return err
 	}
 	return writePaneLayout(w, out, asJSON)
 }
 
-func (c *commandContext) paneCommandLayout(ctx context.Context, sessionFlag string, req paneCommandAPIRequest) (paneLayoutResponseDTO, error) {
-	path, err := sessionPanesPath(sessionFlag)
-	if err != nil {
-		return paneLayoutResponseDTO{}, err
-	}
+func (c *commandContext) paneCommandLayout(ctx context.Context, req paneCommandAPIRequest) (paneLayoutResponseDTO, error) {
 	var out paneLayoutResponseDTO
-	err = c.postJSON(ctx, path, req, &out)
+	err := c.paneRequest(ctx, http.MethodPost, "", req, &out)
 	return out, err
 }
 
 // closePaneTerminal closes a terminal tab through the window showing the
 // session, which updates its strip and split as the tab's ✕ does. With no
 // window showing it, the daemon closes the terminal directly.
-func (c *commandContext) closePaneTerminal(ctx context.Context, sessionFlag, tab string) error {
-	_, err := c.paneCommandLayout(ctx, sessionFlag, paneCommandAPIRequest{Action: "close", Tab: &tab})
+func (c *commandContext) closePaneTerminal(ctx context.Context, tab string) error {
+	_, err := c.paneCommandLayout(ctx, paneCommandAPIRequest{Action: "close", Tab: &tab})
 	var apiErr apiResponseError
 	if err == nil || !errors.As(err, &apiErr) {
 		return err
 	}
 	switch apiErr.ErrorBody.Code {
 	case "NO_DESKTOP_WINDOW", "SESSION_NOT_ON_SCREEN", "SPLIT_PANES_OFF":
-		return c.sendPaneInput(ctx, sessionFlag, paneInputAPIRequest{Tab: tab, Close: true})
+		return c.sendPaneInput(ctx, paneInputAPIRequest{Tab: tab, Close: true})
 	}
 	return err
 }
 
-func (c *commandContext) sendPaneInput(ctx context.Context, sessionFlag string, req paneInputAPIRequest) error {
-	path, err := sessionPanesPath(sessionFlag)
-	if err != nil {
-		return err
-	}
-	return c.postJSON(ctx, path+"/input", req, nil)
+func (c *commandContext) sendPaneInput(ctx context.Context, req paneInputAPIRequest) error {
+	return c.paneRequest(ctx, http.MethodPost, "/input", req, nil)
 }
 
-func (c *commandContext) readPane(ctx context.Context, sessionFlag, tab string, lines int) (paneOutputDTO, error) {
-	path, err := sessionPanesPath(sessionFlag)
-	if err != nil {
-		return paneOutputDTO{}, err
-	}
+func (c *commandContext) readPane(ctx context.Context, tab string, lines int) (paneOutputDTO, error) {
 	query := url.Values{"tab": {tab}}
 	if lines > 0 {
 		query.Set("lines", fmt.Sprint(lines))
 	}
 	var out paneOutputDTO
-	err = c.getJSON(ctx, path+"/output?"+query.Encode(), &out)
+	err := c.paneRequest(ctx, http.MethodGet, "/output?"+query.Encode(), nil, &out)
 	return out, err
 }
 
@@ -356,12 +343,12 @@ var paneSettleInterval = 700 * time.Millisecond
 
 // runInPane types a command into a terminal tab, waits for its screen to
 // settle and prints its last lines.
-func (c *commandContext) runInPane(ctx context.Context, w io.Writer, sessionFlag, tab, command string, wait runWaitFlags) error {
+func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, command string, wait runWaitFlags) error {
 	if strings.TrimSpace(command) == "" {
 		return usageError{errors.New("nothing to run")}
 	}
 	enter := true
-	if err := c.sendPaneInput(ctx, sessionFlag, paneInputAPIRequest{Tab: tab, Text: &command, Enter: &enter}); err != nil {
+	if err := c.sendPaneInput(ctx, paneInputAPIRequest{Tab: tab, Text: &command, Enter: &enter}); err != nil {
 		return err
 	}
 	if wait.noWait {
@@ -379,7 +366,7 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, sessionFlag
 			return ctx.Err()
 		case <-timer.C:
 		}
-		next, err := c.readPane(ctx, sessionFlag, tab, wait.lines)
+		next, err := c.readPane(ctx, tab, wait.lines)
 		if err != nil {
 			return err
 		}

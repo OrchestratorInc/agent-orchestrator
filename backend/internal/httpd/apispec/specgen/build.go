@@ -1031,9 +1031,10 @@ func paneOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes", id: "getSessionPanes", tag: "sessions",
 			summary:    "Read the split-pane layout the desktop window shows for a session",
-			pathParams: []any{controllers.SessionIDParam{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -1043,12 +1044,13 @@ func paneOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes/input", id: "typeIntoSessionPane", tag: "sessions",
 			summary:    "Type into, or interrupt, one of the session's own terminal tabs",
-			pathParams: []any{controllers.SessionIDParam{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
 			reqBody:    controllers.PaneInputRequest{},
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -1058,11 +1060,12 @@ func paneOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes/output", id: "readSessionPaneOutput", tag: "sessions",
 			summary:    "Read what one of the session's own terminal tabs shows",
-			pathParams: []any{controllers.SessionIDParam{}, controllers.PaneOutputQuery{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.PaneOutputQuery{}, controllers.BrowserCapabilityHeader{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PaneOutputResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -1072,11 +1075,12 @@ func paneOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes", id: "commandSessionPanes", tag: "sessions",
 			summary:    "Ask the desktop window to split, unsplit or focus a session's tabs",
-			pathParams: []any{controllers.SessionIDParam{}},
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
 			reqBody:    controllers.PaneCommandRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.PaneLayoutResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

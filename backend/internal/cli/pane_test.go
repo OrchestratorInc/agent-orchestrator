@@ -11,9 +11,10 @@ import (
 )
 
 type paneCapture struct {
-	method string
-	path   string
-	body   string
+	method     string
+	path       string
+	body       string
+	capability string
 }
 
 func paneServer(t *testing.T, status int, respBody string) (*httptest.Server, *paneCapture) {
@@ -27,6 +28,7 @@ func paneServer(t *testing.T, status int, respBody string) (*httptest.Server, *p
 		}
 		body, _ := io.ReadAll(r.Body)
 		capture.method, capture.path, capture.body = r.Method, r.URL.Path, string(body)
+		capture.capability = r.Header.Get("X-AO-Browser-Capability")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, respBody)
@@ -41,6 +43,7 @@ const paneLayoutBody = `{"sessionId":"aa-47","layout":{"enabled":true,"selected"
 
 func TestPaneListsTabsAndSplits(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, capture := paneServer(t, http.StatusOK, paneLayoutBody)
 	writeRunFileFor(t, cfg, srv)
@@ -52,6 +55,9 @@ func TestPaneListsTabsAndSplits(t *testing.T) {
 	if capture.method != http.MethodGet || capture.path != "/api/v1/sessions/aa-47/panes" {
 		t.Fatalf("hit %s %s", capture.method, capture.path)
 	}
+	if capture.capability != "cap-aa-47" {
+		t.Fatalf("capability header = %q, want the session's capability", capture.capability)
+	}
 	for _, want := range []string{"Split panes: on", "On screen: sh-1", "Terminal 1 (claude-code)", "g1 (on screen)", "50% wide", "focused", "ao pane run sh-1 <command>"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
@@ -61,6 +67,7 @@ func TestPaneListsTabsAndSplits(t *testing.T) {
 
 func TestPaneSplitSendsTheRequest(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, capture := paneServer(t, http.StatusOK, paneLayoutBody)
 	writeRunFileFor(t, cfg, srv)
@@ -83,6 +90,7 @@ func TestPaneSplitSendsTheRequest(t *testing.T) {
 
 func TestPaneRejectsABadSideWithoutCallingTheDaemon(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, capture := paneServer(t, http.StatusOK, paneLayoutBody)
 	writeRunFileFor(t, cfg, srv)
@@ -97,6 +105,7 @@ func TestPaneRejectsABadSideWithoutCallingTheDaemon(t *testing.T) {
 
 func TestPaneShowsTheWindowsRefusal(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, _ := paneServer(t, http.StatusConflict, `{"code":"SPLIT_PANES_OFF","message":"Split panes is off in the AO window."}`)
 	writeRunFileFor(t, cfg, srv)
@@ -112,8 +121,9 @@ func TestPaneShowsTheWindowsRefusal(t *testing.T) {
 
 func TestPaneNeedsASession(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv("AO_BROWSER_CAPABILITY", "")
 	setConfigEnv(t)
-	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane"); err == nil || !strings.Contains(err.Error(), "needs a session") {
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane"); err == nil || !strings.Contains(err.Error(), "must run inside an AO session") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -152,6 +162,7 @@ func paneTerminalServer(t *testing.T) (*httptest.Server, *[]string) {
 
 func TestPaneRunTypesTheCommandAndPrintsTheSettledScreen(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, calls := paneTerminalServer(t)
 	writeRunFileFor(t, cfg, srv)
@@ -173,6 +184,7 @@ func TestPaneRunTypesTheCommandAndPrintsTheSettledScreen(t *testing.T) {
 
 func TestPaneReadAndInterrupt(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	cfg := setConfigEnv(t)
 	srv, calls := paneTerminalServer(t)
 	writeRunFileFor(t, cfg, srv)
@@ -194,6 +206,7 @@ func TestPaneReadAndInterrupt(t *testing.T) {
 
 func TestPaneSplitRunRefusesANonTerminalTab(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 	setConfigEnv(t)
 	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "split", "file:README.md", "--run", "ls"); err == nil || !strings.Contains(err.Error(), "needs a terminal") {
 		t.Fatalf("err = %v", err)
@@ -212,6 +225,8 @@ func TestPaneCloseGoesThroughTheWindowAndFallsBackToTheDaemon(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AO_SESSION_ID", "aa-47")
+			t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
+			t.Setenv("AO_BROWSER_CAPABILITY", "cap-aa-47")
 			cfg := setConfigEnv(t)
 			var calls []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -243,5 +258,14 @@ func TestPaneCloseGoesThroughTheWindowAndFallsBackToTheDaemon(t *testing.T) {
 				t.Fatalf("calls = %v, want daemon fallback = %v", calls, tc.wantInput)
 			}
 		})
+	}
+}
+
+func TestPaneNeedsTheSessionCapability(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	t.Setenv("AO_BROWSER_CAPABILITY", "")
+	setConfigEnv(t)
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "read", "sh-1"); err == nil || !strings.Contains(err.Error(), "AO_BROWSER_CAPABILITY") {
+		t.Fatalf("err = %v", err)
 	}
 }

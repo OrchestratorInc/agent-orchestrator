@@ -9479,6 +9479,12 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
       responses:
         "200":
           content:
@@ -9486,6 +9492,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ControllersPaneLayoutResponse'
           description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "409":
           content:
             application/json:
@@ -9523,6 +9535,12 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
       requestBody:
         content:
           application/json:
@@ -9542,6 +9560,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "409":
           content:
             application/json:
@@ -9586,6 +9610,12 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
       requestBody:
         content:
           application/json:
@@ -9601,6 +9631,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -9661,6 +9697,12 @@ paths:
           type:
           - "null"
           - integer
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
       responses:
         "200":
           content:
@@ -9674,6 +9716,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:

@@ -62,6 +62,9 @@ inside this session's workspace.
 - The terminal is a normal shell in this session's workspace. Commands run as
   the user and they see every keystroke, so run only what the user asked for or
   what the task needs.
+- `ao pane` works only from inside your session: like `ao browser`, it proves
+  the session with the `AO_BROWSER_CAPABILITY` AO gives your agent. It can't
+  act on another session.
 - Only this session's own terminal tabs can be driven. The agent tab, reviewers,
   other sessions' terminals and AO's login terminals are refused.
 
