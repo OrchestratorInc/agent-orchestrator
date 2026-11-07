@@ -2453,9 +2453,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// row. Keep the session surface (and its switch control) mounted while the
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
-	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
+	// A remote session has no such surface to keep: without its session it
+	// reads "No session" and asks to pick a worker, which a host that stopped
+	// answering held for as long as the lookup retried. It says it is loading
+	// instead, then why it could not load.
+	if (!session && (hostId || (!workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving))) {
+		const remoteLoading = Boolean(hostId && remoteSessionQuery.isLoading);
 		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
-		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
+		const remoteError = hostId && !remoteLoading ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
@@ -2473,8 +2478,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
 				<PageTopbar />
-				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-					{remoteError ?? t(noLongerShared ? "session.noLongerShared" : "session.notFound")}
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : remoteLoading ? "status" : undefined}>
+					{remoteLoading ? t("remote.loadingSession") : remoteError ?? t(noLongerShared ? "session.noLongerShared" : "session.notFound")}
 				</div>
 			</div>
 		);

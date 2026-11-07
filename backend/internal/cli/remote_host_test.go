@@ -44,7 +44,7 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 		want       []string
 		absent     string
 	}{
-		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
+		{"enable", "enable", []string{"GET /api/v1/mobile/status", "POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, "ao remote-host link"},
 		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
 		{"disable", "disable", []string{"POST /api/v1/mobile/disable"}, []string{"disabled"}, "pairing-secret"},
 	} {
@@ -145,7 +145,7 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only" {
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-tunnel-only" {
 		t.Fatalf("tunnel-only requests = %s", got)
 	}
 	if !strings.Contains(out, "Tunnel: starting") || !strings.Contains(out, "pairing-secret") || strings.Contains(out, "http://") {
@@ -244,7 +244,7 @@ func TestRemoteHostCLIRejectsArgsAndPreservesDaemonError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "listener failed (MOBILE_ENABLE) [request req-123]") {
 		t.Fatalf("daemon error = %v, want request ID and code", err)
 	}
-	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-lan-only" {
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only" {
 		t.Fatalf("requests = %v, want LAN-only enable", requests)
 	}
 	requests = nil
@@ -289,5 +289,58 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") ||
 		!strings.Contains(out, "Linked to an AO account") {
 		t.Fatalf("fixed address status = %q, %v", out, err)
+	}
+}
+
+// A stopped listener comes back with a new connection password, and the daemon
+// takes back the account token with the old one. The account still lists the
+// machine, but its devices are refused and the machine stops publishing its
+// address (#7412): enable says so, and how to link it again.
+func TestRemoteHostCLISaysANewPasswordUnlinkedTheMachine(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		running  bool
+		unlinked bool
+	}{
+		{"LAN", []string{"enable"}, false, true},
+		{"tunnel", []string{"enable", "--tunnel"}, false, true},
+		{"tunnel-only", []string{"enable", "--tunnel-only"}, false, true},
+		// A running listener keeps its password, and the link with it.
+		{"running listener", []string{"enable"}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			enabled, linked := tc.running, true
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/mobile/enable-lan-only", "/api/v1/mobile/enable-tunnel-only":
+					if !enabled {
+						enabled, linked = true, false
+					}
+				case "/api/v1/mobile/status", "/api/v1/mobile/remote-access":
+				default:
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"enabled":%v,"accountLinked":%v,"hostId":"host-a","password":"pairing-secret","tunnel":{"supported":true,"running":true}}`, enabled, linked)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, append([]string{"remote-host"}, tc.args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			said := strings.Contains(out, "The new connection password unlinked this machine from your AO account") &&
+				strings.Contains(out, "Run `ao remote-host link` to link it again.")
+			if said != tc.unlinked {
+				t.Fatalf("output = %q, want unlink notice %v", out, tc.unlinked)
+			}
+			if !tc.unlinked && !strings.Contains(out, "Linked to an AO account") {
+				t.Fatalf("output = %q, want the link kept", out)
+			}
+		})
 	}
 }
