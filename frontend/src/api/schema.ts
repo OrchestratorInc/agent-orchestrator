@@ -7116,6 +7116,7 @@ export interface components {
         SessionBranchState: {
             commits: number;
             remoteBranch?: string;
+            remoteHead?: string;
             unpushed: number;
         };
         SessionHistoryResponse: {

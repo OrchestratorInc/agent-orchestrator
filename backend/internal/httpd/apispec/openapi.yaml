@@ -20235,6 +20235,8 @@ components:
           type: integer
         remoteBranch:
           type: string
+        remoteHead:
+          type: string
         unpushed:
           type: integer
       required:
