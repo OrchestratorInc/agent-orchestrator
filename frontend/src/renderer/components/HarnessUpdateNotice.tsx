@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "lucide-react";
+import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";

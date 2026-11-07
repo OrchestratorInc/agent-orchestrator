@@ -3,7 +3,7 @@ import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
-import { ChevronRight, FileCode2, GitCompareArrows, MessageSquarePlus, MoreVertical, Pencil, SearchX } from "lucide-react";
+import { ChevronRight, FileCode2, GitCompareArrows, MessageSquarePlus, MoreVertical, Pencil, SearchX } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	fetchWorkspaceFileRevision,

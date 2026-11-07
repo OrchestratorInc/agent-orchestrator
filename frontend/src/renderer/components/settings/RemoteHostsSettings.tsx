@@ -1,4 +1,4 @@
-import { Pencil, Server, Trash2 } from "lucide-react";
+import { Pencil, Server, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";

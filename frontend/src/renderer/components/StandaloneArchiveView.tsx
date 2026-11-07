@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Plus } from "@/components/app-icons";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import { useRestoreSession } from "../hooks/useRestoreSession";

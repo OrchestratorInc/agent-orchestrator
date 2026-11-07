@@ -1,4 +1,4 @@
-import { MoreVertical, Archive, Columns2, Pencil, Rows2, Ungroup, X } from "lucide-react";
+import { MoreVertical, Archive, Columns2, Pencil, Rows2, Ungroup, X } from "@/components/app-icons";
 import { createContext, useContext, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";

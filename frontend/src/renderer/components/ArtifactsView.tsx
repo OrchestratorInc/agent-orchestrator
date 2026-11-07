@@ -1,5 +1,5 @@
 import { BrowserIcon } from "./icons";
-import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "lucide-react";
+import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { parseNightlyVersion } from "../lib/build-channel";

@@ -1,5 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
-import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";

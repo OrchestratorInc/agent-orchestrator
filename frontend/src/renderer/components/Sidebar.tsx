@@ -46,7 +46,7 @@ import {
 	User,
 	X,
 	ArrowLeft,
-} from "lucide-react";
+} from "@/components/app-icons";
 import {
 	useCallback,
 	useEffect,

@@ -1,4 +1,4 @@
-import { Check, Link2 } from "lucide-react";
+import { Check, Link2 } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";

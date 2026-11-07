@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Globe, Share } from "lucide-react";
+import { Check, Copy, Globe, Share } from "@/components/app-icons";
 import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";

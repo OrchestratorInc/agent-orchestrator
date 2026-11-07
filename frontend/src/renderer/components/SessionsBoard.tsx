@@ -11,7 +11,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,

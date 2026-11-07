@@ -2,7 +2,7 @@ import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
+import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
 import { apiClient } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useSettings } from "../../hooks/useSettings";

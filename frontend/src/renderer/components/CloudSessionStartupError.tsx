@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../i18n";

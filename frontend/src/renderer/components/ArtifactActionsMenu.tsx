@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
