@@ -117,6 +117,16 @@ function confirm() {
 	return renderer!.root.findByType("StackToolbarButton" as never);
 }
 
+/** The Connection section's footer as it renders: whether it draws anything, and its text's modifiers. */
+function connectionFooter(): { drawn: boolean; modifiers: Modifier[] } {
+	let footer: ReactTestRenderer | undefined;
+	act(() => { footer = create(renderer!.root.findAllByType("Section" as never)[1].props.footer); });
+	const text = footer!.root.findAllByType("Text" as never)[0];
+	const result = { drawn: footer!.toJSON() !== null, modifiers: text ? (text.props.modifiers as Modifier[]) : [] };
+	act(() => footer!.unmount());
+	return result;
+}
+
 describe("ManualConnectSheet on iOS", () => {
 	it("labels every field for VoiceOver and hides the password", () => {
 		render();
@@ -187,24 +197,12 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(hint().children).toBeUndefined();
 	});
 
-	// @expo/ui's Section is a different SwiftUI view with and without a footer, so
-	// adding or removing one rebuilds the section's fields and the focused field
-	// loses focus: the keyboard closed after the first character of a host. The
-	// footer stays mounted and only its text changes.
-	it("keeps the connection footer mounted while the hint, the port error and a failure come and go", async () => {
+	// FormSection keeps the footer slot mounted (formSection.source.test.ts guards
+	// that no Section's footer comes and goes). What the footer draws must not
+	// change shape either: whenever it shows text, the same single modifier.
+	it("draws the connection footer with the same modifiers while the hint, the port error and a failure come and go", async () => {
 		fixtures.ping.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(401));
 		render();
-		const footer = () => renderer!.root.findAllByType("Section" as never)[1].props.footer;
-		// The footer element (so the native footer slot) at every step, and the
-		// modifiers its text draws with whenever it has text.
-		const shape = () => {
-			let rendered: ReactTestRenderer | undefined;
-			act(() => { rendered = create(footer()); });
-			const text = rendered!.root.findAllByType("Text" as never)[0];
-			const modifiers = text ? (text.props.modifiers as Modifier[]).map((modifier) => modifier.$type) : "no text";
-			act(() => rendered!.unmount());
-			return { type: footer()?.type, modifiers };
-		};
 		const steps: Array<[string, () => Promise<void>]> = [
 			["name", () => type("manual-connect-name", "Office PC")],
 			["first host character", () => type("manual-connect-host", "1")],
@@ -216,40 +214,26 @@ describe("ManualConnectSheet on iOS", () => {
 			["failed connect", () => act(async () => confirm().props.onPress())],
 			["password fixed", () => type("manual-connect-password", "right")],
 		];
-		const first = shape();
-		expect(first).toEqual({ type: expect.any(Function), modifiers: ["foregroundStyle"] });
+		const kinds = () => connectionFooter().modifiers.map((modifier) => modifier.$type);
+		expect(kinds()).toEqual(["foregroundStyle"]);
 		for (const [step, run] of steps) {
 			await run();
-			const now = shape();
-			expect(now.type, step).toBe(first.type);
-			if (now.modifiers !== "no text") expect(now.modifiers, step).toEqual(first.modifiers);
+			if (connectionFooter().drawn) expect(kinds(), step).toEqual(["foregroundStyle"]);
 		}
 	});
 
-	// The footer's text view keeps the same modifiers between the hint and an
-	// error; only the style they carry changes, so nothing is added or removed.
-	it("draws the hint and an error with the same footer modifier, changing only its style", async () => {
+	// A hint and an error draw with the same modifier, only its style changes;
+	// with nothing to say the footer draws nothing (no empty row, nothing for VoiceOver).
+	it("styles the hint and an error through one modifier and draws nothing when empty", async () => {
 		render();
-		const renderFooter = () => {
-			let footer: ReactTestRenderer | undefined;
-			act(() => { footer = create(renderer!.root.findAllByType("Section" as never)[1].props.footer); });
-			const json = footer!.toJSON();
-			const texts = footer!.root.findAllByType("Text" as never);
-			const styles = texts.flatMap((text) => (text.props.modifiers as Modifier[]).filter((modifier) => modifier.$type === "foregroundStyle").map((modifier) => modifier.args[0]));
-			act(() => footer!.unmount());
-			return { json, styles };
-		};
-		const footerStyles = () => renderFooter().styles;
-		expect(footerStyles()).toEqual([{ type: "hierarchical", style: "secondary" }]);
+		const styles = () => connectionFooter().modifiers.filter((modifier) => modifier.$type === "foregroundStyle").map((modifier) => modifier.args[0]);
+		expect(styles()).toEqual([{ type: "hierarchical", style: "secondary" }]);
 		await type("manual-connect-port", "0");
-		expect(footerStyles()).toEqual(["red"]);
-		// With nothing to say the footer element stays (and with it the slot) but
-		// draws nothing: no empty row for spacing or VoiceOver.
+		expect(styles()).toEqual(["red"]);
 		await type("manual-connect-port", "3011");
 		await type("manual-connect-name", "Office PC");
 		await type("manual-connect-host", "192.168.1.30");
-		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeTruthy();
-		expect(renderFooter().json).toBeNull();
+		expect(connectionFooter().drawn).toBe(false);
 	});
 
 	it("reveals the password in place and hides it again", () => {
