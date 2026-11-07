@@ -376,3 +376,42 @@ func TestUpsertSessionSearchDocsLeavesUnchangedTextAlone(t *testing.T) {
 		t.Fatalf("text rows left after delete: %d (err %v)", orphans, err)
 	}
 }
+
+// Found in review: stage one keeps the best 2,000 documents, so a page past
+// them came back empty while the total still counted them, and the remaining
+// pages could never be fetched. Such a page is read again without the cap.
+func TestSearchSessionSearchDocsPagesPastTheCandidateCap(t *testing.T) {
+	s := newTestStore(t)
+	const matching = 2050
+	docs := make([]domain.SessionSearchDoc, 0, matching)
+	for i := range matching {
+		docs = append(docs, domain.SessionSearchDoc{
+			SourceKey: fmt.Sprintf("chat:s%04d", i), DocKey: "m1", SessionID: fmt.Sprintf("s%04d", i), ProjectID: "p",
+			Kind: domain.SessionSearchKindUser, Body: "the zzcapped word", IndexedAt: testNow, CreatedAt: testNow,
+		})
+	}
+	if err := s.UpsertSessionSearchDocs(context.Background(), docs); err != nil {
+		t.Fatalf("UpsertSessionSearchDocs: %v", err)
+	}
+	for _, group := range []domain.SessionSearchGroup{domain.SessionSearchGroupSession, domain.SessionSearchGroupMessage} {
+		first, err := s.SearchSessionSearchDocs(context.Background(), domain.SessionSearchParams{
+			MatchQuery: matchExpression("zzcapped"), Limit: 100, Group: group, SkipSnippets: true,
+		})
+		if err != nil {
+			t.Fatalf("[%s] first page: %v", group, err)
+		}
+		// The first pages stay capped: that is what keeps a broad search fast.
+		if len(first) != 100 || !first[0].MatchTotalCapped {
+			t.Fatalf("[%s] first page = %d rows, capped=%v; want 100 from the capped candidates", group, len(first), len(first) > 0 && first[0].MatchTotalCapped)
+		}
+		last, err := s.SearchSessionSearchDocs(context.Background(), domain.SessionSearchParams{
+			MatchQuery: matchExpression("zzcapped"), Limit: 100, Offset: 2000, Group: group, SkipSnippets: true,
+		})
+		if err != nil {
+			t.Fatalf("[%s] page past the cap: %v", group, err)
+		}
+		if len(last) != matching-2000 {
+			t.Fatalf("[%s] page past the cap = %d rows, want %d", group, len(last), matching-2000)
+		}
+	}
+}

@@ -338,8 +338,40 @@ func sessionSearchFiltered(params domain.SessionSearchParams) bool {
 		(params.From != nil && !params.From.IsZero()) || (params.To != nil && !params.To.IsZero())
 }
 
-// SearchSessionSearchDocs runs one ranked query against the index.
+// SearchSessionSearchDocs ranks candidates and returns one page.
+//
+// Stage one keeps the best sessionSearchCandidateCap documents by raw bm25,
+// which is what keeps a broad query fast. The cap is only safe when nothing
+// after stage one can discard a candidate: a filter could reject all 2,000 and
+// hide matches that exist, and a recency sort wants the newest, not the most
+// relevant, so both run uncapped.
+//
+// A page can also run off the end of the capped candidates: a short page while
+// the cap was reached, or an empty one past the first. The total counts every
+// match, so that page is read again without the cap; otherwise the pages past
+// the first 2,000 documents (and, grouped, far fewer sessions when a few long
+// sessions fill them) were advertised but could never be fetched. The first
+// pages, which nearly every search is, stay capped.
 func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams) ([]domain.SessionSearchHit, error) {
+	capped := sessionSearchCandidateCap
+	if params.Sort == domain.SessionSearchSortRecent || sessionSearchFiltered(params) {
+		capped = -1
+	}
+	hits, capReached, err := s.searchSessionSearchDocs(ctx, params, capped)
+	if err != nil || capped < 0 {
+		return hits, err
+	}
+	limit := domain.NormalizeSessionSearchLimit(params.Limit)
+	if len(hits) < limit && (capReached || (len(hits) == 0 && params.Offset > 0)) {
+		hits, _, err = s.searchSessionSearchDocs(ctx, params, -1)
+	}
+	return hits, err
+}
+
+// searchSessionSearchDocs runs one ranked query against the index, keeping at
+// most capped candidates from stage one (-1: all), and reports whether the cap
+// was reached.
+func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams, capped int) ([]domain.SessionSearchHit, bool, error) {
 	limit := domain.NormalizeSessionSearchLimit(params.Limit)
 	offset := max(params.Offset, 0)
 	ranking := params.Ranking
@@ -363,20 +395,13 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	if !ranking.ExactTierOff && recent == 0 {
 		exact = params.ExactQuery
 	}
-	// The candidate cap is only safe when nothing after stage one can discard
-	// a candidate: a filter could reject all 2,000 and hide matches that
-	// exist, and a recency sort wants the newest, not the most relevant.
-	capped := sessionSearchCandidateCap
-	if params.Sort == domain.SessionSearchSortRecent || sessionSearchFiltered(params) {
-		capped = -1
-	}
 	// The name tier orders sessions by relevance; a recency sort or a list of
 	// single messages has no use for it.
 	named := ""
 	if grouped == 1 && recent == 0 && !ranking.NameTierOff {
 		var err error
 		if named, err = s.sessionsNamedFor(ctx, params.HighlightTerms); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	args := make([]any, 0, 40)
@@ -401,10 +426,11 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	args = append(args, grouped, recent, depth, depth, grouped, ranking.TailWeight(), grouped, grouped, grouped, recent, limit, offset, skipSnippets)
 	rows, err := s.readDB.QueryContext(ctx, searchSessionSearchDocsSQL, args...)
 	if err != nil {
-		return nil, fmt.Errorf("search session index: %w", err)
+		return nil, false, fmt.Errorf("search session index: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	hits := make([]domain.SessionSearchHit, 0, limit)
+	capReached := false
 	for rows.Next() {
 		var hit domain.SessionSearchHit
 		var docID, createdAt, candidates int64
@@ -414,11 +440,12 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 			&hit.Title, &createdAt, &hit.Rank, &hit.SessionMatches, &body, &hit.MatchTotal, &candidates,
 			&hit.ReviewID,
 		); err != nil {
-			return nil, fmt.Errorf("scan session search hit: %w", err)
+			return nil, false, fmt.Errorf("scan session search hit: %w", err)
 		}
 		hit.Kind = domain.SessionSearchKind(kind)
 		hit.CreatedAt = time.UnixMilli(createdAt).UTC()
 		hit.MatchTotalCapped = capped > 0 && candidates >= int64(capped)
+		capReached = capReached || hit.MatchTotalCapped
 		if !params.SkipSnippets {
 			text := body
 			if hit.Kind == domain.SessionSearchKindTitle && hit.Title != "" {
@@ -429,9 +456,9 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate session search hits: %w", err)
+		return nil, false, fmt.Errorf("iterate session search hits: %w", err)
 	}
-	return hits, nil
+	return hits, capReached, nil
 }
 
 // CountSessionSearchDocsMatching returns how many results a query has, ignoring
