@@ -96,7 +96,7 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number; headSha?: string };
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
