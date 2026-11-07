@@ -6,9 +6,12 @@ import (
 )
 
 // Command creates a non-interactive child process. On Windows it suppresses
-// transient console windows for CLI tools launched by the desktop daemon.
+// transient console windows for CLI tools launched by the desktop daemon, starts
+// a batch shim's target directly when it can follow the shim, and otherwise runs
+// the batch file through cmd.exe /d /s /c (see rewriteBatchShim).
 func Command(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
+	rewriteBatchShim(cmd)
 	configureHidden(cmd)
 	return cmd
 }
@@ -16,6 +19,7 @@ func Command(name string, args ...string) *exec.Cmd {
 // CommandContext is Command with cancellation support.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // Callers intentionally select argv; project hooks execute user-authored shell commands.
+	rewriteBatchShim(cmd)
 	configureHidden(cmd)
 	return cmd
 }
