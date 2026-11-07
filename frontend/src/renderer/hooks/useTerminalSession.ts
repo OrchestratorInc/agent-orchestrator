@@ -21,6 +21,7 @@ import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { shellTerminalsQueryKey } from "./useShellTerminals";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 /**
@@ -270,7 +271,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// A standalone shell has no session row behind it, so its exit carries no
 		// news for the session board. Refetching every workspace on `exit` would
 		// be pure churn — the shell terminal list owns that pane's fate instead.
-		if (optionsRef.current.shellTerminalHandleId) return;
+		// The list drops a shell whose process has exited, so refetching it closes
+		// the tab (and collapses a split it was in), as closing a terminal app's
+		// tab on `exit` does.
+		if (optionsRef.current.shellTerminalHandleId) {
+			void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: ["remote-shell-terminals"] });
+			return;
+		}
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sessionRef.current?.hostId) });
 	}, [queryClient]);
 

@@ -227,6 +227,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
+	root.AddCommand(newPaneCommand(ctx))
 	root.AddCommand(newRenderCommand(ctx))
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))

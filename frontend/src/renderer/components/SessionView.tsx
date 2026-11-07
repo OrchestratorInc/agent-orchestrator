@@ -27,7 +27,7 @@ import { SessionContextMenuItems } from "./SessionContextMenuItems";
 import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
-import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
+import { SplitDivider, SplitFocusOutline, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
@@ -51,8 +51,20 @@ import {
 	ungroupById,
 	withoutTab,
 	type ClientRect,
+	type SplitSide,
 	type TabGroup,
 } from "../lib/pane-split";
+import {
+	describePaneLayout,
+	latestPaneLayout,
+	PaneCommandError,
+	registerPaneSession,
+	reportPaneLayout,
+	type PaneCommandHandler,
+	type PaneLayout,
+	type PaneTabDescription,
+} from "../lib/pane-relay";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
@@ -1696,7 +1708,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
 	// ⌘D's action, set further down; tab menus reuse it.
-	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
+	// An agent's `ao pane split terminal` uses it too, with its own anchor.
+	const splitNewTerminalRef = useRef<(side: SplitSide, anchorKey?: string) => string | undefined>(() => undefined);
 	// Tab menus split their tab beside the one on screen, as dropping it on
 	// that pane's edge does; the tab on screen splits off a new terminal, as
 	// ⌘D does. Only while split panes are on.
@@ -1957,11 +1970,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
 	// below it, splitting the tab on screen if it is not split yet.
-	splitNewTerminalRef.current = (side) => {
-		if (!session || isOrchestrator || !splitPanes) return;
-		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
+	splitNewTerminalRef.current = (side, anchorKey) => {
+		if (!session || isOrchestrator || !splitPanes) return undefined;
+		const anchor = anchorKey ?? (splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY);
 		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
-		if (!shell) return;
+		if (!shell) return undefined;
 		const key = shell.handleId;
 		updateGroups((current) => splitBeside(current, anchor, key, side));
 		setReviewerChatId(null);
@@ -1971,9 +1984,132 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}));
 		setActiveShellTerminal(key);
 		setTerminalTarget({ generation: shell.createdAt, kind: "shell", handleId: key, sessionId, title: shell.title });
+		return key;
 	};
 	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), splitPanes && Boolean(session) && !isOrchestrator);
 	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), splitPanes && Boolean(session) && !isOrchestrator);
+
+	// Agents split this session's panes with `ao pane` (Developer Mode, local
+	// sessions only). While this view is on screen the relay hands it their
+	// requests, and it reports what it shows whenever that changes.
+	const paneRelayEnabled = developerMode && Boolean(session) && !hostId && !session?.cloud;
+	const describePaneTab = (key: string): PaneTabDescription => {
+		if (key === SESSION_TAB_KEY) return { key, kind: "session", title: sessionLabel };
+		if (key.startsWith("file:")) {
+			const path = key.slice("file:".length);
+			return { key, kind: "file", title: centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path };
+		}
+		if (key.startsWith("reviewer")) return { key, kind: "reviewer", title: t("terminal.reviewer") };
+		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
+		const agent = useShellAgentStore.getState().agents[key]?.harness;
+		return { key, kind: "terminal", title: shell?.title ?? key, ...(agent ? { agent } : {}) };
+	};
+	const describeSessionPanesRef = useRef<() => PaneLayout>(() => ({ enabled: false, selected: SESSION_TAB_KEY, tabs: [], groups: [] }));
+	describeSessionPanesRef.current = () =>
+		describePaneLayout({
+			enabled: splitPanes,
+			selected: selectedTabKey,
+			shownGroupId: shownGroup?.id,
+			tabs: [...splittableKeys].map(describePaneTab),
+			groups,
+		});
+	const lastPaneReportRef = useRef("");
+	const reportSessionPanesRef = useRef(() => undefined as void);
+	reportSessionPanesRef.current = () => {
+		if (!paneRelayEnabled) {
+			lastPaneReportRef.current = "";
+			return;
+		}
+		const layout = describeSessionPanesRef.current();
+		const signature = `${sessionId}\n${JSON.stringify(layout)}`;
+		if (signature === lastPaneReportRef.current) return;
+		lastPaneReportRef.current = signature;
+		reportPaneLayout(sessionId, layout);
+	};
+	const paneCommandRef = useRef<PaneCommandHandler>(async () => describeSessionPanesRef.current());
+	paneCommandRef.current = async (request) => {
+		if (!splitPanes) {
+			throw new PaneCommandError("SPLIT_PANES_OFF", "Split panes is off in the AO window. Turn it on in Settings → General (Developer Mode).");
+		}
+		const tab = request.tab?.trim() ?? "";
+		const requireTab = (key: string) => {
+			if (!splittableKeys.has(key)) throw new PaneCommandError("TAB_NOT_FOUND", `This session has no tab "${key}". Run \`ao pane\` to list its tab keys.`);
+		};
+		if (request.action === "split") {
+			const anchor = request.beside?.trim() || (splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY);
+			requireTab(anchor);
+			const side: SplitSide = request.side ?? "right";
+			if (tab === "terminal") {
+				if (isOrchestrator) throw new PaneCommandError("UNSUPPORTED", "The orchestrator's view does not open split terminals.");
+				const opened = splitNewTerminalRef.current(side, anchor);
+				if (!opened) throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
+				// A new shell is a placeholder until the daemon lists it. Answer with
+				// its real key, which is the one later commands must use.
+				let seen = false;
+				for (let waited = 0; waited < 5_000; waited += 100) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					const listed = latestPaneLayout(sessionId)?.tabs.some((candidate) => candidate.key === opened) ?? false;
+					if (listed) seen = true;
+					else if (seen || waited >= 1_000) break;
+				}
+			} else if (tab.startsWith("file:")) {
+				const path = await resolvePaneFile(tab.slice("file:".length));
+				openCenterFile(path);
+				updateGroups((current) => splitBeside(current, anchor, `file:${path}`, side));
+			} else {
+				requireTab(tab);
+				if (tab === anchor) throw new PaneCommandError("INVALID_PANE_COMMAND", "A tab cannot be split beside itself.");
+				updateGroups((current) => splitBeside(current, anchor, tab, side));
+				selectTab(tab);
+			}
+		} else if (request.action === "remove") {
+			if (!groupContaining(groups, tab)) throw new PaneCommandError("NOT_IN_SPLIT", `"${tab}" is not in a split.`);
+			updateGroups((current) => withoutTab(current, tab));
+		} else if (request.action === "ungroup") {
+			const groupId = request.group?.trim() || shownGroup?.id;
+			if (!groupId || !groups.some((group) => group.id === groupId)) {
+				throw new PaneCommandError("NO_SPLIT", groupId ? `This session has no split "${groupId}".` : "No split is on screen.");
+			}
+			updateGroups((current) => ungroupById(current, groupId));
+		} else if (request.action === "close") {
+			// Close a terminal as its tab's ✕ does, so the strip, the split and
+			// the selection all follow. Other tabs are left to the user.
+			if (!shellTerminals.some((shell) => shell.handleId === tab)) {
+				throw new PaneCommandError("TAB_NOT_FOUND", `"${tab}" is not one of this session's terminal tabs.`);
+			}
+			if (groupContaining(groups, tab)) closePaneRef.current(tab);
+			else closeShellTerminalByHandle(tab);
+		} else if (request.action === "focus") {
+			requireTab(tab);
+			selectTab(tab);
+		} else {
+			throw new PaneCommandError("INVALID_PANE_COMMAND", `Unknown pane action "${String(request.action)}".`);
+		}
+		// The new layout is reported once React has rendered the change.
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		return latestPaneLayout(sessionId) ?? describeSessionPanesRef.current();
+	};
+	// A file named by an agent: workspace-relative, or absolute inside this
+	// session's workspace.
+	const resolvePaneFile = async (rawPath: string): Promise<string> => {
+		if (session?.cloud) throw new PaneCommandError("UNSUPPORTED", "Files of a Cloud session are not split.");
+		const reference = normalizeWorkspaceFileReference(rawPath);
+		if (!isAbsoluteFileReference(reference)) {
+			const data = await fetchWorkspaceFiles();
+			return matchWorkspaceFilePath(rawPath, data.files ?? []);
+		}
+		const resolved = await resolveSessionWorkspacePath(sessionId, reference, hostId);
+		if (resolved?.kind === "workspace") return resolved.path;
+		throw new PaneCommandError("FILE_OUTSIDE_WORKSPACE", `${rawPath} is not in this session's workspace.`);
+	};
+	useEffect(
+		() => (paneRelayEnabled ? registerPaneSession(sessionId, (request) => paneCommandRef.current(request)) : undefined),
+		[paneRelayEnabled, sessionId],
+	);
+	// Report after every render (only a changed layout is sent), and when a
+	// terminal's agent changes, which this view does not render on.
+	useEffect(() => reportSessionPanesRef.current());
+	useEffect(() => (paneRelayEnabled ? useShellAgentStore.subscribe(() => reportSessionPanesRef.current()) : undefined), [paneRelayEnabled]);
 
 	const mainWorkspaceTabs = useMemo(
 		() => (groupWorkspaceTabs.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs),
@@ -2780,20 +2916,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{/* Panes other than the focused one rest under a light veil, so
-							    the one taking keys stands out; the veil never takes the pointer.
-							    The session's own chat or agent is never dimmed. */}
-							{shownGroup && shownLayout
-								? [...shownLayout.leaves.keys()].filter((key) => key !== SESSION_TAB_KEY).map((key) => (
-									<div
-										aria-hidden="true"
-										className="pane-split-dim"
-										data-dimmed={key === selectedTabKey ? undefined : ""}
-										key={`dim:${key}`}
-										style={paneStyle(key)}
-									/>
-								))
-								: null}
+							{/* When focus moves to a pane, a thin accent outline flashes on it
+							    and fades away, so it marks the move without staying on screen.
+							    Keyed by the pane, so each focus change replays it. */}
+							{shownGroup && shownLayout && shownLayout.leaves.has(selectedTabKey) ? (
+								<SplitFocusOutline
+									box={layoutBoxes(shownGroup.root).leaves.get(selectedTabKey) ?? { x: 0, y: 0, w: 1, h: 1 }}
+									key={`split-focus:${selectedTabKey}`}
+									screenRef={splitScreenRef}
+								/>
+							) : null}
 							{shownGroup && shownLayout
 								? shownLayout.dividers.map((divider) => (
 									<SplitDivider

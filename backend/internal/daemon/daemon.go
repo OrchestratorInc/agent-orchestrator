@@ -71,6 +71,7 @@ import (
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
@@ -303,6 +304,10 @@ func Run(buildVersion string) error {
 	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
+	// Agents split the desktop window's panes through this relay; the window
+	// links to it over the terminal mux (ch "panes").
+	paneBroker := panes.NewBroker()
+	termMgr.SetPanes(paneSource{paneBroker})
 	defer termMgr.Close()
 
 	// The agent messenger sends validated user input to the session's live
@@ -1133,6 +1138,7 @@ func Run(buildVersion string) error {
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
+		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1166,6 +1172,7 @@ func Run(buildVersion string) error {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,

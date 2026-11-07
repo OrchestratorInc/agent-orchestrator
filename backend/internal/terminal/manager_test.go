@@ -761,6 +761,86 @@ func TestServeForwardsShellAgentSnapshots(t *testing.T) {
 	})
 }
 
+type fakePanes struct {
+	mu       sync.Mutex
+	send     func(json.RawMessage)
+	reports  []string
+	results  []string
+	closed   int
+	connects int
+}
+
+func (f *fakePanes) ConnectPanes(send func(json.RawMessage)) PaneConn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.send = send
+	f.connects++
+	return fakePaneConn{f}
+}
+
+type fakePaneConn struct{ f *fakePanes }
+
+func (c fakePaneConn) Report(sessionID string, layout json.RawMessage) {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.f.reports = append(c.f.reports, sessionID+"="+string(layout))
+}
+
+func (c fakePaneConn) Resolve(result json.RawMessage) {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.f.results = append(c.f.results, string(result))
+}
+
+func (c fakePaneConn) Close() {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.f.closed++
+}
+
+func TestServeRelaysPaneCommandsLayoutsAndResults(t *testing.T) {
+	src := &fakePanes{}
+	mgr := NewManager(&fakeSource{}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.SetPanes(src)
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe}
+	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe} // a second subscribe is ignored
+	conn.in <- clientMsg{Ch: chPanes, Type: msgLayout, SessionID: "s1", Layout: json.RawMessage(`{"selected":"session"}`)}
+	eventually(t, time.Second, func() bool {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return len(src.reports) == 1
+	})
+	src.mu.Lock()
+	send, connects, report := src.send, src.connects, src.reports[0]
+	src.mu.Unlock()
+	if connects != 1 || report != `s1={"selected":"session"}` {
+		t.Fatalf("connects = %d, report = %s", connects, report)
+	}
+
+	send(json.RawMessage(`{"id":"pane-1","sessionId":"s1","action":"split"}`))
+	if msg := recv(t, conn, chPanes, msgCommand, time.Second); string(msg.Command) != `{"id":"pane-1","sessionId":"s1","action":"split"}` {
+		t.Fatalf("command = %s", msg.Command)
+	}
+	conn.in <- clientMsg{Ch: chPanes, Type: msgResult, Result: json.RawMessage(`{"id":"pane-1","ok":true}`)}
+	eventually(t, time.Second, func() bool {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return len(src.results) == 1 && src.results[0] == `{"id":"pane-1","ok":true}`
+	})
+
+	cancel()
+	eventually(t, time.Second, func() bool {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return src.closed == 1
+	})
+}
+
 func TestServeSystemPingGetsPong(t *testing.T) {
 	mgr := NewManager(&fakeSource{}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
