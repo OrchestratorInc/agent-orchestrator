@@ -218,8 +218,11 @@ const EMPTY_CHAT_PLACEHOLDERS = [
 /**
  * The newest pending approval or question the live turn is waiting on.
  *
- * A request with no turn id belongs to the session rather than a turn, so a
- * turn-scoped one always wins; between equals the later sequence is the live one.
+ * A request with no turn id belongs to the session rather than a turn, and a
+ * turn-scoped one always wins over it; between equals the later sequence is the
+ * live one. A turn-less request still docks while a turn runs: the timeline
+ * hides pending questions, so dropping the only renderable copy would leave the
+ * provider blocked on an answer no UI can send (#7658).
  */
 function latestPendingInteraction(
 	items: ConversationItem[],
@@ -231,7 +234,7 @@ function latestPendingInteraction(
 			item.kind !== "activity" ||
 			item.activityKind !== activityKind ||
 			item.status !== "pending" ||
-			(item.turnId ? item.turnId !== turn?.id : !turn)
+			(Boolean(item.turnId) && item.turnId !== turn?.id)
 		) {
 			return latest;
 		}

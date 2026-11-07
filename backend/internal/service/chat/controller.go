@@ -3288,6 +3288,24 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 	}
 }
 
+// interactionTurnID resolves the turn a pending interaction (approval or
+// structured input) is stored against. A driver normally tags the request with
+// the provider turn it interrupted, but a replay across a controller restart
+// can arrive before the replacement has reinstalled that correlation. An
+// unlinked pending interaction is a row the chat UI never shows — the timeline
+// deliberately hides pending questions — so the person it is waiting for sees
+// nothing while the provider blocks on an answer it can never receive
+// (issue #7658). The turn in flight is always the one the provider is blocked
+// on, so attribute the request to it rather than storing an unanchored row.
+func (c *Controller) interactionTurnID(event ports.ChatEvent) string {
+	if event.ProviderTurnID != "" {
+		return event.ProviderTurnID
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingTurnID
+}
+
 func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
 	if event.ProviderTurnID != "" {
@@ -3590,7 +3608,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 
 	case ports.ChatEventApprovalRequested:
 		detail := mergeApprovalDetail(event)
-		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
+		return c.store.UpsertActivity(ctx, c.conversation.ID, c.interactionTurnID(event),
 			domain.ConversationActivity{
 				ID:             c.newID(),
 				Kind:           domain.ActivityKindApproval,
@@ -3624,7 +3642,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			"url":           event.Input.URL,
 			"elicitationId": event.Input.ElicitationID,
 		})
-		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
+		return c.store.UpsertActivity(ctx, c.conversation.ID, c.interactionTurnID(event),
 			domain.ConversationActivity{
 				ID:             c.newID(),
 				Kind:           domain.ActivityKindUserInput,
