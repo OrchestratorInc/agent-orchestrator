@@ -801,7 +801,9 @@ func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID
 				KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
 				UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
 				KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
-				UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+				UnpricedKnownOutputNanos:    row.UnpricedKnownOutputNanos,
+				UnattributedEventCount:      row.UnattributedEventCount,
+				UnidentifiedRouteEventCount: row.UnidentifiedRouteEventCount,
 			},
 		})
 	}
@@ -868,6 +870,7 @@ func usageSourceContextFromGen(row gen.GetUsageSourceWithBindingAndSessionRow) d
 		InitialModelID: row.InitialModelID,
 		ProviderHint:   row.ProviderHint,
 		BindingState:   row.BindingState,
+		SessionMode:    domain.NormalizeSessionMode(row.SessionMode),
 	}
 }
 
@@ -981,7 +984,9 @@ func usageAggregateFromGen(row gen.AggregateUsageBySessionHarnessModelRow) domai
 			KnownCachedInputCount:   row.KnownCachedInputCount, KnownCachedInputNanos: row.KnownCachedInputNanos,
 			UnpricedKnownCachedInputNanos: row.UnpricedKnownCachedInputNanos,
 			KnownOutputCount:              row.KnownOutputCount, KnownOutputNanos: row.KnownOutputNanos,
-			UnpricedKnownOutputNanos: row.UnpricedKnownOutputNanos,
+			UnpricedKnownOutputNanos:    row.UnpricedKnownOutputNanos,
+			UnattributedEventCount:      row.UnattributedEventCount,
+			UnidentifiedRouteEventCount: row.UnidentifiedRouteEventCount,
 		},
 	}
 }
