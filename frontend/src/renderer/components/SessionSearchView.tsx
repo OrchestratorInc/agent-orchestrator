@@ -112,10 +112,13 @@ export function SessionSearchView() {
 		? remoteSearch.answers.reduce((sum, answer) => sum + (answer.outcome === "searched" ? answer.total : 0), 0)
 		: 0;
 	const total = (search.data?.total ?? results.length) + remoteTotal;
-	// A full list may have more behind it; a short one means every machine ran
-	// out, whatever the totals say (a session can move between pages while new
-	// work is indexed, and is shown once).
-	const hasMore = results.length < total && results.length >= shown && !search.pageError;
+	// "Show more" follows whether each machine ran out, not how many distinct
+	// rows are on screen: a session that moved between pages while new work was
+	// indexed is shown once, so a full page can look short. A failed page stops
+	// paging until it is retried.
+	const remoteHasMore = remoteSearch.settled &&
+		remoteSearch.answers.some((answer) => answer.outcome === "searched" && answer.exhausted === false);
+	const hasMore = results.length < total && !search.pageError && (!search.exhausted || remoteHasMore);
 
 	const projectOptions = useMemo(
 		() => [

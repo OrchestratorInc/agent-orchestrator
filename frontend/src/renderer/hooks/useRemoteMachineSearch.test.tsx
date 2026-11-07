@@ -88,7 +88,8 @@ describe("useRemoteMachineSearch", () => {
 			{ q: "flaky", limit: 100 },
 			{ q: "flaky", limit: 25, offset: 100 },
 		]);
-		expect(result.current.answers[0]).toMatchObject({ outcome: "searched", total: 130 });
+		// Every request came back full: the machine may have more.
+		expect(result.current.answers[0]).toMatchObject({ outcome: "searched", total: 130, exhausted: false });
 		expect(result.current.answers[0]!.results.map((row) => row.sessionId)).toEqual(all.slice(0, 125));
 
 		// Asked for more than it has: the short request ends the reading.
@@ -96,6 +97,7 @@ describe("useRemoteMachineSearch", () => {
 		rerender({ limit: 250 });
 		await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(result.current.answers[0]!.results).toHaveLength(130));
+		expect(result.current.answers[0]).toMatchObject({ exhausted: true });
 		expect(get.mock.calls.map(([, options]) => options.params.query.offset ?? 0)).toEqual([0, 100]);
 	});
 

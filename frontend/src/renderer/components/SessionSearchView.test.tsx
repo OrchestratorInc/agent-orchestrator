@@ -369,6 +369,56 @@ describe("SessionSearchView", () => {
 		});
 	});
 
+	// Found in review: "Show more" was decided by how many distinct rows were on
+	// screen. A newer session arriving between pages moves one row onto the next
+	// page, the repeat is dropped, and 49 of 50 rows hid "Show more" though the
+	// last page was full and 150 sessions remained.
+	it("keeps Show more when a session moves between pages", async () => {
+		const all = Array.from({ length: 200 }, (_, index) => ({
+			...result,
+			sessionId: `proj-${index}`,
+			messageId: `msg-${index}`,
+			sessionName: `Session ${index}`,
+		}));
+		getMock.mockImplementation(async (path: string, options?: { params?: { query?: { limit?: number; offset?: number } } }) => {
+			if (path !== "/api/v1/search/sessions") return response();
+			const { limit = 25, offset = 0 } = options?.params?.query ?? {};
+			// By the second page a newer session has pushed everything down one.
+			const rows = offset === 0 ? all.slice(0, limit) : all.slice(offset - 1, offset - 1 + limit);
+			return response({ results: rows, total: all.length, limit, offset });
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Session 24")).toBeInTheDocument());
+		await user.click(screen.getByRole("button", { name: /Show \d+ more/ }));
+		await waitFor(() => expect(screen.getByText("Session 48")).toBeInTheDocument());
+		// Session 24 came back on the second page and is shown once.
+		expect(screen.getAllByText("Session 24")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
+	});
+
+	it("keeps Show more while another machine has more, after this one ran out", async () => {
+		getMock.mockResolvedValue(response({ results: [result], total: 1 }));
+		const remote = Array.from({ length: 25 }, (_, index) => ({
+			...result,
+			sessionId: `air-${index}`,
+			sessionName: `Air session ${index}`,
+			createdAt: "2026-08-08T12:00:00Z",
+		}));
+		remoteSearchMock.mockReturnValue({
+			answers: [{ hostId: "h_air", label: "MacBook Air", outcome: "searched", results: remote, total: 60, exhausted: false }],
+			settled: true,
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Air session 0")).toBeInTheDocument());
+		expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
+	});
+
 	it("searches every connected machine and opens a remote session there", async () => {
 		getMock.mockResolvedValue(response());
 		remoteSearchMock.mockReturnValue({ settled: true, answers: [

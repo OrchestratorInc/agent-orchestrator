@@ -114,6 +114,7 @@ async function searchRemoteMachine(
 		const results: SessionSearchResult[] = [];
 		const seen = new Set<string>();
 		let total = 0;
+		let exhausted = false;
 		for (let offset = 0; offset < request.limit; offset += SESSION_SEARCH_REQUEST_MAX) {
 			const limit = Math.min(SESSION_SEARCH_REQUEST_MAX, request.limit - offset);
 			const { data, response } = await clientForHost(hostId).GET("/api/v1/search/sessions", {
@@ -138,9 +139,12 @@ async function searchRemoteMachine(
 				results.push(result);
 			}
 			total = data.total ?? results.length;
-			if (page.length < limit) break;
+			if (page.length < limit) {
+				exhausted = true;
+				break;
+			}
 		}
-		return { hostId, label, outcome: "searched", results, total };
+		return { hostId, label, outcome: "searched", results, total, exhausted };
 	} catch (error) {
 		// Replaced by a newer query: let the query layer drop this one.
 		if (signal.aborted) throw error;

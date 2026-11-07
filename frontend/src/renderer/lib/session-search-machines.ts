@@ -39,6 +39,12 @@ export type MachineSearchAnswer = {
 	outcome: MachineSearchOutcome;
 	results: readonly SessionSearchResult[];
 	total: number;
+	/**
+	 * The machine ran out: its last request returned fewer rows than asked,
+	 * counted before any duplicate was dropped. Absent for a machine that was
+	 * not searched.
+	 */
+	exhausted?: boolean;
 };
 
 /** A result as the desktop shows it: stamped with the machine it is on. */
