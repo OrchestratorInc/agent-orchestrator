@@ -3102,6 +3102,8 @@
 	"chat.artifact.label": "Artifact",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Annuler la modification",
+	"chat.edit.cancelAction": "Annuler",
+	"chat.edit.sendAction": "Envoyer",
 	"chat.edit.send": "Envoyer le message modifié",
 	"chat.edit.sendShortcut": "Envoyer le message modifié (⌘/Ctrl+Entrée)",
 	"pr.card.reviewStatus": "Review status",

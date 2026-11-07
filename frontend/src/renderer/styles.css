@@ -3311,6 +3311,30 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Editing a sent message keeps its bubble. A hidden copy of the draft shares the
+   textarea's grid cell and sizes it, so the box fits its text the way the bubble
+   did and grows only as the text does. Past the bubble's ten-line fold the
+   textarea scrolls instead. */
+.chat-human-edit-field {
+	display: grid;
+}
+
+.chat-human-edit-field::after {
+	/* The zero-width space gives a trailing newline its line without widening the box. */
+	content: attr(data-value) "\200b";
+	visibility: hidden;
+	overflow: hidden;
+	max-height: 10lh;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	text-wrap: pretty;
+}
+
+.chat-human-edit-field::after,
+.chat-human-edit-field > textarea {
+	grid-area: 1 / 1;
+}
+
 /* Opacity only, so the fade stays on the compositor. */
 .chat-welcome-leaving {
 	animation: chat-welcome-out 150ms ease-out both;

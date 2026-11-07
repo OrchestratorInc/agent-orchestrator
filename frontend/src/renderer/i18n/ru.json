@@ -3181,6 +3181,8 @@
 	"chat.artifact.label": "Артефакт",
 	"chat.image.numbered": "Изображение {{index}}",
 	"chat.edit.cancel": "Отменить редактирование",
+	"chat.edit.cancelAction": "Отменить",
+	"chat.edit.sendAction": "Отправить",
 	"chat.edit.send": "Отправить изменённое сообщение",
 	"chat.edit.sendShortcut": "Отправить изменённое сообщение (⌘/Ctrl+Enter)",
 	"inspector.usage.agent": "Агент",

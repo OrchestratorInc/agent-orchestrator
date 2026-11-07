@@ -3045,6 +3045,8 @@
 	"chat.artifact.label": "Artifact",
 	"chat.image.numbered": "이미지 {{index}}",
 	"chat.edit.cancel": "편집 취소",
+	"chat.edit.cancelAction": "취소",
+	"chat.edit.sendAction": "보내기",
 	"chat.edit.send": "편집한 메시지 보내기",
 	"chat.edit.sendShortcut": "편집한 메시지 보내기(⌘/Ctrl+Enter)",
 	"pr.card.reviewStatus": "Review status",

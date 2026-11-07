@@ -79,7 +79,7 @@ describe("HumanMessageEditor", () => {
 		expect(send).toBeDisabled();
 	});
 
-	it("shows staged attachments as chips and writes them back on send", async () => {
+	it("shows staged attachments as the bubble does and writes them back on send", async () => {
 		const user = userEvent.setup();
 		const onSend = vi.fn();
 		const onDraftChange = vi.fn();
@@ -108,7 +108,7 @@ describe("HumanMessageEditor", () => {
 		// The native image block is the same picture as the image chip.
 		expect(screen.queryByText("image/png")).not.toBeInTheDocument();
 		const chips = screen.getByRole("list", { name: "Attached files" });
-		expect(chips).toHaveTextContent("Image 1");
+		expect(chips.querySelector("img")).toHaveAttribute("alt", "Image 1");
 		expect(chips).toHaveTextContent("attachment-cd34.pdf");
 		expect(chips.querySelector("img")).toHaveAttribute(
 			"src",
@@ -161,6 +161,54 @@ describe("HumanMessageEditor", () => {
 		await user.click(screen.getByRole("button", { name: "Send edited message" }));
 		expect(onSend).toHaveBeenCalledWith(
 			" a\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12.png",
+		);
+	});
+
+	it("keeps Send off until the message changes", async () => {
+		const user = userEvent.setup();
+		const onSend = vi.fn();
+		const block = "Attached files (read these files in the workspace):\n- .ao/attachments/attachment-cd34.pdf";
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor
+					text={`prompt\n\n${block}`}
+					originalText={`prompt\n\n${block}`}
+					content={[]}
+					sessionId="session-1"
+					apiBaseUrl={null}
+					pending={false}
+					busy={false}
+					onCancel={vi.fn()}
+					onSend={onSend}
+				/>
+			</TooltipProvider>,
+		);
+		const editor = screen.getByRole("textbox", { name: "Edit message" });
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		expect(send).toHaveTextContent("Send");
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toHaveTextContent("Cancel");
+		expect(send).toBeDisabled();
+		fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+		expect(onSend).not.toHaveBeenCalled();
+		await user.type(editor, "!");
+		expect(send).toBeEnabled();
+		await user.type(editor, "{backspace}");
+		expect(send).toBeDisabled();
+		// Dropping a file is a change too.
+		await user.click(screen.getByRole("button", { name: "Remove attachment-cd34.pdf" }));
+		expect(send).toBeEnabled();
+		await user.click(send);
+		expect(onSend).toHaveBeenCalledWith("prompt");
+	});
+
+	it("explains the branch through the field's description", () => {
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor text="prompt" content={[]} sessionId="session-1" apiBaseUrl={null} pending={false} busy={false} onCancel={vi.fn()} onSend={vi.fn()} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveAccessibleDescription(
+			"Starts a new conversation branch. Files stay as they are.",
 		);
 	});
 
