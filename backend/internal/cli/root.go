@@ -239,6 +239,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newPtyHostCommand())
 	root.AddCommand(newCodexLoginCommand(ctx))
 	root.AddCommand(newClaudeLoginCommand(ctx))
+	root.AddCommand(newOpenCodeLoginCommand(ctx))
 	root.AddCommand(newImportCommand(ctx))
 	root.AddCommand(newDevCommand(ctx))
 	root.AddCommand(newProjectCommand(ctx))
@@ -268,7 +269,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao opencode-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

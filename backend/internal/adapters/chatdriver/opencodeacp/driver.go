@@ -34,9 +34,13 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	content, err := opencode.PrepareACPConfigContent(
 		cfg.Env["OPENCODE_CONFIG_CONTENT"], cfg.SystemPrompt, cfg.Permissions)
+	if err != nil {
+		return nil, nil, err
+	}
+	content, err = opencode.AddConfigPlugins(content, opencode.ClaudePlanPluginKey(1), opencode.ClaudePlanPlugins(ctx, 1, ""))
 	if err != nil {
 		return nil, nil, err
 	}

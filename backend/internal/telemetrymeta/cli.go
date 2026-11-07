@@ -35,6 +35,7 @@ var routineInternalCLICommands = []string{
 	"ao unreal-provider",
 	"ao codex-login",
 	"ao claude-login",
+	"ao opencode-login",
 }
 
 // CLIActorType infers the actor for legacy loopback CLI telemetry requests that

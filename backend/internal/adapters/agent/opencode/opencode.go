@@ -116,7 +116,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID, ClaudePlanPlugins(ctx, 1, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID, ClaudePlanPlugins(ctx, 1, ""))
 	if err != nil {
 		return nil, false, err
 	}
@@ -443,6 +443,9 @@ type opencodeInlineConfig struct {
 	Schema     string                           `json:"$schema,omitempty"`
 	Permission map[string]string                `json:"permission,omitempty"`
 	Agent      map[string]opencodeAgentSettings `json:"agent,omitempty"`
+	// Plugin adds to the user's plugin list; OpenCode 1 concatenates plugin
+	// lists across config layers, so global and project plugins still load.
+	Plugin []string `json:"plugin,omitempty"`
 }
 
 type opencodeAgentSettings struct {
@@ -474,7 +477,8 @@ func opencodePermissionConfig(mode ports.PermissionMode) map[string]string {
 	return nil
 }
 
-func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
+// plugins are added to the AO config layer (see ClaudePlanPlugins).
+func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID string, plugins []string) ([]string, string, error) {
 	permission := opencodePermissionConfig(permissions)
 	// Bypass goes on the agent, not in the config body. OpenCode's native flag
 	// is an alias of --auto, which still enforces explicit deny rules, and a
@@ -510,6 +514,7 @@ func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, pro
 		Agent: map[string]opencodeAgentSettings{
 			agentName: {Mode: "primary", Prompt: prompt, Permission: agentPermission},
 		},
+		Plugin: plugins,
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

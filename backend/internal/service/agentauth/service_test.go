@@ -333,6 +333,34 @@ func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	}
 }
 
+func TestStartOpensOpenCodeLoginMenuForEachMajorVersion(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	for _, tt := range []struct {
+		agentID, major string
+		wantDataHome   bool
+	}{
+		{"opencode", "1", false},
+		{"opencode-v2", "2", true},
+	} {
+		opener := &recordingTerminalOpener{}
+		resolver := managedExecutableResolver{agentID: tt.agentID, path: "/managed/bin/opencode"}
+		svc := NewWithAgentResolver(resolver, resolver, opener, "")
+		svc.selfExecutable = func() (string, error) { return "/Applications/AO.app/Contents/MacOS/ao", nil }
+
+		if _, err := svc.Start(context.Background(), tt.agentID); err != nil {
+			t.Fatalf("Start(%s): %v", tt.agentID, err)
+		}
+		want := []string{"/Applications/AO.app/Contents/MacOS/ao", "opencode-login", "--executable", "/managed/bin/opencode", "--major", tt.major}
+		if got := opener.input.Argv; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s terminal argv = %#v, want trusted OpenCode login menu %#v", tt.agentID, got, want)
+		}
+		// OpenCode 2 must save the login into AO's isolated data home.
+		if _, ok := opener.input.Env["XDG_DATA_HOME"]; ok != tt.wantDataHome {
+			t.Fatalf("%s terminal env = %#v, want XDG_DATA_HOME set = %v", tt.agentID, opener.input.Env, tt.wantDataHome)
+		}
+	}
+}
+
 func TestStartPinsClaudeDataDirectoryAcrossAuthWorkspaceChange(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("AO_DATA_DIR", "data")
