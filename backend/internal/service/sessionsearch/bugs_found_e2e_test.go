@@ -517,3 +517,126 @@ func TestTheWordAsTypedOutranksItsWidenedForms(t *testing.T) {
 		t.Fatalf("exact tier off = %v; this test no longer reproduces the stem bias it guards against", sessionIDs(off.Results))
 	}
 }
+
+// Found in review: the sweep's stamp counted rows and their times, and a
+// rollback changes neither. It only marks the discarded turns. After indexing
+// and then rolling back, every sweep skipped the conversation and the agent's
+// forgotten turn stayed searchable. This goes through Sweep, the production
+// path; IndexChat alone bypasses the skip.
+func TestSweepDropsARolledBackTurn(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-rollback", "conv-rollback")
+	appendUserMessage(t, f.store, session, "conv-rollback", "keep-msg", "turn-keep", "keep zzKeepNeedle in mind")
+	settleAssistantMessage(t, f.store, "conv-rollback", "keep-reply", "turn-keep", "noted")
+	appendUserMessage(t, f.store, session, "conv-rollback", "drop-msg", "turn-drop", "try zzDropNeedle instead")
+	addCommandActivity(t, f.store, "conv-rollback", "turn-drop", "cmd-drop", "go test ./...", "FAIL zzDropOutput", domain.ActivityStatusCompleted)
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if len(search(t, f.svc, "zzDropNeedle").Results) != 1 || len(search(t, f.svc, "zzDropOutput").Results) != 1 {
+		t.Fatalf("the turn was not indexed before the rollback")
+	}
+
+	if _, err := f.store.RollbackTurns(ctx, "conv-rollback", "turn-drop", testNow.Add(time.Minute)); err != nil {
+		t.Fatalf("RollbackTurns: %v", err)
+	}
+	if _, err := f.svc.Sweep(ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	for _, word := range []string{"zzDropNeedle", "zzDropOutput"} {
+		if got := search(t, f.svc, word).Results; len(got) != 0 {
+			t.Fatalf("%s still searchable after a rollback: %s", word, describe(got))
+		}
+	}
+	if len(search(t, f.svc, "zzKeepNeedle").Results) != 1 {
+		t.Fatalf("the kept turn went missing")
+	}
+}
+
+// Found in review: activities were read from the raw table, so a rolled-back
+// turn's command output and file changes were indexed even by a full reindex,
+// and path: matched an edit that was undone.
+func TestReindexSkipsActivitiesOfARolledBackTurn(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-undone", "conv-undone")
+	appendUserMessage(t, f.store, session, "conv-undone", "keep-msg", "turn-keep", "the kept turn")
+	settleAssistantMessage(t, f.store, "conv-undone", "keep-reply", "turn-keep", "done")
+	appendUserMessage(t, f.store, session, "conv-undone", "drop-msg", "turn-drop", "the undone turn")
+	addCommandActivity(t, f.store, "conv-undone", "turn-drop", "cmd-drop", "make", "error zzUndoneOutput", domain.ActivityStatusCompleted)
+	addActivity(t, f.store, "conv-undone", "turn-drop", domain.ConversationActivity{
+		ID: "files-drop", Kind: domain.ActivityKindFileChange, Status: domain.ActivityStatusCompleted,
+		Detail: []byte(`{"files":[{"path":"src/zzundone/file.go"}]}`),
+	})
+	if _, err := f.store.RollbackTurns(ctx, "conv-undone", "turn-drop", testNow.Add(time.Minute)); err != nil {
+		t.Fatalf("RollbackTurns: %v", err)
+	}
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	for _, query := range []string{"zzUndoneOutput", "path:zzundone"} {
+		if got := search(t, f.svc, query).Results; len(got) != 0 {
+			t.Fatalf("%s matched a rolled-back turn: %s", query, describe(got))
+		}
+	}
+}
+
+// Found in review: the content fingerprint hashed each message's length, so an
+// equal-length edit of a queued prompt ("zzalpha" to "zzomega") compared equal
+// and was never re-indexed: the old word stayed and the new one never appeared.
+func TestSweepReindexesAnEqualLengthEdit(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-queued", "conv-queued")
+	created, err := f.store.AppendUserMessage(ctx, "conv-queued", session.ID, "generation-"+string(session.ID),
+		domain.ConversationMessage{ID: "queued-msg", Origin: domain.MessageOriginHuman, Text: "deploy zzalpha tonight", ClientMessageID: "client-queued"},
+		"turn-queued", testNow)
+	if err != nil || !created {
+		t.Fatalf("AppendUserMessage: created=%v err=%v", created, err)
+	}
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if len(search(t, f.svc, "zzalpha").Results) != 1 {
+		t.Fatalf("the queued prompt was not indexed")
+	}
+	if err := f.store.UpdateQueuedTurnMessage(ctx, "conv-queued", "turn-queued", "deploy zzomega tonight", "", 0,
+		testNow.Add(time.Minute), domain.ConversationQueuedEditDelivery{}); err != nil {
+		t.Fatalf("UpdateQueuedTurnMessage: %v", err)
+	}
+	if _, err := f.svc.Sweep(ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := search(t, f.svc, "zzalpha").Results; len(got) != 0 {
+		t.Fatalf("the edited-away word is still searchable: %s", describe(got))
+	}
+	if len(search(t, f.svc, "zzomega").Results) != 1 {
+		t.Fatalf("the edited prompt was not re-indexed")
+	}
+}
+
+// Found in review: a rename touches no message or activity, so neither the
+// stamp nor the fingerprint saw it, and the old name stayed searchable.
+func TestSweepPicksUpARename(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-rename", "conv-rename")
+	renameForSearch(t, f, session, "Zzoldname investigation")
+	appendUserMessage(t, f.store, session, "conv-rename", "rename-msg", "turn-rename", "look at the cache")
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if _, err := f.store.RenameSession(ctx, session.ID, "Zznewname investigation", testNow.Add(time.Minute)); err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+	if _, err := f.svc.Sweep(ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := search(t, f.svc, "zznewname").Results; len(got) == 0 || got[0].SessionID != string(session.ID) {
+		t.Fatalf("the new name is not searchable: %s", describe(got))
+	}
+	if got := search(t, f.svc, "zzoldname").Results; len(got) != 0 {
+		t.Fatalf("the old name is still searchable: %s", describe(got))
+	}
+}

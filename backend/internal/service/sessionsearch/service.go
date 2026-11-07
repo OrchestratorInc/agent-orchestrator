@@ -1015,8 +1015,10 @@ func pathsFromActivityDetail(detail string) []string {
 // source row. The sweep compares strings, so a stamp that differs in any part
 // triggers a real read.
 func stampFingerprint(stamp domain.SessionSearchConversationStamp) string {
-	return fmt.Sprintf("v%d:%d:%d:%d:%d:%d", indexFormatVersion,
-		stamp.MessageCount, stamp.MessageSeqMax, stamp.ActivityCount, stamp.ActivitySeqMax, stamp.UpdatedAt)
+	witness := sha256.Sum256([]byte(stamp.Witness))
+	return fmt.Sprintf("v%d:%d:%d:%d:%d:%d:%s", indexFormatVersion,
+		stamp.MessageCount, stamp.MessageSeqMax, stamp.ActivityCount, stamp.ActivitySeqMax, stamp.UpdatedAt,
+		hex.EncodeToString(witness[:8]))
 }
 
 // indexFormatVersion is the shape of the documents a Chat source produces. It
@@ -1052,19 +1054,35 @@ func chatFingerprint(
 	activities []domain.SessionSearchActivity,
 	paths []string,
 ) string {
+	// Every field that reaches a document is hashed whole, length-prefixed so
+	// two fields cannot run together. Hashing lengths instead kept an
+	// equal-length edit ("red key" to "new key") from ever being re-indexed.
 	digest := sha256.New()
-	_, _ = fmt.Fprintf(digest, "v%d\x00%s\x00%d\x00%s\x00", indexFormatVersion,
-		conversation.ProviderTitle, conversation.LatestSequence, conversation.ActiveBranchID)
+	field := func(value string) { _, _ = fmt.Fprintf(digest, "%d:%s", len(value), value) }
+	_, _ = fmt.Fprintf(digest, "v%d:%d:", indexFormatVersion, conversation.LatestSequence)
+	for _, value := range []string{
+		conversation.ProviderTitle, conversation.DisplayName, conversation.Branch, conversation.ActiveBranchID,
+		string(conversation.ProjectID), string(conversation.Harness), conversation.ReviewID,
+	} {
+		field(value)
+	}
 	for _, message := range messages {
-		_, _ = fmt.Fprintf(digest, "%s:%d:%d\x00", message.ID, message.Sequence, len(message.Text))
+		_, _ = fmt.Fprintf(digest, "m%d:", message.Sequence)
+		field(message.ID)
+		field(string(message.Role))
+		field(message.Text)
 	}
 	for _, activity := range activities {
-		_, _ = fmt.Fprintf(digest, "%s:%d:%d:%d:%d:%d\x00",
-			activity.ID, activity.Sequence, len(activity.Summary), len(activity.Detail),
-			len(activity.Output), len(activity.Streamed))
+		_, _ = fmt.Fprintf(digest, "a%d:", activity.Sequence)
+		for _, value := range []string{
+			activity.ID, string(activity.Kind), string(activity.Status), activity.Summary,
+			activity.Detail, activity.Output, activity.Streamed, activity.AnchorMessageID,
+		} {
+			field(value)
+		}
 	}
 	for _, path := range paths {
-		_, _ = fmt.Fprintf(digest, "%s\x00", path)
+		field(path)
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }

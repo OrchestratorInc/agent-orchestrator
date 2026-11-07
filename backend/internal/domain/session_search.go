@@ -235,6 +235,12 @@ type SessionSearchConversationStamp struct {
 	ActivitySeqMax int64
 	// UpdatedAt is the newest row timestamp in milliseconds.
 	UpdatedAt int64
+	// Witness covers what changes what is visible or how it is named without
+	// touching a message or activity row: the active branch, rolled-back and
+	// cancelled turns, the conversation's title, and the session's name and
+	// branch. Counts and times alone missed a rollback and a rename, so the
+	// sweep kept serving discarded text and old names.
+	Witness string
 }
 
 // SessionSearchMessage is the visible slice of one Chat message.

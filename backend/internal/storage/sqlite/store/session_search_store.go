@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -911,73 +912,83 @@ func (s *Store) SessionSearchVisibleMessages(ctx context.Context, conversationID
 // non-prose timeline: commands with their output, tool calls, file changes,
 // plans, and reasoning summaries. This is the text every competitor skips.
 func (s *Store) SessionSearchActivities(ctx context.Context, conversationID string) ([]domain.SessionSearchActivity, error) {
-	rows, err := s.readDB.QueryContext(ctx, `
-SELECT a.id, a.sequence, a.kind, a.status, a.summary, a.detail_json, a.command_output, a.streamed_text,
-       a.created_at, a.updated_at,
-       COALESCE(
-           (SELECT m.id FROM conversation_messages m
-            WHERE m.conversation_id = a.conversation_id AND m.turn_id = a.turn_id AND m.sequence <= a.sequence
-            ORDER BY m.sequence DESC LIMIT 1),
-           (SELECT m.id FROM conversation_messages m
-            WHERE m.conversation_id = a.conversation_id AND m.turn_id = a.turn_id
-            ORDER BY m.sequence LIMIT 1),
-           '')
-FROM conversation_activities a
-WHERE a.conversation_id = ?
-ORDER BY a.sequence`, conversationID)
+	activities, messages, err := s.sessionSearchVisibleTimeline(ctx, conversationID)
 	if err != nil {
-		return nil, fmt.Errorf("list session search activities: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var activities []domain.SessionSearchActivity
-	for rows.Next() {
-		var activity domain.SessionSearchActivity
-		var kind, status string
-		if err := rows.Scan(
-			&activity.ID, &activity.Sequence, &kind, &status, &activity.Summary,
-			&activity.Detail, &activity.Output, &activity.Streamed,
-			&activity.CreatedAt, &activity.UpdatedAt, &activity.AnchorMessageID,
-		); err != nil {
-			return nil, fmt.Errorf("scan session search activity: %w", err)
+	// Each activity opens at its turn's message: the last one at or before it,
+	// else the turn's first. Only visible messages count, so a result never
+	// points at a message the transcript cannot display.
+	byTurn := map[string][]domain.ConversationMessage{}
+	for _, message := range messages {
+		if message.TurnID != "" {
+			byTurn[message.TurnID] = append(byTurn[message.TurnID], message)
 		}
-		activity.Kind = domain.ActivityKind(kind)
-		activity.Status = domain.ActivityStatus(status)
-		activities = append(activities, activity)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate session search activities: %w", err)
+	out := make([]domain.SessionSearchActivity, 0, len(activities))
+	for _, activity := range activities {
+		anchor := ""
+		if turn := byTurn[activity.TurnID]; len(turn) > 0 {
+			anchor = turn[0].ID
+			for _, message := range turn {
+				if message.Sequence <= activity.Sequence {
+					anchor = message.ID
+				}
+			}
+		}
+		out = append(out, domain.SessionSearchActivity{
+			ID: activity.ID, Sequence: activity.Sequence, Kind: activity.Kind, Status: activity.Status,
+			Summary: activity.Summary, Detail: string(activity.Detail), Output: activity.CommandOutput, Streamed: activity.StreamedText,
+			CreatedAt: activity.CreatedAt, UpdatedAt: activity.UpdatedAt, AnchorMessageID: anchor,
+		})
 	}
-	return activities, nil
+	return out, nil
 }
 
-// SessionSearchTouchedPaths returns the file paths a conversation's turns
-// touched. detail_json holds {"files":[{"path":…}]} for a file_change activity.
+// sessionSearchVisibleTimeline reads a conversation's activities and messages
+// through the conversation's own readers, so search indexes exactly what the
+// transcript shows: the active branch's path, without rolled-back or cancelled
+// turns. Reading the raw tables instead kept discarded command output, undone
+// file changes and other branches searchable after a full reindex.
+func (s *Store) sessionSearchVisibleTimeline(ctx context.Context, conversationID string) ([]domain.ConversationActivity, []domain.ConversationMessage, error) {
+	activityRows, err := s.qr.SelectConversationActivities(ctx, conversationID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list session search activities: %w", err)
+	}
+	activities := make([]domain.ConversationActivity, 0, len(activityRows))
+	for _, row := range activityRows {
+		activities = append(activities, activityToDomain(row))
+	}
+	messages, err := s.ConversationMessages(ctx, conversationID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list session search messages: %w", err)
+	}
+	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Sequence < messages[j].Sequence })
+	return activities, messages, nil
+}
+
+// SessionSearchTouchedPaths returns the file paths a conversation's visible
+// turns touched: an undone edit is not a path the session changed. detail_json
+// holds {"files":[{"path":…}]} for a file_change activity.
 func (s *Store) SessionSearchTouchedPaths(ctx context.Context, conversationID string) ([]string, error) {
-	rows, err := s.readDB.QueryContext(ctx, `
-SELECT detail_json FROM conversation_activities
-WHERE conversation_id = ? AND kind = 'file_change'
-ORDER BY sequence`, conversationID)
+	activityRows, err := s.qr.SelectConversationActivities(ctx, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("list session search touched paths: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 	seen := map[string]struct{}{}
 	var paths []string
-	for rows.Next() {
-		var detail string
-		if err := rows.Scan(&detail); err != nil {
-			return nil, fmt.Errorf("scan session search activity detail: %w", err)
+	for _, row := range activityRows {
+		activity := activityToDomain(row)
+		if activity.Kind != domain.ActivityKindFileChange {
+			continue
 		}
-		for _, path := range pathsFromFileChangeDetail(detail) {
+		for _, path := range pathsFromFileChangeDetail(string(activity.Detail)) {
 			if _, ok := seen[path]; ok {
 				continue
 			}
 			seen[path] = struct{}{}
 			paths = append(paths, path)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate session search activities: %w", err)
 	}
 	return paths, nil
 }
@@ -1063,8 +1074,15 @@ SELECT c.id,
                UNION ALL
                SELECT MAX(a.updated_at) AS at FROM conversation_activities a WHERE a.conversation_id = c.id
            ) AS t
-       ), 0)
+       ), 0),
+       COALESCE(c.active_branch_id, '') || char(31) || COALESCE(c.provider_title, '') || char(31) ||
+       COALESCE(s.display_name, '') || char(31) || COALESCE(s.branch, '') || char(31) ||
+       (SELECT COUNT(*) || ':' || COALESCE(MAX(t.rolled_back_at), '') || ':' || COALESCE(MAX(t.completed_at), '')
+        FROM conversation_turns t
+        WHERE t.conversation_id = c.id AND (t.rolled_back_at IS NOT NULL OR t.state = 'cancelled'))
 FROM conversations c
+LEFT JOIN review r ON r.id = c.current_review_id
+LEFT JOIN sessions s ON s.id = COALESCE(c.current_session_id, r.session_id)
 WHERE c.current_session_id IS NOT NULL OR c.current_review_id IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("read session search conversation stamps: %w", err)
@@ -1074,7 +1092,7 @@ WHERE c.current_session_id IS NOT NULL OR c.current_review_id IS NOT NULL`)
 		var stamp domain.SessionSearchConversationStamp
 		if err := rows.Scan(
 			&stamp.ConversationID, &stamp.MessageCount, &stamp.MessageSeqMax,
-			&stamp.ActivityCount, &stamp.ActivitySeqMax, &stamp.UpdatedAt,
+			&stamp.ActivityCount, &stamp.ActivitySeqMax, &stamp.UpdatedAt, &stamp.Witness,
 		); err != nil {
 			return nil, fmt.Errorf("scan session search conversation stamp: %w", err)
 		}
