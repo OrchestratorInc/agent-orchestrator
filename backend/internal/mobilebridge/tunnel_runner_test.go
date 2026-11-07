@@ -708,3 +708,29 @@ func TestTunnelRunnerMovesToTheFixedAddressWhenNudged(t *testing.T) {
 		t.Fatal("the nudge did not move the tunnel")
 	}
 }
+
+// A quick tunnel Cloudflare deleted while the machine slept keeps retrying and
+// never registers again (measured: 473 refused registrations over a night).
+// The runner stops it so the next start gets a new address that resolves.
+func TestTunnelRunnerRestartsAQuickTunnelThatLostEveryConnection(t *testing.T) {
+	quickURL := "2026-10-28T19:57:40Z INF |  https://nose-dis-avenue-hopkins.trycloudflare.com  |"
+	bin, _ := fakeCloudflared(t, quickURL+"\n"+registeredLine+"\n"+droppedLines)
+	r := &TunnelRunner{Binary: bin, LocalPort: 4321, PIDPath: filepath.Join(t.TempDir(), "tunnel.pid"), Runtime: &TunnelRuntime{}, deadAfter: 100 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err := r.runOnce(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("runner never stopped the dead quick tunnel: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "no live connection") {
+		t.Fatalf("runOnce = %v", err)
+	}
+	// Repairs are a fixed tunnel's: a quick one just starts again.
+	if r.repair || r.unhelped != 0 {
+		t.Fatalf("repair %v, unhelped %d", r.repair, r.unhelped)
+	}
+	// The dead address is no longer advertised.
+	if r.Runtime.Endpoint() != nil {
+		t.Fatalf("still advertising %+v", r.Runtime.Endpoint())
+	}
+}
