@@ -46,9 +46,15 @@ export function sectionModifiers(t: Theme): ModifierConfig[] {
 }
 
 /** A section footer: the system's footnote styling, or the error colour for a problem with the section's fields. */
-export function FormFooter({ children, error = false }: { children: string; error?: boolean }) {
+/**
+ * A section footer. A section with text fields keeps one mounted and only changes
+ * its text (none when there is nothing to say): @expo/ui builds a different
+ * SwiftUI Section with and without a footer, so adding or removing it rebuilds
+ * the fields, and the focused field loses focus and the keyboard.
+ */
+export function FormFooter({ children, error = false }: { children?: string; error?: boolean }) {
 	const t = useTheme();
-	return <Text modifiers={error ? [foregroundStyle(t.red)] : undefined}>{children}</Text>;
+	return <Text modifiers={error ? [foregroundStyle(t.red)] : undefined}>{children ?? ""}</Text>;
 }
 
 function inputModifiers(t: Theme, props: FormTextFieldProps, contentType?: Parameters<typeof textContentType>[0]): ModifierConfig[] {

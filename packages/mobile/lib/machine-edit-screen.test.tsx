@@ -185,7 +185,8 @@ describe("editing a machine", () => {
 		// A footer isn't read out as it appears, so the screen reader is told.
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("environment-password-a", "right");
-		expect(connectionSection().props.footer).toBeUndefined();
+		// Cleared but still mounted, so the field being typed in keeps focus.
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: undefined });
 	});
 
 	it("explains an out-of-range port and keeps Save off", async () => {
