@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
@@ -166,6 +167,99 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 				t.Fatalf("Execute error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexLoginExplainsCodexInstallThatCannotStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell launcher fixture is Unix-specific")
+	}
+	tests := []struct {
+		name       string
+		launcher   string
+		wantReason string
+	}{
+		{
+			// npm launchers up to 0.132 spawn vendor/<triple>/codex/codex
+			// without checking it exists; Node prints the spawn error.
+			name:       "native binary missing, old launcher",
+			launcher:   "#!/bin/sh\necho \"Error: spawn /x/vendor/aarch64-apple-darwin/codex/codex ENOENT\" >&2\necho '    at ChildProcess._handle.onexit (node:internal/child_process:286:19)' >&2\nexit 1\n",
+			wantReason: "(Error: spawn /x/vendor/aarch64-apple-darwin/codex/codex ENOENT)",
+		},
+		{
+			// 0.133+ launchers throw instead; Node prints the source location first.
+			name:       "native binary missing, new launcher",
+			launcher:   "#!/bin/sh\nprintf 'file:///x/bin/codex.js:123\\n    throw new Error(\\n    ^\\n\\nError: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex: npm install -g @openai/codex@latest\\n' >&2\nexit 1\n",
+			wantReason: "(Error: Missing optional dependency @openai/codex-darwin-arm64.",
+		},
+		{
+			// A working Codex that rejects the login keeps Codex's own failure.
+			name:     "login rejected",
+			launcher: "#!/bin/sh\n[ \"$1\" = --version ] && { echo codex-cli 0.166.0; exit 0; }\nexit 1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := filepath.Join(t.TempDir(), "codex")
+			if err := os.WriteFile(launcher, []byte(tt.launcher), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			deps := Deps{In: strings.NewReader("1\n"), Out: io.Discard, Err: io.Discard}
+			cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+			cmd.SetArgs([]string{"--executable", launcher})
+			cmd.SetIn(deps.In)
+			cmd.SetOut(deps.Out)
+			cmd.SetErr(deps.Err)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("Execute succeeded, want login failure")
+			}
+			msg := err.Error()
+			hinted := strings.Contains(msg, "the Codex CLI at "+launcher+" could not start") && strings.Contains(msg, "Reinstall or update Codex")
+			if tt.wantReason == "" {
+				if hinted {
+					t.Fatalf("error = %q, want Codex's own login failure", msg)
+				}
+				return
+			}
+			if !hinted || !strings.Contains(msg, tt.wantReason) {
+				t.Fatalf("error = %q, want reinstall hint with reason %q", msg, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestCodexLoginStartProbeTimesOutWhenLauncherChildHoldsPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell launcher fixture is Unix-specific")
+	}
+	previous := codexStartProbeTimeout
+	codexStartProbeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { codexStartProbeTimeout = previous })
+
+	// Login fails; --version hangs and leaves a background child that inherits
+	// stdout/stderr, so killing only the launcher would not close the pipes.
+	launcher := filepath.Join(t.TempDir(), "codex")
+	script := "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nsleep 30 &\nsleep 30\n"
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{In: strings.NewReader("1\n"), Out: io.Discard, Err: io.Discard}
+	cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", launcher})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "codex login failed: exit status 1" {
+			t.Fatalf("Execute error = %v, want Codex's own login failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("codex-login still waiting on the start probe 10s after its 300ms timeout")
 	}
 }
 
