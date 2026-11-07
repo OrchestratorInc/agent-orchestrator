@@ -5013,6 +5013,24 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
   });
 
+  // A squash merge leaves the branch's commits ahead of the base.
+  it("offers no Create PR once the session's PR is merged", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState: pushed(4) })} />);
+
+    expect(await branch().findByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("4 commits")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
+  });
+
+  it("offers a new PR for work made after the merge", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState: pushed(4) })} />);
+
+    expect(await screen.findByRole("button", { name: "Commit & create PR" })).toBeInTheDocument();
+  });
+
   it("leaves the loading state once the PR appears", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
     const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([])} />);

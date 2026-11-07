@@ -478,6 +478,7 @@ const SummaryView = memo(function SummaryView({
 			branch={
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged")}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (
