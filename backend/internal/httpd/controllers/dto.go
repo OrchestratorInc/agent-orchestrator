@@ -1384,6 +1384,9 @@ type DelegateTaskResponse struct {
 }
 
 // SessionPRFacts is the pull-request read shape returned under session PR routes.
+// On session reads (GET /sessions, GET /sessions/{sessionId}) review also carries
+// AO's review verdicts on the PR's current head; GET /sessions/{sessionId}/pr
+// reports the provider's decision alone.
 type SessionPRFacts struct {
 	URL            string                `json:"url"`
 	Number         int                   `json:"number"`
