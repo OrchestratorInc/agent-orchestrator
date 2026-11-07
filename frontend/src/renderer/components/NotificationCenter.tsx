@@ -993,7 +993,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						{rowGroups.map((group) => (
 						<Fragment key={group.key}>
 						{group.label ? (
-							<div aria-hidden="true" className="sticky top-0 z-10 bg-popover px-3.5 pb-1 pt-2.5 text-caption font-medium text-muted-foreground">
+							<div aria-hidden="true" className="px-3.5 pb-1 pt-3 text-caption font-medium text-muted-foreground">
 								{group.label}
 							</div>
 						) : null}
@@ -1501,14 +1501,6 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							{notification.body}
 						</p>
 					) : null}
-					{approval.length > 0 && sessionId ? (
-						<CloudApprovalActions
-							decisions={approval}
-							labels={approvalLabels}
-							notification={notification}
-							onDecide={onDecide}
-						/>
-					) : null}
 					{metaParts.length > 0 || (offerRestore && sessionId && projectId) ? (
 						<div className={cn("flex min-w-0 flex-col items-start gap-1.5", inbox ? "mt-1" : "mt-2")}>
 						{metaParts.length > 0 ? (
@@ -1539,6 +1531,16 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							</Button>
 						) : null}
 						</div>
+					) : null}
+					{/* Actions last, as an approval in Slack or Teams: the primary
+					    one first, flush with the text above. */}
+					{approval.length > 0 && sessionId ? (
+						<CloudApprovalActions
+							decisions={approval}
+							labels={approvalLabels}
+							notification={notification}
+							onDecide={onDecide}
+						/>
 					) : null}
 				</div>
 				<div className="flex min-w-14 shrink-0 flex-col items-end gap-1">
@@ -1642,7 +1644,7 @@ function CloudTriageActions({ busy, disabled, notification, onDone, onSnooze, on
 
 /**
  * Answers an approval from the bell with the two choices the chat card leads
- * with: deny, or allow once. Anything more (always allow, always deny) is a
+ * with: allow once (first, as the primary action), or deny. Anything more (always allow, always deny) is a
  * decision worth making in the session itself, which the row opens. Only
  * whoever is driving the session or owns it may answer; anyone else is told so
  * and the row stays.
@@ -1659,7 +1661,7 @@ function CloudApprovalActions({ decisions, labels, notification, onDecide }: {
 	const ordered = orderedApprovalDecisions(decisions);
 	const label = approvalDecisionLabeler(ordered, undefined, labels);
 	const pick = (...kinds: string[]) => kinds.map((kind) => ordered.find((decision) => approvalDecisionKind(decision) === kind)).find(Boolean);
-	const quick = [pick("reject_once", "reject_always"), pick("allow_once", "allow_always")].filter((decision): decision is (typeof ordered)[number] => Boolean(decision));
+	const quick = [pick("allow_once", "allow_always"), pick("reject_once", "reject_always")].filter((decision): decision is (typeof ordered)[number] => Boolean(decision));
 	const shown = quick.length > 0 ? quick : ordered.slice(0, 2);
 	const decide = (decisionId: string) => {
 		if (pending) return;
@@ -1675,18 +1677,19 @@ function CloudApprovalActions({ decisions, labels, notification, onDecide }: {
 	};
 	const stop = (event: React.SyntheticEvent) => event.stopPropagation();
 	return (
-		<div className="mt-2 flex flex-col items-start gap-1.5" onClick={stop} onKeyDown={stop}>
-			<div className="flex items-center gap-1.5">
+		<div className="mt-2.5 flex flex-col items-start gap-1.5" onClick={stop} onKeyDown={stop}>
+			<div className="flex items-center gap-2">
 				{shown.map((decision) => {
 					const kind = approvalDecisionKind(decision);
+					const allows = kind === "allow_once" || kind === "allow_always";
 					return (
 						<Button
 							disabled={pending !== null}
 							key={decision.id}
 							onClick={() => decide(decision.id)}
-							size="xs"
+							size="sm"
 							type="button"
-							variant={kind === "allow_once" ? "accent" : "secondary"}
+							variant={allows ? "accent" : "outline"}
 						>
 							{pending === decision.id ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
 							{label(decision)}

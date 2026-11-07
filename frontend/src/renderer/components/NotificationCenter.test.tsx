@@ -1371,7 +1371,7 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 
 		// The row itself is a button that opens the session; these are the actions in it.
 		const actions = within(row).getAllByRole("button").filter((button) => !button.hasAttribute("role"));
-		expect(actions.map((button) => button.textContent).filter((text) => text)).toEqual(["Deny", "Allow once"]);
+		expect(actions.map((button) => button.textContent).filter((text) => text)).toEqual(["Allow once", "Deny"]);
 		await userEvent.click(within(row).getByRole("button", { name: "Allow once" }));
 
 		expect(decideChatApprovalMock).toHaveBeenCalledWith("org-2", "csess-1", "req-1", "allow");
