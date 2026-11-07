@@ -472,7 +472,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		navigateToAnnotation({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId });
 		const query = reveal.query?.trim();
 		if (query) {
-			setFind({ query, matches: [], index: 0, anchor: reveal.messageId });
+			setFind((current) => {
+				// Another result for the search the bar already shows: its matches are
+				// listed, and the effect below refills them only when the query or its
+				// results change, which they have not. Keep them and move to the
+				// opened one; the anchor stays only for a match the list lacks yet.
+				const matches = current?.query.trim() === query ? current.matches : [];
+				const index = matches.findIndex((match) => match.messageId === reveal.messageId);
+				return index >= 0 ? { query, matches, index } : { query, matches, index: 0, anchor: reveal.messageId };
+			});
 			setFindQuery(query);
 		}
 	}, [navigateToAnnotation, onSelectChat]);

@@ -551,6 +551,35 @@ describe("SessionChatSurface search reveal", () => {
 		expect(screen.queryByTestId("session-find-bar")).not.toBeInTheDocument();
 	});
 
+	// Found in review: a second result for the same search emptied the bar's
+	// matches, and nothing refilled them: the query and its cached results were
+	// unchanged. The bar sat at 0/0 and Enter did nothing.
+	it("keeps the session's matches when another result for the same search opens", async () => {
+		mockMatches({
+			flaky: [
+				{ messageId: "msg-1", snippet: "the flaky login test", highlights: [{ start: 4, end: 9 }] },
+				{ messageId: "msg-2", snippet: "still flaky on CI", highlights: [{ start: 6, end: 11 }] },
+			],
+		});
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", query: "flaky" });
+		render(
+			<Wrapper client={client}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+		const input = await screen.findByRole("searchbox", { name: "Find in conversation" });
+		await waitFor(() => expect(screen.getByTestId("session-find-count")).toHaveTextContent("1/2"));
+
+		act(() => requestSessionSearchReveal("sess-1", { messageId: "msg-2", text: "flaky", query: "flaky" }));
+		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-2"));
+		// Positioned on the opened match, and Enter still steps (wrapping to the first).
+		expect(screen.getByTestId("session-find-count")).toHaveTextContent("2/2");
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1");
+		expect(screen.getByTestId("session-find-count")).toHaveTextContent("1/2");
+	});
+
 	it("searches again from the first match when the find query changes", async () => {
 		mockMatches({
 			flaky: [{ messageId: "msg-1", snippet: "the flaky login test", highlights: [{ start: 4, end: 9 }] }],
