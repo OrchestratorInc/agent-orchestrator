@@ -25,10 +25,10 @@ export interface HumanMessageEditorProps {
 	className?: string;
 	/** Places Cancel and Send in the row the message's hover actions use. */
 	actionsClassName?: string;
-	/** Drawn above the text, where the bubble draws it. */
+	/** Drawn first, where the bubble draws it. */
 	leading?: ReactNode;
-	/** Drawn under the attachments, where the bubble draws it. */
-	trailing?: ReactNode;
+	/** Drawn after the staged files and above the text, where the bubble draws them. */
+	cloudAttachments?: ReactNode;
 	pending: boolean;
 	/** Durable unresolved delivery: lock edits, but allow explicit safe recovery. */
 	locked?: boolean;
@@ -51,7 +51,7 @@ export function HumanMessageEditor({
 	className,
 	actionsClassName,
 	leading,
-	trailing,
+	cloudAttachments,
 	pending,
 	locked = false,
 	recoveryLabel,
@@ -149,6 +149,15 @@ export function HumanMessageEditor({
 				style={startWidth ? { minWidth: `min(${startWidth}px, 100%)` } : undefined}
 			>
 				{leading}
+				<StagedAttachmentItems
+					paths={attachments}
+					sessionId={sessionId}
+					apiBaseUrl={apiBaseUrl}
+					ariaLabel={t("chat.attachment.list")}
+					className="mb-2"
+					onRemove={pending || locked ? undefined : removeAttachment}
+				/>
+				{cloudAttachments}
 				{/* A hidden copy of the draft sizes the field (see styles.css), so the box
 				    fits its text exactly as the bubble did and grows only with the text. */}
 				<div className="chat-human-edit-field" data-value={draft}>
@@ -169,15 +178,6 @@ export function HumanMessageEditor({
 						className="chat-composer-scrollbar w-full min-w-0 resize-none overflow-y-auto overscroll-contain bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
 					/>
 				</div>
-				<StagedAttachmentItems
-					paths={attachments}
-					sessionId={sessionId}
-					apiBaseUrl={apiBaseUrl}
-					ariaLabel={t("chat.attachment.list")}
-					className="mt-2"
-					onRemove={pending || locked ? undefined : removeAttachment}
-				/>
-				{trailing}
 				<ConversationContentItems
 					content={otherContent}
 					ariaLabel={t("chat.edit.preservedContent")}

@@ -985,7 +985,7 @@ export function HumanMessage({
 					className={humanBubbleClass()}
 					actionsClassName={editActionRowClass}
 					leading={annotationSummary}
-					trailing={<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />}
+					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1009,6 +1009,15 @@ export function HumanMessage({
 				>
 					<CollapsibleHumanBody stateKey={visibleMessageText}>
 						{annotationSummary}
+						{/* Attachments sit above the text they came with. */}
+						<StagedAttachmentItems
+							paths={attachments}
+							sessionId={sessionId}
+							apiBaseUrl={apiBaseUrl}
+							ariaLabel="Attached files"
+							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
+						/>
+						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
 						{body ? (
 							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 								<ProseWithInlineImages
@@ -1020,14 +1029,6 @@ export function HumanMessage({
 								/>
 							</p>
 						) : null}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn(body && "mt-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
 					</CollapsibleHumanBody>
 				</div>
 			)}

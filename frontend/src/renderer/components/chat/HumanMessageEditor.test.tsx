@@ -108,6 +108,8 @@ describe("HumanMessageEditor", () => {
 		// The native image block is the same picture as the image chip.
 		expect(screen.queryByText("image/png")).not.toBeInTheDocument();
 		const chips = screen.getByRole("list", { name: "Attached files" });
+		// As in the bubble, the attachments sit above the text.
+		expect(chips.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(chips.querySelector("img")).toHaveAttribute("alt", "Image 1");
 		expect(chips).toHaveTextContent("attachment-cd34.pdf");
 		expect(chips.querySelector("img")).toHaveAttribute(
