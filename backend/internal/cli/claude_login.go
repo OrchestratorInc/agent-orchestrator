@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
@@ -58,7 +59,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	case "3":
 		args = append(args, "--sso")
 	case "4":
-		return c.saveClaudeSetupToken(in, out, style)
+		return c.saveClaudeSetupToken(ctx, in, out, style)
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
@@ -70,6 +71,14 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	// itself already succeeded, so failing to clear the token is only a warning.
 	if err := clearClaudeSetupToken(); err != nil {
 		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the earlier setup token.\n", err); writeErr != nil {
+			return writeErr
+		}
+	}
+	// Likewise an Anthropic API key saved from Claude Code's AO panel, the
+	// same release the daemon's own sign-ins do. The key stays saved for
+	// other harnesses.
+	if _, err := releaseClaudeAPIKey(ctx); err != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the saved Anthropic API key.\n", err); writeErr != nil {
 			return writeErr
 		}
 	}
@@ -85,7 +94,22 @@ func clearClaudeSetupToken() error {
 	return claudecode.RemoveLocalOAuthToken(cfg.DataDir)
 }
 
-func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {
+// releaseClaudeAPIKey stops AO passing Claude Code the ANTHROPIC_API_KEY
+// saved from its own panel, which would otherwise override the sign-in just
+// completed. It returns the variable released ("" when none).
+func releaseClaudeAPIKey(ctx context.Context) (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("resolve AO data directory to switch off the saved Anthropic API key: %w", err)
+	}
+	released, err := providerkeys.ReleaseHarness(ctx, cfg.DataDir, "claude-code")
+	if err != nil {
+		return "", fmt.Errorf("switch off the saved Anthropic API key: %w", err)
+	}
+	return released, nil
+}
+
+func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader, out io.Writer, style codexLoginStyle) error {
 	if _, err := fmt.Fprintf(out, "\nRun claude setup-token in another terminal, then paste its token here.\n%s: ", style.bold("Setup token")); err != nil {
 		return err
 	}
@@ -105,7 +129,19 @@ func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style
 	if err != nil {
 		return fmt.Errorf("resolve AO data directory: %w", err)
 	}
+	// Claude Code's saved ANTHROPIC_API_KEY would keep winning over the token.
+	// Release it first and give it back if the token cannot be written, as the
+	// daemon does, so a failure leaves the previous sign-in in place.
+	released, err := providerkeys.ReleaseHarness(ctx, cfg.DataDir, "claude-code")
+	if err != nil {
+		return fmt.Errorf("switch off the saved Anthropic API key, so the setup token was not saved: %w", err)
+	}
 	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
+		if released != "" {
+			if restoreErr := providerkeys.ClaimForHarness(ctx, cfg.DataDir, released, "claude-code"); restoreErr != nil {
+				return fmt.Errorf("%w; the saved Anthropic API key could not be switched back on either: %w", err, restoreErr)
+			}
+		}
 		return err
 	}
 	if _, err := fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token.")); err != nil {

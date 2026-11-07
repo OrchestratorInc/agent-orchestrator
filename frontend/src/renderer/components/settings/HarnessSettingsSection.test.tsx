@@ -336,6 +336,23 @@ describe("HarnessSettingsSection", () => {
 		}
 	});
 
+	it("offers explicit login when authentication is unknown without showing logout", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", logoutCommand: "codex logout", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never
+			: get(path, options));
+		renderSection();
+		await userEvent.click(await findListRow("codex"));
+		const page = await findAgentRow("codex");
+		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
+		expect(within(page).queryByRole("button", { name: "Log out" })).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(await within(page).findByRole("region", { name: "Sign in to Codex" })).toBeVisible();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -1125,7 +1142,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
+		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		// Credential presence alone does not imply a failed provider check.
 		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();

@@ -151,11 +151,61 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
-// StartAgentUILoginRequest selects a fixed native login method. The optional
-// credential is passed to stdin and never returned in operation responses.
+// StartAgentUILoginRequest selects a reviewed login method. Credentials are
+// never returned in operation responses; model is required by some key flows.
 type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
+	// Device also publishes a provider key to the OS user environment.
+	Device bool `json:"device,omitempty"`
+	// Provider is the catalog provider a provider_key login configures.
+	Provider string `json:"provider,omitempty"`
+}
+
+// CatalogProviderParam names one provider in a harness's own catalog.
+type CatalogProviderParam struct {
+	Provider string `path:"provider" description:"Provider ID from the harness's catalog."`
+}
+
+// ListCatalogProvidersResponse lists the key-only providers in a harness's
+// own provider catalog.
+type ListCatalogProvidersResponse struct {
+	Providers []agentauth.CatalogProvider `json:"providers"`
+}
+
+// ListCatalogModelsResponse lists a catalog provider's model IDs.
+type ListCatalogModelsResponse struct {
+	Models []string `json:"models"`
+}
+
+// ProviderKeyNameParam names one reviewed provider environment variable.
+type ProviderKeyNameParam struct {
+	Name string `path:"name" description:"Provider environment variable, such as ANTHROPIC_API_KEY."`
+}
+
+// ListProviderKeysResponse lists display-safe provider key state.
+type ListProviderKeysResponse struct {
+	Keys []agentauth.ProviderKey `json:"keys"`
+}
+
+// SaveProviderKeyRequest stores a key, or keeps the saved one when secret is
+// omitted, and sets whether it is published to the OS user environment.
+type SaveProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+	Device bool   `json:"device"`
+}
+
+// CheckProviderKeyRequest checks secret, or the saved key when omitted.
+type CheckProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+}
+
+// AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9
+// for a recognized numbered native login menu. It never carries terminal
+// bytes or credentials.
+type AgentLoginActionRequest struct {
+	Action string `json:"action" enum:"previous,next,select,1,2,3,4,5,6,7,8,9"`
 }
 
 // SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.

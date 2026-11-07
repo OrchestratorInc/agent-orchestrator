@@ -21,11 +21,13 @@ describe("requestAgentLogin", () => {
 		await requestAgentLogin({ action: "cancel", agentId: "codex", operationId: "op-1" }, 3002, fetchImpl);
 		await requestAgentLogin({ action: "code", agentId: "claude-code", operationId: "op-1", code: "abc#state" }, 3002, fetchImpl);
 		await requestAgentLogin({ action: "start", agentId: "codex", method: "api_key", secret: "test-secret" }, 3002, fetchImpl);
+		await requestAgentLogin({ action: "start", agentId: "openhands", method: "env_LLM_API_KEY", secret: "test-key", model: "anthropic/claude-sonnet-4-5" }, 3002, fetchImpl);
 		expect(fetchImpl.mock.calls.map(([url, init]) => [init?.method, url, init?.body])).toEqual([
 			["GET", "http://127.0.0.1:3002/api/v1/agents/codex/auth/operations/op-1", undefined],
 			["DELETE", "http://127.0.0.1:3002/api/v1/agents/codex/auth/operations/op-1", undefined],
 			["POST", "http://127.0.0.1:3002/api/v1/agents/claude-code/auth/operations/op-1/code", JSON.stringify({ code: "abc#state" })],
 			["POST", "http://127.0.0.1:3002/api/v1/agents/codex/auth/operations", JSON.stringify({ method: "api_key", secret: "test-secret" })],
+			["POST", "http://127.0.0.1:3002/api/v1/agents/openhands/auth/operations", JSON.stringify({ method: "env_LLM_API_KEY", secret: "test-key", model: "anthropic/claude-sonnet-4-5" })],
 		]);
 	});
 
@@ -48,6 +50,8 @@ describe("parseAgentLoginRequest", () => {
 		expect(() => parseAgentLoginRequest(null)).toThrow("Invalid agent.");
 		expect(() => parseAgentLoginRequest({ action: "start", agentId: "../projects", method: "browser" })).toThrow("Invalid agent.");
 		expect(() => parseAgentLoginRequest({ action: "start", agentId: "codex", method: "browser/../x" })).toThrow("Invalid sign-in method.");
+		expect(() => parseAgentLoginRequest({ action: "start", agentId: "openhands", method: "env_LLM_API_KEY", model: "bad\nmodel" })).toThrow("Invalid model.");
+		expect(() => parseAgentLoginRequest({ action: "start", agentId: "openhands", method: "env_LLM_API_KEY", model: "x".repeat(257) })).toThrow("Invalid model.");
 		expect(() => parseAgentLoginRequest({ action: "get", agentId: "codex", operationId: "a/b" })).toThrow("Invalid sign-in operation.");
 		expect(() => parseAgentLoginRequest({ action: "code", agentId: "codex", operationId: "op-1", code: "x".repeat(4097) })).toThrow("Invalid sign-in code.");
 		expect(() => parseAgentLoginRequest({ action: "delete-all", agentId: "codex", operationId: "op-1" })).toThrow("Invalid sign-in action.");
