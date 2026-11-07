@@ -32,8 +32,13 @@ type earlyFlushHarness struct {
 
 func newEarlyFlushHarness(now time.Time) *earlyFlushHarness {
 	h := &earlyFlushHarness{now: now, store: newCoordinatorStore(now), delivery: &coordinatorDelivery{}}
-	h.c = NewCoordinator(CoordinatorDeps{Store: h.store, Delivery: h.delivery, Now: func() time.Time { return h.now }, RetryDelay: time.Second})
+	h.restart()
 	return h
+}
+
+// restart replaces the coordinator, dropping its in-memory early-flush holds.
+func (h *earlyFlushHarness) restart() {
+	h.c = NewCoordinator(CoordinatorDeps{Store: h.store, Delivery: h.delivery, Now: func() time.Time { return h.now }, RetryDelay: time.Second})
 }
 
 func (h *earlyFlushHarness) run(t *testing.T) time.Duration {
@@ -327,5 +332,34 @@ func TestCoordinatorDueDeliveryDoesNotHoldSeparateDoneBatch(t *testing.T) {
 	got := h.delivery.submitted()
 	if len(got) != 2 || !strings.Contains(got[0].message, "a progress") || !strings.Contains(got[1].message, "a finished") {
 		t.Fatalf("submissions = %#v, want the due batch, then the done batch", got)
+	}
+}
+
+func TestCoordinatorEarlyFlushKeepsDeferredBatchScheduleAfterRestart(t *testing.T) {
+	start := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	h.delivery.submitErrFor = map[domain.SessionID]error{"orch": ErrOrchestratorBusy}
+	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)), earlyWorker("b", domain.ActivityIdle, start.Add(-time.Hour)))
+	h.store.add(reportAt("checkpoint-b", "b", start, start, "b progress"))
+	if delay := h.run(t); delay != OrchestratorBusyRetry || h.delivery.attempts != 1 {
+		t.Fatalf("busy delay = %v, attempts = %d; want the checkpoint batch deferred", delay, h.delivery.attempts)
+	}
+
+	// A separate done batch becomes eligible while the checkpoint batch waits
+	// for its retry time, and the restart drops the in-memory hold.
+	h.delivery.submitErrFor = nil
+	h.store.add(doneAt("done-a", "a", start, "a finished"))
+	h.restart()
+	h.now = start.Add(domain.ReportEarlyFlushDebounce)
+	if delay := h.run(t); delay != OrchestratorBusyRetry-domain.ReportEarlyFlushDebounce || h.delivery.attempts != 1 {
+		t.Fatalf("delay = %v, attempts = %d; want no attempt before the checkpoint's retry time", delay, h.delivery.attempts)
+	}
+	h.now = start.Add(OrchestratorBusyRetry)
+	if delay := h.run(t); delay != -1 {
+		t.Fatalf("delay = %v, want idle after both batches", delay)
+	}
+	got := h.delivery.submitted()
+	if len(got) != 2 || !strings.Contains(got[0].message, "b progress") || !strings.Contains(got[1].message, "a finished") {
+		t.Fatalf("submissions = %#v, want the checkpoint batch at its retry time, then the done batch", got)
 	}
 }

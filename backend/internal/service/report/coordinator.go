@@ -37,7 +37,7 @@ type DeliveryStore interface {
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
-	ListPendingDoneReports(context.Context) ([]domain.ReportRecord, error)
+	ListPendingReportsOfDoneProjects(context.Context) ([]domain.ReportRecord, error)
 	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
@@ -191,13 +191,13 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 // among projects that only wait for time. Projects whose other workers are
 // still working wait for an activity wake or the deadline.
 func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain.ProjectID, time.Duration, error) {
-	dones, err := c.store.ListPendingDoneReports(ctx)
+	pending, err := c.store.ListPendingReportsOfDoneProjects(ctx)
 	if err != nil {
 		return "", 0, err
 	}
 	var projects []domain.ProjectID
 	byProject := map[domain.ProjectID][]domain.ReportRecord{}
-	for _, report := range dones {
+	for _, report := range pending {
 		if _, seen := byProject[report.ProjectID]; !seen {
 			projects = append(projects, report.ProjectID)
 		}
@@ -210,6 +210,11 @@ func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain
 	}
 	var wait time.Duration
 	for _, projectID := range projects {
+		if !claimsDone(byProject[projectID]) {
+			// The next claim would take another batch first, for example one
+			// deferred until a retry time. It goes out when it is due.
+			continue
+		}
 		flushAt, ok, err := c.earlyFlushAt(ctx, projectID, byProject[projectID])
 		if err != nil {
 			return "", 0, err
@@ -230,13 +235,25 @@ func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain
 	return "", wait, nil
 }
 
+// claimsDone reports whether the next claim for a project takes a done report.
+// pending holds the project's pending reports in claim order: the first one
+// names the batch a claim takes, and unbatched reports join a new batch.
+func claimsDone(pending []domain.ReportRecord) bool {
+	for _, report := range pending {
+		if report.DeliveryBatchID == pending[0].DeliveryBatchID && report.State == domain.ReportDone {
+			return true
+		}
+	}
+	return false
+}
+
 // earlyFlushAt reports when a project's pending done batch may flush early.
 // It may not while another worker is still working: a live worker session
 // whose activity is active and that has not itself reported done. Idle,
 // waiting, blocked, exited, and terminated workers, reviewers (which are not
 // sessions), and orchestrators never hold a batch. Without an active
 // orchestrator the batch keeps its deadline, so no retry loop starts early.
-func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.ProjectID, dones []domain.ReportRecord) (time.Time, bool, error) {
+func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.ProjectID, pending []domain.ReportRecord) (time.Time, bool, error) {
 	recs, err := c.store.ListSessions(ctx, projectID)
 	if err != nil {
 		return time.Time{}, false, err
@@ -246,7 +263,10 @@ func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.Project
 	}
 	reporters := map[domain.SessionID]bool{}
 	var settled time.Time
-	for _, report := range dones {
+	for _, report := range pending {
+		if report.State != domain.ReportDone {
+			continue
+		}
 		reporters[report.SessionID] = true
 		if report.CreatedAt.After(settled) {
 			settled = report.CreatedAt

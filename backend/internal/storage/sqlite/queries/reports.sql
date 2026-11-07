@@ -40,10 +40,12 @@ WHERE project_id = ? AND delivery_state = 'pending'
 ORDER BY available_at, created_at, id
 LIMIT ?;
 
--- name: ListPendingDoneReports :many
+-- name: ListPendingReportsOfDoneProjects :many
 SELECT * FROM reports
-WHERE delivery_state = 'pending' AND state = 'done'
-ORDER BY project_id, created_at, id;
+WHERE delivery_state = 'pending' AND project_id IN (
+  SELECT project_id FROM reports WHERE delivery_state = 'pending' AND state = 'done'
+)
+ORDER BY project_id, available_at, created_at, id;
 
 -- name: AssignPendingReportsToBatch :exec
 UPDATE reports

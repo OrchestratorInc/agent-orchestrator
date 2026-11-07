@@ -275,7 +275,7 @@ func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
 	}
 }
 
-func TestReportStoreListsPendingDoneReportsBeforeTheirDeadline(t *testing.T) {
+func TestReportStoreListsPendingReportsOfDoneProjects(t *testing.T) {
 	ctx := context.Background()
 	s, err := sqlite.Open(t.TempDir())
 	if err != nil {
@@ -298,14 +298,22 @@ func TestReportStoreListsPendingDoneReportsBeforeTheirDeadline(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	done, err := s.ListPendingDoneReports(ctx)
-	if err != nil || len(done) != 1 || done[0].ID != "rpt_done" || done[0].SessionID != sess.ID {
-		t.Fatalf("pending done=%+v err=%v", done, err)
+	seedProject(t, s, "other")
+	other, err := s.CreateSession(ctx, sampleRecord("other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateReport(ctx, domain.ReportRecord{ID: "rpt_other", SessionID: other.ID, ProjectID: other.ProjectID, State: domain.ReportCheckpoint, Note: "other progress", CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	done, err := s.ListPendingReportsOfDoneProjects(ctx)
+	if err != nil || len(done) != 2 || done[0].ID != "rpt_done" || done[1].ID != "rpt_checkpoint" || done[0].SessionID != sess.ID {
+		t.Fatalf("pending reports of done projects=%+v err=%v", done, err)
 	}
 	if _, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "token", now); err != nil {
 		t.Fatal(err)
 	}
-	if done, err = s.ListPendingDoneReports(ctx); err != nil || len(done) != 0 {
+	if done, err = s.ListPendingReportsOfDoneProjects(ctx); err != nil || len(done) != 0 {
 		t.Fatalf("claimed done still pending=%+v err=%v", done, err)
 	}
 }

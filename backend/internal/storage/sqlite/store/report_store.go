@@ -129,13 +129,14 @@ func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]d
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ListPendingDoneReports returns every pending done report regardless of its
-// settlement deadline so the coordinator can flush a batch early once the
-// project's other workers have stopped.
-func (s *Store) ListPendingDoneReports(ctx context.Context) ([]domain.ReportRecord, error) {
-	rows, err := s.qr.ListPendingDoneReports(ctx)
+// ListPendingReportsOfDoneProjects returns every pending report of each project
+// that has a pending done report, regardless of its settlement deadline, in
+// claim order per project. The coordinator uses it to flush a done batch early
+// once the project's other workers have stopped.
+func (s *Store) ListPendingReportsOfDoneProjects(ctx context.Context) ([]domain.ReportRecord, error) {
+	rows, err := s.qr.ListPendingReportsOfDoneProjects(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list pending done reports: %w", err)
+		return nil, fmt.Errorf("list pending reports of done projects: %w", err)
 	}
 	out := make([]domain.ReportRecord, 0, len(rows))
 	for _, row := range rows {

@@ -408,53 +408,6 @@ func (q *Queries) GetReportInterrupt(ctx context.Context, sessionID string) (tim
 	return last_interrupted_at, err
 }
 
-const listPendingDoneReports = `-- name: ListPendingDoneReports :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
-WHERE delivery_state = 'pending' AND state = 'done'
-ORDER BY project_id, created_at, id
-`
-
-func (q *Queries) ListPendingDoneReports(ctx context.Context) ([]Report, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingDoneReports)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Report{}
-	for rows.Next() {
-		var i Report
-		if err := rows.Scan(
-			&i.ID,
-			&i.SessionID,
-			&i.ProjectID,
-			&i.State,
-			&i.Note,
-			&i.Message,
-			&i.CreatedAt,
-			&i.DeliveryState,
-			&i.AvailableAt,
-			&i.SettlementDeadline,
-			&i.RepeatCount,
-			&i.ClaimToken,
-			&i.ClaimedAt,
-			&i.DeliveryAttempts,
-			&i.AcknowledgedAt,
-			&i.LastError,
-			&i.DeliveryBatchID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listPendingReportSchedule = `-- name: ListPendingReportSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
 WHERE delivery_state = 'pending'
@@ -570,6 +523,55 @@ type ListPendingReportsByProjectScheduleParams struct {
 
 func (q *Queries) ListPendingReportsByProjectSchedule(ctx context.Context, arg ListPendingReportsByProjectScheduleParams) ([]Report, error) {
 	rows, err := q.db.QueryContext(ctx, listPendingReportsByProjectSchedule, arg.ProjectID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Report{}
+	for rows.Next() {
+		var i Report
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.State,
+			&i.Note,
+			&i.Message,
+			&i.CreatedAt,
+			&i.DeliveryState,
+			&i.AvailableAt,
+			&i.SettlementDeadline,
+			&i.RepeatCount,
+			&i.ClaimToken,
+			&i.ClaimedAt,
+			&i.DeliveryAttempts,
+			&i.AcknowledgedAt,
+			&i.LastError,
+			&i.DeliveryBatchID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingReportsOfDoneProjects = `-- name: ListPendingReportsOfDoneProjects :many
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
+WHERE delivery_state = 'pending' AND project_id IN (
+  SELECT project_id FROM reports WHERE delivery_state = 'pending' AND state = 'done'
+)
+ORDER BY project_id, available_at, created_at, id
+`
+
+func (q *Queries) ListPendingReportsOfDoneProjects(ctx context.Context) ([]Report, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingReportsOfDoneProjects)
 	if err != nil {
 		return nil, err
 	}

@@ -330,34 +330,47 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 	}
 	return pending, nil
 }
-func (s *coordinatorStore) ListPendingDoneReports(context.Context) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ListPendingReportsOfDoneProjects(context.Context) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var pending []domain.ReportRecord
+	done := map[domain.ProjectID]bool{}
 	for _, rec := range s.reports {
 		if rec.DeliveryState == domain.ReportPending && rec.State == domain.ReportDone {
+			done[rec.ProjectID] = true
+		}
+	}
+	var pending []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.DeliveryState == domain.ReportPending && done[rec.ProjectID] {
 			pending = append(pending, rec)
 		}
 	}
+	sortReports(pending)
 	return pending, nil
 }
 func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	batchID := ""
-	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			batchID = s.reports[i].DeliveryBatchID
-			if batchID == "" {
-				batchID = "report-batch:" + s.reports[i].ID
-			}
-			break
+	// Like the store: the project's earliest scheduled report names the batch,
+	// and unbatched reports join it only when that report is unbatched too.
+	var scheduled []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.ProjectID == project && rec.DeliveryState == domain.ReportPending {
+			scheduled = append(scheduled, rec)
 		}
+	}
+	if len(scheduled) == 0 {
+		return nil, nil
+	}
+	sortReports(scheduled)
+	batchID := scheduled[0].DeliveryBatchID
+	if batchID == "" {
+		batchID = "report-batch:" + scheduled[0].ID
 	}
 	var claimed []domain.ReportRecord
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			if s.reports[i].DeliveryBatchID != "" && s.reports[i].DeliveryBatchID != batchID {
+			if s.reports[i].DeliveryBatchID != batchID && (s.reports[i].DeliveryBatchID != "" || scheduled[0].DeliveryBatchID != "") {
 				continue
 			}
 			s.reports[i].DeliveryBatchID = batchID
