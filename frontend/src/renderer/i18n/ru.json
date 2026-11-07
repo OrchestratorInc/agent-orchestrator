@@ -3983,6 +3983,7 @@
 	"share.people.idle": "бездействует",
 	"board.shared.working": "{{name}} работает",
 	"newTask.cloudConfiguredDefault": "По умолчанию для проекта или агента",
+	"newTask.sameAsOrchestrator": "Как у оркестратора",
 	"newTask.cloudCredentialModels": "Из списка моделей подключённого провайдера",
 	"newTask.cloudLegacyModels": "Этот сервер Cloud не может предоставить список моделей. Эти варианты взяты с вашего компьютера и могут не работать в Cloud.",
 	"newTask.cloudModelsCatalog": "Модели для {{agent}} в Cloud",
