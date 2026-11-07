@@ -6,6 +6,12 @@ export const COMPANY = {
   CHANGELOG_URL: "https://orchestrator.inc/changelog",
   DOWNLOAD_URL: "https://orchestrator.inc/download",
   DISCORD_URL: "https://discord.com/invite/UZv7JjxbwG",
+  X_URL: "https://x.com/useOrchestrator",
+  PRIVACY_URL: "https://orchestrator.inc/privacy/",
+  REFUNDS_URL: "https://orchestrator.inc/refunds/",
+  SUPPORT_URL: "https://orchestrator.inc/support/",
+  LICENSE_URL: "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/LICENSE",
+  LEGAL_NAME: "Untrivial, Inc.",
 } as const;
 
 /** The labels a docs problem report gets on GitHub. */

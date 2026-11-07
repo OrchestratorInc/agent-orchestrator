@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "智能体"
 
+msgid "Apache-2.0 License"
+msgstr "Apache-2.0 许可证"
+
 msgid "Back to the docs home"
 msgstr "返回文档首页"
+
+msgid "Breadcrumb"
+msgstr "面包屑导航"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "关闭侧边栏"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "收起侧边栏"
+
+msgid "Community"
+msgstr "社区"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "隐藏侧边栏"
 msgid "Installation"
 msgstr "安装"
 
+msgid "Last updated {formatted}"
+msgstr "最后更新于 {formatted}"
+
+msgid "Legal"
+msgstr "法律信息"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "下一页"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "上一页"
 
+msgid "Privacy"
+msgstr "隐私"
+
+msgid "Product"
+msgstr "产品"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "阅读 {markdownUrl}，并回答我关于它的问题。"
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "参考"
+
+msgid "Refunds & Cancellations"
+msgstr "退款与取消"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "此页面有错误或遗漏吗？"
 
 msgid "Suggest a change"
 msgstr "建议修改"
+
+msgid "Support & Contact"
+msgstr "支持与联系"
 
 msgctxt "table of contents"
 msgid "Table of contents"

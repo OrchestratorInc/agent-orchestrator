@@ -7,6 +7,7 @@ import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import { type ReactNode, useMemo } from "react";
 import { navLabel } from "@/i18n/ui-messages";
 import { baseOptions } from "@/lib/layout.shared";
+import { SiteFooter } from "./site-footer";
 
 type Node = PageTree.Root["children"][number];
 
@@ -51,6 +52,7 @@ export function LocalizedDocsLayout({
   return (
     <DocsLayout tree={localizedTree} {...baseOptions(i18n, homeUrl)}>
       {children}
+      <SiteFooter homeUrl={homeUrl} />
     </DocsLayout>
   );
 }

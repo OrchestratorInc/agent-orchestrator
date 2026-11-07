@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "Agents"
 
+msgid "Apache-2.0 License"
+msgstr "Apache-2.0-licentie"
+
 msgid "Back to the docs home"
 msgstr "Terug naar de startpagina van de documentatie"
+
+msgid "Breadcrumb"
+msgstr "Kruimelpad"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "Zijbalk sluiten"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "Zijbalk samenvouwen"
+
+msgid "Community"
+msgstr "Community"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "Zijbalk verbergen"
 msgid "Installation"
 msgstr "Installatie"
 
+msgid "Last updated {formatted}"
+msgstr "Laatst bijgewerkt op {formatted}"
+
+msgid "Legal"
+msgstr "Juridisch"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "Volgende"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "Vorige"
 
+msgid "Privacy"
+msgstr "Privacy"
+
+msgid "Product"
+msgstr "Product"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "Lees {markdownUrl} en beantwoord mijn vragen erover."
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "Naslag"
+
+msgid "Refunds & Cancellations"
+msgstr "Terugbetalingen en annuleringen"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "Klopt er iets niet of ontbreekt er iets op deze pagina?"
 
 msgid "Suggest a change"
 msgstr "Wijziging voorstellen"
+
+msgid "Support & Contact"
+msgstr "Support en contact"
 
 msgctxt "table of contents"
 msgid "Table of contents"

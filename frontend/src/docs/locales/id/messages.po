@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "Agen"
 
+msgid "Apache-2.0 License"
+msgstr "Lisensi Apache-2.0"
+
 msgid "Back to the docs home"
 msgstr "Kembali ke beranda dokumentasi"
+
+msgid "Breadcrumb"
+msgstr "Breadcrumb"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "Tutup bilah samping"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "Ciutkan bilah samping"
+
+msgid "Community"
+msgstr "Komunitas"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "Sembunyikan bilah samping"
 msgid "Installation"
 msgstr "Instalasi"
 
+msgid "Last updated {formatted}"
+msgstr "Terakhir diperbarui {formatted}"
+
+msgid "Legal"
+msgstr "Legal"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "Berikutnya"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "Sebelumnya"
 
+msgid "Privacy"
+msgstr "Privasi"
+
+msgid "Product"
+msgstr "Produk"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "Baca {markdownUrl} lalu jawab pertanyaan saya tentang halaman itu."
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "Referensi"
+
+msgid "Refunds & Cancellations"
+msgstr "Pengembalian Dana & Pembatalan"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "Ada yang salah atau kurang di halaman ini?"
 
 msgid "Suggest a change"
 msgstr "Sarankan perubahan"
+
+msgid "Support & Contact"
+msgstr "Dukungan & Kontak"
 
 msgctxt "table of contents"
 msgid "Table of contents"

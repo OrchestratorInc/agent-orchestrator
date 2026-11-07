@@ -20,8 +20,14 @@ msgctxt "sidebar section"
 msgid "Agents"
 msgstr "エージェント"
 
+msgid "Apache-2.0 License"
+msgstr "Apache-2.0 ライセンス"
+
 msgid "Back to the docs home"
 msgstr "ドキュメントのトップへ戻る"
+
+msgid "Breadcrumb"
+msgstr "パンくずリスト"
 
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
@@ -45,6 +51,9 @@ msgstr "サイドバーを閉じる"
 msgctxt "sidebar"
 msgid "Collapse sidebar"
 msgstr "サイドバーを折りたたむ"
+
+msgid "Community"
+msgstr "コミュニティ"
 
 msgctxt "sidebar section"
 msgid "Configuration"
@@ -100,6 +109,12 @@ msgstr "サイドバーを隠す"
 msgid "Installation"
 msgstr "インストール"
 
+msgid "Last updated {formatted}"
+msgstr "最終更新日: {formatted}"
+
+msgid "Legal"
+msgstr "法的情報"
+
 msgctxt "pagination"
 msgid "Next"
 msgstr "次へ"
@@ -144,12 +159,21 @@ msgctxt "pagination"
 msgid "Previous"
 msgstr "前へ"
 
+msgid "Privacy"
+msgstr "プライバシー"
+
+msgid "Product"
+msgstr "製品"
+
 msgid "Read {markdownUrl} and answer my questions about it."
 msgstr "{markdownUrl} を読んで、この内容についての質問に答えてください。"
 
 msgctxt "sidebar section"
 msgid "Reference"
 msgstr "リファレンス"
+
+msgid "Refunds & Cancellations"
+msgstr "返金とキャンセル"
 
 msgctxt "sidebar section"
 msgid "Runtimes"
@@ -168,6 +192,9 @@ msgstr "このページに誤りや不足がありますか？"
 
 msgid "Suggest a change"
 msgstr "変更を提案"
+
+msgid "Support & Contact"
+msgstr "サポートとお問い合わせ"
 
 msgctxt "table of contents"
 msgid "Table of contents"
