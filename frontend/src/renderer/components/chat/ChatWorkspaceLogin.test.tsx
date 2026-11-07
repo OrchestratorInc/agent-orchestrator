@@ -81,6 +81,8 @@ describe("ChatWorkspace refused login", () => {
 		expect(screen.queryByText("The agent ran into a problem")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Log in again" })).toBeNull();
+		// The agent did no work on it, so nothing says it worked for a second.
+		expect(document.querySelector("[data-turn-worked]")).toBeNull();
 	});
 
 	it("opens the Harness page on the login, then sends the message again once it takes", async () => {
@@ -102,9 +104,65 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).toHaveBeenCalledOnce();
 		expect(retry).toHaveBeenCalledWith("turn-1");
-		// Kept until the message's copy appears, so a send that fails still knows the user is in.
+		// Settled rather than cleared, so a send that fails still knows the user is in.
 		expect(useUiStore.getState().loginReturn?.settled).toBe(true);
 		// In again, so the chat box is open again.
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
+	});
+
+	it("says it is sending from the moment it sends the message again, with nothing to click twice", async () => {
+		// The send is on its way, and the retry has not reported pending yet.
+		const retry = vi.fn(() => new Promise<never>(() => {}));
+		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+
+		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		await act(async () => {});
+
+		expect(retry).toHaveBeenCalledOnce();
+		expect(band()).toHaveAttribute("data-login-state", "sending");
+		expect(band()).toHaveTextContent("Logged in to Claude Code · sending your message");
+		expect(within(band()).queryByRole("button", { name: "Send again" })).toBeNull();
+	});
+
+	it("offers Send again while it waits, for a login finished somewhere this chat does not watch", async () => {
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+		act(() => useUiStore.getState().closeSettings());
+
+		// Logged in from a terminal, say: the Harness page never sees it.
+		expect(band()).toHaveAttribute("data-login-state", "waiting");
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledOnce();
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("opens the chat box once the daemon finds the login working again, however it came back", async () => {
+		const retry = vi.fn();
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const refusedAt = Date.parse(snapshot.turns[0]!.completedAt!);
+		// A sign-in the daemon saw before the refusal says nothing about it.
+		const before = { ...snapshot, account: { authenticationState: "authenticated" as const, authVerifiedAt: new Date(refusedAt - 60_000).toISOString() } };
+		const { rerender } = render(<ChatWorkspace snapshot={before} retryControl={{ retry }} />);
+		expect(band()).toHaveAttribute("data-login-state", "signedOut");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-readonly", "true");
+
+		const after = { ...snapshot, account: { authenticationState: "authenticated" as const, authVerifiedAt: new Date(refusedAt + 60_000).toISOString() } };
+		rerender(<ChatWorkspace snapshot={after} retryControl={{ retry }} />);
+
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
+		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
+		// Nothing watched this login take, so the message waits for the user's click.
+		expect(retry).not.toHaveBeenCalled();
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("leaves the chat box open when nothing could send the message again", () => {
+		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} />);
+
+		expect(band()).toBeInTheDocument();
 		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
 	});
 
@@ -192,14 +250,31 @@ describe("ChatWorkspace refused login", () => {
 		// The user sent it again by hand while Settings was open, and it was answered.
 		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", state: "completed", failureCode: undefined, errorMessage: undefined }];
 		snapshot.items = [prompt, { ...prompt, id: "user-2", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt];
-		act(() => useUiStore.setState({ loginReturn: { sessionId: snapshot.sessionId, agentId: "claude-code" } }));
+		act(() => {
+			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", startLogin: true });
+			useUiStore.setState({ loginReturn: { sessionId: snapshot.sessionId, agentId: "claude-code" } });
+		});
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
 		expect(screen.queryByTestId("login-band")).toBeNull();
 
 		// The login still brings the user back, and then nothing waits on it.
 		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).not.toHaveBeenCalled();
+		expect(useUiStore.getState().loginReturn).toBeNull();
+	});
+
+	it("forgets the banner's login once settings close without it", async () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		snapshot.turns = [{ ...snapshot.turns[0]!, failureCode: undefined, errorMessage: "Failed to authenticate: OAuth session expired and could not be refreshed" }];
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(useUiStore.getState().loginReturn).not.toBeNull();
+
+		// Given up: a later refusal starts signed out, not waiting on this login.
+		act(() => useUiStore.getState().closeSettings());
 		expect(useUiStore.getState().loginReturn).toBeNull();
 	});
 

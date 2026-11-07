@@ -5106,7 +5106,8 @@ const TurnGroup = memo(function TurnGroup({
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
 	const showsWorked = Boolean(
-		outcome && !quietReply && !onlyRead && (foldedRuns.length > 0 || workedDurationMs !== undefined),
+		// A message refused for its login did no work, so it gets no "Worked for".
+		outcome && !quietReply && !onlyRead && !loginNoteMessageId && (foldedRuns.length > 0 || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -5316,8 +5317,6 @@ function TimelineItem({
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
-	/** This message is the live edge of its turn, rather than an earlier fragment
-	 * followed by tool activity. */
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
 }) {
@@ -5716,10 +5715,14 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 	);
 }
 
-/** The turn ran a tool or changed a file, so sending it again could repeat that. */
-function turnDidWork(snapshot: ConversationSnapshot, turnId: string): boolean {
-	return Boolean(snapshot.turns.find((entry) => entry.id === turnId)?.diff?.files.length) ||
-		snapshot.items.some((item) => item.turnId === turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind));
+/** The turns that ran a tool or changed a file, so sending one again could repeat that. */
+function turnsThatDidWork(snapshot: ConversationSnapshot): Set<string> {
+	const turnIds = new Set<string>();
+	for (const turn of snapshot.turns) if (turn.diff?.files.length) turnIds.add(turn.id);
+	for (const item of snapshot.items) {
+		if (item.turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)) turnIds.add(item.turnId);
+	}
+	return turnIds;
 }
 
 /**
@@ -5738,11 +5741,20 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	newWorkDisabled: boolean;
 }): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean; logIn: () => void } {
 	const retryable = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
+	const workedTurnIds = useMemo(() => turnsThatDidWork(snapshot), [snapshot]);
 	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
-	// Switching the chat to another agent leaves this agent's login behind.
-	const switchedAway = Boolean(latest) && snapshot.items.some((item) => item.kind === "activity" &&
-		item.detail?.event === "provider_switch" &&
-		snapshot.items.every((own) => own.turnId !== latest!.id || own.sequence < item.sequence));
+	// Switching the chat to another agent leaves this agent's login behind: a switch
+	// after the latest turn's last item.
+	const switchedAway = useMemo(() => {
+		if (!latest) return false;
+		let lastSwitch = -Infinity;
+		let latestEnd = -Infinity;
+		for (const item of snapshot.items) {
+			if (item.kind === "activity" && item.detail?.event === "provider_switch") lastSwitch = Math.max(lastSwitch, item.sequence);
+			if (item.turnId === latest.id) latestEnd = Math.max(latestEnd, item.sequence);
+		}
+		return lastSwitch > latestEnd;
+	}, [latest, snapshot.items]);
 	const refused = latest?.state === "failed" && latest.failureCode === "auth_required" && !switchedAway &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latest.id)
 		? latest
@@ -5753,25 +5765,37 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	// once the login takes: there is nothing it could do twice. Any other, and every
 	// cloud one (the cloud connection's login is not watched from here), is the
 	// user's to send again.
-	const queued = resendable && !cloud && !turnDidWork(snapshot, refusedId!);
+	const queued = resendable && !cloud && !workedTurnIds.has(refusedId!);
+	// The daemon found this session's login working again after the refusal, however
+	// it came back (a login in a terminal, a token that refreshed): the user is in.
+	const account = snapshot.account;
+	const loginConfirmed = Boolean(refused?.completedAt && account?.authenticationState === "authenticated" &&
+		account.authVerifiedAt && Date.parse(account.authVerifiedAt) >= Date.parse(refused.completedAt));
 	// Only a login for the account this session runs on fixes it.
 	const provider = agentAccountProviderFor(snapshot.harness);
 	const stored = useUiStore((state) => state.loginReturn);
 	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
-	const sending = Boolean(refusedId && retryControl?.pending && forRefused(retryControl.turnId));
-	// Sending it again after the login was refused (the daemon or the network):
-	// the user is in, so the band says what failed and offers it once more.
-	const sendError = refusedId && loginReturn?.loggedInAt !== undefined && forRefused(retryControl?.turnId)
+	// Sending it again was refused (the daemon or the network) while the band offered
+	// it: the band says what failed and offers it once more.
+	const sendError = refusedId && (loginReturn || loginConfirmed) && forRefused(retryControl?.turnId)
 		? retryControl?.error
 		: undefined;
+	// The message this chat sends again on its own, from the moment it starts until
+	// that send settles: the retry's own pending state shows a render later, and the
+	// band must not offer Send again for a message already on its way.
+	const [autoSending, setAutoSending] = useState<string>();
+	const sending = Boolean(refusedId && (
+		(retryControl?.pending && forRefused(retryControl.turnId)) || (autoSending === refusedId && !sendError)));
 	const state: ChatLoginBandProps["state"] = sending
 		? "sending"
 		: sendError
 			? "failed"
 			: loginReturn?.loggedInAt !== undefined
 				? loginReturn.settled ? "loggedIn" : "sending"
-				: loginReturn ? "waiting" : "signedOut";
+				: loginConfirmed ? "loggedIn"
+					: loginReturn ? "waiting" : "signedOut";
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const sendAgain = useStableCallback(() => {
 		if (refusedId) void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
@@ -5801,9 +5825,10 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 		const ui = useUiStore.getState();
 		// No refused message to send (it was sent again, the chat moved past it, or the
 		// login was started from the banner): the login still brings the user back,
-		// and then nothing more waits on it.
+		// and then nothing more waits on it. Settings closed without a login drops it
+		// too, so a later refusal starts signed out rather than waiting.
 		if (!refusedId) {
-			if (loginReturn.loggedInAt !== undefined) ui.clearLoginReturn(snapshot.sessionId);
+			if (loginReturn.loggedInAt !== undefined || !settingsOpen) ui.clearLoginReturn(snapshot.sessionId);
 			return;
 		}
 		if (loginReturn.loggedInAt === undefined || loginReturn.settled) return;
@@ -5813,11 +5838,14 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 			ui.settleLoginReturn(snapshot.sessionId);
 			return;
 		}
-		// Kept until the message's copy appears, so a send that fails still knows
-		// the user is in.
+		// Settled, not cleared, so a send that fails still knows the user is in. The
+		// band says it is sending from now on, not only once the retry reports pending.
 		ui.settleLoginReturn(snapshot.sessionId);
-		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
-	}, [loginReturn, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, snapshot]);
+		setAutoSending(refusedId);
+		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined).finally(() => {
+			setAutoSending((current) => current === refusedId ? undefined : current);
+		});
+	}, [loginReturn, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, settingsOpen, snapshot]);
 	const lines = useMemo(() => {
 		const map = new Map<string, TurnOutcomeLogin>();
 		for (const turn of snapshot.turns) {
@@ -5830,17 +5858,19 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 							: state === "signedOut" ? "queued"
 								// In, but it was not sent: the band offers Send again.
 								: "stopped";
-			map.set(turn.id, { status, align: turnDidWork(snapshot, turn.id) ? "start" : "end" });
+			map.set(turn.id, { status, align: workedTurnIds.has(turn.id) ? "start" : "end" });
 		}
 		return map;
-	}, [queued, refusedId, snapshot, state]);
+	}, [queued, refusedId, snapshot.turns, state, workedTurnIds]);
 	return {
 		lines,
 		logIn,
-		// Until the login takes (or the chat moves to another agent), nothing new can
-		// be sent: the agent would refuse it the same way. A cloud login is not watched
-		// from here, so nothing would ever unlock it: a cloud chat stays open.
-		locked: Boolean(refused) && !cloud && (state === "signedOut" || state === "waiting"),
+		// Until the login takes, the daemon finds it working again, or the chat moves to
+		// another agent, nothing new can be sent: the agent would refuse it the same way.
+		// Only when the message can be sent again: the waiting band offers that, so a
+		// login finished where this chat does not look always has a way on. A cloud
+		// login is not watched from here, so a cloud chat stays open.
+		locked: Boolean(refused) && !cloud && resendable && (state === "signedOut" || state === "waiting"),
 		...(refused ? {
 			band: {
 				harness: snapshot.harness,
@@ -5849,8 +5879,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				state,
 				queued,
 				onLogin: logIn,
-				// Offered once the user is in, also for a message that did work: sending
-				// it again is the user's click, never automatic.
+				// Offered while the login is pending and once the user is in, also for a
+				// message that did work: sending it again is the user's click, never automatic.
 				...(resendable ? { onSendAgain: sendAgain } : {}),
 				...(sendError ? { error: sendError } : {}),
 			},

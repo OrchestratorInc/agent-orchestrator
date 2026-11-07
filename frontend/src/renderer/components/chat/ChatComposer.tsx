@@ -189,8 +189,9 @@ function ComposerBand({ band }: { band?: ReactNode }) {
 					<motion.div
 						className="chat-composer-band-tray"
 						initial={{ y: "100%" }}
-						animate={{ y: 0, transition: { duration: reducedMotion ? 0 : 0.26, ease: "easeOut" } }}
-						exit={{ y: "100%", transition: { duration: reducedMotion ? 0 : 0.2, ease: "easeIn" } }}
+						// --duration-normal (150ms), DESIGN.md's small panel movement.
+						animate={{ y: 0, transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeOut" } }}
+						exit={{ y: "100%", transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeIn" } }}
 					>
 						{band}
 					</motion.div>

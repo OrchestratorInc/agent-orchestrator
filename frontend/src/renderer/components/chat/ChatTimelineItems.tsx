@@ -673,7 +673,7 @@ export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"]
 			data-login-status={status}
 			className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
 		>
-			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" ? "animate-spin" : "chat-login-hourglass")} /> : null}
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" && "animate-spin")} /> : null}
 			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
 		</div>
 	);

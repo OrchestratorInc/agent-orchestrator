@@ -3018,21 +3018,6 @@ html.sidebar-reordering * {
 	background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
 }
 
-/* A message waiting on a login: its hourglass turns over now and then. The icon
-   is symmetric, so the turn back to the start at each loop does not show. */
-.chat-login-hourglass {
-	animation: chat-login-hourglass 3.2s ease-in-out infinite;
-}
-
-@keyframes chat-login-hourglass {
-	0%, 78% { transform: rotate(0deg); }
-	92%, 100% { transform: rotate(180deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.chat-login-hourglass { animation: none; }
-}
-
 .chat-composer-startup-shimmer {
 	position: absolute;
 	inset: 0;
