@@ -4251,6 +4251,8 @@
 	"search.sortRecent": "Сначала новые",
 	"search.resultCount": "Показано {{shown}} из {{total}}",
 	"search.showMore": "Показать ещё {{remaining}}",
+	"search.pageFailed": "Не удалось загрузить больше сессий.",
+	"search.retry": "Повторить",
 	"command.sessionMatches_one": "{{count}} совпадение",
 	"command.sessionMatches_few": "{{count}} совпадения",
 	"command.sessionMatches_many": "{{count}} совпадений",

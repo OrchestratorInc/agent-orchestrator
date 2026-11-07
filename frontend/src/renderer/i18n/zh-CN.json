@@ -4058,6 +4058,8 @@
 	"search.sortRecent": "最新",
 	"search.resultCount": "{{total}} 个会话中的 {{shown}} 个",
 	"search.showMore": "再显示 {{remaining}} 个",
+	"search.pageFailed": "无法加载更多会话。",
+	"search.retry": "重试",
 	"command.sessionMatches_one": "{{count}} 个匹配",
 	"command.sessionMatches_other": "{{count}} 个匹配",
 	"search.matchCount_one": "{{count}} 个匹配",

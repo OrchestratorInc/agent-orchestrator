@@ -4076,6 +4076,8 @@
 	"search.sortRecent": "최신순",
 	"search.resultCount": "{{total}}개 세션 중 {{shown}}개",
 	"search.showMore": "{{remaining}}개 더 보기",
+	"search.pageFailed": "세션을 더 불러오지 못했습니다.",
+	"search.retry": "다시 시도",
 	"command.sessionMatches_one": "{{count}}개 일치",
 	"command.sessionMatches_other": "{{count}}개 일치",
 	"search.matchCount_one": "{{count}}개 일치",

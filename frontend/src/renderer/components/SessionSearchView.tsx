@@ -86,7 +86,8 @@ export function SessionSearchView() {
 	const results = search.data?.results ?? [];
 	const coverage = search.data?.coverage;
 	const total = search.data?.total ?? results.length;
-	const hasMore = results.length < total && !search.exhausted;
+	// A failed page stops paging: the next page would show results past a gap.
+	const hasMore = results.length < total && !search.exhausted && !search.pageError;
 	const trimmed = query.trim();
 	const tooShort = trimmed.length > 0 && trimmed.length < SESSION_SEARCH_MIN_QUERY_CHARS;
 
@@ -263,7 +264,12 @@ export function SessionSearchView() {
 											/>
 										))}
 									</ul>
-									{hasMore ? (
+									{search.pageError ? (
+										<div role="alert" className="flex items-center justify-center gap-2 pt-3 text-sm text-destructive">
+											<span>{t("search.pageFailed")}</span>
+											<TopbarButton onClick={search.retryPage}>{t("search.retry")}</TopbarButton>
+										</div>
+									) : hasMore ? (
 										<div className="flex justify-center pt-3">
 											<TopbarButton onClick={() => setPaging({ key: pageKey, pages: pages + 1 })}>
 												{t("search.showMore", { remaining: total - results.length })}

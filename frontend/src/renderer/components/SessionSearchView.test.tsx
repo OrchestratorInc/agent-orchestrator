@@ -222,6 +222,44 @@ describe("SessionSearchView", () => {
 		});
 	});
 
+	// Found in review: only the first page's error reached the view. A failed
+	// second page left the first 25 rows with no error and a "Show more" that
+	// skipped to offset 50, showing later results past the missing page.
+	it("keeps the loaded page when the next one fails, and retries it before paging on", async () => {
+		const all = Array.from({ length: 60 }, (_, index) => ({
+			...result,
+			sessionId: `proj-${index}`,
+			messageId: `msg-${index}`,
+			sessionName: `Session ${index}`,
+		}));
+		let secondPageFails = true;
+		getMock.mockImplementation(async (path: string, options?: { params?: { query?: { limit?: number; offset?: number } } }) => {
+			if (path !== "/api/v1/search/sessions") return response();
+			const { limit = 25, offset = 0 } = options?.params?.query ?? {};
+			if (offset === 25 && secondPageFails) return { error: { message: "daemon unavailable" } };
+			return response({ results: all.slice(offset, offset + limit), total: all.length, limit, offset });
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Session 24")).toBeInTheDocument());
+		await user.click(screen.getByRole("button", { name: /Show 35 more/ }));
+
+		// The page keeps its rows, says the next page failed, and offers a retry
+		// instead of a "Show more" that would skip it.
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not load more sessions."), { timeout: 5000 });
+		expect(screen.getByText("Session 24")).toBeInTheDocument();
+		expect(screen.queryByText("Session 25")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+
+		secondPageFails = false;
+		await user.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(screen.getByText("Session 49")).toBeInTheDocument());
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Show 10 more/ })).toBeInTheDocument();
+	});
+
 	// The daemon clamps every request to 100 rows (SessionSearchMaxLimit). Paging
 	// by a growing limit asked for 125 on the fifth page, got the same first 100,
 	// and every later "Show more" repeated them.

@@ -4057,6 +4057,8 @@
 	"search.sortRecent": "Newest",
 	"search.resultCount": "{{shown}} of {{total}} sessions",
 	"search.showMore": "Show {{remaining}} more",
+	"search.pageFailed": "Could not load more sessions.",
+	"search.retry": "Retry",
 	"command.sessionMatches_one": "{{count}} match",
 	"command.sessionMatches_other": "{{count}} matches",
 	"search.matchCount_one": "{{count}} match",

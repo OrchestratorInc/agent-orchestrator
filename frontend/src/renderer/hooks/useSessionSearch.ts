@@ -100,7 +100,16 @@ export type SessionSearchPages = {
 	data: SessionSearchResponse | undefined;
 	isLoading: boolean;
 	isFetching: boolean;
+	/** The first page failed: there is nothing to show. */
 	error: Error | null;
+	/**
+	 * A later page failed after its retry. The pages before it stay on screen and
+	 * paging stops there until retryPage, so a later page cannot be shown past a
+	 * gap.
+	 */
+	pageError: Error | null;
+	/** Asks every failed page again. */
+	retryPage: () => void;
 	/** The last page came back short: there is nothing more to fetch. */
 	exhausted: boolean;
 };
@@ -108,9 +117,12 @@ export type SessionSearchPages = {
 function joinSessionSearchPages(pages: UseQueryResult<SessionSearchResponse>[]): SessionSearchPages {
 	const first = pages[0];
 	const last = pages.at(-1);
+	// Rows stop at the first page that failed: what follows it would leave a gap.
+	const failedAt = pages.findIndex((page, index) => index > 0 && page.error);
+	const shown = failedAt > 0 ? pages.slice(0, failedAt) : pages;
 	const seen = new Set<string>();
 	const results: SessionSearchResult[] = [];
-	for (const page of pages) {
+	for (const page of shown) {
 		for (const result of page.data?.results ?? []) {
 			// A session can move to a later page when new work is indexed between
 			// requests; it is shown once, at its first place.
@@ -125,7 +137,11 @@ function joinSessionSearchPages(pages: UseQueryResult<SessionSearchResponse>[]):
 		isLoading: first?.isLoading ?? false,
 		isFetching: pages.some((page) => page.isFetching),
 		error: first?.error ?? null,
-		exhausted: Boolean(last?.data && !last.isPlaceholderData && (lastResults?.length ?? 0) < SESSION_SEARCH_PAGE_SIZE),
+		pageError: failedAt > 0 ? pages[failedAt]!.error : null,
+		retryPage: () => {
+			for (const page of pages) if (page.error) void page.refetch();
+		},
+		exhausted: failedAt < 0 && Boolean(last?.data && !last.isPlaceholderData && (lastResults?.length ?? 0) < SESSION_SEARCH_PAGE_SIZE),
 	};
 }
 

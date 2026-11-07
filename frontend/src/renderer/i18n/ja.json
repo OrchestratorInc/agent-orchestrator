@@ -4076,6 +4076,8 @@
 	"search.sortRecent": "新しい順",
 	"search.resultCount": "{{total}}件のセッション中{{shown}}件",
 	"search.showMore": "さらに{{remaining}}件表示",
+	"search.pageFailed": "これ以上のセッションを読み込めませんでした。",
+	"search.retry": "再試行",
 	"command.sessionMatches_one": "{{count}}件の一致",
 	"command.sessionMatches_other": "{{count}}件の一致",
 	"search.matchCount_one": "{{count}}件の一致",

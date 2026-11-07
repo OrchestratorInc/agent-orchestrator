@@ -4076,6 +4076,8 @@
 	"search.sortRecent": "Neueste",
 	"search.resultCount": "{{shown}} von {{total}} Sitzungen",
 	"search.showMore": "{{remaining}} weitere anzeigen",
+	"search.pageFailed": "Weitere Sitzungen konnten nicht geladen werden.",
+	"search.retry": "Erneut versuchen",
 	"command.sessionMatches_one": "{{count}} Treffer",
 	"command.sessionMatches_other": "{{count}} Treffer",
 	"search.matchCount_one": "{{count}} Treffer",

@@ -4167,6 +4167,8 @@
 	"search.sortRecent": "Plus récents",
 	"search.resultCount": "{{shown}} sur {{total}} sessions",
 	"search.showMore": "Afficher {{remaining}} de plus",
+	"search.pageFailed": "Impossible de charger plus de sessions.",
+	"search.retry": "Réessayer",
 	"command.sessionMatches_one": "{{count}} résultat",
 	"command.sessionMatches_other": "{{count}} résultats",
 	"command.sessionMatches_many": "{{count}} résultats",
