@@ -1966,7 +1966,14 @@ func toSpawnAPIError(err error) error {
 	case errors.Is(err, sessionmanager.ErrClientRequestIncomplete):
 		return apierr.Conflict("CLIENT_REQUEST_INCOMPLETE", "This task is still starting or its prior launch did not finish; check the session before trying again", nil)
 	case errors.Is(err, context.DeadlineExceeded):
-		return apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out before the agent could start", nil)
+		message := "Session spawn timed out before the agent could start"
+		var timeoutErr *sessionmanager.SpawnTimeoutError
+		if errors.As(err, &timeoutErr) {
+			if detail := timeoutErr.Detail(); detail != "" {
+				message += ": " + detail
+			}
+		}
+		return apierr.Conflict("SPAWN_TIMEOUT", message, nil)
 	case errors.Is(err, context.Canceled):
 		return apierr.Conflict("SPAWN_CANCELLED", "Session spawn was cancelled", nil)
 	case errors.Is(err, sessionmanager.ErrSpawnPrompt):
