@@ -104,6 +104,24 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
 
+describe("WorkerBoardList's pull to refresh", () => {
+	const spinner = () => renderer.root.findByType("FlatList" as never).props.refreshControl.props;
+
+	// UIKit already sets iOS's spinner under the large-title bar. An offset
+	// moved it a whole header height lower, onto the rows, and it jumped as the
+	// bar's height changed during the pull.
+	it("leaves iOS's spinner where UIKit puts it, even under a clear header", () => {
+		act(() => { renderer = create(board([older], { overlayTopInset: 152 })); });
+		expect(spinner().progressViewOffset).toBeUndefined();
+	});
+
+	it("starts Android's spinner below the bar the list runs under", () => {
+		fixtures.platform = "android";
+		act(() => { renderer = create(board([older], { overlayTopInset: 80 })); });
+		expect(spinner().progressViewOffset).toBe(80);
+	});
+});
+
 describe("WorkerBoardList's updated pill", () => {
 	it("holds the order behind the pill until it is tapped", () => {
 		holdNews();
