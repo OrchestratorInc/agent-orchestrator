@@ -536,7 +536,7 @@ function nativeStagingWasLost(): boolean {
 function discardLostNativeStaging(): boolean {
   if (!nativeStagingWasLost()) return false;
   recordUpdateDiagnostic("native-staging-lost", { version: stagedVersion });
-  const failure = new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  const failure = new Error("The staged update files are missing. Orchestrator is checking for a fresh update. Confirm installation again when it is ready.");
   const restartWasRequested = updateRestartRequested;
   discardStagedBuild();
   updateRestartRequested = false;
@@ -3094,7 +3094,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   }
   if (discardLostNativeStaging()) {
     if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
-    throw new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+    throw new Error("The staged update files are missing. Orchestrator is checking for a fresh update. Confirm installation again when it is ready.");
   }
   if (macRestartPreparation) return macRestartPreparation;
   let confirmation: UpdateInstallResult;

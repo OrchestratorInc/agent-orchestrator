@@ -2950,7 +2950,7 @@ func TestSpawn_AfterStartPromptBuilderCombinesStandingInstructionsAndTaskOnce(t 
 		t.Fatalf("BuildAfterStartPrompt calls = %d, want 1", agent.buildCalls)
 	}
 	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
-		!strings.Contains(msg.msgs[0], "## Orchestrator Worker Role") ||
+		!strings.Contains(msg.msgs[0], "## Worker Role") ||
 		!strings.HasSuffix(msg.msgs[0], "TASK:\nfix the button") {
 		t.Fatalf("delivered prompts = %#v, want one combined bootstrap turn", msg.msgs)
 	}
@@ -6022,7 +6022,7 @@ func TestSpawnWorker_ProjectRulesInSystemPrompt(t *testing.T) {
 	}
 
 	systemPrompt := agent.lastLaunch.SystemPrompt
-	for _, want := range []string{"## Orchestrator Worker Role", "## Project Rules", "Inline rule.", "File rule."} {
+	for _, want := range []string{"## Worker Role", "## Project Rules", "Inline rule.", "File rule."} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
@@ -6109,7 +6109,7 @@ func TestSpawnWorker_AppendsActiveOrchestratorContact(t *testing.T) {
 	// Coordination instructions must be in the system prompt, not the user prompt.
 	systemPrompt := agent.lastLaunch.SystemPrompt
 	for _, want := range []string{
-		"## Orchestrator Coordination",
+		"## Orchestrator Agent Coordination",
 		`ao send --session mer-1 --message "<your message>"`,
 		"Message it only for true blockers, cross-session coordination",
 	} {
@@ -6117,7 +6117,7 @@ func TestSpawnWorker_AppendsActiveOrchestratorContact(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if strings.Contains(agent.lastLaunch.Prompt, "## Orchestrator Coordination") {
+	if strings.Contains(agent.lastLaunch.Prompt, "## Orchestrator Agent Coordination") {
 		t.Fatalf("orchestrator coordination must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
 	}
 }
@@ -6259,7 +6259,7 @@ func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 		t.Fatal(err)
 	}
 	systemPrompt := agent.lastLaunch.SystemPrompt
-	if strings.Contains(systemPrompt, "## Orchestrator Coordination") || strings.Contains(systemPrompt, "ao send --session mer-1") {
+	if strings.Contains(systemPrompt, "## Orchestrator Agent Coordination") || strings.Contains(systemPrompt, "ao send --session mer-1") {
 		t.Fatalf("terminated orchestrator should not be added to system prompt:\n%s", systemPrompt)
 	}
 }
@@ -6843,7 +6843,7 @@ func TestRestore_FallbackLaunchDeliversPromptAfterStartWhenAgentRequestsIt(t *te
 		t.Fatalf("fallback launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
 	}
 	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
-		!strings.Contains(msg.msgs[0], "## Orchestrator Worker Role") ||
+		!strings.Contains(msg.msgs[0], "## Worker Role") ||
 		!strings.HasSuffix(msg.msgs[0], "TASK:\ncontinue the task") {
 		t.Fatalf("delivered prompts = %#v, want one combined fallback turn", msg.msgs)
 	}
@@ -7353,7 +7353,7 @@ func TestRestore_PromptlessLostNativeConversationDeliversStandingInstructions(t 
 		t.Fatalf("fresh launch prompt = %q, want empty for after-start delivery", recording.lastLaunch.Prompt)
 	}
 	if len(msg.msgs) != 1 || !strings.HasPrefix(msg.msgs[0], "STANDING:\n") ||
-		!strings.Contains(msg.msgs[0], "## Orchestrator Worker Role") ||
+		!strings.Contains(msg.msgs[0], "## Worker Role") ||
 		!strings.HasSuffix(msg.msgs[0], "TASK:\n") {
 		t.Fatalf("delivered prompts = %#v, want one instruction-only bootstrap turn", msg.msgs)
 	}

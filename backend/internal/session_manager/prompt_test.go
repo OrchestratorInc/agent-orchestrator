@@ -43,8 +43,8 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 		ProjectRules:          "Always run focused tests.",
 	})
 	for _, want := range []string{
-		"## Orchestrator Worker Role",
-		"## Orchestrator Coordination",
+		"## Worker Role",
+		"## Orchestrator Agent Coordination",
 		`ao send --session mer-orchestrator --message "<your message>"`,
 		"## Pull Requests for This Session",
 		"For a workspace project whose recorded session branch",
@@ -82,7 +82,7 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 func TestSystemPromptGuardAllowsHighLevelRoleAndBehaviorSummary(t *testing.T) {
 	got := systemPromptGuard()
 	for _, want := range []string{
-		"say whether you are operating as an AO orchestrator or implementation worker",
+		"say whether you are operating as an orchestrator agent or implementation worker",
 		"orchestrators coordinate work and spawn or redirect workers",
 		"workers complete assigned tasks, issues, features",
 		"PR/MR workflow when applicable",
@@ -200,7 +200,7 @@ func TestBuildSystemPrompt_WorkerWithOrchestratorUsesOrchestratorParallelHandoff
 		Project:               promptProject{ID: "mer", Name: "Mercury", Repo: "https://github.com/acme/mercury"},
 		OrchestratorSessionID: "mer-orchestrator",
 	})
-	if !strings.Contains(got, "ask the orchestrator to spawn additional AO worker sessions") {
+	if !strings.Contains(got, "ask the orchestrator to spawn additional worker sessions") {
 		t.Fatalf("worker prompt missing orchestrator handoff guidance:\n%s", got)
 	}
 	if strings.Contains(got, "If no orchestrator is attached, continue serially") {
@@ -371,7 +371,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 		return buildSystemPromptText(cfg)
 	}
 	common := []string{
-		"## Orchestrator Native Review",
+		"## Native Review",
 		"implementation PRs owned by this session",
 		"not the path for reviewing someone else's PR",
 		"isolated Orchestrator reviewer agent, not another worker",
@@ -391,7 +391,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	}
 
 	off := build(false, true)
-	for _, want := range append(common, "ask the user or the orchestrator whether to start an AO review") {
+	for _, want := range append(common, "ask the user or the orchestrator whether to start a built-in review") {
 		if !strings.Contains(off, want) {
 			t.Fatalf("default worker prompt missing %q:\n%s", want, off)
 		}
@@ -399,7 +399,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	if strings.Contains(off, "This project asks workers to request it") {
 		t.Fatalf("default worker prompt requests review without the opt-in:\n%s", off)
 	}
-	if solo := build(false, false); !strings.Contains(solo, "ask the user whether to start an AO review") {
+	if solo := build(false, false); !strings.Contains(solo, "ask the user whether to start a built-in review") {
 		t.Fatalf("worker prompt without an orchestrator should only ask the user:\n%s", solo)
 	}
 	if strings.Contains(on, "- - ") || strings.Contains(off, "- - ") {
@@ -407,7 +407,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	}
 
 	local := buildSystemPromptText(systemPromptConfig{Role: sessionPromptRoleWorker, Project: promptProject{ID: "mer"}})
-	if strings.Contains(local, "## Orchestrator Native Review") {
+	if strings.Contains(local, "## Native Review") {
 		t.Fatalf("a project with no remote has no PRs to review:\n%s", local)
 	}
 }
