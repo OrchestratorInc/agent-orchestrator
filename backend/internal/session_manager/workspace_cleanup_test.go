@@ -155,6 +155,71 @@ func TestCleanupReleasesProjectGateAndRechecksOwnership(t *testing.T) {
 	}
 }
 
+// blockingCleanupListStore makes the first ListSessions call observable and
+// blocked, so a test can inspect the gate scope around the cleanup candidate
+// read. Later calls pass through.
+type blockingCleanupListStore struct {
+	*fakeStore
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingCleanupListStore) ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	s.once.Do(func() {
+		close(s.started)
+		<-s.release
+	})
+	return s.fakeStore.ListSessions(ctx, project)
+}
+
+func TestCleanupReadsCandidatesUnderProjectGate(t *testing.T) {
+	m, st, _, rec := newCleanupFixture(t, "exit 0")
+	rec.IsTerminated = true
+	rec.Metadata.RuntimeHandleID = ""
+	st.sessions[rec.ID] = rec
+
+	blocking := &blockingCleanupListStore{
+		fakeStore: st,
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	m.store = blocking
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Cleanup(context.Background(), rec.ProjectID)
+		done <- err
+	}()
+
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not read candidates")
+	}
+
+	gate := m.workspaceGate(rec.ProjectID)
+	if gate.TryLock() {
+		gate.Unlock()
+		t.Fatal("cleanup read candidates without holding the project gate")
+	}
+
+	close(blocking.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup did not finish")
+	}
+
+	if !gate.TryLock() {
+		t.Fatal("cleanup did not release the project gate")
+	}
+	gate.Unlock()
+}
+
 func TestSpawnRollbackReleasesProjectGateBeforeCleanup(t *testing.T) {
 	m, _, ws, rec := newCleanupFixture(t, waitingCleanupCommand())
 	daemonCtx, stop := context.WithCancel(context.Background())
