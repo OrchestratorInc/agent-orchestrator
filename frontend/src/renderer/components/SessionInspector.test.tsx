@@ -4340,8 +4340,8 @@ describe("SessionInspector summary reviews", () => {
     // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
-      "Browser",
       "Files",
+      "Browser",
     ]);
     expect(
       screen.queryByRole("switch", { name: "Automatically fix review comments" }),
