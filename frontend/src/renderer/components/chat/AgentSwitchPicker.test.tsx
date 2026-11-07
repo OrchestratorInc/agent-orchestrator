@@ -214,6 +214,15 @@ describe("AgentModelPicker", () => {
 		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", expect.anything());
 	});
 
+	it.each([false, true])("does not offer gated Coder Agents when terminal=%s", async (terminal) => {
+		const user = userEvent.setup();
+		open(undefined, terminal);
+		await user.click(screen.getByRole("button", { name: terminal ? "Agent running in this terminal" : /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		expect(await screen.findByRole("menuitemradio", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Coder Agents" })).not.toBeInTheDocument();
+	});
+
 	it("searches every agent's models and picks one with its agent", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open();

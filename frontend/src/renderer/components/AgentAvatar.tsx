@@ -15,6 +15,9 @@ import clineDarkLogo from "../assets/agents/cline-dark.svg";
 import clineLightLogo from "../assets/agents/cline-light.svg";
 import claudeLogo from "../assets/agents/claude.svg";
 import claudeCodeLogo from "../assets/agents/claude-code.svg";
+// coder/coder: site/static/favicons/favicon-{dark,light}.svg (see LICENSE-coder-agents.txt).
+import coderAgentsDarkLogo from "../assets/agents/coder-agents-dark.svg";
+import coderAgentsLightLogo from "../assets/agents/coder-agents-light.svg";
 import codexLogo from "../assets/agents/codex.svg";
 import codewhaleDarkLogo from "../assets/agents/codewhale-dark.svg";
 import codewhaleLightLogo from "../assets/agents/codewhale-light.svg";
@@ -110,6 +113,7 @@ const LOGOS: AgentLogoSources = {
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
+	"coder-agents": { light: coderAgentsLightLogo, dark: coderAgentsDarkLogo },
 };
 
 /**

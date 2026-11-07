@@ -56,6 +56,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
 | `command-code` | Yes | Yes | — |
+| `coder-agents` | No | Unavailable (setup only) | — |
 
 The table shows shipped capabilities, not whether an agent is ready on your machine. Run the catalog for current readiness or when scripting:
 
@@ -78,7 +79,7 @@ ao spawn --name fx-task --agent fx --mode tui
 
 ## Chat versus Terminal UI
 
-Unreal Agent is Chat-only; the other worker adapters provide a terminal interface. These harnesses have structured Chat drivers:
+Unreal Agent is Chat-only. Coder Agents currently provides setup and model discovery only; neither session interface is available. The other worker adapters provide a terminal interface. These harnesses have structured Chat drivers:
 
 | Harness | Chat transport |
 | --- | --- |
@@ -98,7 +99,7 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
 
-Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
+All remaining runnable harnesses are Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
 
 Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo Code needs version 0.1.14 or newer and is Terminal UI-only, as is Gemini. Unreal Agent is built into Orchestrator for macOS/Linux, is Chat-only, and requires bypass permissions because it has no interactive approval flow. DeepSeek Chat uses `dsh --profile acp`. Check readiness and the provider options offered by your installed Orchestrator version before launching.
 

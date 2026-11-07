@@ -4073,8 +4073,8 @@ describe("TaskComposer local saved choices", () => {
 });
 
 describe("useTaskLaunch agent choices", () => {
-	function Choices() {
-		const task = useTaskLaunch({ projectId: "proj-1" });
+	function Choices({ hostId }: { hostId?: string }) {
+		const task = useTaskLaunch({ projectId: "proj-1", hostId });
 		return <ul>{task.agentChoices.map((agent) => <li key={agent.id}>{agent.id}</li>)}</ul>;
 	}
 
@@ -4090,6 +4090,44 @@ describe("useTaskLaunch agent choices", () => {
 		] };
 		render(<Wrap><Choices /></Wrap>);
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
+	});
+
+	it.each([undefined, "box-a"])("excludes connected Coder Agents from choices on host %s", async (hostId) => {
+		h.agentCatalog = { agents: [agentReadiness("coder-agents", "Coder Agents"), agentReadiness("codex", "Codex")] };
+		const get = async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } }
+			: { data: { status: "ok", project: { config: {} } } };
+		h.get.mockImplementation(get);
+		h.remoteGet.mockImplementation(get);
+		render(<Wrap><Choices hostId={hostId} /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["codex"]));
+	});
+
+	it("excludes gated Coder Agents from fallback choices before readiness loads", () => {
+		h.agentCatalog = undefined;
+		render(<Wrap><Choices /></Wrap>);
+		expect(screen.queryByText("coder-agents")).not.toBeInTheDocument();
+		expect(screen.getByText("codex")).toBeInTheDocument();
+	});
+
+	it("replaces configured and remembered Coder defaults with a runnable agent before submitting", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ "proj-1": { lastAgent: "coder-agents", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("coder-agents", "Coder Agents"), agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } }
+			: path.includes("/models")
+				? { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } }
+				: { data: { status: "ok", project: { config: { worker: { agent: "coder-agents" } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "runnable-worker" } });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
+		fireEvent.change(task(), { target: { value: "Use a runnable harness" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("runnable-worker"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ agent: "codex" }),
+		}));
 	});
 });
 
@@ -4271,6 +4309,12 @@ describe("useTaskLaunch on the new chat page", () => {
 
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
+		render(<Wrap><LoadError /></Wrap>);
+		await screen.findByText("No agent is ready. Set one up in Settings.");
+	});
+
+	it("does not treat a connected Coder account as a runnable Scratchpad agent", async () => {
+		h.agentCatalog = { agents: [agentReadiness("coder-agents", "Coder Agents")] };
 		render(<Wrap><LoadError /></Wrap>);
 		await screen.findByText("No agent is ready. Set one up in Settings.");
 	});

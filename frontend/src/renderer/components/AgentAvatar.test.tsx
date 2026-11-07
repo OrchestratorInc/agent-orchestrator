@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AgentAvatar } from "./AgentAvatar";
+import coderAgentsDarkLogo from "../assets/agents/coder-agents-dark.svg";
+import coderAgentsLightLogo from "../assets/agents/coder-agents-light.svg";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
@@ -28,6 +30,12 @@ describe("AgentAvatar", () => {
 		render(<AgentAvatar provider="gemini" />);
 
 		expect(screen.getByRole("img", { name: "gemini" })).toHaveAttribute("src", geminiLogo);
+	});
+
+	it("renders the official Coder light and dark marks", () => {
+		render(<AgentAvatar provider="coder-agents" />);
+
+		expect(themeSources("coder-agents")).toEqual([coderAgentsLightLogo, coderAgentsDarkLogo]);
 	});
 
 	it("keeps raster marks as a theme pair when no vector exists", () => {
