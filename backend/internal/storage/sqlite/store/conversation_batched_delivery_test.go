@@ -36,6 +36,13 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A row with no detail at all, as a provider's reasoning step can be, must not
+	// break reading the steers.
+	reasoning := domain.ConversationActivity{ID: "reasoning-1", Kind: domain.ActivityKindReasoning, Status: domain.ActivityStatusCompleted}
+	if err := s.UpsertActivity(ctx, conversation, "p-lead", reasoning, histClock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
 	// Steer: a queued report rides a steer into the running turn.
 	appendQueued("report-2", domain.MessageOriginAutomation, 3*time.Second)
 	steered, err := s.ClaimQueuedBatch(ctx, conversation, false, 0, histClock.Add(2*time.Minute))
