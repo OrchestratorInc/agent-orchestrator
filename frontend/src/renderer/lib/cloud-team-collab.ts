@@ -222,6 +222,11 @@ export function splitByMentions<T extends { name: string }>(text: string, mentio
 	return parts;
 }
 
+/** A recorded mention's name and kind, for drawing it in a posted message or aside. */
+export function namedMentions(mentions: readonly CloudCpMention[] | undefined): Array<{ kind: "person" | "team"; name: string }> {
+	return (mentions ?? []).flatMap((mention) => mention.name ? [{ kind: mention.kind, name: mention.name }] : []);
+}
+
 /** A guest named someone outside the session (422 mention_not_allowed). */
 export function mentionNotAllowedError(error: unknown): boolean {
 	return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "mention_not_allowed";

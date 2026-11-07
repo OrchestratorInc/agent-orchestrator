@@ -737,6 +737,28 @@ describe("HumanMessage", () => {
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
 	});
+
+	it("draws the people and teams it names as chips, as the composer drew them", () => {
+		const { container } = render(<HumanMessage message={human({
+			text: "@Chen Wei and @Platform, look at this. Mail ana@example.com",
+			mentions: [{ kind: "person", name: "Chen Wei" }, { kind: "team", name: "Platform" }],
+		})} sessionId="s1" />);
+		const chips = [...container.querySelectorAll("[data-mention-chip]")];
+		expect(chips.map((chip) => chip.getAttribute("data-mention-chip"))).toEqual(["person", "team"]);
+		expect(container.querySelector("[data-chat-message-body]")?.textContent).toBe("CWChen Wei and PLPlatform, look at this. Mail ana@example.com");
+	});
+
+	it("leaves an @ that names nobody as text", () => {
+		const { container } = render(<HumanMessage message={human({ text: "@Chen Wei hi" })} sessionId="s1" />);
+		expect(container.querySelector("[data-mention-chip]")).toBeNull();
+	});
+
+	it("credits who suggested a message a suggestion became", () => {
+		const { container } = render(<HumanMessage message={human({ authorName: "Ben Ortiz", suggestedBy: "Chen Wei" })} sessionId="s1" />);
+		expect(container.querySelector("[data-chat-message-author]")?.textContent).toBe("Ben Ortiz · Suggested by Chen Wei");
+		const own = render(<HumanMessage message={human({ id: "human-2", suggestedBy: "Chen Wei" })} sessionId="s1" />);
+		expect(own.container.querySelector("[data-chat-message-author]")?.textContent).toBe("Suggested by Chen Wei");
+	});
 });
 
 describe("ProviderSwitchMarker", () => {

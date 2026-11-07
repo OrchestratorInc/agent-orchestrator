@@ -4111,6 +4111,7 @@
 	"suggestion.failed": "Couldn't do that. Try again.",
 	"aside.withdraw": "Withdraw",
 	"aside.withdrawFailed": "Couldn't withdraw, try again",
+	"suggestion.suggestedBy": "Suggested by {{name}}",
 	"mention.tooMany": "Mention at most {{max}} people and teams at once.",
 	"mention.notAllowed": "You can mention only people in this session.",
 	"mention.tooManyMentioned": "That would notify too many people. Mention fewer.",

@@ -47,6 +47,8 @@ import {
 	composerLockedError,
 	mentionNotAllowedError,
 	mentionToken,
+	namedMentions,
+	parseMentions,
 	tooManyMentionedError,
 	suggestionFromEvent,
 	suggestionResolvedError,
@@ -106,6 +108,9 @@ type EventPayload = {
 	itemId?: unknown;
 	authorUserId?: unknown;
 	authorName?: unknown;
+	/** chat.user_message: the people and teams it named, and the suggestion it sent. */
+	mentions?: unknown;
+	suggestionId?: unknown;
 	subjectKind?: unknown;
 	content?: unknown;
 };
@@ -707,6 +712,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// A Setup that ran before any turn started sits just above that prompt.
 	const firstTurnStart = events.find((event) => event.type === "chat.turn_started")?.sequence ?? Infinity;
 	const firstPrompt = events.find((event) => event.type === "chat.user_message")?.sequence;
+	// Who suggested each suggestion a message sent, for the credit under it.
+	const suggesters = new Map<string, string>();
+	for (const event of events) {
+		const suggestion = suggestionFromEvent(event);
+		const name = suggestion?.suggestedBy.name || suggestion?.author.name;
+		if (suggestion && name) suggesters.set(suggestion.id, name);
+	}
 	const runSequence = (run: ScriptRun) =>
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
@@ -893,6 +905,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
 			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
 			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
+			const mentions = automation ? [] : namedMentions(parseMentions(payload.mentions));
+			const suggestedBy = !automation && typeof payload.suggestionId === "string" ? suggesters.get(payload.suggestionId) : undefined;
 			items.push({
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
@@ -904,6 +918,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				...(content ? { content } : {}),
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
+				...(mentions.length > 0 ? { mentions } : {}),
+				...(suggestedBy ? { suggestedBy } : {}),
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});

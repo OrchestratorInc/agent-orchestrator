@@ -3031,6 +3031,13 @@ html.sidebar-reordering * {
 	border-top-right-radius: 0;
 }
 
+/* Aside mode writes to people, not the agent: the composer takes the dashed edge
+   an aside has in the timeline, so nobody writes to the wrong audience. */
+.cursor-chat-composer[data-composer-variant="aside"] {
+	outline: 1px dashed color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+	outline-offset: -1px;
+}
+
 /* Dragging remains visible without changing the composer's structural edge. */
 .cursor-chat-composer[data-dragging] {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));

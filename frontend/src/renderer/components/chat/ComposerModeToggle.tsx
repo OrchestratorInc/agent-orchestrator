@@ -1,9 +1,20 @@
-import { Bot, MessageSquare } from "lucide-react";
+import { Bot, EyeOff, MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 export type ComposerMode = "agent" | "aside";
+
+/** Aside mode's footer: what the dashed edge means, in the words an aside row uses. */
+export function AsideComposerHint() {
+	const { t } = useTranslation();
+	return (
+		<span className="ml-1 inline-flex min-w-0 items-center gap-1 truncate text-caption text-passive" data-aside-composer-hint="">
+			<EyeOff aria-hidden="true" className="size-3 shrink-0" />
+			{t("aside.hiddenFromAgent")}
+		</span>
+	);
+}
 
 /**
  * The composer's two modes in a shared cloud session: Agent writes to the

@@ -166,7 +166,7 @@ import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatComposer, type ChatComposerHandle, type ComposerMentionSource, type StoredComposerAttachment } from "./ChatComposer";
-import { ComposerModeToggle, type ComposerMode } from "./ComposerModeToggle";
+import { AsideComposerHint, ComposerModeToggle, type ComposerMode } from "./ComposerModeToggle";
 import { AsideRow } from "./AsideRow";
 import type { ComposerMention } from "../../lib/cloud-team-collab";
 import { ContextMeter } from "./ContextMeter";
@@ -2126,7 +2126,8 @@ function ChatWorkspaceContent({
 										onInterrupt={!asideMode && turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
 										onContinue={!asideMode && canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={asideMode ? undefined : queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={asideMode ? modeToggle : draftSettings ?? <>
+										variant={asideMode ? "aside" : undefined}
+										settings={asideMode ? <>{modeToggle}<AsideComposerHint /></> : draftSettings ?? <>
 											{modeToggle}
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}

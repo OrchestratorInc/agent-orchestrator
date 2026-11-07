@@ -4128,6 +4128,7 @@
 	"suggestion.failed": "Das hat nicht geklappt. Bitte erneut versuchen.",
 	"aside.withdraw": "Zurückziehen",
 	"aside.withdrawFailed": "Zurückziehen fehlgeschlagen, erneut versuchen",
+	"suggestion.suggestedBy": "Vorgeschlagen von {{name}}",
 	"mention.tooMany": "Erwähnen Sie höchstens {{max}} Personen und Teams auf einmal.",
 	"mention.notAllowed": "Sie können nur Personen in dieser Sitzung erwähnen.",
 	"mention.tooManyMentioned": "Das würde zu viele Personen benachrichtigen. Erwähnen Sie weniger.",

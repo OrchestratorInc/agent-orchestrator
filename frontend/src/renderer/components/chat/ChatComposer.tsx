@@ -321,7 +321,10 @@ export const ChatComposer = memo(function ChatComposer({
 	mentions: mentionSource,
 	editorLabel = "Message the agent",
 	onToggleMode,
+	variant,
 }: {
+	/** Aside mode: the composer takes an aside's dashed edge, so nobody writes to the wrong audience. */
+	variant?: "aside";
 	/** People and teams in the `@` menu; absent, `@` offers files only. */
 	mentions?: ComposerMentionSource;
 	/** The editor's accessible name. */
@@ -2263,6 +2266,7 @@ export const ChatComposer = memo(function ChatComposer({
 				// here and half there.
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
+				data-composer-variant={variant}
 				aria-busy={starting || undefined}
 				onMouseDown={(e) => {
 					if (controlsDisabled || e.button !== 0) return;

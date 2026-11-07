@@ -563,6 +563,17 @@ describe("suggestions from asides", () => {
 		await waitFor(() => expect(screen.queryByText("Suggested")).toBeNull());
 	});
 
+	it("credit a message a suggestion became, and draw its mentions", () => {
+		const snapshot = toSnapshot(session, [
+			event(1, "chat.suggestion_created", suggestion),
+			event(2, "chat.user_message", { text: "@Chen Wei Also cover it", turnId: "t1", authorUserId: "user-ben", authorName: "Ben Ortiz", suggestionId: "sg-1", mentions: [{ kind: "person", userId: "user-chen", name: "Chen Wei" }] }),
+			event(3, "chat.suggestion_resolved", { ...suggestion, status: "sent", sentEventSequence: 2 }),
+		], "user-me");
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ authorName: "Ben Ortiz", suggestedBy: "Chen Wei", mentions: [{ kind: "person", name: "Chen Wei" }] });
+		// Suggestion events draw nothing of their own.
+		expect(snapshot.items).toHaveLength(1);
+	});
 });
 
 describe("mentions in a steer", () => {

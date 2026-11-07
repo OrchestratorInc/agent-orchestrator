@@ -3,7 +3,9 @@ import { createContext, useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudCpSuggestion } from "../../lib/cloud-cp/types";
 import type { ConversationActivity } from "../../types/conversation";
+import { namedMentions } from "../../lib/cloud-team-collab";
 import { PersonAvatar } from "../teams/TeamVisuals";
+import { MentionedText } from "./MentionChip";
 import { Button } from "../ui/button";
 
 /** What a shared cloud session lets its asides do, and how it names their authors. */
@@ -48,7 +50,8 @@ export function AsideRow({ activity }: { activity: ConversationActivity }) {
 			data-aside={aside.asideId}
 		>
 			<div className="flex min-h-6 min-w-0 items-center gap-2 text-xs">
-				<PersonAvatar name={known || name} size="xs" />
+				{/* Initials from the person's own name, never from "You". */}
+				<PersonAvatar name={known || (mine ? undefined : name)} size="xs" />
 				<span className="min-w-0 truncate font-medium text-foreground">{name}</span>
 				<span className="flex-1" />
 				{suggest && suggested ? (
@@ -91,7 +94,9 @@ export function AsideRow({ activity }: { activity: ConversationActivity }) {
 					{t("aside.hiddenFromAgent")}
 				</span>
 			</div>
-			<p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">{aside.text}</p>
+			<p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
+				<MentionedText text={aside.text} mentions={namedMentions(aside.mentions)} />
+			</p>
 		</div>
 	);
 }

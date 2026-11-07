@@ -4216,6 +4216,7 @@
 	"suggestion.failed": "No se pudo hacer. Inténtalo de nuevo.",
 	"aside.withdraw": "Retirar",
 	"aside.withdrawFailed": "No se pudo retirar, inténtalo de nuevo",
+	"suggestion.suggestedBy": "Sugerido por {{name}}",
 	"mention.tooMany": "Menciona como máximo {{max}} personas y equipos a la vez.",
 	"mention.notAllowed": "Solo puedes mencionar a personas de esta sesión.",
 	"mention.tooManyMentioned": "Se notificaría a demasiadas personas. Menciona a menos.",

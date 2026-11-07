@@ -11,6 +11,7 @@ import {
 	MAX_MENTIONS,
 	mentionAskSteps,
 	mentionNotAllowedError,
+	namedMentions,
 	parseMentions,
 	splitByMentions,
 	tooManyMentionedError,
@@ -220,7 +221,7 @@ describe("suggestions", () => {
 	});
 });
 
-describe("mentions in text", () => {
+describe("mentions in posted text", () => {
 	const chen = { kind: "person" as const, name: "Chen Wei" };
 	const chenShort = { kind: "person" as const, name: "Chen" };
 	const platform = { kind: "team" as const, name: "Platform" };
@@ -237,9 +238,10 @@ describe("mentions in text", () => {
 		expect(splitByMentions("no mentions", [])).toEqual(["no mentions"]);
 	});
 
-	it("reads recorded tokens with the names they had", () => {
+	it("reads recorded tokens and keeps the named ones for drawing", () => {
 		const tokens = parseMentions([{ kind: "person", userId: "u", name: "Chen Wei" }, { kind: "team", teamId: "t" }, "junk"]);
 		expect(tokens).toEqual([{ kind: "person", userId: "u", name: "Chen Wei" }, { kind: "team", teamId: "t" }]);
+		expect(namedMentions(tokens)).toEqual([{ kind: "person", name: "Chen Wei" }]);
 		expect(parseMentions(undefined)).toEqual([]);
 	});
 

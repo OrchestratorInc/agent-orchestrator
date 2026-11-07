@@ -54,7 +54,7 @@ import { Box, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { mentionText, splitByMentions, uniqueMentions, type ComposerMention } from "../../lib/cloud-team-collab";
 import { cn } from "../../lib/utils";
-import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
+import { MentionChip } from "./MentionChip";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
@@ -292,15 +292,14 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
 		if (this.__kind === "person" || this.__kind === "team") {
 			return (
-				<span
+				<MentionChip
+					className="select-none"
+					contentEditable={false}
 					data-composer-token={this.__kind}
 					data-value={this.__value}
-					contentEditable={false}
-					className="mx-0.5 inline-flex items-center gap-1 rounded-md bg-interactive-hover py-0.5 pr-1.5 pl-0.5 align-middle text-[0.9em] leading-none text-foreground select-none"
-				>
-					{this.__kind === "person" ? <PersonAvatar name={this.__display} size="xs" /> : <TeamTile name={this.__display} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
-					{this.__display}
-				</span>
+					kind={this.__kind}
+					name={this.__display}
+				/>
 			);
 		}
 		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);

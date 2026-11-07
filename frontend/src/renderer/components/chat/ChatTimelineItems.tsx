@@ -78,6 +78,7 @@ import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, S
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
+import { MentionedText } from "./MentionChip";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -989,9 +990,11 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
-			{message.authorName && !editing ? (
+			{(message.authorName || message.suggestedBy) && !editing ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
-					{message.authorName}
+					{[message.authorName, message.suggestedBy ? <SuggestedByCredit key="suggested" name={message.suggestedBy} /> : undefined]
+						.filter(Boolean)
+						.flatMap((part, index) => (index > 0 ? [" · ", part] : [part]))}
 				</span>
 			) : null}
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
@@ -1042,7 +1045,9 @@ export function HumanMessage({
 									attachments={attachments}
 									sessionId={sessionId}
 									apiBaseUrl={apiBaseUrl}
-									renderText={(text) => <SessionLinkedText text={text} />}
+									renderText={(text) => message.mentions?.length
+										? <MentionedText text={text} mentions={message.mentions} renderText={(plain) => <SessionLinkedText text={plain} />} />
+										: <SessionLinkedText text={text} />}
 								/>
 							</p>
 						) : null}
@@ -1096,6 +1101,12 @@ export function HumanMessage({
 			) : null}
 		</div>
 	);
+}
+
+/** A message a teammate's suggestion became: who suggested it, as GitHub credits a suggester. */
+function SuggestedByCredit({ name }: { name: string }) {
+	const { t } = useTranslation();
+	return <span data-chat-message-suggested-by="">{t("suggestion.suggestedBy", { name })}</span>;
 }
 
 /**

@@ -4299,6 +4299,7 @@
 	"suggestion.failed": "Не получилось. Попробуйте снова.",
 	"aside.withdraw": "Отозвать",
 	"aside.withdrawFailed": "Не удалось отозвать, попробуйте снова",
+	"suggestion.suggestedBy": "Предложение от {{name}}",
 	"mention.tooMany": "Упоминайте не больше {{max}} людей и команд за раз.",
 	"mention.notAllowed": "Упоминать можно только участников этой сессии.",
 	"mention.tooManyMentioned": "Это уведомит слишком много людей. Упомяните меньше.",

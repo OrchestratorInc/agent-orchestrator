@@ -56,10 +56,15 @@ describe("the composer's Agent and Aside modes", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Aside" }));
 		const aside = await screen.findByRole("combobox", { name: "Message teammates" });
 		expect(lexicalEditorText(aside)).toBe("");
+		// The composer itself changes, not only its words: an aside's edge and a quiet hint.
+		expect(aside.closest("form")).toHaveAttribute("data-composer-variant", "aside");
+		expect(aside.closest("form")?.querySelector("[data-aside-composer-hint]")).toHaveTextContent("Agent can't see this");
 		expect(screen.getByText("Message teammates. The agent never reads asides")).toBeInTheDocument();
 		await typeInLexicalEditor(aside, "for people");
 		fireEvent.click(screen.getByRole("button", { name: "Agent" }));
 		const back = await screen.findByRole("combobox", { name: "Message the agent" });
+		expect(back.closest("form")).not.toHaveAttribute("data-composer-variant");
+		expect(document.querySelector("[data-aside-composer-hint]")).toBeNull();
 		await waitFor(() => expect(lexicalEditorText(back)).toBe("for the agent"));
 		expect(readChatSessionDraft({ sessionId: "modes-drafts#aside", incarnation: "modes-drafts" }).composer.text).toBe("for people");
 		expect(readChatSessionDraft("modes-drafts").composer.text).toBe("for the agent");

@@ -212,6 +212,10 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set on a human message another participant in a shared session sent. */
 	authorName?: string;
+	/** The people and teams a human message named, drawn as chips in its text. */
+	mentions?: Array<{ kind: "person" | "team"; name: string }>;
+	/** A message sent from a teammate's suggestion: who suggested it, credited under it. */
+	suggestedBy?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;

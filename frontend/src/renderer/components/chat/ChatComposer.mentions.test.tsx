@@ -369,3 +369,10 @@ describe("the mention cap", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 });
+
+describe("the aside variant", () => {
+	it("marks the composer so it takes an aside's dashed edge", () => {
+		const { container } = render(<ChatComposer onSend={vi.fn()} variant="aside" />);
+		expect(container.querySelector("form")).toHaveAttribute("data-composer-variant", "aside");
+	});
+});

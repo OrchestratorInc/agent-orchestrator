@@ -4128,6 +4128,7 @@
 	"suggestion.failed": "実行できませんでした。もう一度お試しください。",
 	"aside.withdraw": "取り下げる",
 	"aside.withdrawFailed": "取り下げられませんでした。もう一度お試しください",
+	"suggestion.suggestedBy": "{{name}} の提案",
 	"mention.tooMany": "一度にメンションできる人とチームは {{max}} 件までです。",
 	"mention.notAllowed": "メンションできるのはこのセッションの参加者だけです。",
 	"mention.tooManyMentioned": "通知する人数が多すぎます。メンションを減らしてください。",

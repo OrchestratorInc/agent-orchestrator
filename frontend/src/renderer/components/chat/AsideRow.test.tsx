@@ -91,7 +91,18 @@ describe("AsideRow", () => {
 		expect(onWithdraw).toHaveBeenCalledWith(suggestion);
 	});
 
+	it("draws the people and teams it names as chips", () => {
+		const { container } = renderRow(aside({ text: "@Chen Wei and @Platform, can you check?", mentions: [{ kind: "person", userId: "u-chen", name: "Chen Wei" }, { kind: "team", teamId: "t", name: "Platform" }] }));
+		const chips = [...container.querySelectorAll("[data-mention-chip]")];
+		expect(chips.map((chip) => [chip.getAttribute("data-mention-chip"), chip.textContent])).toEqual([["person", "CWChen Wei"], ["team", "PLPlatform"]]);
+		expect(container.querySelector("[data-aside] p")?.textContent).toBe("CWChen Wei and PLPlatform, can you check?");
+	});
 
+	it("gives your own aside your initials, not the label's", () => {
+		const { container } = renderRow(aside({ authorUserId: "u-me", authorName: "Asha Rao" }), { selfUserId: "u-me" });
+		expect(screen.getByText("You")).toBeInTheDocument();
+		expect(container.querySelector("[data-person-avatar]")?.textContent).toBe("AR");
+	});
 
 	it("renders nothing for a row without an aside", () => {
 		const { container } = renderRow({ ...aside(), detail: { event: "chat.aside" } });
