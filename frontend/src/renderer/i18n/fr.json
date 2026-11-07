@@ -1381,6 +1381,8 @@
 	"settings.cliLink.foreign": "This command is not an Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Hôtes distants",
 	"settings.navigation": "Navigation",
+	"settings.altMenu": "Show menu bar with Alt",
+	"settings.altMenuSaveFailed": "Could not save this setting.",
 	"settings.navigationGestures": "Gestes de navigation",
 	"settings.navigationGesturesHint": "Balayez horizontalement avec deux doigts pour revenir en arrière ou avancer.",
 	"settings.renderMath": "Afficher les formules",
