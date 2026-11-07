@@ -649,14 +649,18 @@ describe("Cloud control-plane asides, mentions and the team feed", () => {
 		const { fetchImpl, client: cp } = client();
 		await cp.listSessionSuggestions("org", "session");
 		await cp.createSessionSuggestion("org", "session", { asideId: "aside 1" }, { idempotencyKey: "sg-key" });
-		await cp.createSessionSuggestion("org", "session", { asideId: "aside 2", text: "In other words" });
+		// A suggestion is the aside's own words: nothing but the aside goes up, even from a loose caller.
+		await cp.createSessionSuggestion("org", "session", { asideId: "aside 2", text: "In other words" } as { asideId: string });
+		// @ts-expect-error rewording belongs to the driver's /send, never to the suggestion
+		const reworded: Parameters<typeof cp.createSessionSuggestion>[2] = { asideId: "aside 3", text: "Reworded" };
+		void reworded;
 		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions");
 		expect(call(fetchImpl, 0)[1].method).toBe("GET");
 		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions");
 		expect(call(fetchImpl, 1)[1].method).toBe("POST");
 		expect(JSON.parse(call(fetchImpl, 1)[1].body as string)).toEqual({ asideId: "aside 1" });
 		expect(key(call(fetchImpl, 1)[1])).toBe("sg-key");
-		expect(JSON.parse(call(fetchImpl, 2)[1].body as string)).toEqual({ asideId: "aside 2", text: "In other words" });
+		expect(JSON.parse(call(fetchImpl, 2)[1].body as string)).toEqual({ asideId: "aside 2" });
 		expect(key(call(fetchImpl, 2)[1])).toBeTruthy();
 	});
 

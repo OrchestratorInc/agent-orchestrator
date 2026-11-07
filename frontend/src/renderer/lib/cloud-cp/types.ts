@@ -338,7 +338,12 @@ export type CloudCpSuggestion = Suggestion;
 export type CloudCpSuggestionEnvelope = SuggestionEnvelope;
 /** chat.suggestion_created or chat.suggestion_resolved, with the suggestion as its payload. */
 export type CloudCpSuggestionEvent = SuggestionEvent;
-export type CloudCpCreateSuggestionInput = CreateSuggestionInput;
+/**
+ * POST .../suggestions takes only the aside: a suggestion is always the aside's own
+ * words, and the CP refuses any other field with a 400. Rewording happens only on
+ * the driver's side, through /send with `text`, attributed to the driver.
+ */
+export type CloudCpCreateSuggestionInput = Pick<CreateSuggestionInput, "asideId">;
 export type CloudCpSendSuggestionInput = SendSuggestionInput;
 export type CloudCpSendSuggestionResult = SendSuggestionResult;
 export type CloudCpDismissSuggestionInput = DismissSuggestionInput;

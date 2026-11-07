@@ -121,6 +121,14 @@ describe("TeamFeedView", () => {
 		expect(container.querySelectorAll("[data-feed-status]")).toHaveLength(1);
 	});
 
+	it("draws a worker row whose orchestrator you can't open as a plain line", async () => {
+		mocks.getMyFeed.mockResolvedValue(page([item("a", { status: "working", title: "Fix flaky test", line: "running npm test", worker: undefined })]));
+		renderFeed();
+		const row = await screen.findByRole("button", { name: /Fix flaky test/ });
+		expect(within(row).getByText("running npm test")).toBeInTheDocument();
+		expect(within(row).queryByText(/Worker/)).toBeNull();
+	});
+
 	it.each([
 		["needs", "Needs someone"], ["working", "Working"], ["review", "In review"], ["ready", "Ready to merge"],
 		["merged", "Merged"], ["failed", "Failed"], ["idle", "Idle"],
