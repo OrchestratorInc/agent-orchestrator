@@ -1328,6 +1328,10 @@ type SendSessionMessageRequest struct {
 	// UserAuthored marks content written directly by the user but delivered via
 	// AO's automation relay, such as inline document feedback.
 	UserAuthored bool `json:"userAuthored,omitempty"`
+	// SenderName labels a sender outside AO's sessions, such as a bot relaying
+	// the user's chat or `ao send` run from a terminal. Presentation only, and
+	// ignored when senderSessionId is set.
+	SenderName string `json:"senderName,omitempty" maxLength:"60"`
 	// Attachment is an optional inline image (e.g. a browser-annotation
 	// snapshot) delivered alongside the message. The daemon writes it into the
 	// session worktree and appends a path reference to the message.

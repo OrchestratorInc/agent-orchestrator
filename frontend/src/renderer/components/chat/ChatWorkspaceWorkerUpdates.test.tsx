@@ -356,4 +356,11 @@ describe("messages an outside tool relayed", () => {
 
 		expect(screen.queryByTestId("agent-message")).not.toBeInTheDocument();
 	});
+
+	it("draws a message its sender named through the send API under that name, with no prefix needed", () => {
+		renderOrchestrator([{ ...automation("t1", 1, "Run exactly this one command."), senderDisplayName: "ao send" }, reply("t1", 2, "Done.")], vi.fn(), [], "worker");
+
+		expect(screen.getByTestId("agent-message")).toHaveTextContent("ao sendRun exactly this one command.");
+		expect(screen.queryByText("automation")).not.toBeInTheDocument();
+	});
 });

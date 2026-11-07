@@ -1377,3 +1377,35 @@ func TestRelayWhileHibernatedKeepsSenderAndInteraction(t *testing.T) {
 		t.Fatalf("worker latest interaction = %v (found=%v err=%v), want %v", rec.Metadata.LatestInteractionAt, found, err, interactionAt)
 	}
 }
+
+// A relay from outside AO's sessions keeps the name its sender gave, so the
+// timeline can tell it from AO's own messages.
+func TestRelayWhileHibernatedKeepsAnOutsideSendersName(t *testing.T) {
+	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
+		t.Fatalf("HibernateChat = %v, %v", hibernated, err)
+	}
+	h.svc.SetWakeCallback(func(ctx context.Context, _ domain.SessionID) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	if _, err := h.svc.RelaySessionChatTurn(ctx, testSession, "catch me up", "relay-outside-1", ports.MessageDeliveryOptions{
+		SenderName: "Grok Bot", AuthoredByUser: true,
+	}); err != nil {
+		t.Fatalf("cold relay: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, found, err := h.st.ConversationMessageByClientID(ctx, conversation.ID, "relay-outside-1")
+	if err != nil || !found {
+		t.Fatalf("queued message found=%v err=%v", found, err)
+	}
+	if message.Origin != domain.MessageOriginAutomation || message.SenderSessionID != "" || message.SenderDisplayName != "Grok Bot" {
+		t.Fatalf("queued message = origin %q, sender %q/%q; want automation from Grok Bot with no session",
+			message.Origin, message.SenderSessionID, message.SenderDisplayName)
+	}
+}

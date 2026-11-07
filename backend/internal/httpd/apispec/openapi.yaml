@@ -20124,6 +20124,9 @@ components:
           maxLength: 4096
           minLength: 1
           type: string
+        senderName:
+          maxLength: 60
+          type: string
         senderSessionId:
           type: string
         userAuthored:

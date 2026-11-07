@@ -125,8 +125,12 @@ export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 	return parseReports(item.text, item.createdAt, item.id);
 });
 
-/** The outside tool a message or steer came through and what it said, when no AO session sent it. */
-// ponytail: reads the tool's text prefix, so anyone can type one; a sender name on the send API would replace it.
+/**
+ * The outside sender a message or steer came from and what it said, when no AO
+ * session sent it: the name it gave the send API (`ao send` run from a
+ * terminal names itself so), else the tool its `[via …]` prefix names.
+ */
+// ponytail: a sender that names itself only in its text prefix is taken at its word; the send API's senderName is the structural route.
 export const relayedVia = cachedBy((item): { name: string; body: string } | null => {
 	// A message's piggybacked reports draw as their own rows, as under a human message.
 	const text = item.kind === "message"
@@ -134,8 +138,8 @@ export const relayedVia = cachedBy((item): { name: string; body: string } | null
 		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text ?? item.summary : undefined;
 	if (text === undefined) return null;
 	const via = VIA_PREFIX.exec(text);
-	const name = via?.[1]?.trim();
-	return via && name ? { name, body: text.slice(via[0].length) } : null;
+	const name = (item.kind === "message" ? item.senderDisplayName?.trim() : undefined) || via?.[1]?.trim();
+	return name ? { name, body: via ? text.slice(via[0].length) : text } : null;
 });
 
 export function isTaskTitleUpdate(item: ConversationItem): boolean {
