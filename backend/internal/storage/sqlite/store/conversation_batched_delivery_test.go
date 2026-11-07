@@ -32,7 +32,7 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 	if err := s.BindTurnToProvider(ctx, batch[0].TurnID, "p-lead", histClock.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "p-lead", histClock.Add(time.Minute)); err != nil {
+	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "p-lead", "", histClock.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,7 +54,7 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 	if err := s.UpsertActivity(ctx, conversation, "p-lead", steer, histClock.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteQueuedBatch(ctx, conversation, []string{steered[0].TurnID}, "p-lead", histClock.Add(2*time.Minute)); err != nil {
+	if err := s.CompleteQueuedBatch(ctx, conversation, []string{steered[0].TurnID}, "p-lead", "steer-1", histClock.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 

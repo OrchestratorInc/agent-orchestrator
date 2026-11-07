@@ -1205,7 +1205,9 @@ SET state = 'completed',
     completed_at = sqlc.arg(completed_at),
     promotion_started_at = NULL,
     promoted_to_turn_id = sqlc.arg(promoted_to_turn_id),
-    batched_input = 1
+    batched_input = 1,
+    batch_delivery_kind = sqlc.arg(batch_delivery_kind),
+    batch_delivery_steer_id = sqlc.arg(batch_delivery_steer_id)
 WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
@@ -2148,25 +2150,14 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
 
--- The queued turns AO batched into another turn's provider input: a queue drain
--- or a steer. The snapshot turn queries leave them out, so the client reads the
--- delivery link here.
+-- The queued turns AO batched into another turn's provider input, and how: a
+-- queue drain or a steer. The snapshot turn queries leave them out, so the
+-- client reads the delivery link here. Turns batched before the kind was
+-- recorded are left out.
 -- name: ListConversationBatchedTurns :many
-SELECT id, promoted_to_turn_id
+SELECT id, promoted_to_turn_id, batch_delivery_kind, batch_delivery_steer_id
 FROM conversation_turns
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND batched_input = 1
-  AND promoted_to_turn_id IS NOT NULL;
-
--- Steers that carried queued turns, with the detail naming those turns. A steer
--- is a system row; other rows may have no detail at all, so the JSON is only
--- read once json_valid says it parses (WHERE terms have no evaluation order).
--- name: ListConversationBatchSteers :many
-SELECT id, detail_json
-FROM conversation_activities
-WHERE conversation_id = sqlc.arg(conversation_id)
-  AND kind = 'system'
-  AND CASE WHEN json_valid(detail_json)
-      THEN json_extract(detail_json, '$.event') = 'steer'
-       AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array'
-      ELSE 0 END;
+  AND promoted_to_turn_id IS NOT NULL
+  AND batch_delivery_kind != '';
