@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerMention } from "../../lib/cloud-team-collab";
 import { chatDraftScopeKey, readChatSessionDraft } from "../../lib/chat-drafts";
-import { readDraftMentions } from "../../lib/chat-draft-mentions";
+import { readDraftMentions, writeDraftMentions } from "../../lib/chat-draft-mentions";
 import type { CloudCpMentionCandidates } from "../../lib/cloud-cp/types";
 import { useUiStore } from "../../stores/ui-store";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
@@ -76,6 +76,18 @@ describe("the @ menu with people and teams", () => {
 		expect(outline[1]).toContain("Here now");
 		expect(outline.find((line) => line.includes("Platform"))).toContain("6 people");
 		expect(outline.find((line) => line.includes("Cara Diaz"))).toContain("Can't open this yet");
+	});
+
+	it("names each section for screen readers as a group of its options", async () => {
+		const { field } = renderComposer({ mentions: mentions() });
+		await typeInLexicalEditor(field, "check with @");
+		const listbox = screen.getByRole("listbox");
+		const groups = within(listbox).getAllByRole("group");
+		expect(groups.map((group) => group.getAttribute("aria-label"))).toEqual(["In this session", "Teams", "People in Northwind", "Files"]);
+		expect(within(within(listbox).getByRole("group", { name: "Teams" })).getAllByRole("option").map((option) => option.textContent)).toEqual([
+			expect.stringContaining("Checkout"),
+			expect.stringContaining("Platform"),
+		]);
 	});
 
 	it("shows at most five people under In this session", async () => {
@@ -187,6 +199,34 @@ describe("mention chips", () => {
 	});
 });
 
+describe("chips saved beside a draft", () => {
+	const scope = chatDraftScopeKey({ sessionId: "session-chips", incarnation: "session-chips" });
+
+	it("are cleared when the draft is sent, so a later draft never revives them", async () => {
+		const first = renderComposer({ mentions: mentions({ confirm: () => undefined }), draftSessionId: "session-chips" });
+		await typeInLexicalEditor(first.field, "@che");
+		await userEvent.keyboard("{Enter}");
+		await typeInLexicalEditor(first.field, "hi");
+		expect(readDraftMentions(scope)).toHaveLength(1);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(first.onSend).toHaveBeenCalled());
+		await waitFor(() => expect(localStorage.getItem(`ao.chatDraftMentions:${scope}`)).toBeNull());
+		first.view.unmount();
+		const second = renderComposer({ mentions: mentions(), draftSessionId: "session-chips" });
+		await typeInLexicalEditor(second.field, "@Chen Wei by hand");
+		expect(second.field.querySelector("[data-composer-token]")).toBeNull();
+	});
+
+	it("never come back on a recalled message, which reads as text", async () => {
+		writeDraftMentions(scope, [{ kind: "person", id: "u-chen", name: "Chen Wei" }]);
+		const { field } = renderComposer({ mentions: mentions(), draftSessionId: "session-chips", sentMessages: ["@Chen Wei hi"] });
+		act(() => field.focus());
+		await userEvent.keyboard("{ArrowUp}");
+		await waitFor(() => expect(lexicalEditorText(field)).toBe("@Chen Wei hi"));
+		expect(field.querySelector("[data-composer-token]")).toBeNull();
+	});
+});
+
 describe("asking before a mentioning send", () => {
 	const chen: ComposerMention = { kind: "person", id: "u-chen", name: "Chen Wei", canOpen: true };
 
@@ -231,14 +271,58 @@ describe("asking before a mentioning send", () => {
 		expect(confirm).toHaveBeenCalledTimes(2);
 	});
 
-	it("drops the question on Escape", async () => {
+	it("keeps Escape out of the question: in a session Escape denies approvals", async () => {
 		const confirm = vi.fn(() => new Promise<ComposerMention[] | null>(() => undefined));
 		const cancelConfirm = vi.fn();
 		const { field } = renderComposer({ mentions: mentions({ confirm, cancelConfirm }) });
 		await typeInLexicalEditor(field, "@che");
 		await userEvent.keyboard("{Enter}{Enter}");
-		fireEvent.keyDown(field, { key: "Escape" });
-		expect(cancelConfirm).toHaveBeenCalled();
+		const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+		act(() => { field.dispatchEvent(event); });
+		expect(cancelConfirm).not.toHaveBeenCalled();
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	it("answers an open question with its primary action on Enter, sending nothing twice", async () => {
+		let resolveAnswer!: (mentions: ComposerMention[] | null) => void;
+		const confirm = vi.fn(() => new Promise<ComposerMention[] | null>((resolve) => { resolveAnswer = resolve; }));
+		const answer = vi.fn(() => resolveAnswer([chen]));
+		const { field, onSend } = renderComposer({ mentions: mentions({ confirm, answer }) });
+		await typeInLexicalEditor(field, "@che");
+		await userEvent.keyboard("{Enter}{Enter}");
+		expect(confirm).toHaveBeenCalledTimes(1);
+		await userEvent.keyboard("{Enter}");
+		expect(answer).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(confirm).toHaveBeenCalledTimes(1);
+	});
+
+	it("never switches modes on Shift+Tab while a question is open, and keeps the question", async () => {
+		const confirm = vi.fn(() => new Promise<ComposerMention[] | null>(() => undefined));
+		const cancelConfirm = vi.fn();
+		const onToggleMode = vi.fn();
+		const { field } = renderComposer({ mentions: mentions({ confirm, cancelConfirm }), onToggleMode });
+		await typeInLexicalEditor(field, "@che");
+		await userEvent.keyboard("{Enter}{Enter}");
+		const event = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+		act(() => { field.dispatchEvent(event); });
+		expect(onToggleMode).not.toHaveBeenCalled();
+		expect(cancelConfirm).not.toHaveBeenCalled();
+		// Focus moves back as usual, to the question's buttons above the editor.
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	it("puts focus back in the editor once the question is answered from its bar", async () => {
+		let resolveAnswer!: (mentions: ComposerMention[] | null) => void;
+		const confirm = vi.fn(() => new Promise<ComposerMention[] | null>((resolve) => { resolveAnswer = resolve; }));
+		const { field } = renderComposer({ mentions: mentions({ confirm }) });
+		await typeInLexicalEditor(field, "@che");
+		await userEvent.keyboard("{Enter}{Enter}");
+		// Clicking the bar's button took focus; the bar then goes away.
+		act(() => { (document.activeElement as HTMLElement | null)?.blur(); });
+		expect(field).not.toHaveFocus();
+		await act(async () => resolveAnswer(null));
+		await waitFor(() => expect(field).toHaveFocus());
 	});
 
 	it("sends at once when nothing needs asking", async () => {
@@ -295,6 +379,19 @@ describe("composer modes", () => {
 	});
 });
 
+describe("an approval in the composer's place", () => {
+	it("carries the mode switch under it, and Shift+Tab there switches to Aside", () => {
+		const onToggleMode = vi.fn();
+		render(<ChatComposer onSend={vi.fn()} approval={<button type="button">Allow</button>} dockFooter={<span data-testid="mode-switch">switch</span>} onToggleMode={onToggleMode} />);
+		expect(screen.getByTestId("mode-switch")).toBeInTheDocument();
+		const allow = screen.getByRole("button", { name: "Allow" });
+		const event = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+		act(() => { allow.dispatchEvent(event); });
+		expect(onToggleMode).toHaveBeenCalledTimes(1);
+		expect(event.defaultPrevented).toBe(true);
+	});
+});
+
 describe("mentions on a saved draft's delivery", () => {
 	it("sends them with the delivery and keeps them on its record for a retry", async () => {
 		let fail = true;
@@ -337,6 +434,16 @@ describe("calm refusals", () => {
 		expect(line).toHaveClass("text-muted-foreground");
 		expect(screen.queryByRole("alert")).toBeNull();
 		await waitFor(() => expect(lexicalEditorText(field)).toBe("Edited suggestion"));
+	});
+
+	it("reads a steer's refused mention as the same calm line as a send's, not a warning", async () => {
+		const onSteer = vi.fn(async () => ({ status: "not-accepted" as const, reason: "You can mention only people in this session.", calm: true }));
+		const { field } = renderComposer({ willQueue: true, canSteer: true, onSteer });
+		await typeInLexicalEditor(field, "look at this");
+		await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+		const line = await screen.findByText("You can mention only people in this session.");
+		expect(line).toHaveClass("text-muted-foreground");
+		expect(line).not.toHaveClass("text-warning");
 	});
 
 	it("still reads a real refusal as an error", async () => {

@@ -1,3 +1,4 @@
+import type { ComposerMention } from "../lib/cloud-team-collab";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
@@ -78,7 +79,12 @@ export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "f
  */
 export type ChatSteerOutcome =
 	| { status: "accepted" }
-	| { status: "not-accepted"; reason: string };
+	| {
+		status: "not-accepted";
+		reason: string;
+		/** An ordinary refusal (a mention the session can't take), said as a muted line rather than a warning. */
+		calm?: boolean;
+	};
 
 /** Durable inline-edit acceptance; uncertainty remains a rejected promise. */
 export type ChatEditOutcome = ChatSteerOutcome;
@@ -183,6 +189,8 @@ export interface ConversationContentSummary {
 
 export interface QueuedMessageEditOptions {
 	clientMessageId?: string;
+	/** The people and teams the edited message names, as its chips did. */
+	mentions?: ComposerMention[];
 	attachments?: { mimeType: string; data: string }[];
 	retainedContent?: number[];
 	expectedRevision?: number;
@@ -216,6 +224,8 @@ export interface ConversationMessage {
 	mentions?: Array<{ kind: "person" | "team"; name: string }>;
 	/** A message sent from a teammate's suggestion: who suggested it, credited under it. */
 	suggestedBy?: string;
+	/** A message sent from the reader's own suggestion: credited "Suggested by you". */
+	suggestedByYou?: boolean;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;

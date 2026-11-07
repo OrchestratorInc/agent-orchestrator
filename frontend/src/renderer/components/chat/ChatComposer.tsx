@@ -250,8 +250,13 @@ export interface ComposerMentionSource {
 	 * or null to keep the draft unsent. Undefined sends at once.
 	 */
 	confirm?: (mentions: ComposerMention[]) => Promise<ComposerMention[] | null> | undefined;
-	/** The draft changed or Escape was pressed while a confirm was asked: it no longer applies. */
+	/** The draft changed while a confirm was asked: it no longer applies. */
 	cancelConfirm?: () => void;
+	/**
+	 * Enter's answer to the open question: its primary action (Notify, or
+	 * Share and send). Escape stays out of it; in a session it denies approvals.
+	 */
+	answer?: () => void;
 }
 
 export const ChatComposer = memo(function ChatComposer({
@@ -268,6 +273,7 @@ export const ChatComposer = memo(function ChatComposer({
 	settings,
 	addMenuItems,
 	approval,
+	dockFooter,
 	elicitation,
 	skills = [],
 	filePaths = [],
@@ -356,6 +362,8 @@ export const ChatComposer = memo(function ChatComposer({
 	addMenuItems?: ReactNode;
 	/** A provider decision that temporarily replaces ordinary message entry. */
 	approval?: ReactNode;
+	/** Shown under an approval that has taken the editor's place (the Agent/Aside switch). */
+	dockFooter?: ReactNode;
 	/** A provider question, docked above the composer until it is answered. */
 	elicitation?: ReactNode;
 	/** A send is in flight. */
@@ -428,7 +436,14 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Why the last steer was refused. */
 	steerRefusal?: string;
 	/** A selected history message to load into the composer as a new draft. */
-	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[] };
+	draftSeed?: {
+		id: string;
+		text: string;
+		attachments?: StoredComposerAttachment[];
+		stagedAttachments?: ChatDraftAttachment[];
+		/** The people and teams the seeded text names, drawn as chips (a draft with no saved scope). */
+		mentions?: readonly ComposerMention[];
+	};
 	/** A queued turn being edited in the composer instead of the dock. */
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
@@ -436,7 +451,7 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
 	/** Every edit of the draft text or move of its caret, with the text and caret after it. */
-	onDraftInput?: (text: string, caret?: number) => void;
+	onDraftInput?: (text: string, caret?: number, mentions?: readonly ComposerMention[]) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -522,6 +537,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// already handled) reads calmly rather than as a failure.
 	const [calmSendError, setCalmSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
+	// A refused mention is an ordinary outcome: its line is muted, not a warning.
+	const [steerOutcomeCalm, setSteerOutcomeCalm] = useState(false);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
@@ -567,7 +584,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const confirmedMentions = useRef<ComposerMention[] | null>(null);
 	// Read by the editor's change handler, which outlives a render.
 	const cancelMentionConfirmRef = useRef<() => void>(() => undefined);
-	const readSavedMentions = useCallback(() => (draftScopeKey ? readDraftMentions(draftScopeKey) : []), [draftScopeKey]);
+	const readSavedMentions = useCallback(() => (draftScopeKey ? readDraftMentions(draftScopeKey) : draftSeed?.mentions ?? []), [draftScopeKey, draftSeed?.mentions]);
+	const mentionAnswerRef = useRef(mentionSource?.answer);
+	mentionAnswerRef.current = mentionSource?.answer;
 	const dictation = useDictation({
 		onText: (text) => editor.current?.dictate(text),
 		onEnd: (keep) => editor.current?.endDictation(keep),
@@ -1033,7 +1052,10 @@ export const ChatComposer = memo(function ChatComposer({
 		highlightedRef.current = 0;
 		setHighlighted(0);
 		editor.current?.clear();
-	}, []);
+		// The cleared text never reaches onEditorChange's save (textRef is already
+		// empty), so the chips saved beside it go here, or a later draft revives them.
+		if (draftScopeKey) writeDraftMentions(draftScopeKey, []);
+	}, [draftScopeKey]);
 
 	const applyAcceptedDraftResult = useCallback(
 		(result: DraftClearResult) => {
@@ -1432,7 +1454,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (snapshot.text !== previousText) cancelMentionConfirmRef.current();
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
 			draftCaretRef.current = snapshot.caret;
-			onDraftInput?.(snapshot.text, snapshot.caret);
+			onDraftInput?.(snapshot.text, snapshot.caret, snapshot.mentions);
 		}
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
@@ -1555,7 +1577,7 @@ export const ChatComposer = memo(function ChatComposer({
 		[onCompact, skills, suggestionsFor],
 	);
 
-	/** A confirm that no longer applies: the draft changed, or Escape. */
+	/** A confirm that no longer applies: the draft changed. */
 	function cancelMentionConfirm() {
 		if (!mentionConfirm.current) return;
 		if (submitInFlight.current === mentionConfirm.current) submitInFlight.current = null;
@@ -1581,7 +1603,8 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		// A send that mentions people may ask first (a big team, someone who can't
 		// open the session). The draft stays as it is, editable, while it asks; an
-		// edit or Escape drops the question and the next send asks again.
+		// edit drops the question and the next send asks again. However it is
+		// answered, focus goes back to the editor the question took it from.
 		const asking = !confirmedMentions.current && !durableDelivery && !savingQueuedEdit
 			? mentionSource?.confirm?.(editor.current?.getSnapshot().mentions ?? [])
 			: undefined;
@@ -1590,6 +1613,7 @@ export const ChatComposer = memo(function ChatComposer({
 				if (mentionConfirm.current !== pending) return;
 				mentionConfirm.current = null;
 				if (submitInFlight.current === pending) submitInFlight.current = null;
+				editor.current?.focus();
 				if (!cleared) return;
 				confirmedMentions.current = cleared;
 				return submit(undefined, forceSteer);
@@ -1796,11 +1820,14 @@ export const ChatComposer = memo(function ChatComposer({
 						: sendMentions ? await onSteer(message, undefined, undefined, undefined, sendMentions) : await onSteer(message);
 					if (outcome?.status === "not-accepted") {
 						setSteerOutcomeNotice(outcome.reason);
+						setSteerOutcomeCalm(outcome.calm === true);
 						return;
 					}
 				} else if (savingQueuedEdit) {
-					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
-						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
+					const retained = visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]);
+					// A queued message keeps the people its chips name.
+					if (sendMentions) await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined, retained, undefined, undefined, undefined, sendMentions);
+					else await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined, retained);
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
@@ -1911,6 +1938,7 @@ export const ChatComposer = memo(function ChatComposer({
 						setTextDraftPersistenceError(null);
 						setDeliveryRecoveryNotice(null);
 						setSteerOutcomeNotice(outcome.reason);
+						setSteerOutcomeCalm(outcome.calm === true);
 					} else {
 						setTextDraftPersistenceError(
 							"chat.draft.clearRefusedSteerFailed",
@@ -2003,6 +2031,12 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const handleEnterKey = useCallback(
 		(event: globalThis.KeyboardEvent): boolean => {
+			// A question about the send's mentions is open: Enter gives its primary answer.
+			const answer = mentionAnswerRef.current;
+			if (mentionConfirm.current && answer && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+				answer();
+				return true;
+			}
 			const liveSnapshot = editor.current?.getSnapshot();
 			if (liveSnapshot) textRef.current = liveSnapshot.text;
 			const liveTrigger = liveSnapshot?.trigger;
@@ -2033,15 +2067,11 @@ export const ChatComposer = memo(function ChatComposer({
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Shift+Tab switches the composer's mode (Agent and Aside), as Claude Code
 		// cycles its modes, instead of moving focus back.
-		if (onToggleMode && event.key === "Tab" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+		// While a question about the send is open it moves focus back as usual,
+		// to the question's buttons above, and never drops the question.
+		if (onToggleMode && !mentionConfirm.current && event.key === "Tab" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
 			event.preventDefault();
 			onToggleMode();
-			return;
-		}
-		if (event.key === "Escape" && mentionConfirm.current) {
-			event.preventDefault();
-			event.stopPropagation();
-			cancelMentionConfirm();
 			return;
 		}
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
@@ -2110,7 +2140,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!browse) return false;
 		const index = browse.index + (older ? 1 : -1);
 		if (index >= browse.entries.length) return false;
-		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
+		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start", index < 0 ? undefined : []);
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
 		if (snapshot) onEditorChange(snapshot);
@@ -2238,9 +2268,16 @@ export const ChatComposer = memo(function ChatComposer({
 		return withQueueStack(
 			<form
 				onSubmit={(event) => event.preventDefault()}
+				// Shift+Tab switches to Aside here too, so the team can talk it over.
+				onKeyDown={(event) => {
+					if (!onToggleMode || event.key !== "Tab" || !event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+					event.preventDefault();
+					onToggleMode();
+				}}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
+				{dockFooter ? <div className="flex items-center" data-approval-dock-footer="">{dockFooter}</div> : null}
 				{commandError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{commandError}
@@ -2487,7 +2524,7 @@ export const ChatComposer = memo(function ChatComposer({
 					</p>
 				) : null}
 				{steerRefusal ?? steerOutcomeNotice ? (
-					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+					<p role="status" className={cn("px-1.5 text-xs leading-snug", !steerRefusal && steerOutcomeCalm ? "text-muted-foreground" : "text-warning")}>
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
 					</p>
 				) : null}

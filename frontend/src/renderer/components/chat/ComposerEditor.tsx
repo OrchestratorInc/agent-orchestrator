@@ -84,7 +84,8 @@ export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	/** Replaces the text; `mentions` names its chips (else the draft's saved ones; [] for none). */
+	setText(text: string, caret?: "start" | "end", mentions?: readonly ComposerMention[]): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	/** Replaces the trigger with a chip: a file or skill by its value, or a person or team. */
@@ -638,9 +639,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, mentions) => {
 				editor.update(() => {
-					$replaceEditorText(text, attachedImages(), caret, savedMentions());
+					$replaceEditorText(text, attachedImages(), caret, mentions ?? savedMentions());
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
 					discrete: true,

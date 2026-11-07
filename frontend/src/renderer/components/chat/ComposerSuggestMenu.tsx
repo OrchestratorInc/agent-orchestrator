@@ -94,6 +94,70 @@ export function ComposerSuggestMenu({
 
 	if (items.length === 0) return null;
 
+	const renderOption = (item: (typeof items)[number], index: number) => (
+		<Pressable
+			tabIndex={-1}
+			role="option"
+			id={`${id}-option-${index}`}
+			aria-selected={index === highlighted}
+			onClick={() => onPick(item.value)}
+			className={cn(
+				"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
+				index === highlighted
+					? "bg-interactive-active text-foreground"
+					: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
+			)}
+		>
+			{item.mention ? (
+				<span aria-hidden="true" className="flex h-4 shrink-0 items-center">
+					{item.mention.kind === "person"
+						? <PersonAvatar name={item.mention.name} size="xs" />
+						: <TeamTile name={item.mention.name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+				</span>
+			) : kind === "file"
+				? (() => {
+						const Icon = composerFileIcon(item.value);
+						return (
+							<span
+								aria-hidden="true"
+								className="flex h-4 shrink-0 items-center text-muted-foreground"
+							>
+								<Icon className="size-3.5" />
+							</span>
+						);
+					})()
+				: null}
+			<span className="min-w-0 flex-1">
+				<span
+					className={cn(
+						"block truncate text-xs",
+						index === highlighted ? "text-foreground" : "text-muted-foreground",
+					)}
+				>
+					{kind === "skill" ? `/${item.label}` : item.label}
+				</span>
+				{item.detail ? (
+					<span className="block truncate text-caption leading-snug text-muted-foreground">
+						{item.detail}
+					</span>
+				) : null}
+			</span>
+			{displayBadge(item.badge) ? (
+				<span className="shrink-0 text-micro text-muted-foreground">
+					{displayBadge(item.badge)}
+				</span>
+			) : null}
+			{index === highlighted ? (
+				<span
+					aria-label="Press Tab or Enter to insert"
+					className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
+				>
+					<CornerDownLeft aria-hidden="true" className="size-3" />
+				</span>
+			) : null}
+		</Pressable>
+	);
+
 	return (
 		<div
 			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col gap-px overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
@@ -109,80 +173,30 @@ export function ComposerSuggestMenu({
 					onScroll={updateScrollIndicators}
 					className="scrollbar-none flex max-h-64 flex-col gap-px overflow-y-auto"
 				>
-					{items.map((item, index) => (
-						<li key={item.value} data-index={index} role="presentation">
-							{item.section && item.section !== items[index - 1]?.section ? (
-								<div
+					{menuGroups(items).map((group) => group.section ? (
+						// A section is a group named for screen readers; its visible title says the same.
+						<li key={`section:${group.start}`} role="presentation">
+							<ul aria-label={group.section} className="flex flex-col gap-px" role="group">
+								<li
 									aria-hidden="true"
-									className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", index > 0 && "mt-1")}
+									className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", group.start > 0 && "mt-1")}
 									data-suggest-section=""
+									role="presentation"
 								>
-									{item.section}
-								</div>
-							) : null}
-							<Pressable
-								tabIndex={-1}
-								role="option"
-								id={`${id}-option-${index}`}
-								aria-selected={index === highlighted}
-								onClick={() => onPick(item.value)}
-								className={cn(
-									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
-									index === highlighted
-										? "bg-interactive-active text-foreground"
-										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
-								)}
-							>
-								{item.mention ? (
-									<span aria-hidden="true" className="flex h-4 shrink-0 items-center">
-										{item.mention.kind === "person"
-											? <PersonAvatar name={item.mention.name} size="xs" />
-											: <TeamTile name={item.mention.name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
-									</span>
-								) : kind === "file"
-									? (() => {
-											const Icon = composerFileIcon(item.value);
-											return (
-												<span
-													aria-hidden="true"
-													className="flex h-4 shrink-0 items-center text-muted-foreground"
-												>
-													<Icon className="size-3.5" />
-												</span>
-											);
-										})()
-									: null}
-								<span className="min-w-0 flex-1">
-									<span
-										className={cn(
-											"block truncate text-xs",
-											index === highlighted ? "text-foreground" : "text-muted-foreground",
-										)}
-									>
-										{kind === "skill" ? `/${item.label}` : item.label}
-									</span>
-									{item.detail ? (
-										<span className="block truncate text-caption leading-snug text-muted-foreground">
-											{item.detail}
-										</span>
-									) : null}
-								</span>
-								{displayBadge(item.badge) ? (
-									<span className="shrink-0 text-micro text-muted-foreground">
-										{displayBadge(item.badge)}
-									</span>
-								) : null}
-								{index === highlighted ? (
-									<span
-										aria-label="Press Tab or Enter to insert"
-										className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
-									>
-										<CornerDownLeft aria-hidden="true" className="size-3" />
-									</span>
-								) : null}
-							</Pressable>
+									{group.section}
+								</li>
+								{group.items.map((item, offset) => (
+									<li key={item.value} data-index={group.start + offset} role="presentation">
+										{renderOption(item, group.start + offset)}
+									</li>
+								))}
+							</ul>
 						</li>
-					))}
+					) : group.items.map((item, offset) => (
+						<li key={item.value} data-index={group.start + offset} role="presentation">
+							{renderOption(item, group.start + offset)}
+						</li>
+					)))}
 				</ul>
 				{scrollIndicators.top ? (
 					<div
@@ -213,4 +227,15 @@ export function ComposerSuggestMenu({
 function displayBadge(badge?: string): string | undefined {
 	if (!badge || badge.toLowerCase() === "agent") return undefined;
 	return badge.toLowerCase() === "ao" ? "AO" : badge;
+}
+
+/** Runs of items under one section title (none for an untitled run), each with where it starts. */
+function menuGroups<T extends { section?: string }>(items: readonly T[]): Array<{ section?: string; start: number; items: T[] }> {
+	const groups: Array<{ section?: string; start: number; items: T[] }> = [];
+	items.forEach((item, index) => {
+		const last = groups.at(-1);
+		if (last && last.section === item.section) last.items.push(item);
+		else groups.push({ section: item.section, start: index, items: [item] });
+	});
+	return groups;
 }
