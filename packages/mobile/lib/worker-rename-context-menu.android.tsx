@@ -1,57 +1,48 @@
-import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
-import { type MutableRefObject, type ReactNode } from "react";
-import { Pressable } from "react-native";
-import type { GestureType } from "react-native-gesture-handler";
+import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
+import { useRef, useState } from "react";
+import { Pressable, StyleSheet, View, type GestureResponderEvent } from "react-native";
+import { haptics } from "./haptics";
+import { usePressFeedback } from "./pressFeedback";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { hasWorkerActionDrawable, type WorkerAction, type WorkerActionId } from "./worker-action-model";
+import { workerActionDrawable } from "./worker-action-drawables";
+import { workerAccessibilityActions, workerActionNamed, type WorkerActionId } from "./worker-action-model";
+import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
-// Android's drawables are bundled, not resolved by name, so every action needs a
-// file here. `require` of a missing one fails at bundle time rather than
-// rendering blank, so this map and assets/icons must agree exactly.
-const DRAWABLES: Partial<Record<WorkerActionId, number>> = {
-	pin: require("../assets/icons/pin.xml"),
-	unpin: require("../assets/icons/unpin.xml"),
-	rename: require("../assets/icons/rename.xml"),
-	open: require("../assets/icons/open.xml"),
-	resume: require("../assets/icons/resume.xml"),
-	restore: require("../assets/icons/restore.xml"),
-	openPr: require("../assets/icons/openPr.xml"),
-	delete: require("../assets/icons/delete.xml"),
-};
-
-// MenuView owns Android's long-press natively. It must remain the trigger while
-// the row is nested in Swipeable; React Native and Gesture Handler callbacks
-// lose that touch race to the swipe container.
+/**
+ * The row and its long-press menu: Compose's DropdownMenu, with each action's
+ * Material Symbol.
+ *
+ * Compose opens the menu at its anchor's start edge, and anchored to the whole
+ * row it always opened against the screen's left edge, wherever the finger
+ * was. The anchor is instead a point placed under the finger as the long press
+ * lands, so the menu opens there, as a long press on any Android list does;
+ * Compose moves it in from an edge it would cross.
+ *
+ * The row asks the menu to open, and gives the long-press haptic the system
+ * gives a view that opens a menu.
+ */
 export function WorkerRowContextMenu({
 	children,
 	onPress,
 	actions,
 	onAction,
-	gestureRef: _gestureRef,
 	accessibilityLabel,
 	accessibilityHint,
 	style,
-	pressedStyle,
-}: {
-	children: ReactNode;
-	onPress(): void;
-	actions: WorkerAction[];
-	onAction(id: WorkerActionId): void;
-	gestureRef: MutableRefObject<GestureType | undefined>;
-	accessibilityLabel: string;
-	accessibilityHint: string;
-	style: object;
-	pressedStyle: object;
-}) {
+}: WorkerRowContextMenuProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	const feedback = usePressFeedback("row");
+	const menu = useRef<MenuComponentRef>(null);
+	// Where the finger came down, in the row, and where the anchor sits.
+	const touch = useRef({ x: 0, y: 0 });
+	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
 
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
 		title: action.title,
-		...(hasWorkerActionDrawable(action.id)
-			? { image: DRAWABLES[action.id], imageColor: action.destructive ? t.red : t.accent }
-			: {}),
+		image: workerActionDrawable(action.id),
+		imageColor: action.destructive ? t.red : t.textSecondary,
 		titleColor: action.destructive ? t.red : t.textPrimary,
 		attributes: action.destructive ? { destructive: true } : undefined,
 	}));
@@ -61,22 +52,47 @@ export function WorkerRowContextMenu({
 	};
 
 	return (
-		<MenuView
-			colorScheme={scheme}
-			actions={menuActions}
-			shouldOpenOnLongPress
-			onPressAction={chooseAction}
-			testID="worker-row-menu"
-		>
+		<View>
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
 				accessibilityHint={accessibilityHint}
+				accessibilityActions={workerAccessibilityActions(actions)}
+				onAccessibilityAction={(event) => {
+					const id = workerActionNamed(actions, event.nativeEvent.actionName);
+					if (id) onAction(id);
+				}}
+				android_ripple={feedback.android_ripple}
 				onPress={onPress}
-				style={({ pressed }) => [style, pressed && pressedStyle]}
+				onPressIn={(event: GestureResponderEvent) => {
+					touch.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
+				}}
+				onLongPress={() => {
+					haptics.press();
+					setAnchor(touch.current);
+					// Opened once the anchor has moved under the finger.
+					requestAnimationFrame(() => menu.current?.show());
+				}}
+				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>
 				{children}
 			</Pressable>
-		</MenuView>
+			<MenuView
+				ref={menu}
+				colorScheme={scheme}
+				actions={menuActions}
+				onPressAction={chooseAction}
+				style={[styles.anchor, { left: anchor.x, top: anchor.y }]}
+				testID="worker-row-menu"
+			>
+				<View pointerEvents="none" style={styles.point} />
+			</MenuView>
+		</View>
 	);
 }
+
+const styles = StyleSheet.create({
+	// Takes no touches: the row under it has them all.
+	anchor: { position: "absolute", pointerEvents: "none" },
+	point: { width: 1, height: 1 },
+});

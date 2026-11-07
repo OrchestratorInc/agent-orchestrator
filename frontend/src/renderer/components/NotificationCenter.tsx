@@ -46,6 +46,7 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
@@ -484,6 +485,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	const setPanelOpen = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
+		if (nextOpen) captureTopbarAction("notifications");
 		if (!nextOpen) {
 			remoteHistoryGeneration.current += 1;
 			remoteFirstPageKeys.current.clear();

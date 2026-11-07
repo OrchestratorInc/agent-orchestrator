@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
@@ -15,7 +16,6 @@ import {
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -95,7 +95,7 @@ export function SessionBranchSummary({
 				params: { path: { sessionId: session.id } },
 				body: { message: gitActionMessage(kind, facts.base, openPRNumber) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.git.actionFailed")));
+			if (error) throw apiErrorException(error, t("inspector.git.actionFailed"));
 		},
 		onMutate: (kind) => startPending(key, kind),
 		onError: () => clearPending(key),

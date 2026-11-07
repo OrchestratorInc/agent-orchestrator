@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
 type PreparedClone = components["schemas"]["ClonePreparationResult"];
@@ -79,7 +80,7 @@ export function usePreparedClone(hostId?: string) {
 			const { error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/projects/clone/cleanup", {
 				body: { path: current.path, preparationId: current.preparationId, keepCheckout: true },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Could not keep the cloned checkout"));
+			if (error) throw apiErrorException(error, "Could not keep the cloned checkout");
 			currentRef.current = null;
 			inputRef.current = null;
 		} finally {

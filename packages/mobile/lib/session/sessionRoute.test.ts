@@ -35,11 +35,11 @@ const pending: SessionLookup = { state: "pending" };
 
 type ViewArgs = Parameters<typeof sessionRouteView>[0];
 const view = (over: Partial<ViewArgs> = {}) =>
-	sessionRouteView({ listed: undefined, configured: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
+	sessionRouteView({ listed: undefined, paired: true, connection: "open", loading: false, lookup: pending, routeHostId: "host-a", currentHostId: "host-a", ...over });
 
 type DueArgs = Parameters<typeof sessionLookupDue>[0];
 const due = (over: Partial<DueArgs> = {}) =>
-	sessionLookupDue({ listed: false, configured: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
+	sessionLookupDue({ listed: false, paired: true, connection: "open", appActive: true, machineChanged: false, lookup: pending, ...over });
 
 describe("sessionRouteView", () => {
 	it("never opens another machine's same-ID session from a stale route", () => {
@@ -48,17 +48,17 @@ describe("sessionRouteView", () => {
 		expect(view({ listed, routeHostId: undefined })).toEqual({ kind: "wrongHost" });
 	});
 	it("waits for the saved config before judging anything", () => {
-		expect(view({ configured: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
+		expect(view({ paired: null, loading: true, listed: orchestrator(), lookup: failed(404) })).toEqual({ kind: "loading" });
 	});
 	it("shows an offline paired host instead of another-machine or a permanent loader", () => {
-		expect(view({ configured: null, connection: "closed" })).toEqual({ kind: "offline" });
-		expect(view({ configured: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
+		expect(view({ paired: null, connection: "closed" })).toEqual({ kind: "offline" });
+		expect(view({ paired: null, connection: "closed", currentHostId: "host-b" })).toEqual({ kind: "wrongHost" });
 	});
 
 	// The store keeps the last machine's lists after Settings → forget, so a
 	// cached id must not open a session screen with nothing paired.
 	it("shows the unpaired state before consulting the lists", () => {
-		expect(view({ configured: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
+		expect(view({ paired: false, listed: orchestrator() })).toEqual({ kind: "unpaired" });
 	});
 
 	it("opens a listed session whatever the lookup or the link says", () => {
@@ -172,8 +172,8 @@ describe("sessionLookupDue", () => {
 
 	it("never asks for a listed id, or without a paired machine", () => {
 		expect(due({ listed: true })).toBe(false);
-		expect(due({ configured: false })).toBe(false);
-		expect(due({ configured: null })).toBe(false);
+		expect(due({ paired: false })).toBe(false);
+		expect(due({ paired: null })).toBe(false);
 	});
 
 	it("never asks again once the daemon has answered", () => {

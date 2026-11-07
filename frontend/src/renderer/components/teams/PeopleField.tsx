@@ -96,6 +96,8 @@ export function PeopleField({
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
+	const blurCloseTimer = useRef<number | undefined>(undefined);
+	useEffect(() => () => window.clearTimeout(blurCloseTimer.current), []);
 	// The suggestion the person moved to with the arrow keys or the pointer;
 	// until they do, the highlight is the default one below.
 	const [moved, setMoved] = useState<string | null>(null);
@@ -311,7 +313,8 @@ export function PeopleField({
 							// or an arrow key does.
 							onClick={() => setOpen(true)}
 							onBlur={() => {
-								window.setTimeout(() => setOpen(false), 120);
+								window.clearTimeout(blurCloseTimer.current);
+								blurCloseTimer.current = window.setTimeout(() => setOpen(false), 120);
 								commitTyped();
 							}}
 							onKeyDown={onKeyDown}

@@ -3,6 +3,7 @@ import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
@@ -63,8 +64,13 @@ type EventPayload = {
 	steering?: unknown;
 	error?: unknown;
 	text?: unknown;
-	/** chat.user_message: the model and effort the message was sent with */
+	/**
+	 * chat.user_message: the model and effort the message was sent with.
+	 * session.model_unavailable: the project's model the account lacks.
+	 */
 	model?: unknown;
+	/** session.model_unavailable: the agent whose account lacks the model. */
+	harness?: unknown;
 	reasoningEffort?: unknown;
 	origin?: unknown;
 	senderLabel?: unknown;
@@ -434,6 +440,25 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 }
 
 /**
+ * The session started on its agent's default model because the creator's
+ * Cloud account cannot run the project's model, as a system row: the control
+ * plane says so once, before the session's first turn.
+ */
+function modelUnavailableActivity(event: CloudCpClientEvent, sessionAgent: string): ConversationActivity | undefined {
+	const payload = eventPayload(event);
+	const model = typeof payload.model === "string" ? payload.model.trim() : "";
+	if (!model) return undefined;
+	const harness = typeof payload.harness === "string" && payload.harness ? payload.harness : sessionAgent;
+	return {
+		kind: "activity", id: `cloud-model-unavailable-${event.sequence}`, sequence: event.sequence, revision: 1,
+		activityKind: "system", status: "completed",
+		summary: appI18n.t("chat.cloudModelUnavailableNotice", { model, agent: agentLabel(harness) }),
+		detail: { event: "session.model_unavailable" },
+		createdAt: event.createdAt,
+	};
+}
+
+/**
  * One Setup or Cleanup run as a system row, placed where its first step event
  * arrived. Its revision is the run's newest event, so the row redraws live
  * even where only the newest event per step is kept.
@@ -798,6 +823,11 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				if (before >= 0) items.splice(before, 0, activity);
 				else items.push(activity);
 			}
+			continue;
+		}
+		if (event.type === "session.model_unavailable") {
+			const activity = modelUnavailableActivity(event, session.provider);
+			if (activity) items.push(activity);
 			continue;
 		}
 		if (event.type === "workspace.setup") {
@@ -1183,6 +1213,12 @@ export function CloudSessionChatSurface({
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
 			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
+			// The worker listed the account's own models, which the control plane
+			// keeps as the account's Cloud list: every New Task and settings picker
+			// for this agent reads it again now rather than on its next refresh.
+			if (catalog.accountListed && userId) {
+				void invalidateCloudModelCatalogs(queryClient, { baseUrl, userId, orgId: cloud!.orgId, agent: session.provider });
+			}
 			return { ...catalog, selectionVersionAtFetch };
 		},
 	});
@@ -1583,13 +1619,15 @@ export function CloudSessionChatSurface({
 	// The composer's agent and model picker, with the agent's mark, as a local
 	// chat has. A Cloud session keeps the agent it started with, so the picker
 	// offers only its models; another agent is a new task.
+	// Its models are Cloud's for the account (cloudOrgId), as every Cloud picker's are.
 	const agentSwitch = useMemo<AgentSwitchProps>(() => ({
 		projectId: session.workspaceId,
+		cloudOrgId: cloud?.orgId,
 		agents: [{ id: session.provider, label: agentLabel(session.provider) }],
 		onPendingChange: () => undefined,
 		disabled: true,
 		harnessView: "cloud",
-	}), [session.provider, session.workspaceId]);
+	}), [cloud?.orgId, session.provider, session.workspaceId]);
 	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
 	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model, undefined, true, false);
 	// With no list of the session's own yet, Claude's choices come from the device's

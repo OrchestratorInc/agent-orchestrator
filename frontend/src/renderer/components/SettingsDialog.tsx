@@ -39,6 +39,7 @@ import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -471,6 +472,7 @@ export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
+	useEdgeFade(scrollerRef, "y", [page?.active]);
 	if (!page) return null;
 	const layer = page.active;
 	return (
@@ -491,7 +493,7 @@ export function SettingsPane() {
 				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar edge-fade [--edge-fade-end-size:0px] relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>

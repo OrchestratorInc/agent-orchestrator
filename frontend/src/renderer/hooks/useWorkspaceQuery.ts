@@ -1,3 +1,4 @@
+import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
@@ -267,6 +268,7 @@ type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 class DaemonNotReadyError extends Error {
 	constructor() {
 		super("AO daemon API is not ready");
+		markApiError(this);
 	}
 }
 

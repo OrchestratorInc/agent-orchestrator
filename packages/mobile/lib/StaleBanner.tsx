@@ -1,13 +1,7 @@
-import { Feather } from "./icons";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-
-import { haptics } from "./haptics";
-import { describeLinkHealth } from "./linkHealth";
+import { InlineBanner } from "./InlineBanner";
+import { describeLinkHealth, type LinkBannerCopy } from "./linkHealth";
 import { staleAgeLabel } from "./screenState";
 import { useApp } from "./store";
-import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { fontScaleCap, space, type } from "./tokens";
 import { useStaleness } from "./useStaleness";
 
 /**
@@ -24,6 +18,9 @@ import { useStaleness } from "./useStaleness";
  * small component. It also self-gates to null when the data is current, so
  * screens can render it unconditionally.
  *
+ * It draws the chat screen's banner, so the app has one banner language rather
+ * than two that nearly match.
+ *
  * It also says when the phone's own connection is the problem: no network, a
  * link still recovering from a blip, or one that answers slowly. Those are
  * amber and never name the machine as down. `networkOnly` limits it to the
@@ -31,8 +28,6 @@ import { useStaleness } from "./useStaleness";
  * one machine's poll is not the whole story.
  */
 export function StaleBanner({ error = false, onRetry, networkOnly = false }: { error?: boolean; onRetry?: () => void; networkOnly?: boolean }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
 	const { getLastSyncAt, config, linkHealth, selectedHostName } = useApp();
 	const { stale, ageMs } = useStaleness(getLastSyncAt);
 
@@ -51,8 +46,6 @@ export function StaleBanner({ error = false, onRetry, networkOnly = false }: { e
 	// desktop is gone, the other can just be a laptop that slept. The phone's own
 	// connection is amber: nothing is wrong with the machine.
 	const red = error && !showLink;
-	const tone = red ? t.red : t.amber;
-	const fill = red ? t.tintRed : t.tintAmber;
 	const age = staleAgeLabel(ageMs);
 	const text = showLink
 		? link.text
@@ -61,57 +54,26 @@ export function StaleBanner({ error = false, onRetry, networkOnly = false }: { e
 				? `Can't reach ${host} — showing data from ${age}`
 				: `Can't reach your machine — showing data from ${age}`
 			: `Showing data from ${age}`;
-	const icon = showLink ? link.icon : error ? "wifi-off" : "clock";
 	// Retrying can't help while the phone itself has no network.
 	const retry = linkHealth === "phone-offline" ? undefined : onRetry;
 
 	return (
-		<View
+		<InlineBanner
 			accessibilityRole="alert"
 			accessibilityLabel={text}
-			style={[styles.banner, { backgroundColor: fill }]}
-		>
-			<Feather name={icon} size={12} color={tone} />
-			<Text
-				numberOfLines={1}
-				maxFontSizeMultiplier={fontScaleCap.chrome}
-				style={styles.bannerText}
-			>
-				{text}
-			</Text>
-			{retry ? (
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Retry now"
-					hitSlop={7}
-					onPress={() => {
-						haptics.tap();
-						retry();
-					}}
-				>
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.bannerAction, { color: tone }]}>
-						Retry
-					</Text>
-				</Pressable>
-			) : null}
-		</View>
+			tone={red ? "danger" : "warning"}
+			icon={showLink ? linkSymbols[link.icon] : error ? "offline" : "history"}
+			title={text}
+			action={retry ? "Retry" : undefined}
+			actionLabel="Retry now"
+			onPress={retry}
+		/>
 	);
 }
 
-// Metrics mirror the chat screen's InlineBanner so the app has one banner
-// language rather than two that nearly match.
-const makeStyles = (t: Theme) =>
-	StyleSheet.create({
-		banner: {
-			minHeight: 35,
-			flexDirection: "row",
-			alignItems: "center",
-			gap: space.sm,
-			paddingHorizontal: space.md,
-			paddingVertical: space.xs,
-			borderBottomWidth: 1,
-			borderBottomColor: t.borderSubtle,
-		},
-		bannerText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		bannerAction: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600" },
-	});
+/** The link's own glyphs, as the app's system symbols. */
+const linkSymbols = {
+	"wifi-off": "offline",
+	"refresh-cw": "refresh",
+	activity: { ios: "waveform.path.ecg", android: "monitor_heart" },
+} as const satisfies Record<LinkBannerCopy["icon"], unknown>;

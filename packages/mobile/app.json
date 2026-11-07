@@ -63,7 +63,7 @@
 				"foregroundImage": "./assets/android-icon-foreground.png",
 				"monochromeImage": "./assets/android-icon-monochrome.png"
 			},
-			"predictiveBackGestureEnabled": true,
+			"predictiveBackGestureEnabled": false,
 			"permissions": ["android.permission.CAMERA"],
 			"softwareKeyboardLayoutMode": "resize"
 		},
@@ -75,6 +75,9 @@
 			"expo-router",
 			"@sentry/react-native/expo",
 			"./plugins/withCircleDashedCheck",
+			"./plugins/withHarnessMenuIcons",
+			"./plugins/withAndroidDialogTheme",
+			"./plugins/withIosSoftScrollEdge",
 			[
 				"expo-navigation-bar",
 				{
@@ -86,6 +89,9 @@
 				{
 					"android": {
 						"usesCleartextTraffic": true
+					},
+					"ios": {
+						"enableSceneSupport": true
 					}
 				}
 			],

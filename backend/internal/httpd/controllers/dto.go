@@ -264,6 +264,8 @@ type SessionIDParam struct {
 type PreviewFileQuery struct {
 	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
 	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+	// Version reads a kept version instead of the live artifact file.
+	ArtifactVersion int64 `query:"artifactVersion,omitempty" description:"With source=artifact, serve this saved version of the file instead of its current content." minimum:"1"`
 }
 
 // PRNumberParam is the associated pull-request number in Files routes.
@@ -571,7 +573,7 @@ type SpawnSessionRequest struct {
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
 	// ApprovalMode overrides the project/default policy for this spawn.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
-	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
+	Prompt       string                `json:"prompt,omitempty" maxLength:"102400"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
 	// selected harness can honor the model before launching.
@@ -1335,7 +1337,7 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"16384"`
+	Brief           string              `json:"brief" maxLength:"102400"`
 	Branch          string              `json:"branch,omitempty" maxLength:"255"`
 	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
@@ -2421,7 +2423,7 @@ type ShellTerminalHandleIDParam struct {
 type OpenShellTerminalRequest struct {
 	ProjectID     string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
 	SessionID     string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
-	Shell         string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	Shell         string `json:"shell,omitempty" description:"Shell to launch: auto (the user's default shell), an executable path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl)."`
 	StartOnAttach bool   `json:"startOnAttach,omitempty" description:"Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid."`
 	Title         string `json:"title,omitempty" description:"Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N)."`
 	Cols          int    `json:"cols,omitempty" description:"Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored)."`
@@ -2453,6 +2455,27 @@ type ListShellTerminalsResponse struct {
 // terminal mutations.
 type ShellTerminalEnvelope struct {
 	ShellTerminal ShellTerminalResponse `json:"shellTerminal"`
+}
+
+// TerminalShellResponse is one shell a new terminal can launch. ID is the
+// value to send as a terminal's shell.
+type TerminalShellResponse struct {
+	ID   string `json:"id" description:"Value to send as a terminal's shell: auto, a Windows selector, or the executable path."`
+	Name string `json:"name" description:"Display name, such as zsh or PowerShell."`
+	Path string `json:"path,omitempty" description:"Executable path. Empty when the default shell cannot be resolved."`
+}
+
+// TerminalShellsResponse is the body of GET /api/v1/terminal-shells.
+type TerminalShellsResponse struct {
+	Default TerminalShellResponse   `json:"default" description:"The shell auto resolves to."`
+	Shells  []TerminalShellResponse `json:"shells" description:"Installed shells, one per real binary."`
+}
+
+// TerminalShellCheckResponse reports whether a custom shell path can launch.
+type TerminalShellCheckResponse struct {
+	Executable bool   `json:"executable"`
+	Path       string `json:"path,omitempty" description:"Resolved executable path when executable."`
+	Message    string `json:"message,omitempty" description:"Why the path cannot launch."`
 }
 
 // CueIDParam is the {cueId} path parameter of the /cues/{cueId} routes.

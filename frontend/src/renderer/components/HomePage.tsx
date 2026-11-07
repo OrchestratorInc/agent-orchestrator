@@ -30,6 +30,7 @@ import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 /**
  * Home landing layout contracts (do not regress without explicit design sign-off):
@@ -153,6 +154,7 @@ export function HomePage() {
 }
 
 function HomePageContent() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
@@ -272,7 +274,7 @@ function HomePageContent() {
 	}
 
 	return (
-		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
+		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
 					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
