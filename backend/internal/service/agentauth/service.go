@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -297,6 +298,11 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
 		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+	}
+	if plan.AgentID == "prime-agent" && s.dataDir != "" {
+		// Sign in to the profile sessions run with, not ~/.prime/agent.
+		input.Env = make(map[string]string, 1)
+		primeagent.New().AugmentRuntimeEnv(input.Env, s.dataDir)
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)
