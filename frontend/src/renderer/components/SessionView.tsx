@@ -27,7 +27,7 @@ import { SessionContextMenuItems } from "./SessionContextMenuItems";
 import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
-import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
+import { SplitDivider, SplitFocusOutline, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
@@ -2909,20 +2909,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{/* Panes other than the focused one rest under a light veil, so
-							    the one taking keys stands out; the veil never takes the pointer.
-							    The session's own chat or agent is never dimmed. */}
-							{shownGroup && shownLayout
-								? [...shownLayout.leaves.keys()].filter((key) => key !== SESSION_TAB_KEY).map((key) => (
-									<div
-										aria-hidden="true"
-										className="pane-split-dim"
-										data-dimmed={key === selectedTabKey ? undefined : ""}
-										key={`dim:${key}`}
-										style={paneStyle(key)}
-									/>
-								))
-								: null}
+							{/* When focus moves to a pane, a thin accent outline flashes on it
+							    and fades away, so it marks the move without staying on screen.
+							    Keyed by the pane, so each focus change replays it. */}
+							{shownGroup && shownLayout && shownLayout.leaves.has(selectedTabKey) ? (
+								<SplitFocusOutline
+									box={layoutBoxes(shownGroup.root).leaves.get(selectedTabKey) ?? { x: 0, y: 0, w: 1, h: 1 }}
+									key={`split-focus:${selectedTabKey}`}
+									screenRef={splitScreenRef}
+								/>
+							) : null}
 							{shownGroup && shownLayout
 								? shownLayout.dividers.map((divider) => (
 									<SplitDivider
