@@ -70,7 +70,7 @@ export function connectRoute(onConnected: () => void, hostId?: string) {
 		pathname: "/connect" as const,
 		params: {
 			resultKey: parkSheetResult(onConnected),
-			...(hostId ? { hostId } : {}),
+			...(hostId !== undefined ? { hostId } : {}),
 		},
 	};
 }
