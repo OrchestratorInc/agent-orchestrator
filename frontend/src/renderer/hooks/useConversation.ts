@@ -1386,8 +1386,10 @@ function steerRefusal(error: unknown): string | undefined {
 			return "The turn finished before this landed. Send it as a message instead.";
 		case "CHAT_INTERFACE_TRANSITION":
 			return "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.";
-		case "CHAT_TURN_NOT_STEERABLE":
-			return `${apiErrorMessage(error)} Try again once it finishes.`;
+		case "CHAT_TURN_NOT_STEERABLE": {
+			const message = apiErrorMessage(error).trim();
+			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
+		}
 		case "CHAT_STEER_UNSUPPORTED":
 			// Answered by hiding the control, so there is nothing to say.
 			return undefined;

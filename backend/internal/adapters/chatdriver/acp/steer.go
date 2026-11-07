@@ -17,8 +17,9 @@ const steeringMethod = "_session/steering"
 
 // defaultSteerDrainWait bounds how long a drain-mode steer holds the caller
 // while the agent works toward its next step boundary. The Chat controller
-// holds its dispatch lock for the whole call, so Stop and new sends wait too;
-// past this, the guidance is withdrawn and the caller is told to try again.
+// holds its dispatch lock for the whole call, so new sends wait too; Stop
+// withdraws the guidance first (WithdrawPendingSteers). Past this, the
+// guidance is withdrawn and the caller is told to try again.
 const defaultSteerDrainWait = 5 * time.Second
 
 // steerNudgeTimeout bounds the best-effort request asking a drain agent to
@@ -160,11 +161,14 @@ func (s steering) supported(init acpsdk.InitializeResponse) bool {
 
 // pendingSteer is guidance waiting for a drain agent to collect it. done
 // receives exactly once, under conversation.mu: true when the agent collected
-// it, false when the turn it was meant for ended first.
+// it, false when the turn it was meant for ended first or Stop withdrew it.
 type pendingSteer struct {
 	turn string
 	text string
 	done chan bool
+	// withdrawn means Stop settled it, not the end of the turn. Set under
+	// conversation.mu before done is sent.
+	withdrawn bool
 }
 
 // providerRefusal marks a request the ACP agent rejected on its own terms, as
@@ -285,8 +289,16 @@ func (c *conversation) steerByDrain(
 	c.pendingSteers = append(c.pendingSteers, pending)
 	c.mu.Unlock()
 
+	// The wait starts before the nudge, so the nudge counts toward Wait.
+	wait := drain.Wait
+	if wait <= 0 {
+		wait = defaultSteerDrainWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
 	if drain.Nudge != "" {
-		nudgeCtx, cancel := context.WithTimeout(ctx, steerNudgeTimeout)
+		nudgeCtx, cancel := context.WithTimeout(ctx, min(steerNudgeTimeout, wait))
 		if err := c.legacyWire.call(nudgeCtx, drain.Nudge, map[string]string{"sessionId": sessionID}); err != nil {
 			c.log.Debug("ACP steer nudge failed; guidance waits for the next boundary",
 				"method", drain.Nudge, "error", err)
@@ -294,15 +306,15 @@ func (c *conversation) steerByDrain(
 		cancel()
 	}
 
-	wait := drain.Wait
-	if wait <= 0 {
-		wait = defaultSteerDrainWait
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
 	settled := func(collected bool) (ports.ChatTurnRef, error) {
 		if collected {
 			return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
+		}
+		// withdrawn is written before done is sent, so reading it here is safe.
+		if pending.withdrawn {
+			return ports.ChatTurnRef{}, fmt.Errorf(
+				"%w: the turn is being stopped, so the agent never collected the guidance",
+				ports.ErrChatTurnNotSteerable)
 		}
 		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
 	}
@@ -367,6 +379,18 @@ func (c *conversation) collectSteers(params json.RawMessage) any {
 	}
 	c.mu.Unlock()
 	return drain.Response(texts)
+}
+
+// WithdrawPendingSteers settles every steer still waiting for the agent as not
+// collected, so a Steer blocked on a drain agent returns at once. Stop calls it
+// before taking the Chat controller's dispatch lock.
+func (c *conversation) WithdrawPendingSteers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, pending := range c.pendingSteers {
+		pending.withdrawn = true
+	}
+	c.releasePendingSteersLocked()
 }
 
 // releasePendingSteersLocked settles every waiting steer as not collected. It

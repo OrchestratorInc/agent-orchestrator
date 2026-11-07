@@ -657,6 +657,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	case update.AgentMessageChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
@@ -666,12 +667,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			break
 		}
-		c.mu.Lock()
-		segment := c.steerSegment
-		c.mu.Unlock()
+		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
+		if parentID != "" {
+			// A steer goes to the parent turn, so a subagent's reply stays one message.
+			segment = 0
+		}
 		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
-			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
+			if parentID != "" {
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
 				item.text += delta
@@ -696,13 +699,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	case update.AgentThoughtChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			break
 		}
-		c.mu.Lock()
-		segment := c.steerSegment
-		c.mu.Unlock()
 		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()

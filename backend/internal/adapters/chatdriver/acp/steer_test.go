@@ -425,3 +425,114 @@ func TestACPSteerStartsANewMessageForIdlessText(t *testing.T) {
 		t.Fatalf("messages in order = %q then %q", deltas[order[0]], deltas[order[1]])
 	}
 }
+
+// Stop withdraws a steer that is still waiting for the agent, so it does not
+// sit behind the steer's wait. The caller is told to retry, not to send the
+// guidance as a new turn, because the turn is being stopped.
+func TestACPSteerDrainStopWithdrawsAWaitingSteer(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	acceptImages(agent)
+	conv, turn := startDrainConversation(t, agent, testDrain(time.Minute))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging instead"})
+		done <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conv.mu.Lock()
+		parked := len(conv.pendingSteers)
+		conv.mu.Unlock()
+		if parked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("steer was never parked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var withdrawer ports.ChatSteerWithdrawer = conv
+	withdrawer.WithdrawPendingSteers()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ports.ErrChatTurnNotSteerable) {
+			t.Fatalf("Steer error = %v, want ErrChatTurnNotSteerable", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Steer kept waiting after Stop withdrew it")
+	}
+	result, err := conv.HandleExtensionMethod(context.Background(), testDrainMethod, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("drain after withdrawal: %v", err)
+	}
+	if encoded, _ := json.Marshal(result); string(encoded) != `{"messages":[]}` {
+		t.Fatalf("drain after withdrawal = %s, want empty messages", encoded)
+	}
+}
+
+// A steer goes to the parent turn. A subagent's reply that streams across it
+// stays one message instead of starting a second subagent activity.
+func TestACPSteerKeepsASubagentReplyInOneMessage(t *testing.T) {
+	collected := make(chan struct{})
+	agent := &fakeAgent{}
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		say := func(text string) {
+			_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+				SessionId: params.SessionId,
+				Update: acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+					Content: acpsdk.TextBlock(text),
+					Meta:    map[string]any{"claudeCode": map[string]any{"parentToolUseId": "task-1"}},
+				}},
+			})
+		}
+		say("reading the config. ")
+		for {
+			raw, err := agent.conn.CallExtension(ctx, testDrainMethod, map[string]any{"sessionId": string(params.SessionId)})
+			if err != nil {
+				return acpsdk.PromptResponse{}, err
+			}
+			var response struct {
+				Messages []string `json:"messages"`
+			}
+			_ = json.Unmarshal(raw, &response)
+			if len(response.Messages) > 0 {
+				close(collected)
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		say("found the timeout.")
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	conv, turn := startDrainConversation(t, agent, testDrain(2*time.Second))
+	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging"}); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	<-collected
+
+	texts := map[string]string{}
+	started := 0
+	for {
+		event := nextEvent(t, conv.Events())
+		switch event.Kind {
+		case ports.ChatEventActivityStarted:
+			if event.Summary == "Subagent response" {
+				started++
+			}
+		case ports.ChatEventActivityText:
+			texts[event.ProviderItemID] += event.Delta
+		}
+		if event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	if started != 1 || len(texts) != 1 {
+		t.Fatalf("subagent activities = %d, texts = %#v, want one", started, texts)
+	}
+	for _, text := range texts {
+		if text != "reading the config. found the timeout." {
+			t.Fatalf("subagent text = %q", text)
+		}
+	}
+}
