@@ -57,6 +57,7 @@ type fakeClaude struct {
 	apiKey     map[string]bool   // folders logged in with an API key
 	failing    map[string]bool   // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
+	limitsErr  error
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -75,7 +76,7 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
-	return domain.AgentAccountLimits{Windows: f.windows}, nil
+	return domain.AgentAccountLimits{Windows: f.windows}, f.limitsErr
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil
@@ -770,5 +771,93 @@ func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
 	read()
 	if len(confirmed) != 1 || confirmed[0] != domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude) {
 		t.Fatalf("confirmed = %v", confirmed)
+	}
+}
+
+func TestListKeepsLastUsageWhenProbeFailsForSameLogin(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 42}},
+	}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	before, err := svc.List(ctx, true)
+	if err != nil || len(before) != 1 || before[0].Limits == nil {
+		t.Fatalf("initial reading: %+v, %v", before, err)
+	}
+	claude.limitsErr = fmt.Errorf("provider %w", domain.ErrUsageUnavailable)
+	for _, email := range []string{"a@example.com", "a@example.com", "b@example.com"} {
+		claude.signedInAs[""] = email
+		views, err := svc.List(ctx, true)
+		if err != nil || len(views) != 1 || views[0].LimitsErr != "provider usage is temporarily unavailable" {
+			t.Fatalf("failed probe: %+v, %v", views, err)
+		}
+		want := before[0].Limits
+		if email == "b@example.com" {
+			want = nil
+		}
+		if views[0].Limits != want {
+			t.Fatalf("cached reading for %s = %+v, want %+v", email, views[0].Limits, want)
+		}
+	}
+}
+
+func TestListDoesNotKeepUsageAfterAnotherLimitsFailure(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 42}},
+	}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if views, err := svc.List(ctx, true); err != nil || views[0].Limits == nil {
+		t.Fatalf("initial reading: %+v, %v", views, err)
+	}
+	claude.limitsErr = errors.New("claude get_usage: boom")
+	views, err := svc.List(ctx, true)
+	if err != nil || views[0].Limits != nil || views[0].LimitsErr != "claude get_usage: boom" {
+		t.Fatalf("only an unavailable usage read keeps the last reading: %+v, %v", views, err)
+	}
+}
+
+func TestOnlyARealUsageReadingConfirmsTheLogin(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	confirmed := 0
+	svc.SetLoginConfirmed(func(domain.AgentAccount, time.Time) { confirmed++ })
+	read := func(err error) int {
+		confirmed, claude.limitsErr = 0, err
+		if _, listErr := svc.List(ctx, true); listErr != nil {
+			t.Fatal(listErr)
+		}
+		return confirmed
+	}
+	if n := read(nil); n != 1 {
+		t.Fatalf("a real reading confirmed %d times, want 1", n)
+	}
+	// A usage read the provider could not answer shows nothing about the login,
+	// even though an earlier reading is kept for display.
+	if n := read(fmt.Errorf("Claude %w", domain.ErrUsageUnavailable)); n != 0 {
+		t.Fatalf("an unavailable usage read confirmed %d times, want 0", n)
+	}
+	if n := read(errors.New("claude get_usage: boom")); n != 0 {
+		t.Fatalf("a failed usage read confirmed %d times, want 0", n)
+	}
+}
+
+func TestListDoesNotCarryUsageAcrossLoginsWithoutAnEmail(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": ""},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 42}},
+	}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if views, err := svc.List(ctx, true); err != nil || views[0].Limits == nil {
+		t.Fatalf("initial reading: %+v, %v", views, err)
+	}
+	claude.limitsErr = fmt.Errorf("Claude %w", domain.ErrUsageUnavailable)
+	views, err := svc.List(ctx, true)
+	if err != nil || views[0].Limits != nil || views[0].LimitsErr == "" {
+		t.Fatalf("a login that cannot be told apart must not inherit a reading: %+v, %v", views, err)
 	}
 }

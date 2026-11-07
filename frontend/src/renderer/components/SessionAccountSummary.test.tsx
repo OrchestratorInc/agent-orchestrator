@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionAccountSummary } from "./SessionAccountSummary";
@@ -47,4 +47,23 @@ it("asks the local daemon about a local session's account, never a cloud session
 		expect(paths).toEqual(expect.arrayContaining(["/api/v1/agents/accounts/sessions/{sessionId}", "/api/v1/sessions/{sessionId}/interface-transition"]));
 	});
 	expect(getMock.mock.calls.filter(([, options]) => sessionIdOf(options) === "s-cloud")).toEqual([]);
+});
+
+// A refresh the provider could not answer keeps the last reading; the summary
+// says so beside the bars instead of showing old numbers as current.
+it("warns beside the kept usage when the provider could not refresh it", async () => {
+	const account = {
+		id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, email: "a@example.com",
+		problem: "Claude usage is temporarily unavailable",
+		limits: { fetchedAt: "2026-11-07T10:00:00Z", windows: [{ id: "five_hour", usedPercent: 42 }] },
+	};
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts" ? { accounts: [account] }
+			: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: account.id } : {},
+	}));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(<QueryClientProvider client={queryClient}><SessionAccountSummary session={session("s-warn")} /></QueryClientProvider>);
+
+	expect(await screen.findByText("Claude usage is temporarily unavailable")).toBeInTheDocument();
+	expect(screen.getByText(/58% left/)).toBeInTheDocument();
 });
