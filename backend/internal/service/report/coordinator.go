@@ -66,6 +66,9 @@ type Coordinator struct {
 	// deadline, and early flush does not wait for a retry time, so without the
 	// hold every wake would retry at once. Guarded by mu.
 	earlyHold map[domain.ProjectID]time.Time
+	// started bounds early flush of a batch attempted before this coordinator
+	// existed: its hold was lost with the previous process.
+	started time.Time
 }
 
 // CoordinatorDeps configures durable scheduling and delivery.
@@ -88,7 +91,7 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.RetryDelay <= 0 {
 		d.RetryDelay = 5 * time.Second
 	}
-	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1), earlyHold: map[domain.ProjectID]time.Time{}}
+	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1), earlyHold: map[domain.ProjectID]time.Time{}, started: d.Now().UTC()}
 }
 
 // Wake asks the coordinator to inspect durable scheduling state.
@@ -224,6 +227,11 @@ func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain
 		}
 		if hold := c.earlyHold[projectID]; hold.After(flushAt) {
 			flushAt = hold
+		}
+		// A batch that was already attempted may wait for a retry time that a
+		// done row cannot store, so after a restart it waits out a full retry.
+		if retry := c.started.Add(OrchestratorBusyRetry); byProject[projectID][0].DeliveryBatchID != "" && retry.After(flushAt) {
+			flushAt = retry
 		}
 		if !flushAt.After(now) {
 			return projectID, 0, nil

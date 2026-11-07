@@ -321,9 +321,7 @@ func TestCoordinatorDueDeliveryDoesNotHoldSeparateDoneBatch(t *testing.T) {
 	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)))
 	checkpoint := reportAt("checkpoint-a", "a", start, start, "a progress")
 	checkpoint.DeliveryBatchID = "batch-checkpoint"
-	done := doneAt("done-a", "a", start, "a finished")
-	done.DeliveryBatchID = "batch-done"
-	h.store.add(checkpoint, done)
+	h.store.add(checkpoint, doneAt("done-a", "a", start, "a finished"))
 
 	h.now = start.Add(domain.ReportEarlyFlushDebounce)
 	if delay := h.run(t); delay != -1 {
@@ -361,5 +359,32 @@ func TestCoordinatorEarlyFlushKeepsDeferredBatchScheduleAfterRestart(t *testing.
 	got := h.delivery.submitted()
 	if len(got) != 2 || !strings.Contains(got[0].message, "b progress") || !strings.Contains(got[1].message, "a finished") {
 		t.Fatalf("submissions = %#v, want the checkpoint batch at its retry time, then the done batch", got)
+	}
+}
+
+func TestCoordinatorEarlyFlushKeepsSharedBatchRetryAfterRestart(t *testing.T) {
+	start := time.Date(2026, 10, 12, 19, 0, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	h.delivery.submitErrFor = map[domain.SessionID]error{"orch": ErrOrchestratorBusy}
+	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)))
+	h.store.add(reportAt("checkpoint-a", "a", start, start, "a progress"), doneAt("done-a", "a", start, "a finished"))
+	if delay := h.run(t); delay != OrchestratorBusyRetry || h.delivery.attempts != 1 {
+		t.Fatalf("busy delay = %v, attempts = %d; want the shared batch deferred", delay, h.delivery.attempts)
+	}
+
+	// The restart drops the in-memory hold while the batch waits for its retry.
+	h.delivery.submitErrFor = nil
+	h.now = start.Add(domain.ReportEarlyFlushDebounce)
+	h.restart()
+	if delay := h.run(t); delay != OrchestratorBusyRetry-domain.ReportEarlyFlushDebounce || h.delivery.attempts != 1 {
+		t.Fatalf("delay = %v, attempts = %d; want no attempt before the batch's retry time", delay, h.delivery.attempts)
+	}
+	h.now = start.Add(OrchestratorBusyRetry)
+	if delay := h.run(t); delay != -1 {
+		t.Fatalf("delay = %v, want idle after the batch", delay)
+	}
+	got := h.delivery.submitted()
+	if len(got) != 1 || !strings.Contains(got[0].message, "a progress") || !strings.Contains(got[0].message, "a finished") {
+		t.Fatalf("submissions = %#v, want the shared batch once at its retry time", got)
 	}
 }
