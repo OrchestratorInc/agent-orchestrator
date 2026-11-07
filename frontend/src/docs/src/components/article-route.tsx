@@ -57,7 +57,7 @@ export function articleRoute(locale: SupportedLocale) {
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
         {locale === DEFAULT_LOCALE && <EnglishArticleNotice />}
         {/* The Markdown copy is English, also for translated articles. */}
-        <PageActions markdownPath={markdownPath(page.slugs)} sourceUrl={editUrl} issueUrl={issueUrl} />
+        <PageActions markdownPath={markdownPath(page.slugs)} />
         <DocsBody lang={locale}>
           <MDX
             components={getMDXComponents({
