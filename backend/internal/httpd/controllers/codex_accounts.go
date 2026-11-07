@@ -292,6 +292,10 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 	}
 	events, err := c.Svc.SubscribeCodexAccounts(r.Context())
 	if err != nil && !codexAccountStreamQuiet(err) {
+		if r.Context().Err() != nil {
+			// The client left while setup was pending; nobody reads a response.
+			return
+		}
 		envelope.WriteError(w, r, err)
 		return
 	}
