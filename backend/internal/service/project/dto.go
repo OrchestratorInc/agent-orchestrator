@@ -60,6 +60,8 @@ type CloneProgress struct {
 	Phase CloneProgressPhase `json:"phase" enum:"enumerating_objects,counting_objects,compressing_objects,receiving_objects,resolving_deltas,updating_files,filtering_content,retrying"`
 	// Attempt is the 1-based clone attempt the phase belongs to.
 	Attempt int `json:"attempt" minimum:"1"`
+	// Percent is how far git says the phase is, when it reports one.
+	Percent *int `json:"percent,omitempty" minimum:"0" maximum:"100"`
 }
 
 // CloneDestination reports local destination readiness without contacting the remote.

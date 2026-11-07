@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -230,8 +231,8 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 		if onProgress != nil {
 			// Git only prints progress to a terminal unless asked.
 			args = append(args, "--progress")
-			stderr.report = func(phase CloneProgressPhase) {
-				onProgress(CloneProgress{Phase: phase, Attempt: attempt + 1})
+			stderr.report = func(phase CloneProgressPhase, percent *int) {
+				onProgress(CloneProgress{Phase: phase, Attempt: attempt + 1, Percent: percent})
 			}
 		}
 		cmd := aoprocess.CommandContext(ctx, "git", append(args, "--", remoteURL, temporaryPath)...)
@@ -321,14 +322,15 @@ var cloneProgressPhases = map[string]CloneProgressPhase{
 const maxCloneStderrLine = 4 * 1024
 
 // cloneStderr splits git's stderr into lines; progress redraws end in \r. A
-// progress line only moves the reported phase. Every other line is kept,
+// progress line only moves the reported phase and percent. Every other line is kept,
 // bounded, for retry classification, so a long progress run cannot push the
 // final error out of the buffer.
 type cloneStderr struct {
 	output  limitedCloneOutput
 	pending []byte
 	phase   CloneProgressPhase
-	report  func(CloneProgressPhase)
+	percent *int
+	report  func(CloneProgressPhase, *int)
 }
 
 func (s *cloneStderr) Write(p []byte) (int, error) {
@@ -357,11 +359,11 @@ func (s *cloneStderr) line(line []byte) {
 	if len(line) == 0 {
 		return
 	}
-	if phase, ok := cloneProgressPhase(line); ok {
-		if phase != s.phase {
-			s.phase = phase
+	if phase, percent, ok := cloneProgressLine(line); ok {
+		if phase != s.phase || !samePercent(percent, s.percent) {
+			s.phase, s.percent = phase, percent
 			if s.report != nil {
-				s.report(phase)
+				s.report(phase, percent)
 			}
 		}
 		return
@@ -372,13 +374,30 @@ func (s *cloneStderr) line(line []byte) {
 
 func (s *cloneStderr) String() string { return s.output.String() + string(s.pending) }
 
-func cloneProgressPhase(line []byte) (CloneProgressPhase, bool) {
-	title, _, found := strings.Cut(strings.TrimPrefix(string(line), "remote: "), ":")
+// cloneProgressLine reads a progress line's phase and, when git prints one,
+// its percent, as in "Receiving objects:  45% (1234/2700), 12.30 MiB | …".
+func cloneProgressLine(line []byte) (CloneProgressPhase, *int, bool) {
+	title, rest, found := strings.Cut(strings.TrimPrefix(string(line), "remote: "), ":")
 	if !found {
-		return "", false
+		return "", nil, false
 	}
 	phase, ok := cloneProgressPhases[title]
-	return phase, ok
+	if !ok {
+		return "", nil, false
+	}
+	value, _, hasPercent := strings.Cut(rest, "%")
+	if !hasPercent {
+		return phase, nil, true
+	}
+	percent, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || percent < 0 || percent > 100 {
+		return phase, nil, true
+	}
+	return phase, &percent, true
+}
+
+func samePercent(a, b *int) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 func transientCloneFailure(output string) bool {

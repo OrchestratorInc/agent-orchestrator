@@ -79,8 +79,18 @@ func TestTransientCloneFailure(t *testing.T) {
 }
 
 func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
-	var phases []CloneProgressPhase
-	stderr := cloneStderr{report: func(phase CloneProgressPhase) { phases = append(phases, phase) }}
+	type step struct {
+		phase   CloneProgressPhase
+		percent int // -1 when git printed none
+	}
+	var steps []step
+	stderr := cloneStderr{report: func(phase CloneProgressPhase, percent *int) {
+		value := -1
+		if percent != nil {
+			value = *percent
+		}
+		steps = append(steps, step{phase, value})
+	}}
 	// A long redraw run would fill the 32 KiB buffer if progress were kept.
 	redraws := strings.Repeat("Receiving objects:  50% (1/2), 1.00 MiB | 1.00 MiB/s\r", 2000)
 	for _, chunk := range []string{
@@ -94,9 +104,16 @@ func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := []CloneProgressPhase{ClonePhaseEnumeratingObjects, ClonePhaseCountingObjects, ClonePhaseReceivingObjects, ClonePhaseResolvingDeltas}
-	if !reflect.DeepEqual(phases, want) {
-		t.Fatalf("phases = %v, want %v", phases, want)
+	// Redraws at the same percent report once; a new percent reports again.
+	want := []step{
+		{ClonePhaseEnumeratingObjects, -1},
+		{ClonePhaseCountingObjects, 100},
+		{ClonePhaseReceivingObjects, 50},
+		{ClonePhaseReceivingObjects, 100},
+		{ClonePhaseResolvingDeltas, 100},
+	}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("steps = %v, want %v", steps, want)
 	}
 	if strings.Contains(stderr.String(), "Receiving objects") {
 		t.Fatal("progress lines were kept for classification")

@@ -486,7 +486,8 @@ const clonePhaseKeys: Record<CloneProgress["phase"], MessageKey> = {
 
 /**
  * One line naming the step the clone is on. A new step rises in as the last
- * one drifts up and fades away; the timer ticks in place within a step.
+ * one drifts up and fades away; git's percent and the timer tick in place
+ * within a step.
  */
 function CloneActivityRow({
 	activity,
@@ -501,10 +502,14 @@ function CloneActivityRow({
 	const reducedMotion = useReducedMotion();
 	const phase = activity === "cloning" ? progress?.phase : undefined;
 	const step = activity === "validating" ? "validating" : phase ? `${phase}:${progress?.attempt ?? 1}` : "cloning";
-	const label = t(
-		activity === "validating" ? "createProject.cloneVerifying" : phase ? clonePhaseKeys[phase] : "createProject.cloneInProgress",
-		{ seconds: elapsed },
-	);
+	const percent = phase ? progress?.percent : null;
+	const label = activity === "validating"
+		? t("createProject.cloneVerifying", { seconds: elapsed })
+		: !phase
+			? t("createProject.cloneInProgress", { seconds: elapsed })
+			: percent == null
+				? t("createProject.cloneStep", { step: t(clonePhaseKeys[phase]), seconds: elapsed })
+				: t("createProject.cloneStepPercent", { step: t(clonePhaseKeys[phase]), percent, seconds: elapsed });
 	return (
 		<div className="flex items-center gap-2 px-4 pt-3 text-[12px] leading-5 text-muted-foreground" role="status" aria-live="polite">
 			<LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
@@ -512,7 +517,7 @@ function CloneActivityRow({
 				<AnimatePresence initial={false}>
 					<motion.span
 						key={step}
-						className="chat-working-shimmer absolute inset-x-0 top-0 truncate"
+						className="chat-working-shimmer absolute inset-x-0 top-0 truncate tabular-nums"
 						initial={reducedMotion ? false : { opacity: 0, y: "100%" }}
 						animate={{ opacity: 1, y: 0, transition: { duration: reducedMotion ? 0 : 0.24, ease: "easeOut" } }}
 						exit={reducedMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: "-100%", transition: { duration: 0.2, ease: "easeIn" } }}

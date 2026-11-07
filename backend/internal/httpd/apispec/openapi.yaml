@@ -15257,6 +15257,12 @@ components:
         attempt:
           minimum: 1
           type: integer
+        percent:
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
         phase:
           enum:
           - enumerating_objects

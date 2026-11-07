@@ -5215,6 +5215,7 @@ export interface components {
         };
         CloneProgress: {
             attempt: number;
+            percent?: null | number;
             /** @enum {string} */
             phase: "enumerating_objects" | "counting_objects" | "compressing_objects" | "receiving_objects" | "resolving_deltas" | "updating_files" | "filtering_content" | "retrying";
         };

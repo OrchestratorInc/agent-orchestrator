@@ -365,6 +365,13 @@ describe("clone repository input", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("remote: Counting objects · 0s");
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1 } }));
 		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 0s");
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 45 } }));
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 45% · 0s");
+		// The percent ticks in place: no second line slides in for it.
+		const lines = screen.getByRole("status").querySelectorAll(".chat-working-shimmer").length;
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 46 } }));
+		expect(screen.getByRole("status").querySelectorAll(".chat-working-shimmer")).toHaveLength(lines);
+		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 46% · 0s");
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "retrying", attempt: 2 } }));
 		expect(screen.getByRole("status")).toHaveTextContent("Connection dropped, retrying · 0s");
 

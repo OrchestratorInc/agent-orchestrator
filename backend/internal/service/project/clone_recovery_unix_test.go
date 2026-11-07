@@ -72,13 +72,15 @@ exec 2>/dev/null`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	percent := func(value int) *int { return &value }
 	want := []projectsvc.CloneProgress{
-		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 1},
-		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 1},
+		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 1, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 1, Percent: percent(50)},
 		{Phase: projectsvc.ClonePhaseRetrying, Attempt: 2},
-		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 2},
-		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 2},
-		{Phase: projectsvc.ClonePhaseResolvingDeltas, Attempt: 2},
+		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 2, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 2, Percent: percent(50)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 2, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseResolvingDeltas, Attempt: 2, Percent: percent(100)},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("progress = %+v, want %+v", got, want)

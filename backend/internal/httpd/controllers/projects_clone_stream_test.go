@@ -24,7 +24,8 @@ type streamingCloneManager struct {
 }
 
 func (m streamingCloneManager) PrepareCloneWithProgress(_ context.Context, in projectsvc.CloneInput, onProgress func(projectsvc.CloneProgress)) (projectsvc.ClonePreparationResult, error) {
-	onProgress(projectsvc.CloneProgress{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 1})
+	percent := 45
+	onProgress(projectsvc.CloneProgress{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 1, Percent: &percent})
 	onProgress(projectsvc.CloneProgress{Phase: projectsvc.ClonePhaseResolvingDeltas, Attempt: 1})
 	if m.err != nil {
 		return projectsvc.ClonePreparationResult{}, m.err
@@ -71,7 +72,8 @@ func TestPrepareCloneStreamSendsProgressThenResult(t *testing.T) {
 		t.Fatalf("events = %+v, want two progress events and a result", events)
 	}
 	if events[0].Progress == nil || events[0].Progress.Phase != projectsvc.ClonePhaseReceivingObjects ||
-		events[1].Progress == nil || events[1].Progress.Phase != projectsvc.ClonePhaseResolvingDeltas {
+		events[0].Progress.Percent == nil || *events[0].Progress.Percent != 45 ||
+		events[1].Progress == nil || events[1].Progress.Phase != projectsvc.ClonePhaseResolvingDeltas || events[1].Progress.Percent != nil {
 		t.Fatalf("progress events = %+v", events[:2])
 	}
 	if events[2].Result == nil || events[2].Result.Path != "/code/repo" || events[2].Error != nil {
