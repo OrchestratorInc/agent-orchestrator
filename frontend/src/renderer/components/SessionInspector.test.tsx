@@ -1761,6 +1761,29 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
   });
 
+  it.each([
+    {
+      name: "a standalone session",
+      overrides: { workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+      expected: "Created session",
+    },
+    { name: "a project worker", overrides: { kind: "worker" as const }, expected: "Created workspace" },
+    { name: "an orchestrator", overrides: { kind: "orchestrator" as const }, expected: "Created workspace" },
+  ])("labels $name's creation as $expected", ({ overrides, expected }) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          ...overrides,
+          status: "idle",
+          createdAt: "2026-06-15T09:00:00Z",
+        })}
+      />,
+    );
+
+    expect(activitySection().getByText(expected)).toBeInTheDocument();
+    expect(activitySection().getAllByText(/^Created (session|workspace)$/)).toHaveLength(1);
+  });
+
   it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
     renderWithQuery(
       <SessionInspector
