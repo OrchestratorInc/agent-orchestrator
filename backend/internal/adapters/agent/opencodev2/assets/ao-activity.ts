@@ -1,4 +1,14 @@
 // agent-orchestrator: managed opencode-v2 activity plugin (do not edit)
+//
+// Child (subagent) sessions share this event bus and carry their own ids. They
+// are tracked from session.created(parentID) and never reported as the session
+// identity: AO persists the reported id as the native restore handle, so a
+// child id would make restoration resume the subagent conversation. Child tool /
+// execution activity is folded onto the root session as plain `active` so
+// subagent work still reads as activity, while child turn boundaries are
+// dropped — a child finishing does not end the parent's turn. Roots report tool
+// calls as pre-tool-use / post-tool-use(-failure) with the upstream call id so
+// AO's step timeline and in-flight correlation work.
 import { spawn } from "node:child_process"
 
 const HOOK_TIMEOUT_MS = 1_250
@@ -8,6 +18,14 @@ export default {
   async setup(context) {
     const launchID = (process.env.AO_RUNTIME_LAUNCH_ID ?? "").trim()
     const seenSessions = new Set()
+    const childSessions = new Set()
+    let rootSessionID = null
+    // An inbox item can be re-delivered or reconciled, and a replayed prompt
+    // does not clear AO's unsettled checkpoint. Emit each inbox item once.
+    const seenInboxItems = new Set()
+    // A turn can end with both session.execution.* and session.status(idle).
+    // Report one stop per turn; the next user prompt starts a new turn.
+    const stoppedSessions = new Set()
     const controller = new AbortController()
 
     let queue = Promise.resolve()
@@ -47,36 +65,105 @@ export default {
       report("session-start", sessionID)
     }
 
+    // A second stop in the same turn would mark the completed conversation
+    // checkpoint unsettled, so the turn boundary is emitted at most once.
+    function reportStop(sessionID) {
+      if (!sessionID || stoppedSessions.has(sessionID)) return
+      stoppedSessions.add(sessionID)
+      report("stop", sessionID)
+    }
+
+    function isChildSession(sessionID) {
+      return !!sessionID && childSessions.has(sessionID)
+    }
+
+    // Fold a session id onto the root session AO may see. Children resolve to
+    // the current root (null until one is known) and are never forwarded; a
+    // non-child id becomes the current root, preserving OpenCode's supported
+    // new-native-session flows and AO's checkpoint reset on identity change.
+    function resolveSessionID(sessionID) {
+      if (!sessionID) return null
+      if (childSessions.has(sessionID)) return rootSessionID
+      rootSessionID = sessionID
+      return sessionID
+    }
+
     function handleEvent(event) {
       const data = event?.data
       const sessionID = data?.sessionID
       switch (event?.type) {
         case "session.created":
+          if (!sessionID) break
+          // Nested subagents carry their immediate parent's id; any session
+          // with a parent is a child and must never become the identity.
+          if (data?.parentID) {
+            childSessions.add(sessionID)
+            break
+          }
+          rootSessionID = sessionID
           ensureSession(sessionID)
           break
-        case "session.execution.started":
-          ensureSession(sessionID)
-          report("active", sessionID)
+        case "session.execution.started": {
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          // A new execution segment starts a new turn even if the plugin missed
+          // the prompt event (for example when it subscribed mid-turn).
+          if (!isChildSession(sessionID)) stoppedSessions.delete(root)
+          report("active", root)
           break
+        }
         case "session.execution.succeeded":
         case "session.execution.failed":
         case "session.execution.interrupted":
+          // A child's execution boundary says nothing about the parent turn.
+          if (!sessionID || isChildSession(sessionID)) break
+          rootSessionID = sessionID
           ensureSession(sessionID)
-          report("stop", sessionID)
+          reportStop(sessionID)
           break
         case "session.status":
+          if (!sessionID || isChildSession(sessionID)) break
+          rootSessionID = sessionID
           ensureSession(sessionID)
-          if (data?.status?.type === "idle") report("stop", sessionID)
-          else if (data?.status?.type === "busy") report("active", sessionID)
+          if (data?.status?.type === "idle") reportStop(sessionID)
+          else if (data?.status?.type === "busy") {
+            stoppedSessions.delete(sessionID)
+            report("active", sessionID)
+          }
           break
-        case "permission.asked":
-          ensureSession(sessionID)
-          report("permission-blocked", sessionID, { permission_id: data?.id ?? "" })
+        case "session.inbox.enqueued": {
+          // Only real user input is a prompt boundary. Synthetic, compaction,
+          // and move items would otherwise mark the session active with no
+          // prompt of their own.
+          if (!sessionID || isChildSession(sessionID)) break
+          const item = data?.item
+          if (item?.type !== "user") break
+          const inboxID = data?.inboxID || item?.id || ""
+          if (inboxID) {
+            if (seenInboxItems.has(inboxID)) break
+            seenInboxItems.add(inboxID)
+          }
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          stoppedSessions.delete(root)
+          // Forward only the prompt text; files and metadata stay native.
+          const text = typeof item.payload?.text === "string" ? item.payload.text : ""
+          report("user-prompt-submit", root, { prompt: text })
           break
-        case "permission.replied":
-          ensureSession(sessionID)
-          report("permission-resolved", sessionID, { permission_id: data?.requestID ?? "", reply: data?.reply ?? "" })
+        }
+        case "permission.asked": {
+          // A child dialog still blocks the tree; surface it on the root id.
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          report("permission-blocked", root, { permission_id: data?.id ?? "" })
           break
+        }
+        case "permission.replied": {
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          report("permission-resolved", root, { permission_id: data?.requestID ?? "", reply: data?.reply ?? "" })
+          break
+        }
       }
     }
 
@@ -90,12 +177,20 @@ export default {
 
     const registrations = await Promise.all([
       context.tool.hook("execute.before", (input) => {
-        ensureSession(input.sessionID)
-        report("active", input.sessionID, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
+        const root = resolveSessionID(input.sessionID)
+        ensureSession(root)
+        if (isChildSession(input.sessionID)) report("active", root)
+        else report("pre-tool-use", root, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
       }),
       context.tool.hook("execute.after", (input) => {
-        ensureSession(input.sessionID)
-        report("active", input.sessionID, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
+        const root = resolveSessionID(input.sessionID)
+        ensureSession(root)
+        if (isChildSession(input.sessionID)) report("active", root)
+        else
+          report(input.status === "error" ? "post-tool-use-failure" : "post-tool-use", root, {
+            tool_name: input.tool ?? "",
+            tool_use_id: input.id ?? "",
+          })
       }),
     ])
 
