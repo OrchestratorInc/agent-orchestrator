@@ -2268,9 +2268,39 @@ paths:
         - $ref: "#/components/parameters/After"
         - $ref: "#/components/parameters/EventLimit"
         - $ref: "#/components/parameters/EventTypes"
+        - name: before
+          in: query
+          required: false
+          description: |
+            Read back from this sequence instead of forward from after: the
+            newest events with after < sequence < before (at most limit), oldest
+            first. 9007199254740991 reads the newest page. The page then extends
+            back to the prompt of every turn and the first step of every Setup
+            or Cleanup run it holds part of, so it never starts inside one, by
+            at most 1000 events and never to after or below. Such a page carries
+            hasOlder and nextBefore; a control plane that predates this
+            parameter ignores it and answers with a page after `after` without
+            them.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+            maximum: 9007199254740991
+        - name: since
+          in: query
+          required: false
+          description: >-
+            With before only: read only events created at or after this time
+            (still at most limit, and still extended back to where their turns
+            start). Without before it is refused with 400.
+          schema:
+            type: string
+            format: date-time
       responses:
         "200":
-          description: Client-visible events after the supplied sequence.
+          description: |
+            Client-visible events after the supplied sequence or, with before,
+            the newest events below it.
           content:
             application/json:
               schema:
@@ -9212,6 +9242,21 @@ components:
           minimum: 0
           maximum: 9007199254740991
           description: Highest sequence returned, or the supplied after cursor when the page is empty.
+        hasOlder:
+          type: boolean
+          description: >-
+            Only on a page read with before: events older than the page remain
+            above the after cursor. Absent, the control plane read forward and
+            ignored before.
+        nextBefore:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Only on a page read with before: the before cursor for the next
+            older page, the lowest sequence returned or the supplied before
+            cursor when the page is empty.
     TerminalKind:
       type: string
       enum: [agent, workspace]
