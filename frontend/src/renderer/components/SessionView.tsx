@@ -2059,6 +2059,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					projectId={session.workspaceId}
 					sessionId={session.id}
 					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE)}
+					sessionName={session.title}
+					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
 				/>
 			) : null}
 			<SessionTopbarActions />

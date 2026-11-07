@@ -210,6 +210,11 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		sessionShareUrls: {
+			remember: async () => undefined,
+			recall: async () => ({}),
+			forget: async () => undefined,
+		},
 		cloudShare: {
 			available: async () => true,
 			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
