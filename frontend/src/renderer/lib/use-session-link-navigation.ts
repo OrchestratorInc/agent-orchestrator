@@ -67,7 +67,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		const artifact = parseArtifactLink(url);
 		const target = parseSessionLink(url) ?? artifact;
 		if (!target) {
-			showGlobalToast("This Orchestrator session link is malformed or unsupported.", undefined, {
+			showGlobalToast("This Orchestrator-managed session link is malformed or unsupported.", undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,

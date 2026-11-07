@@ -56,7 +56,7 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 		"provider's verified full head commit SHA",
 		"Never pass FETCH_HEAD as a checkout target",
 		"including failed commands",
-		"Orchestrator sessions use linked Git worktrees.",
+		"Orchestrator-managed sessions use linked Git worktrees.",
 		"remote definitions with the human checkout",
 		"git config --worktree",
 		"explicit URL instead of adding a named remote",
@@ -103,7 +103,7 @@ func TestBuildSystemPrompt_OrchestratorRequiresConfirmationAndAOOnlyDelegation(t
 		"ask for explicit confirmation before making any code changes",
 		"prefer spawning or redirecting a worker unless the human explicitly confirms",
 		"Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work",
-		"You may coordinate multiple workers, but Orchestrator workers only",
+		"You may coordinate multiple workers, but workers only",
 		"ao session claim-pr <worker-session-id> <pr-ref>",
 		"must pass the target worker session explicitly",
 		"Add `--model <id>` when the human or task explicitly requests a specific model",
@@ -333,7 +333,7 @@ func TestBuildSystemPrompt_OrchestratorRoutesOwnedAndExternalReviews(t *testing.
 		Project: promptProject{ID: "mer", Name: "Mercury"},
 	})
 	for _, want := range []string{
-		"To review implementation owned by an Orchestrator worker, use Orchestrator's native reviewer",
+		"To review implementation owned by a worker, use Orchestrator's native reviewer",
 		"`ao review trigger <worker-session-id>`",
 		"`ao review ls <worker-session-id>`",
 		"When asked to review someone else's PR, spawn or use one normal review-only worker session",

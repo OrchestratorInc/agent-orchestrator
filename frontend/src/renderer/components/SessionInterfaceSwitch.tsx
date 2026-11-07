@@ -236,10 +236,10 @@ export function SessionInterfaceSwitchDialog({
 					</DialogTitle>
 					<DialogDescription className="pt-1 text-xs leading-5">
 						{mayStartFresh ? (
-							<>The same Orchestrator session and worktree continue, but Hermes may start a fresh conversation.
+							<>The same Orchestrator-managed session and worktree continue, but Hermes may start a fresh conversation.
 								Messages and tool results may not transfer into the target agent's context; the source history stays in its original interface.</>
 						) : (
-							<>The same Orchestrator session, worktree, and agent-native conversation continue in the other interface.
+							<>The same Orchestrator-managed session, worktree, and agent-native conversation continue in the other interface.
 								Completed messages and tool work stay in the agent's context.</>
 						)}
 					</DialogDescription>

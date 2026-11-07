@@ -69,7 +69,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	// signing sessions in over the login the user just completed. The sign-in
 	// itself already succeeded, so failing to clear the token is only a warning.
 	if err := clearClaudeSetupToken(); err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; Orchestrator sessions may keep using the earlier setup token.\n", err); writeErr != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; Orchestrator-managed sessions may keep using the earlier setup token.\n", err); writeErr != nil {
 			return writeErr
 		}
 	}

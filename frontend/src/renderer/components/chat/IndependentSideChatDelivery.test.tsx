@@ -782,6 +782,6 @@ it("does not call the local daemon for a remote session", async () => {
 		await Promise.resolve();
 	});
 	expect(get).not.toHaveBeenCalled();
-	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator sessions");
+	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator-managed sessions");
 	expect(post).not.toHaveBeenCalled();
 });

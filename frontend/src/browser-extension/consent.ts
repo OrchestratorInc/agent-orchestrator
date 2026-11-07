@@ -66,7 +66,7 @@ export class ConsentManager {
 		const denials = await this.denials();
 		const deniedUntil = denials[sessionId];
 		if (deniedUntil && deniedUntil > this.now()) {
-			throw new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator session access to Chrome; ask them to allow it from the Orchestrator Browser Bridge menu");
+			throw new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator-managed session access to Chrome; ask them to allow it from the Orchestrator Browser Bridge menu");
 		}
 		const existing = this.pending.get(sessionId);
 		if (existing) return existing.promise;
@@ -122,7 +122,7 @@ export class ConsentManager {
 			const denials = await this.denials();
 			denials[decision.sessionId] = this.now() + DENIAL_COOLDOWN_MS;
 			await this.chrome.storage.local.set({ [DENIALS_KEY]: denials });
-			pending?.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator session access to Chrome"));
+			pending?.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator-managed session access to Chrome"));
 		}
 		if (pending?.windowId !== undefined) await this.chrome.windows.remove(pending.windowId).catch(() => undefined);
 	}

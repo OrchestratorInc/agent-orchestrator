@@ -71,7 +71,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&sessionID, "session", "", "Orchestrator session id")
+	cmd.Flags().StringVar(&sessionID, "session", "", "Orchestrator-managed session id")
 	cmd.Flags().StringVar(&reviewID, "review", "", "Orchestrator review id")
 	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "Orchestrator review id to receive process activity")
 	cmd.Flags().StringVar(&launchID, "launch", "", "Orchestrator process launch id")

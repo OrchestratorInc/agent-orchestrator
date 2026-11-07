@@ -151,7 +151,7 @@ func (c *commandContext) clearPreview(ctx context.Context) error {
 func sessionPreviewPath() (string, error) {
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
-		return "", usageError{errors.New("ao preview must run inside an Orchestrator session (AO_SESSION_ID is not set)")}
+		return "", usageError{errors.New("ao preview must run inside an Orchestrator-managed session (AO_SESSION_ID is not set)")}
 	}
 	// PathEscape: session ids are already "-"/digit safe, but keep the URL
 	// well-formed regardless.

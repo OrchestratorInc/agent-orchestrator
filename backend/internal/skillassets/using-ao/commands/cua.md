@@ -103,7 +103,7 @@ Orchestrator refuses actions that would land wherever the user is working:
 window's `pid` and `window_id`, and `type_text` without a field to type into.
 The same checks apply to every step of `run_steps`.
 
-All calls from one Orchestrator session run in the same Cua Driver session, so a pixel
+All calls from one Orchestrator-managed session run in the same Cua Driver session, so a pixel
 `click` can use the screenshot an earlier `get_window_state` took. A driver
 session ends after a few idle minutes; Orchestrator starts it again on the next call,
 but its screenshots are gone, so read the window again if a pixel action

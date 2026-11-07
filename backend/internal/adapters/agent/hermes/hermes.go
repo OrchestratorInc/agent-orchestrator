@@ -1230,7 +1230,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		if bundled = pyStrip(bundled); bundled != "" {
 			path, ok := childPath(bundled)
 			if st, err := os.Stat(path); !ok || err == nil && st.IsDir() {
-				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome Orchestrator reads; unset it for Orchestrator sessions")
+				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome Orchestrator reads; unset it for Orchestrator-managed sessions")
 			}
 		}
 	}
@@ -1262,7 +1262,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		entries, _ := os.ReadDir(dir)
 		for _, entry := range entries {
 			if englishLocaleFile.MatchString(entry.Name()) && !entry.IsDir() {
-				return fmt.Errorf("hermes: %s rewords the English terminal chrome Orchestrator reads; remove or rename it for Orchestrator sessions", filepath.Join(dir, entry.Name()))
+				return fmt.Errorf("hermes: %s rewords the English terminal chrome Orchestrator reads; remove or rename it for Orchestrator-managed sessions", filepath.Join(dir, entry.Name()))
 			}
 		}
 	}

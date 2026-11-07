@@ -336,7 +336,7 @@ func newSessionExitAgentCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "exit-agent <id>",
-		Short: "Exit an agent without terminating its Orchestrator session",
+		Short: "Exit an agent without terminating its Orchestrator-managed session",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -355,7 +355,7 @@ func newSessionResumeAgentCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "resume-agent <id>",
-		Short: "Resume an exited agent in its existing Orchestrator session",
+		Short: "Resume an exited agent in its existing Orchestrator-managed session",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -434,7 +434,7 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 		Short: "Attach an existing PR to a session",
 		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
 			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.",
-		Example: `  # From inside an Orchestrator worker session
+		Example: `  # From inside a worker session
   ao session claim-pr 88
 
   # Target a session explicitly

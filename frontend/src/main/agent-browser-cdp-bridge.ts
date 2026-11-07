@@ -478,7 +478,7 @@ export class AgentBrowserCDPBridge {
 	private requireTarget(targetId: string | undefined): AgentBrowserTarget {
 		if (!targetId) throw new Error("targetId is required");
 		const target = this.listTargets().find((candidate) => candidate.id === targetId);
-		if (!target) throw new Error("Target is outside this Orchestrator worker");
+		if (!target) throw new Error("Target is outside this worker");
 		return target;
 	}
 

@@ -2,8 +2,8 @@
 
 Manage Orchestrator's native code reviewer for a worker's PR.
 
-Orchestrator's reviewer is an isolated reviewer agent for implementation PRs owned by an
-Orchestrator worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
+Orchestrator's reviewer is an isolated reviewer agent for implementation PRs owned by a
+worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
 the review commands default to the calling session (`AO_SESSION_ID`), so
 `ao review trigger` reviews your own implementation PR. An orchestrator passes
 the implementation worker's session id.
@@ -130,7 +130,7 @@ ao review trigger [worker-session-id] [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator session |
+| `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator-managed session |
 | `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if Orchestrator does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |

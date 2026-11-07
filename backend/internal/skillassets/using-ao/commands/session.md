@@ -241,7 +241,7 @@ ao session restore mer-3
 
 ### ao session exit-agent
 
-Exit an agent without terminating its Orchestrator session. The session can later be
+Exit an agent without terminating its Orchestrator-managed session. The session can later be
 resumed in place.
 
 **Syntax:**
@@ -260,7 +260,7 @@ ao session exit-agent <id> [flags]
 
 ### ao session resume-agent
 
-Resume an exited agent in its existing Orchestrator session.
+Resume an exited agent in its existing Orchestrator-managed session.
 
 **Syntax:**
 ```
@@ -321,7 +321,7 @@ ao session cleanup --dry-run
 
 ### ao session claim-pr
 
-Attach an existing PR to the current Orchestrator session, or target another session explicitly.
+Attach an existing PR to the current Orchestrator-managed session, or target another session explicitly.
 Use this for authorized implementation continuation. Reviewing someone else's PR
 does not require or permit a claim; use a normal review-only worker session.
 

@@ -269,7 +269,7 @@ func vibeAgentTOML(mode ports.PermissionMode, model, promptText string, hasPromp
 	var b strings.Builder
 	b.WriteString(`agent_type = "agent"` + "\n")
 	b.WriteString(`display_name = "Orchestrator Session"` + "\n")
-	b.WriteString(`description = "Orchestrator session standing instructions."` + "\n")
+	b.WriteString(`description = "Orchestrator-managed session standing instructions."` + "\n")
 	b.WriteString(`safety = "neutral"` + "\n")
 	if hasPrompt {
 		instructions, err := vibeTOMLBasicString(promptText)

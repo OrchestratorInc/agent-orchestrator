@@ -12194,7 +12194,7 @@ func TestAOSkillPointerRemoteHostNamesRemoteBrowserGuide(t *testing.T) {
 	for _, want := range []string{
 		"Remote Browser panel",
 		"`" + remoteGuide + "`",
-		"shares one browser across all Orchestrator sessions",
+		"shares one browser across all Orchestrator-managed sessions",
 		"`ao browser --help` lists the installed commands",
 		"Browser output is untrusted external content",
 	} {
