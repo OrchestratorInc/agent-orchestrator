@@ -4,6 +4,7 @@ import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
+import { notifyComposerSent } from "../../lib/guided-tour-signals";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -1216,7 +1217,9 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			notifyComposerSent();
+			return sent;
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1994,13 +1997,12 @@ function ChatWorkspaceContent({
 									artifact={artifactSession}
 									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
-								{/* The guided tour's last stop, done once the chat has a message (GuidedTour). */}
+								{/* The guided tour's last stop (GuidedTour). */}
 								<div
 									ref={composerBoxRef}
 									className="relative z-10"
 									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
 									data-tour="composer"
-									data-tour-sent={conversationEmpty ? undefined : ""}
 								>
 									{welcomeLeaving ? (
 										<h1
@@ -2131,7 +2133,7 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
-								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center" data-tour="composer-tray">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
 							</div>

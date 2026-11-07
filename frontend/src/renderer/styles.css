@@ -6348,6 +6348,13 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	mask-composite: intersect, add;
 }
 
+/* Guided tour (GuidedTour): the rest of the window fades back toward the page
+ * rather than greying out, and a thin focus-coloured ring marks what's lit. */
+:root {
+	--tour-scrim: color-mix(in oklch, var(--background) 68%, transparent);
+	--tour-ring: color-mix(in oklch, var(--ring) 80%, transparent);
+}
+
 /* Onboarding illustration style: a black-and-white line drawing. Strokes
  * only: every fill is clear, so the drawing sits on the onboarding page, and
  * one thin line weight in the page's own foreground draws every edge (white

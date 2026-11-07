@@ -9,7 +9,6 @@ import { IS_DEV } from "./is-dev";
 export const DEV_FAKE_PROJECT_ID = "dev-fake-project";
 
 let enabled = false;
-const sendListeners = new Set<() => void>();
 
 export function setDevFakeProject(on: boolean) {
 	enabled = IS_DEV && on;
@@ -17,19 +16,6 @@ export function setDevFakeProject(on: boolean) {
 
 export function isDevFakeProject(projectId: string | undefined): boolean {
 	return IS_DEV && enabled && projectId === DEV_FAKE_PROJECT_ID;
-}
-
-/** A send in the pretend project's new chat: it goes nowhere, but the tour
- * treats it as the first task sent. */
-export function noteDevFakeSend() {
-	for (const listener of sendListeners) listener();
-}
-
-export function onDevFakeSend(listener: () => void) {
-	sendListeners.add(listener);
-	return () => {
-		sendListeners.delete(listener);
-	};
 }
 
 export function withDevFakeProject(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {

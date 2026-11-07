@@ -1,73 +1,114 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { ArrowRight, X } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceQuery, workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
-import { DEV_FAKE_PROJECT_ID, onDevFakeSend, setDevFakeProject } from "../../lib/dev-fake-project";
+import { DEV_FAKE_PROJECT_ID, setDevFakeProject } from "../../lib/dev-fake-project";
+import { onComposerSent } from "../../lib/guided-tour-signals";
 import { IS_DEV } from "../../lib/is-dev";
+import { sessionNavigateTarget } from "../../lib/navigate-to-session";
 import { reportOnboardingStep } from "../../lib/onboarding-telemetry";
+import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
-import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND } from "../../types/workspace";
+import { CLOUD_PROJECT_KIND, findProjectOrchestrator, STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { Button } from "../ui/button";
-import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 
 // After setup, the real app walks the person through their first project and
-// task: the control to use next is spotlit (the rest of the window dims) with
-// a short card beside it, and each step moves on when the person does it, not
-// on a Next button. Controls opt in with `data-tour="<step target>"`.
-// Dev builds add Continue, and on the first step Continue with a fake project
-// (dev-fake-project), so the whole tour can be previewed on a machine that
-// already has projects; the card waits in a corner while its control is off
-// screen.
+// task. The control to use next is lit (the rest of the window softly fades
+// back) with a short card beside it, and each step moves on when the person
+// does it: open or add a project, open the orchestrator, send it a message.
+// When that control isn't on screen (they wandered off, or the page is still
+// loading) the card waits in the corner with a way back. Controls opt in with
+// `data-tour="…"`. Dev builds add Continue, and on the first step Continue
+// with a fake project (dev-fake-project), to preview the whole tour on a
+// machine that already has projects.
+//
+// The card is not the shared Popover: that one is a dialog, and pages treat
+// an open dialog as owning Escape and focus. This is a guide beside the work.
 
-type TourStep = "project" | "orchestrator" | "task";
-const TOUR_STEPS: readonly TourStep[] = ["project", "orchestrator", "task"];
-const TOUR_COPY = {
+type TourStep = "project" | "orchestrator" | "task" | "done";
+/** The steps the person does, counted on the card. */
+const COUNTED: readonly TourStep[] = ["project", "orchestrator", "task"];
+const COPY = {
 	project: { title: "firstRun.tourProjectTitle", body: "firstRun.tourProjectBody" },
 	recent: { title: "firstRun.tourRecentTitle", body: "firstRun.tourRecentBody" },
 	orchestrator: { title: "firstRun.tourOrchestratorTitle", body: "firstRun.tourOrchestratorBody" },
 	task: { title: "firstRun.tourTaskTitle", body: "firstRun.tourTaskBody" },
+	done: { title: "firstRun.tourDoneTitle", body: "firstRun.tourDoneBody" },
 } as const satisfies Record<TourStep | "recent", { title: string; body: string }>;
-/** Each step's control, first match wins: Home's latest project (a machine
- * that has one opens it) or its add-project actions, the project board's
- * Orchestrator button (the empty board's, else the header's), then the
- * orchestrator chat's composer. */
+
+/** Each step's control, first match wins: Home's projects section (its add
+ * actions and, on a machine that has some, recent projects); the board's
+ * Orchestrator button (the empty board's, else the page header's); a chat's
+ * composer. */
 const RECENT_PROJECT = '[data-tour="recent-project"]';
-const TARGET: Record<TourStep, readonly string[]> = {
-	project: [RECENT_PROJECT, '[data-tour="add-project"]'],
+const TARGET: Record<Exclude<TourStep, "done">, readonly string[]> = {
+	project: ['[data-tour="add-project"]'],
 	orchestrator: ['[data-tour="orchestrator"]', '[data-tour="orchestrator-header"]'],
 	task: ['[data-tour="composer"]'],
 };
-/** Lit together with a step's control when on screen: the chat's sample
- * prompts above its composer. */
-const ALSO_LIT: Partial<Record<TourStep, string>> = { task: '[data-tour="composer-prompts"]' };
-const findTarget = (step: TourStep) =>
-	TARGET[step].reduce<Element | null>((found, selector) => found ?? document.querySelector(selector), null);
-/** A step is done once the next one's control is on screen: a project board
- * (a project added or opened), then a chat's composer. */
-const DONE_WHEN_SHOWN: Partial<Record<TourStep, TourStep>> = { project: "orchestrator", orchestrator: "task" };
-/** Where the dev-build card waits while its control is off screen. */
-const CORNER = { getBoundingClientRect: () => new DOMRect(window.innerWidth - 16, window.innerHeight - 16, 0, 0) };
-// Any dialog over the app (Add Project's, the onboarding itself) hides the
-// tour until it closes; the tour's own card doesn't count.
-const OPEN_MODAL = '[role="dialog"]:not([data-guided-tour]), [role="alertdialog"]';
-/** Room between the control and the spotlight's edge. */
-const SPOTLIGHT_PAD = 6;
+/** Lit with the composer when shown: its sample prompts and project tray. */
+const ALSO_LIT: Partial<Record<TourStep, readonly string[]>> = {
+	task: ['[data-tour="composer-prompts"]', '[data-tour="composer-tray"]'],
+};
+/** A step is done once the next one's control is on screen: any project
+ * board (one added or opened), then any chat's composer. */
+const DONE_WHEN_SHOWN: Partial<Record<TourStep, Exclude<TourStep, "done">>> = { project: "orchestrator", orchestrator: "task" };
+const BOARD = '[data-testid="board"][data-project-id]';
+// A dialog over the app (Add Project's, Settings, the palette, the onboarding
+// itself) owns the moment: the tour steps aside until it closes.
+const OPEN_DIALOG = '[role="dialog"], [role="alertdialog"]';
 
-// The tour survives a relaunch mid-way (per-viewer convenience, so
-// localStorage). `known` is the projects there when it started, so the first
-// step waits for a new one; null until the project list has loaded. `fake`:
-// a dev build is previewing with the pretend project.
-type TourState = { step: TourStep; known: string[] | null; fake?: boolean };
+/** Room between the control and the lit area's edge. */
+const LIT_PAD = 6;
+/** Between the lit area and the card. */
+const CARD_GAP = 12;
+/** From the window's edges. */
+const EDGE = 16;
+/** How long a control may be gone before the card docks: a page swap takes a
+ * frame or two, which shouldn't make the card jump. */
+const MISSING_GRACE_MS = 400;
+/** The lit area and card glide from one control to the next over this. */
+const GLIDE_MS = 280;
+/** The closing note leaves on its own after this. */
+const DONE_HOLD_MS = 12_000;
+
+/** On screen, not just in the page: chats stay mounted (hidden) after they're
+ * left, and a hidden composer or dialog must not count. */
+function isVisible(element: Element): boolean {
+	const box = element.getBoundingClientRect();
+	return box.width > 0 && box.height > 0 && element.checkVisibility({ checkVisibilityCSS: true });
+}
+/** The first visible match, trying the selectors in order. */
+function findVisible(selectors: readonly string[]): Element | null {
+	for (const selector of selectors) {
+		for (const element of document.querySelectorAll(selector)) if (isVisible(element)) return element;
+	}
+	return null;
+}
+
+// ── State: one tour per install, kept across relaunches ──────────────────────
+
+// `known`: the projects there when the tour started, so the first step can
+// tell a new one (null until the list loads). `projectId`: the project the
+// tour settled on (added or opened). `fake`: a dev build previewing with the
+// pretend project. A per-viewer convenience, so localStorage.
+type TourState = { step: TourStep; known: string[] | null; projectId?: string; fake?: boolean };
 const STORAGE_KEY = "ao.guidedTour";
+const STEPS: readonly TourStep[] = [...COUNTED, "done"];
 
 function readState(): TourState | null {
 	try {
 		const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<TourState> | null;
-		if (!parsed || !TOUR_STEPS.includes(parsed.step as TourStep)) return null;
-		return { step: parsed.step as TourStep, known: Array.isArray(parsed.known) ? parsed.known : null, fake: parsed.fake === true };
+		if (!parsed || !STEPS.includes(parsed.step as TourStep)) return null;
+		return {
+			step: parsed.step as TourStep,
+			known: Array.isArray(parsed.known) ? parsed.known.filter((id): id is string => typeof id === "string") : null,
+			projectId: typeof parsed.projectId === "string" ? parsed.projectId : undefined,
+			fake: IS_DEV && parsed.fake === true,
+		};
 	} catch {
 		return null;
 	}
@@ -91,69 +132,136 @@ function subscribe(listener: () => void) {
 	listeners.add(listener);
 	return () => listeners.delete(listener);
 }
+/** Moves on from `from` only if the tour is still there (a late signal from a
+ * step already passed changes nothing). */
+function moveOn(from: TourStep, to: TourStep, patch: Partial<TourState> = {}) {
+	if (state?.step === from) setState({ ...state, ...patch, step: to });
+}
 
-/** Starts the tour from its first step (onboarding calls this as it closes). */
+/** Starts the tour from its first step. Onboarding calls this once it has
+ * closed and Home, where projects are added, is showing. */
 export function startGuidedTour() {
 	setState({ step: "project", known: null });
 }
 
+// ── Following the control on screen ─────────────────────────────────────────
+
 type Rect = { top: number; left: number; width: number; height: number };
-/** The element's box, grown to take in what's lit with it (when shown). */
-function unionBox(element: Element, also: string | undefined): Rect {
-	const box = element.getBoundingClientRect();
-	const extra = also ? document.querySelector(also)?.getBoundingClientRect() : undefined;
-	if (!extra || extra.width === 0 || extra.height === 0) return box;
-	const top = Math.min(box.top, extra.top);
-	const left = Math.min(box.left, extra.left);
-	return { top, left, width: Math.max(box.right, extra.right) - left, height: Math.max(box.bottom, extra.bottom) - top };
+// "pending": a step's first moments, before its control has shown up (the
+// card waits rather than docking); "missing": still not there after that.
+type Seen =
+	| { kind: "pending" }
+	| { kind: "covered" }
+	| { kind: "missing" }
+	| { kind: "shown"; element: Element; rect: Rect; radius: number };
+
+/** The box of the control and what's lit with it. */
+function litBox(element: Element, also: readonly string[] = []): Rect {
+	let { top, left, right, bottom } = element.getBoundingClientRect();
+	for (const selector of also) {
+		const extra = findVisible([selector])?.getBoundingClientRect();
+		if (!extra) continue;
+		top = Math.min(top, extra.top);
+		left = Math.min(left, extra.left);
+		right = Math.max(right, extra.right);
+		bottom = Math.max(bottom, extra.bottom);
+	}
+	return { top, left, width: right - left, height: bottom - top };
 }
-const sameRect = (a: Rect | null, b: Rect | null) =>
-	a === b || (!!a && !!b && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height);
 
-/** The step's control on screen; `sent` once the composer's chat has a message. */
-type Target = { element: Element; rect: Rect; sent: boolean };
+/** The control's own corner radius (it or the first rounded part inside it),
+ * so the lit area follows its shape. */
+function cornerRadius(element: Element): number {
+	const queue: Element[] = [element];
+	for (let checked = 0; queue.length && checked < 24; checked++) {
+		const node = queue.shift()!;
+		const radius = Number.parseFloat(getComputedStyle(node).borderTopLeftRadius);
+		if (radius > 0) return Math.min(radius, 28);
+		queue.push(...Array.from(node.children));
+	}
+	return 8;
+}
 
-/** Follows the step's control every frame while the tour runs: "covered"
- * while a dialog is over the app, null while the control isn't on screen. */
-function useTarget(step: TourStep | undefined) {
-	const [target, setTarget] = useState<Target | "covered" | null>(null);
-	useEffect(() => {
-		if (!step) {
-			setTarget(null);
+const sameRect = (a: Rect, b: Rect) =>
+	Math.abs(a.top - b.top) < 0.5 && Math.abs(a.left - b.left) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
+
+/** Watches the page every frame while a step runs: moves the tour on once the
+ * next step's control shows up (a page can mount well after the last one
+ * went), and reports where this step's control is. */
+function useSeen(step: TourStep | undefined): Seen {
+	const [seen, setSeen] = useState<Seen>({ kind: "pending" });
+	// A layout effect, so a step's first look happens before it paints: the
+	// card never shows a frame at the last step's control or in the corner.
+	useLayoutEffect(() => {
+		if (!step || step === "done") {
+			setSeen({ kind: "missing" });
 			return;
 		}
 		let frame = 0;
-		let last: Target | "covered" | null = null;
+		let last: Seen | undefined;
+		let lastShownAt = performance.now();
+		const report = (next: Seen) => {
+			const unchanged = last !== undefined && next.kind === last.kind && (
+				next.kind !== "shown" || (last.kind === "shown" && next.element === last.element && sameRect(next.rect, last.rect))
+			);
+			if (unchanged) return;
+			last = next;
+			setSeen(next);
+		};
 		const tick = () => {
-			// Checked every frame: the next page's control can mount well after
-			// this one's goes (a route still loading).
-			const ahead = DONE_WHEN_SHOWN[step];
-			if (ahead && state && findTarget(ahead)) {
-				setState({ ...state, step: ahead });
-				return;
-			}
-			if (document.querySelector(OPEN_MODAL)) {
-				if (last !== "covered") setTarget((last = "covered"));
-				frame = requestAnimationFrame(tick);
-				return;
-			}
-			const element = findTarget(step);
-			const box = element ? unionBox(element, ALSO_LIT[step]) : undefined;
-			const next = element && box && box.width > 0 && box.height > 0
-				? { element, rect: { top: box.top, left: box.left, width: box.width, height: box.height }, sent: element.hasAttribute("data-tour-sent") }
-				: null;
-			const previous = last === "covered" ? undefined : last;
-			if (last === "covered" || next?.element !== previous?.element || next?.sent !== previous?.sent || !sameRect(next?.rect ?? null, previous?.rect ?? null)) {
-				last = next;
-				setTarget(next);
-			}
 			frame = requestAnimationFrame(tick);
+			const ahead = DONE_WHEN_SHOWN[step];
+			if (ahead && findVisible(TARGET[ahead])) {
+				const board = findVisible([BOARD])?.getAttribute("data-project-id") ?? undefined;
+				moveOn(step, ahead, board && step === "project" ? { projectId: board } : {});
+				return;
+			}
+			if (findVisible([OPEN_DIALOG])) {
+				report({ kind: "covered" });
+				return;
+			}
+			const element = findVisible(TARGET[step]);
+			const rect = element ? litBox(element, ALSO_LIT[step]) : undefined;
+			if (element && rect && rect.width > 0 && rect.height > 0) {
+				lastShownAt = performance.now();
+				const radius = last?.kind === "shown" && last.element === element ? last.radius : cornerRadius(element);
+				report({ kind: "shown", element, rect, radius });
+				return;
+			}
+			// Gone for a moment (a page swap) keeps the last place; gone for
+			// longer docks the card.
+			if (performance.now() - lastShownAt > MISSING_GRACE_MS) report({ kind: "missing" });
+			else if (last?.kind !== "shown") report({ kind: "pending" });
 		};
 		tick();
 		return () => cancelAnimationFrame(frame);
 	}, [step]);
-	return target;
+	return seen;
 }
+
+function useWindowSize() {
+	const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+	useEffect(() => {
+		const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
+	return size;
+}
+
+/** Under the lit area when it fits, else over it, centred on it and kept
+ * inside the window; with nothing lit, the bottom-right corner. */
+function placeCard(lit: Rect | undefined, card: { width: number; height: number }, view: { width: number; height: number }) {
+	if (!lit) return { top: view.height - card.height - EDGE, left: view.width - card.width - EDGE };
+	const below = lit.top + lit.height + LIT_PAD + CARD_GAP;
+	const above = lit.top - LIT_PAD - CARD_GAP - card.height;
+	const top = below + card.height <= view.height - EDGE ? below : above >= EDGE ? above : view.height - card.height - EDGE;
+	const centred = lit.left + lit.width / 2 - card.width / 2;
+	const left = Math.min(Math.max(centred, EDGE), view.width - card.width - EDGE);
+	return { top, left };
+}
+
+// ── The tour ────────────────────────────────────────────────────────────────
 
 export function GuidedTour() {
 	const { t } = useTranslation();
@@ -161,131 +269,212 @@ export function GuidedTour() {
 	const onboardingOpen = useUiStore((ui) => ui.firstRunOnboardingOpen);
 	const step = tour && !onboardingOpen ? tour.step : undefined;
 	const workspaces = useWorkspaceQuery().data;
+	const navigate = useNavigate();
+	const router = useRouter();
+	const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
+	const queryClient = useQueryClient();
+	const seen = useSeen(step);
+	const view = useWindowSize();
+
+	// The first step also ends when a project appears that wasn't there at the
+	// start (Add Project can land on its board a beat later).
 	const localProjectIds = workspaces
 		?.filter((project) => project.kind !== STANDALONE_PROJECT_KIND && project.kind !== CLOUD_PROJECT_KIND)
 		.map((project) => project.id);
-	const tracked = useTarget(step);
-	const target = tracked === "covered" ? null : tracked;
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
+	const listKey = localProjectIds?.join("\n");
+	useEffect(() => {
+		if (!state || !localProjectIds) return;
+		if (state.known === null) {
+			setState({ ...state, known: localProjectIds });
+			return;
+		}
+		const known = state.known;
+		const added = localProjectIds.find((id) => !known.includes(id));
+		if (added) moveOn("project", "orchestrator", { projectId: added });
+		// listKey stands for localProjectIds, which is a fresh array each render.
+	}, [tour, listKey]);
 
-	// The tour moves on: a new project (or, in useTarget, the next step's
-	// control on screen), then the chat's first message.
-	const projectsLoaded = localProjectIds !== undefined;
-	const hasNewProject = Boolean(tour?.known && localProjectIds?.some((id) => !tour.known!.includes(id)));
-	useEffect(() => {
-		if (!tour || !projectsLoaded) return;
-		if (tour.known === null) setState({ ...tour, known: localProjectIds ?? [] });
-		else if (tour.step === "project" && hasNewProject) setState({ ...tour, step: "orchestrator" });
-	}, [tour, projectsLoaded, hasNewProject]);
-	// The pretend project's send stands in for the first message.
-	useEffect(() => {
-		if (!tour?.fake) return;
-		return onDevFakeSend(() => {
-			setState(null);
-			void navigate({ to: "/" }).then(() => queryClient.refetchQueries({ queryKey: workspaceQueryKey }));
-		});
-	}, [tour?.fake, navigate, queryClient]);
+	// The last step ends when any chat sends a message: a real send, or the
+	// pretend project's, which goes nowhere.
 	useEffect(() => {
 		if (step !== "task") return;
 		reportOnboardingStep("first_task", "viewed");
-		if (target?.sent && !tour?.fake) {
-			reportOnboardingStep("first_task", "completed");
-			setState(null);
-		}
-	}, [step, target, tour?.fake]);
+		return onComposerSent(() => {
+			if (!state?.fake) reportOnboardingStep("first_task", "completed");
+			moveOn("task", "done");
+		});
+	}, [step]);
 
-	if (!step || tracked === "covered" || (!target && !IS_DEV)) return null;
-	const refetchProjects = () => queryClient.refetchQueries({ queryKey: workspaceQueryKey });
 	const end = () => {
-		if (step === "task" && !tour?.fake) reportOnboardingStep("first_task", "abandoned");
+		if (state?.step === "task" && !state.fake) reportOnboardingStep("first_task", "abandoned");
+		const fake = state?.fake;
 		setState(null);
-		// The pretend project goes with the tour, so leave its pages first.
-		if (tour?.fake) void navigate({ to: "/" }).then(refetchProjects);
+		// The pretend project goes with the tour: leave its pages, then drop it.
+		if (fake) void navigate({ to: "/" }).then(() => queryClient.refetchQueries({ queryKey: workspaceQueryKey }));
 	};
+	const endRef = useRef(end);
+	endRef.current = end;
+	// The closing note doesn't need dismissing.
+	useEffect(() => {
+		if (step !== "done") return;
+		const timer = window.setTimeout(() => endRef.current(), DONE_HOLD_MS);
+		return () => window.clearTimeout(timer);
+	}, [step]);
+
+	// The card's own size, for placing it.
+	const cardRef = useRef<HTMLDivElement>(null);
+	const [cardSize, setCardSize] = useState({ width: 320, height: 160 });
+	useLayoutEffect(() => {
+		const card = cardRef.current;
+		if (!card) return;
+		const measure = () => setCardSize((size) =>
+			size.width === card.offsetWidth && size.height === card.offsetHeight ? size : { width: card.offsetWidth, height: card.offsetHeight });
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(card);
+		return () => observer.disconnect();
+	});
+
+	// Gliding only when the card or lit area moves to another control (or
+	// docks); following a control as the page scrolls or resizes is instant.
+	const shown = seen.kind === "shown" ? seen : undefined;
+	const anchorKey = shown ? `${step}:${shown.element.getAttribute("data-tour") ?? ""}` : `${step}:corner`;
+	const [gliding, setGliding] = useState(false);
+	const lastAnchor = useRef(anchorKey);
+	useEffect(() => {
+		if (lastAnchor.current === anchorKey) return;
+		lastAnchor.current = anchorKey;
+		setGliding(true);
+		const timer = window.setTimeout(() => setGliding(false), GLIDE_MS + 40);
+		return () => window.clearTimeout(timer);
+	}, [anchorKey]);
+	// The lit area keeps its last place while it fades out.
+	const lastLit = useRef<{ rect: Rect; radius: number } | null>(null);
+	if (shown) lastLit.current = { rect: shown.rect, radius: shown.radius };
+
+	if (!step || !tour || seen.kind === "covered") return null;
+
+	// Where "Take me there" goes for a step whose control is off screen.
+	const projectId = tour.projectId;
+	const orchestrator = projectId && workspaces ? findProjectOrchestrator(workspaces, projectId) : undefined;
+	const destination =
+		step === "project" || !projectId ? { to: "/" as const }
+		: step === "orchestrator" ? { to: "/projects/$projectId" as const, params: { projectId } }
+		: step === "task" && tour.fake ? { to: "/new" as const, search: { project: projectId } }
+		: step === "task" && orchestrator ? sessionNavigateTarget(projectId, orchestrator.id)
+		: { to: "/projects/$projectId" as const, params: { projectId } };
+	const destinationPath = router.buildLocation(destination).pathname;
+	const offTrack = step !== "done" && !shown;
+	const showTakeMeThere = offTrack && pathname !== destinationPath;
+
 	// Dev builds: the first step adds the pretend project and opens its board
-	// (which moves the tour on); its board's step opens a new chat in it, where
-	// the composer is. Otherwise straight to the next step.
-	const advance = async () => {
+	// (which moves the tour on); with it, the board's step opens a new chat in
+	// it. Otherwise straight to the next step.
+	const devContinue = async () => {
 		if (step === "project") {
-			setState({ ...tour!, fake: true });
-			await refetchProjects();
+			setState({ ...tour, fake: true });
+			await queryClient.refetchQueries({ queryKey: workspaceQueryKey });
 			void navigate({ to: "/projects/$projectId", params: { projectId: DEV_FAKE_PROJECT_ID } });
 			return;
 		}
-		if (step === "orchestrator" && tour?.fake) {
+		if (step === "orchestrator" && tour.fake) {
 			void navigate({ to: "/new", search: { project: DEV_FAKE_PROJECT_ID } });
 			return;
 		}
-		if (step === "task") end();
-		else setState({ ...tour!, step: TOUR_STEPS[TOUR_STEPS.indexOf(step) + 1]! });
+		if (step === "done") end();
+		else moveOn(step, STEPS[STEPS.indexOf(step) + 1]!);
 	};
-	const rect = target?.rect;
-	const copy = TOUR_COPY[step === "project" && target?.element.matches(RECENT_PROJECT) ? "recent" : step];
-	return (
+
+	const copy = COPY[step === "project" && shown?.element.querySelector(RECENT_PROJECT) ? "recent" : step];
+	const position = placeCard(step === "done" ? undefined : shown?.rect, cardSize, view);
+	const glide = gliding ? `top ${GLIDE_MS}ms ease-in-out, left ${GLIDE_MS}ms ease-in-out` : undefined;
+	const lit = lastLit.current;
+	const counted = COUNTED.indexOf(step);
+
+	return createPortal(
 		<>
-			{rect ? createPortal(
-				// The spotlight: a box round the control whose huge spread dims the
-				// rest of the window. It never takes the pointer, so the control
-				// (and everything else) stays usable through it.
+			{/* The lit area: a box round the control whose huge spread fades the
+			    rest of the window back. It never takes the pointer, so the
+			    control (and everything else) stays usable through it. */}
+			{lit ? (
 				<div
 					aria-hidden="true"
-					className="pointer-events-none fixed z-overlay rounded-xl transition-[top,left,width,height] duration-[280ms] ease-in-out motion-reduce:transition-none"
+					className="pointer-events-none fixed z-overlay motion-reduce:transition-none"
 					style={{
-						top: rect.top - SPOTLIGHT_PAD,
-						left: rect.left - SPOTLIGHT_PAD,
-						width: rect.width + SPOTLIGHT_PAD * 2,
-						height: rect.height + SPOTLIGHT_PAD * 2,
-						boxShadow: "0 0 0 200vmax var(--color-scrim)",
+						top: lit.rect.top - LIT_PAD,
+						left: lit.rect.left - LIT_PAD,
+						width: lit.rect.width + LIT_PAD * 2,
+						height: lit.rect.height + LIT_PAD * 2,
+						borderRadius: lit.radius + LIT_PAD,
+						opacity: shown && step !== "done" ? 1 : 0,
+						boxShadow: "0 0 0 1.5px var(--tour-ring), 0 0 0 200vmax var(--tour-scrim)",
+						transition: [
+							"opacity 200ms ease-out",
+							gliding ? `top ${GLIDE_MS}ms ease-in-out, left ${GLIDE_MS}ms ease-in-out, width ${GLIDE_MS}ms ease-in-out, height ${GLIDE_MS}ms ease-in-out, border-radius ${GLIDE_MS}ms ease-in-out` : "",
+						].filter(Boolean).join(", "),
 					}}
-				/>,
-				document.body,
+				/>
 			) : null}
-			<Popover open>
-				<PopoverAnchor virtualRef={{ current: target?.element ?? CORNER }} />
-				<PopoverContent
-					data-guided-tour=""
-					aria-labelledby="guided-tour-title"
-					side={target ? "bottom" : "top"}
-					align={target ? "start" : "end"}
-					sideOffset={SPOTLIGHT_PAD + 10}
-					collisionPadding={16}
-					updatePositionStrategy="always"
-					// A guide, not a menu: it stays up while the person works and
-					// leaves focus where it is.
-					onOpenAutoFocus={(event) => event.preventDefault()}
-					onInteractOutside={(event) => event.preventDefault()}
-					onEscapeKeyDown={end}
-					className="w-80 p-4"
+			{seen.kind === "pending" && step !== "done" ? null : <section
+				ref={cardRef}
+				data-guided-tour=""
+				aria-labelledby="guided-tour-title"
+				className="fixed z-overlay w-80 animate-popover-in rounded-xl border border-(--color-border-overlay) bg-overlay p-4 text-popover-foreground shadow-(--shadow-popover) motion-reduce:animate-none motion-reduce:transition-none"
+				style={{ top: position.top, left: position.left, transition: glide }}
+			>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon-sm"
+					className="absolute right-2.5 top-2.5 text-muted-foreground"
+					aria-label={t("firstRun.tourEnd")}
+					title={t("firstRun.tourEnd")}
+					onClick={end}
 				>
-					<div className="flex items-center justify-between gap-3">
-						<p className="text-xs text-muted-foreground">
-							{t("firstRun.tourStepOf", { current: TOUR_STEPS.indexOf(step) + 1, total: TOUR_STEPS.length })}
-						</p>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-sm"
-							className="-mr-1.5 -mt-1 text-muted-foreground"
-							aria-label={t("firstRun.tourEnd")}
-							title={t("firstRun.tourEnd")}
-							onClick={end}
-						>
-							<X aria-hidden="true" />
-						</Button>
+					<X aria-hidden="true" />
+				</Button>
+				{counted >= 0 ? (
+					<div className="flex h-5 items-center gap-2.5 pb-2">
+						<div aria-hidden="true" className="flex items-center gap-1">
+							{COUNTED.map((countedStep, index) => (
+								<span
+									key={countedStep}
+									className={cn("h-1 w-5 rounded-full transition-colors duration-normal", index <= counted ? "bg-foreground" : "bg-muted")}
+								/>
+							))}
+						</div>
+						<span className="text-xs text-muted-foreground">
+							{t("firstRun.tourStepOf", { current: counted + 1, total: COUNTED.length })}
+						</span>
 					</div>
+				) : null}
+				{/* Announced as it changes, so each step is read out as it arrives. */}
+				<div aria-live="polite" className="pr-6">
 					<h2 id="guided-tour-title" className="pt-1 text-sm font-semibold text-foreground">{t(copy.title)}</h2>
 					<p className="pt-1 text-pretty text-sm leading-relaxed text-muted-foreground">{t(copy.body)}</p>
-					{IS_DEV ? (
-						<div className="flex justify-end pt-3">
-							<Button type="button" variant="secondary" size="sm" onClick={() => void advance()}>
-								{t(step === "project" ? "firstRun.tourDevFake" : "firstRun.continue")}
+				</div>
+				{showTakeMeThere || step === "done" || IS_DEV ? (
+					<div className="flex flex-wrap items-center justify-end gap-2 pt-4">
+						{IS_DEV && step !== "done" ? (
+							<Button type="button" variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void devContinue()}>
+								{t(step === "project" && !tour.fake ? "firstRun.tourDevFake" : "firstRun.continue")}
+							</Button>
+						) : null}
+						{showTakeMeThere ? (
+							<Button type="button" variant="secondary" size="sm" onClick={() => void navigate(destination)}>
+								{t("firstRun.tourTakeMeThere")}
 								<ArrowRight aria-hidden="true" />
 							</Button>
-						</div>
-					) : null}
-				</PopoverContent>
-			</Popover>
-		</>
+						) : null}
+						{step === "done" ? (
+							<Button type="button" variant="primary" size="sm" onClick={end}>
+								{t("firstRun.tourDone")}
+							</Button>
+						) : null}
+					</div>
+				) : null}
+			</section>}
+		</>,
+		document.body,
 	);
 }
