@@ -26,7 +26,7 @@ import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pan
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
-import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
+import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitFocusOutline, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
@@ -3151,6 +3151,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									/>
 								))
 								: null}
+							{/* When focus moves to a pane, a thin accent outline flashes on it
+							    and fades away, so it marks the move without staying on screen.
+							    Keyed by the pane, so each focus change replays it. */}
+							{shownGroup && shownLayout && shownLayout.leaves.has(selectedTabKey) ? (
+								<SplitFocusOutline
+									box={layoutBoxes(shownGroup.root).leaves.get(selectedTabKey) ?? { x: 0, y: 0, w: 1, h: 1 }}
+									key={`split-focus:${selectedTabKey}`}
+									screenRef={splitScreenRef}
+								/>
+							) : null}
 							{shownGroup && shownLayout
 								? shownLayout.dividers.map((divider) => (
 									<SplitDivider
