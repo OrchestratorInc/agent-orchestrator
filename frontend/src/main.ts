@@ -3398,7 +3398,8 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 		const rows = JSON.parse(stdout) as GitHubRepoRow[];
 		return rows.flatMap((row) => {
 			const fullName = row.fullName ?? row.full_name;
-			const url = row.url ?? row.html_url;
+			// `gh api user/repos` rows set `url` to the REST API URL, which git cannot clone.
+			const url = row.html_url ?? row.url;
 			if (!fullName || !url) return [];
 			return [{
 				fullName,

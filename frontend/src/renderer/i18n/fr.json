@@ -3417,6 +3417,7 @@
 	"remote.addHost": "Ajouter un hôte",
 	"remote.loadHostsFailed": "Impossible de charger les hôtes enregistrés.",
 	"remote.hostOffline": "L’hôte est hors ligne. Vérifiez son adresse et son mot de passe.",
+	"remote.offlineCopy": "Affichage de la dernière copie enregistrée jusqu’à la connexion de l’hôte.",
 	"remote.hostIncompatible": "Les versions d’Orchestrator sont incompatibles. Mettez à jour Orchestrator sur cet ordinateur et sur l’hôte distant.",
 	"remote.updateAO": "Mettre Orchestrator à jour",
 	"remote.hostUnauthorized": "L’hôte a refusé le mot de passe. Vérifiez son adresse et son mot de passe.",

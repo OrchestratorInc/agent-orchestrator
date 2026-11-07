@@ -21,6 +21,8 @@ import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
+import { useChatSessionId } from "./chat-image-source";
+import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -1832,11 +1834,25 @@ function CommandOutput({
 }) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
+	const hostId = useContext(ChatHostId);
+	const sessionId = useChatSessionId();
+	// A remote page carries only the head and tail of a long output; outputBytes is its full size.
+	const cutBytes = typeof detail?.outputBytes === "number" ? detail.outputBytes : undefined;
+	const [whole, setWhole] = useState<{ revision: number; output?: string; loading?: boolean }>();
+	const wholeOutput = whole?.revision === activity.revision ? whole.output : undefined;
+	const showWhole = () => {
+		if (!sessionId) return;
+		const revision = activity.revision;
+		setWhole({ revision, loading: true });
+		fetchActivityOutput(sessionId, hostId, activity.sequence, activity.id)
+			.then((output) => setWhole({ revision, output }))
+			.catch(() => setWhole(undefined));
+	};
 	// Older ACP-backed conversations may contain the provider's structured
 	// rawOutput even though AO's view model promises a string. New events are
 	// normalized at the adapter boundary; this compatibility read keeps those
 	// already-durable rows from taking down the entire session surface.
-	const raw = commandOutputText(detail?.output as unknown);
+	const raw = commandOutputText((wholeOutput ?? detail?.output) as unknown);
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
@@ -1877,6 +1893,16 @@ function CommandOutput({
 				<p className="px-2.5 py-1 text-xs text-muted-foreground">
 					Showing the end of this large output.
 				</p>
+			) : null}
+			{cutBytes !== undefined && wholeOutput === undefined && sessionId ? (
+				<button
+					type="button"
+					disabled={whole?.revision === activity.revision && whole.loading}
+					onClick={showWhole}
+					className="self-start px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+				>
+					{whole?.revision === activity.revision && whole.loading ? "Loading the whole output…" : `Show the whole output (${Math.ceil(cutBytes / 1024)} KB)`}
+				</button>
 			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">

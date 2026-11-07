@@ -5934,6 +5934,8 @@ export interface components {
             account?: components["schemas"]["ConversationAccountPayload"];
             activeBranchId?: string;
             activities: components["schemas"]["ConversationActivityResponse"][];
+            /** Format: int64 */
+            afterSequence?: number;
             branchMaterialization?: components["schemas"]["ConversationBranchMaterializationResponse"];
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
@@ -17418,6 +17420,10 @@ export interface operations {
                 beforeSequence?: null | number;
                 /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
+                /** @description Read only items newer than this conversation sequence. The response echoes afterSequence when it applied the floor. Omit for a whole page. */
+                afterSequence?: null | number;
+                /** @description Keep at most this many bytes of each command output: its head and tail. A cut output carries outputBytes, the full size. Omit for whole outputs. */
+                outputLimit?: null | number;
             };
             header?: never;
             path: {
