@@ -113,6 +113,7 @@ export function WorkerBoardList({
 	showMachine = true,
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
+	archiveFooter = false,
 	onScroll,
 }: {
 	sessions: DashboardSession[];
@@ -158,6 +159,13 @@ export function WorkerBoardList({
 	 * `sessions`; they are fetched when Archive opens, or a search runs.
 	 */
 	archiveSources?: readonly ArchiveSource[];
+	/**
+	 * With nothing live, show `ListEmptyComponent` filling the screen and Archive
+	 * beneath it as a footer, instead of Archive as the board's only row. The
+	 * Workers tab's idle state is written for that; a project page's "no workers
+	 * yet" copy is not, so it keeps the plain Archive row.
+	 */
+	archiveFooter?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -331,6 +339,10 @@ export function WorkerBoardList({
 			{ zone: "archive" as const, label: "Archive", color: t.textFaint, data: archiveOpen ? archived : [] },
 		];
 	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pagedArchive.error, pinned, sections, archiveCount, archived, archiveOpen, t]);
+	// Nothing live, only history. The Archive row used to be the whole board then,
+	// which kept the list non-empty and so hid the empty state behind it. Now the
+	// empty state fills the screen and Archive sits beneath it as a footer.
+	const archiveOnly = archiveFooter && listSections.length === 1 && listSections[0].zone === "archive";
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.
@@ -341,7 +353,11 @@ export function WorkerBoardList({
 					? [{ kind: "archive-status", key: "archive:status" }]
 					: [];
 				if (section.zone === "archive") {
-					return [{ kind: "archive", key: "header:archive" } as const, ...section.data.map(sessionRow), ...status];
+					return [
+						...(archiveOnly ? [] : [{ kind: "archive", key: "header:archive" } as const]),
+						...section.data.map(sessionRow),
+						...status,
+					];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
 				const open = !collapsible || !collapsedSections[section.zone];
@@ -352,7 +368,7 @@ export function WorkerBoardList({
 					...status,
 				];
 			}),
-		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
+		[collapsedSections, listSections, archiveStatusShown, archiveOpen, archiveOnly],
 	);
 
 	// Disclosure and plain presses stay silent; haptics mark an outcome (a pin, a
@@ -510,9 +526,20 @@ export function WorkerBoardList({
 		restingTop.current = insets.top;
 	}, []);
 	const insetsForBars = Platform.OS === "ios" && contentInsetAdjustmentBehavior === "automatic";
-	const contentContainerStyle = insetsForBars && visibleHeight && listData.length === 0
+	// The Archive footer is sized the same way, so it rests just above the tab bar.
+	const contentContainerStyle = insetsForBars && visibleHeight && (listData.length === 0 || archiveOnly)
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
 		: { flexGrow: 1, paddingBottom: contentBottomInset };
+
+	// The header grows to the space left, so the empty state centres in it and
+	// Archive rests at the bottom; opened, its rows follow beneath.
+	const header = archiveOnly ? (
+		<View style={styles.archiveOnly}>
+			{ListHeaderComponent}
+			{ListEmptyComponent}
+			<ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />
+		</View>
+	) : ListHeaderComponent;
 
 	return (
 		<View style={styles.listWrap}>
@@ -536,8 +563,9 @@ export function WorkerBoardList({
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={overlayTopInset} {...refreshControlColors(t)} />}
-					ListHeaderComponent={ListHeaderComponent}
-					ListEmptyComponent={ListEmptyComponent}
+					ListHeaderComponent={header}
+					ListHeaderComponentStyle={archiveOnly ? styles.archiveOnly : undefined}
+					ListEmptyComponent={archiveOnly ? null : ListEmptyComponent}
 					renderItem={renderItem}
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
@@ -672,6 +700,7 @@ function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		listWrap: { flex: 1 },
+		archiveOnly: { flexGrow: 1 },
 		updatesPill: {
 			position: "absolute",
 			alignSelf: "center",
