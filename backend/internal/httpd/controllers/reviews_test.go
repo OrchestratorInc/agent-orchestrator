@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -545,5 +546,132 @@ func TestReviewsListIncludesEveryActiveReviewer(t *testing.T) {
 	body, _, _ = doRequest(t, empty, "GET", "/api/v1/sessions/mer-1/reviews", "")
 	if !strings.Contains(string(body), `"activeReviewers":[]`) {
 		t.Fatalf("body = %s, want an empty activeReviewers array, never null", body)
+	}
+}
+
+func TestReviewResponsesSanitizeHistoricalFailuresWithoutMutatingService(t *testing.T) {
+	const raw = `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"},"request":{"api_key":"synthetic-secret"},"diagnostics":"private-payload"}`
+	const embedded = `{"status":400,"error":{"type":"invalid_request_error","message":"Authorization: Bearer synthetic-embedded"}}`
+	const safeEmbedded = "HTTP 400: invalid_request_error: provider error details withheld"
+	const preserved = "Authorization: Bearer legitimate-review-content"
+	for _, tc := range []struct {
+		name   string
+		method string
+		suffix string
+		input  string
+	}{
+		{name: "list", method: "GET"},
+		{name: "trigger", method: "POST", suffix: "/trigger"},
+		{name: "cancel", method: "POST", suffix: "/cancel"},
+		{name: "restore", method: "POST", suffix: "/restore"},
+		{name: "kill", method: "POST", suffix: "/kill"},
+		{name: "switch", method: "POST", suffix: "/switch", input: `{"harness":"claude-code"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failed := domain.ReviewRun{ID: "failed", Status: domain.ReviewRunFailed, Body: raw}
+			completed := domain.ReviewRun{ID: "completed", Status: domain.ReviewRunComplete, Body: preserved}
+			submitted := domain.ReviewRun{ID: "submitted", Status: domain.ReviewRunFailed, Verdict: "approved", Body: preserved}
+			posted := domain.ReviewRun{ID: "posted", Status: domain.ReviewRunFailed, GithubReviewID: "123", Body: preserved}
+			sensitive := domain.ReviewRun{ID: "embedded", Status: domain.ReviewRunFailed, Body: embedded}
+			reviews := []reviewcore.PRReviewState{
+				{LatestRun: &failed, PreviousRun: &failed},
+				{LatestRun: &completed, PreviousRun: &submitted},
+				{LatestRun: &posted},
+				{LatestRun: &sensitive, PreviousRun: &sensitive},
+			}
+			runs := []domain.ReviewRun{failed, completed, submitted, posted, sensitive}
+			svc := &fakeReviewService{
+				list:    reviewcore.SessionReviews{Reviews: reviews, Runs: runs},
+				trigger: reviewcore.TriggerResult{Reviews: reviews, Runs: runs},
+				cancel:  reviewcore.CancelResult{Reviews: reviews},
+			}
+			srv := newReviewTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, tc.method, "/api/v1/sessions/mer-1/reviews"+tc.suffix, tc.input)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			var got controllers.ListReviewsResponse
+			mustJSON(t, body, &got)
+			if len(got.Reviews) != len(reviews) {
+				t.Fatalf("reviews = %+v", got.Reviews)
+			}
+			checkFailure := func(run domain.ReviewRun) {
+				t.Helper()
+				for _, want := range []string{"400", "invalid_request_error", "Model unavailable for this account"} {
+					if !strings.Contains(run.Body, want) {
+						t.Fatalf("failure body %q missing %q", run.Body, want)
+					}
+				}
+				for _, unwanted := range []string{"synthetic-secret", "private-payload", "api_key", "diagnostics"} {
+					if strings.Contains(run.Body, unwanted) {
+						t.Fatalf("failure body contains %q: %q", unwanted, run.Body)
+					}
+				}
+			}
+			checkFailure(*got.Reviews[0].LatestRun)
+			checkFailure(*got.Reviews[0].PreviousRun)
+			if got.Reviews[1].LatestRun.Body != preserved || got.Reviews[1].PreviousRun.Body != preserved || got.Reviews[2].LatestRun.Body != preserved {
+				t.Fatal("completed/submitted review content changed")
+			}
+			if got.Reviews[3].LatestRun.Body != safeEmbedded || got.Reviews[3].PreviousRun.Body != safeEmbedded || strings.Contains(string(body), "synthetic-embedded") {
+				t.Fatalf("embedded credential not withheld: %s", body)
+			}
+			if tc.name != "cancel" {
+				if len(got.Runs) != len(runs) {
+					t.Fatalf("runs = %+v", got.Runs)
+				}
+				checkFailure(got.Runs[0])
+				if got.Runs[4].Body != safeEmbedded {
+					t.Fatalf("historical embedded credential body = %q", got.Runs[4].Body)
+				}
+				for _, run := range got.Runs[1:4] {
+					if run.Body != preserved {
+						t.Fatal("completed/submitted historical content changed")
+					}
+				}
+			}
+			if sensitive.Body != embedded || runs[4].Body != embedded || failed.Body != raw || reviews[0].LatestRun.Body != raw || reviews[0].PreviousRun.Body != raw || runs[0].Body != raw {
+				t.Fatal("response mutated service-owned data")
+			}
+		})
+	}
+}
+
+func TestReviewResponsesBoundMalformedAndMultibyteFailures(t *testing.T) {
+	const fallback = "reviewer Chat turn ended without submitting a result"
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"malformed", `{"message":"synthetic-sensitive`, fallback},
+		{"multibyte", strings.Repeat("模 ", 1000), strings.Repeat("模 ", 255) + "…"},
+		{"oversized multibyte", strings.Repeat("模 ", 5000), fallback},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := domain.ReviewRun{ID: "failed", Status: domain.ReviewRunFailed, Body: tc.raw}
+			svc := &fakeReviewService{list: reviewcore.SessionReviews{
+				Reviews: []reviewcore.PRReviewState{{LatestRun: &run, PreviousRun: &run}},
+				Runs:    []domain.ReviewRun{run},
+			}}
+			srv := newReviewTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/mer-1/reviews", "")
+			if status != http.StatusOK {
+				t.Fatalf("status = %d", status)
+			}
+			var got controllers.ListReviewsResponse
+			mustJSON(t, body, &got)
+			if len(got.Reviews) != 1 || got.Reviews[0].LatestRun == nil || got.Reviews[0].PreviousRun == nil || len(got.Runs) != 1 {
+				t.Fatal("missing latest, previous or historical run")
+			}
+			for _, actual := range []string{got.Reviews[0].LatestRun.Body, got.Reviews[0].PreviousRun.Body, got.Runs[0].Body} {
+				if actual != tc.want || len(actual) > 1024 || !utf8.ValidString(actual) {
+					t.Fatalf("unsafe summary: bytes=%d valid=%v", len(actual), utf8.ValidString(actual))
+				}
+			}
+			if run.Body != tc.raw || svc.list.Runs[0].Body != tc.raw {
+				t.Fatal("response mutated original failure")
+			}
+		})
 	}
 }
