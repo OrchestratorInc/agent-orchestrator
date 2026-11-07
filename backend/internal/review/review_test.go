@@ -111,12 +111,16 @@ func (f *fakeStore) SettleReviewChatWork(_ context.Context, reviewID string, _ t
 	return nil
 }
 func (f *fakeStore) RestoreReviewLaunchState(_ context.Context, review domain.Review, _ time.Time) (bool, error) {
-	if f.review == nil || f.review.ID != review.ID {
+	if f.reviews == nil && (f.review == nil || f.review.ID != review.ID) {
 		return false, nil
 	}
 	cp := review
-	f.review = &cp
-	f.reviews[review.Harness] = cp
+	if f.review != nil && f.review.ID == review.ID {
+		f.review = &cp
+	}
+	if f.reviews != nil {
+		f.reviews[review.Harness] = cp
+	}
 	return true, nil
 }
 func (f *fakeStore) mutateReview(harness domain.ReviewerHarness, fn func(*domain.Review)) {
@@ -3045,6 +3049,7 @@ func TestListReturnsActiveOneShotOverrideHandle(t *testing.T) {
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerOpenCode, ReviewerHandleID: "opencode-pane"},
 		runs: []domain.ReviewRun{{
 			ID:        "run-1",
+			ReviewID:  "rev-1",
 			SessionID: "mer-1",
 			Harness:   domain.ReviewerOpenCode,
 			PRURL:     "https://github.com/o/r/pull/1",
