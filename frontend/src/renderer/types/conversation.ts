@@ -492,7 +492,17 @@ export interface SystemEventDetail {
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
 		| "approval_mode.substituted"
 		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
-		| "session.model_unavailable";
+		| "session.model_unavailable"
+		/** A note people wrote for each other in a shared Cloud session, which the agent never sees. */
+		| "chat.aside";
+	/** chat.aside: the note, who wrote it, and whom it mentions. */
+	aside?: {
+		asideId: string;
+		text: string;
+		authorUserId: string;
+		authorName?: string;
+		mentions?: Array<{ kind: "person"; userId: string } | { kind: "team"; teamId: string }>;
+	};
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */

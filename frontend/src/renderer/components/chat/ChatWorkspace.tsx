@@ -165,7 +165,10 @@ import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
-import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type ComposerMentionSource, type StoredComposerAttachment } from "./ChatComposer";
+import { ComposerModeToggle, type ComposerMode } from "./ComposerModeToggle";
+import { AsideRow } from "./AsideRow";
+import type { ComposerMention } from "../../lib/cloud-team-collab";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
@@ -437,7 +440,25 @@ export interface ChatWorkspaceProps {
 		fileReferences?: ChatFileReference[],
 		/** With text delivery, the message as typed, before its file captures were inlined into `text`. */
 		displayText?: string,
+		/** The people and teams the message mentions. */
+		mentions?: ComposerMention[],
 	) => void | Promise<unknown>;
+	/**
+	 * A shared cloud session's two composer modes: Agent writes to the agent,
+	 * Aside writes to the people here and never reaches it. Each keeps its own
+	 * draft; Shift+Tab and a small toggle switch between them.
+	 */
+	composerModes?: {
+		mode: ComposerMode;
+		onModeChange: (mode: ComposerMode) => void;
+		onSendAside: (text: string, clientMessageId: string | undefined, mentions: ComposerMention[] | undefined) => Promise<unknown>;
+		/** Asides can't be posted right now (a deleted session). */
+		asideDisabled?: boolean;
+	};
+	/** People and teams in the composer's @ menu, in either mode. */
+	composerMentions?: ComposerMentionSource;
+	/** Text added to the agent draft (a suggestion being edited); each new id applies once. */
+	composerDraftRequest?: { id: string; text: string };
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
 		requestId: string,
@@ -780,6 +801,9 @@ function ChatWorkspaceContent({
 	composerLockedPlaceholder,
 	settingsLocked = false,
 	onComposerInput,
+	composerModes,
+	composerMentions,
+	composerDraftRequest,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1180,7 +1204,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string, mentions?: ComposerMention[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1231,10 +1255,38 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText, mentions);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
+	// A shared cloud session's Aside mode: the composer writes to people, with
+	// its own draft, and a send posts an aside instead of a message.
+	const asideMode = composerModes?.mode === "aside";
+	const onModeChange = composerModes?.onModeChange;
+	const currentMode = composerModes?.mode;
+	const toggleComposerMode = useCallback(() => {
+		if (currentMode) onModeChange?.(currentMode === "agent" ? "aside" : "agent");
+	}, [currentMode, onModeChange]);
+	const modeToggle = composerModes ? (
+		<ComposerModeToggle mode={composerModes.mode} onChange={composerModes.onModeChange} />
+	) : null;
+	const onSendAside = composerModes?.onSendAside;
+	const handleAsideSend = useCallback(
+		async (text: string, _attachments?: unknown, clientMessageId?: string, _retained?: number[], _excerpts?: ChatDraftExcerptReference[], _files?: ChatFileReference[], _display?: string, mentions?: ComposerMention[]) => {
+			if (!onSendAside) throw new Error("chat.draft.sendFailed");
+			return onSendAside(text, clientMessageId, mentions);
+		},
+		[onSendAside],
+	);
+	// A suggestion being edited joins the agent draft, once Agent mode's composer is up.
+	const appliedDraftRequest = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (!composerDraftRequest || asideMode || appliedDraftRequest.current === composerDraftRequest.id) return;
+		const composer = composerFocusRef.current;
+		if (!composer) return;
+		appliedDraftRequest.current = composerDraftRequest.id;
+		composer.appendDraft(composerDraftRequest.text);
+	}, [asideMode, composerDraftRequest]);
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);
 	const beginQueuedEdit = useCallback(
@@ -2009,7 +2061,7 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
+									open={conversationEmpty && composerEmpty && !asideMode && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
 									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
@@ -2034,42 +2086,49 @@ function ChatWorkspaceContent({
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
-										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
-										queuedDock={composerQueuedDock}
-										approval={composerApproval}
-										elicitation={composerElicitation}
-										onSend={handleComposerSend}
-						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
+										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${asideMode ? "aside" : queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
+										// Aside mode writes to people: nothing in it reaches the agent, so the
+										// agent's docks, files, commands, steering and lease stay with Agent.
+										queuedDock={asideMode ? undefined : composerQueuedDock}
+										approval={asideMode ? undefined : composerApproval}
+										elicitation={asideMode ? undefined : composerElicitation}
+										onSend={asideMode ? handleAsideSend : handleComposerSend}
+										mentions={composerMentions}
+										editorLabel={asideMode ? t("aside.composerLabel") : undefined}
+										onToggleMode={composerModes ? toggleComposerMode : undefined}
+						fileReferencesEnabled={!asideMode && fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
-										sentMessages={sentMessages}
+										sentMessages={asideMode ? undefined : sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
-										draftSeed={composerDraftSeed}
-										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
+										draftSeed={asideMode ? undefined : composerDraftSeed}
+										promptSuggestion={!asideMode && !queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
 											!controllerTransitioning && !loadingQuietly && !agentResuming &&
 											!workspaceActiveTabKey && !reviewerActive && !shellActive && snapshot.controller.state === "ready"
 											? promptSuggestion : undefined}
-										editingQueuedTurnId={queueEdit?.turnId}
-										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
-										savingQueuedEditPending={Boolean(
+										editingQueuedTurnId={asideMode ? undefined : queueEdit?.turnId}
+										queuedEditRecovery={!asideMode && Boolean(queueEdit?.clientMessageId)}
+										savingQueuedEditPending={!asideMode && Boolean(
 											queueEdit?.turnId &&
 												editQueuedTurnPendingTurnId === queueEdit.turnId,
 										)}
 										onCancelQueuedEdit={cancelQueuedEdit}
-										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
+										onQueuedDraftChange={queueEdit && !asideMode ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}
-										onDraftInput={onComposerInput}
-										queuedDraftScope={queueEdit ? draftScope : undefined}
+										// Typing an aside takes no composer lease.
+										onDraftInput={asideMode ? undefined : onComposerInput}
+										queuedDraftScope={queueEdit && !asideMode ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
-										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
-										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={draftSettings ?? <>
+										onInterrupt={!asideMode && turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onContinue={!asideMode && canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
+										commandError={asideMode ? undefined : queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
+										settings={asideMode ? modeToggle : draftSettings ?? <>
+											{modeToggle}
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}
 										</>}
-										addMenuItems={agentSwitch ? (
+										addMenuItems={!asideMode && agentSwitch ? (
 											<ComposerModeItems
 												configOptions={configOptions ?? []}
 												settings={stableSettings}
@@ -2080,16 +2139,16 @@ function ChatWorkspaceContent({
 												disabled={configOptionPending || controllerTransitioning}
 											/>
 										) : undefined}
-										busy={busy}
-										willQueue={Boolean(turn) || startupQueues}
+										busy={asideMode ? false : busy}
+										willQueue={!asideMode && (Boolean(turn) || startupQueues)}
 										queuePlaceholder={
-											session?.provisionState === "provisioning" || cloudStarting
+											!asideMode && (session?.provisionState === "provisioning" || cloudStarting)
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
-										disabledPlaceholder={
+										starting={!asideMode && (orchestratorStarting || arrivingInChat || cloudStarting || composerStarting)}
+										disabled={asideMode ? Boolean(composerModes?.asideDisabled) : (orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabledPlaceholder={asideMode ? undefined :
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
@@ -2113,36 +2172,36 @@ function ChatWorkspaceContent({
 										// task can have non-message activity before its first visible chat
 										// message, and the generic placeholder makes a still-empty composer
 										// look like a regression.
-										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
-										skills={skills}
+										emptyPlaceholder={asideMode ? t("aside.placeholder") : conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
+										skills={asideMode ? NO_SKILLS : skills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
-										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										cloudAttachments={cloudAttachments}
-										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
+										onStageAttachments={newWorkDisabled || asideMode ? undefined : onStageAttachments}
+										cloudAttachments={asideMode ? undefined : cloudAttachments}
+										holdAttachments={newWorkDisabled || asideMode ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
 										// Steering is only meaningful into a turn that is running. A queued turn
 										// has not reached the provider, so there is nothing to steer.
-										onSteer={newWorkDisabled ? undefined : steer}
-										showSteerButton={showSteerButton}
-										canSteer={Boolean(onSteer) && turn?.state === "running"}
-										sendPending={sendPending || agentResuming}
-										steerPending={steerPending}
-										steerRefusal={steerRefusal}
-										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
+										onSteer={newWorkDisabled || asideMode ? undefined : steer}
+										showSteerButton={!asideMode && showSteerButton}
+										canSteer={!asideMode && Boolean(onSteer) && turn?.state === "running"}
+										sendPending={!asideMode && (sendPending || agentResuming)}
+										steerPending={!asideMode && steerPending}
+										steerRefusal={asideMode ? undefined : steerRefusal}
+										onCompact={newWorkDisabled || asideMode || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}
-										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
+										draftSessionId={draftPersistenceAvailable && (asideMode || !queueEdit) ? (asideMode ? asideDraftSessionId(draftScope.sessionId) : draftScope.sessionId) : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
-										acceptedClientMessageIds={acceptedClientMessageIds}
+										acceptedClientMessageIds={asideMode ? undefined : acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
 									/>
 								</div>
@@ -2192,6 +2251,13 @@ function ChatWorkspaceContent({
 		</section>
  </FileAnnotationContext.Provider>
 	);
+}
+
+const NO_SKILLS: ChatSkill[] = [];
+
+/** Aside mode's own draft, kept beside the agent draft of the same session. */
+function asideDraftSessionId(sessionId: string): string {
+	return `${sessionId}#aside`;
 }
 
 function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: ComponentProps<typeof SessionStartup>) {
@@ -5369,6 +5435,9 @@ function TimelineItem({
 	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
+	}
+	if (item.detail?.event === "chat.aside") {
+		return <AsideRow activity={item} />;
 	}
 	if (item.detail?.event === "provider_switch") {
 		return <ProviderSwitchMarker activity={item} />;

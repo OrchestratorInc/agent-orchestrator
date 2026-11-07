@@ -147,6 +147,7 @@ import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/te
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { CloudSessionNotificationReader } from "./CloudSessionNotificationReader";
 import { SessionFollowMenu } from "./SessionFollowMenu";
+import { CloudSessionTabMenu } from "./CloudSessionTabMenu";
 import { SessionPeopleControl } from "./SessionPeople";
 import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
@@ -2030,7 +2031,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// action then, so the tab keeps its avatar on hover.
 	const sessionTabMenuEmpty = !interfaceUi.switchAction && !interfaceUi.switchControl && interfaceUi.target !== "chat";
 	const sessionTabActions = !session || session.cloud || sessionTabMenuEmpty
-		? (session?.cloud ? interfaceUi.switchControl : null)
+		// A cloud session's tab has its own menu (Hide asides) unless a switch is running.
+		? (session?.cloud ? interfaceUi.switchControl ?? <CloudSessionTabMenu key={uiSessionId} /> : null)
 		: (
 			<SessionTabMenu
 				key={uiSessionId}

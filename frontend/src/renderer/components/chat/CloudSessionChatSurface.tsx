@@ -38,6 +38,15 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { useAsideSuggestions, useMentionCandidates, useTeamCollabSupport, asideSuggestionsQueryKey } from "../../hooks/useTeamCollab";
+import { useCloudOrg } from "../../hooks/useCloudOrg";
+import { ASIDE_EVENT, asidePayload, mentionToken, type ComposerMention } from "../../lib/cloud-team-collab";
+import { useUiStore } from "../../stores/ui-store";
+import { AsideActionsContext, type AsideActions } from "./AsideRow";
+import type { ComposerMentionSource } from "./ChatComposer";
+import type { ComposerMode } from "./ComposerModeToggle";
+import { MentionAccessBar, MentionTeamBar, SuggestionBar } from "./TeamComposerBars";
+import { useMentionAsk } from "./useMentionAsk";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -688,6 +697,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
+		// A note people wrote for each other: it belongs to no turn, and nothing
+		// here ever turns it into something the agent reads.
+		if (event.type === ASIDE_EVENT) {
+			const aside = asidePayload(event);
+			if (aside) {
+				items.push({
+					kind: "activity", id: `cloud-aside-${aside.asideId}`, sequence: event.sequence, revision: 1,
+					activityKind: "system", status: "completed", summary: aside.text,
+					detail: { event: "chat.aside", aside: { ...aside, mentions: aside.mentions ?? [] } },
+					createdAt: event.createdAt,
+				});
+			}
+			continue;
+		}
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
 			turns.set(turnID, { id: turnID, state: "queued", requestedAt: event.createdAt });
@@ -1387,7 +1410,7 @@ export function CloudSessionChatSurface({
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
 	const send = useMutation({
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, mentions, suggestionId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; mentions?: ComposerMention[]; suggestionId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
@@ -1408,6 +1431,9 @@ export function CloudSessionChatSurface({
 				...(mode ? { mode } : {}),
 				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
+				// Typed tokens beside the text: only the people named are notified.
+				...(mentions?.length ? { mentions: mentions.map(mentionToken) } : {}),
+				...(suggestionId ? { suggestionId } : {}),
 			};
 			const message = cloudMessageBody(text, display);
 			if (!message.content) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
@@ -1428,6 +1454,134 @@ export function CloudSessionChatSurface({
 			void invalidate();
 		},
 	});
+	// Asides, mentions and aside suggestions, on a control plane that has them.
+	const teamCollab = useTeamCollabSupport() === "supported" && Boolean(cloud);
+	const asidesOpen = teamCollab && session.isTerminated !== true;
+	const hideAsides = useUiStore((state) => state.hideAsides);
+	const orgId = cloud?.orgId;
+	// A viewer can't write to the agent, so their composer starts on Aside.
+	const [chosenMode, setChosenMode] = useState<{ sessionId: string; mode: ComposerMode }>();
+	const composerMode: ComposerMode = chosenMode?.sessionId === session.id ? chosenMode.mode : myRole === "viewer" ? "aside" : "agent";
+	const postAside = useMutation({
+		mutationFn: ({ text, clientMessageId, mentions }: { text: string; clientMessageId?: string; mentions?: ComposerMention[] }) => {
+			if (!orgId) throw new Error("Cloud session context is unavailable.");
+			return client.postAside(orgId, session.id, { text, ...(mentions?.length ? { mentions: mentions.map(mentionToken) } : {}) }, { idempotencyKey: clientMessageId });
+		},
+		onSuccess: () => void invalidate(),
+	});
+	const [mentionQuery, setMentionQuery] = useState<string>();
+	const candidates = useMentionCandidates(orgId, session.id, mentionQuery, asidesOpen);
+	const { org } = useCloudOrg(asidesOpen);
+	const workspaceName = org && org.id === orgId ? org.displayName : undefined;
+	const viewers = live?.viewers;
+	const presentUserIds = useMemo(() => new Set((viewers ?? []).map((viewer) => viewer.userId)), [viewers]);
+	// Shares at Watch, the smallest access, through the share API: only when the
+	// sender says so, never on its own.
+	const projectId = session.workspaceId;
+	const shareWithMentioned = useCallback(async (people: Extract<ComposerMention, { kind: "person" }>[]) => {
+		if (!orgId) throw new Error("Cloud session context is unavailable.");
+		await client.createShareGrants(orgId, projectId, {
+			sessionId: session.id,
+			subjects: people.map((person) => ({ userId: person.id })),
+			role: "viewer",
+			modeCap: "read-only",
+		});
+	}, [client, orgId, projectId, session.id]);
+	const mentionAsk = useMentionAsk({ share: shareWithMentioned, resetKey: session.id });
+	const cancelMentionAsk = mentionAsk.cancel;
+	const setComposerMode = useCallback((mode: ComposerMode) => {
+		cancelMentionAsk();
+		setChosenMode({ sessionId: session.id, mode });
+	}, [cancelMentionAsk, session.id]);
+	const composerMentions = useMemo<ComposerMentionSource | undefined>(() => asidesOpen ? {
+		onQuery: setMentionQuery,
+		candidates: candidates.data,
+		workspaceName,
+		presentUserIds,
+		selfUserId: me,
+		confirm: mentionAsk.confirm,
+		cancelConfirm: mentionAsk.cancel,
+	} : undefined, [asidesOpen, candidates.data, me, mentionAsk.cancel, mentionAsk.confirm, presentUserIds, workspaceName]);
+	// Suggestions wait above the composer of whoever drives: someone who may
+	// write to the agent while nobody else holds its composer.
+	const suggestions = useAsideSuggestions(orgId, session.id, asidesOpen);
+	const canDrive = asidesOpen && !readOnly && !lease.locked;
+	const [settledSuggestions, setSettledSuggestions] = useState<ReadonlySet<string>>(() => new Set());
+	const settleSuggestion = useCallback((suggestionId: string) => {
+		setSettledSuggestions((current) => new Set([...current, suggestionId]));
+		if (orgId) void queryClient.invalidateQueries({ queryKey: asideSuggestionsQueryKey(orgId, session.id) });
+	}, [orgId, queryClient, session.id]);
+	const nextSuggestion = canDrive ? suggestions.data?.find((suggestion) => !settledSuggestions.has(suggestion.suggestionId)) : undefined;
+	// A suggestion being edited goes out with the driver's next message.
+	const editingSuggestion = useRef<{ sessionId: string; suggestionId: string } | undefined>(undefined);
+	const [draftRequest, setDraftRequest] = useState<{ id: string; text: string }>();
+	const sendSuggestion = useMutation({
+		mutationFn: (suggestionId: string) => {
+			const suggestion = suggestions.data?.find((candidate) => candidate.suggestionId === suggestionId);
+			if (!suggestion) throw new Error("The suggestion is gone.");
+			return send.mutateAsync({ text: suggestion.text, clientMessageId: crypto.randomUUID(), suggestionId });
+		},
+		onSuccess: (_answer, suggestionId) => settleSuggestion(suggestionId),
+	});
+	const dismissSuggestion = useMutation({
+		mutationFn: (suggestionId: string) => {
+			if (!orgId) throw new Error("Cloud session context is unavailable.");
+			return client.dismissAsideSuggestion(orgId, session.id, suggestionId);
+		},
+		onSuccess: (_answer, suggestionId) => settleSuggestion(suggestionId),
+	});
+	const editSuggestion = useCallback((suggestionId: string) => {
+		const suggestion = suggestions.data?.find((candidate) => candidate.suggestionId === suggestionId);
+		if (!suggestion) return;
+		editingSuggestion.current = { sessionId: session.id, suggestionId };
+		setSettledSuggestions((current) => new Set([...current, suggestionId]));
+		setComposerMode("agent");
+		setDraftRequest({ id: suggestionId, text: suggestion.text });
+	}, [session.id, setComposerMode, suggestions.data]);
+	const suggestAside = useCallback(async (asideId: string) => {
+		if (!orgId) throw new Error("Cloud session context is unavailable.");
+		await client.suggestAside(orgId, session.id, asideId);
+		await queryClient.invalidateQueries({ queryKey: asideSuggestionsQueryKey(orgId, session.id) });
+	}, [client, orgId, queryClient, session.id]);
+	// A suggestion made or settled elsewhere shows up in the session's events.
+	const lastEventType = eventsQuery.data?.at(-1)?.type;
+	const lastEventSequence = eventsQuery.data?.at(-1)?.sequence;
+	useEffect(() => {
+		if (!orgId || !lastEventType || !/suggest/i.test(lastEventType)) return;
+		void queryClient.invalidateQueries({ queryKey: asideSuggestionsQueryKey(orgId, session.id) });
+	}, [lastEventSequence, lastEventType, orgId, queryClient, session.id]);
+	// Asides name their authors; the people the session knows name the rest.
+	const knownNames = useRef(new Map<string, string>());
+	for (const viewer of viewers ?? []) if (viewer.name) knownNames.current.set(viewer.userId, viewer.name);
+	for (const person of candidates.data?.people ?? []) knownNames.current.set(person.userId, person.name);
+	for (const suggestion of suggestions.data ?? []) if (suggestion.suggestedBy.name) knownNames.current.set(suggestion.suggestedBy.userId, suggestion.suggestedBy.name);
+	const asideActions = useMemo<AsideActions>(() => ({
+		selfUserId: me,
+		nameOf: (userId) => knownNames.current.get(userId),
+		onSuggest: asidesOpen ? suggestAside : undefined,
+		suggestedAsideIds: new Set((suggestions.data ?? []).map((suggestion) => suggestion.asideId)),
+	}), [asidesOpen, me, suggestAside, suggestions.data, viewers, candidates.data]);
+	const composerBars = mentionAsk.step?.kind === "team" ? (
+		<MentionTeamBar team={mentionAsk.step.team} onNotify={mentionAsk.notifyTeam} onCancel={mentionAsk.cancel} />
+	) : mentionAsk.step?.kind === "noAccess" ? (
+		<MentionAccessBar
+			people={mentionAsk.step.people}
+			onShare={() => void mentionAsk.shareAndSend()}
+			onSkip={mentionAsk.sendWithout}
+			sharing={mentionAsk.sharing}
+			failed={mentionAsk.shareFailed}
+		/>
+	) : nextSuggestion ? (
+		<SuggestionBar
+			key={nextSuggestion.suggestionId}
+			suggestion={nextSuggestion}
+			onSend={() => sendSuggestion.mutate(nextSuggestion.suggestionId)}
+			onEdit={() => editSuggestion(nextSuggestion.suggestionId)}
+			onDismiss={() => dismissSuggestion.mutate(nextSuggestion.suggestionId)}
+			busy={sendSuggestion.isPending || dismissSuggestion.isPending}
+			failed={sendSuggestion.isError || dismissSuggestion.isError}
+		/>
+	) : null;
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
 	// as the mode that runs instead, the one the worker would step down to.
@@ -1451,11 +1605,13 @@ export function CloudSessionChatSurface({
 		const projected = toSnapshot(session, eventsQuery.data ?? [], me);
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
-		const items = withoutFailedSetupAttempts(projected.items, startFailed);
+		const kept = withoutFailedSetupAttempts(projected.items, startFailed);
+		// Hide asides (the session menu, per device) leaves only the agent's work.
+		const items = hideAsides ? kept.filter((item) => !(item.kind === "activity" && item.detail?.event === "chat.aside")) : kept;
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, hideAsides, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -1639,6 +1795,7 @@ export function CloudSessionChatSurface({
 	);
 	return (
 		<CloudAttachmentSourceProvider source={attachmentSource}>
+		<AsideActionsContext.Provider value={asideActions}>
 		{/* Replies pace their reveal to how the stream arrives (a poll at a time while it is down). */}
 		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
@@ -1707,7 +1864,19 @@ export function CloudSessionChatSurface({
 							: modelsError
 			}
 			headerActions={headerActions}
-			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
+			composerNotice={live || composerBars ? (
+				<>
+					{composerBars}
+					{live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : null}
+				</>
+			) : undefined}
+			composerModes={asidesOpen ? {
+				mode: composerMode,
+				onModeChange: setComposerMode,
+				onSendAside: (text, clientMessageId, mentions) => postAside.mutateAsync({ text, clientMessageId, mentions }),
+			} : undefined}
+			composerMentions={composerMentions}
+			composerDraftRequest={draftRequest}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
@@ -1732,14 +1901,19 @@ export function CloudSessionChatSurface({
 			fileReferenceDelivery="text"
 			onStageAttachments={stageAttachments}
 			cloudAttachments={stageAttachments ? cloudAttachments : undefined}
-			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {
+			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText, mentions) => {
 				// Staged cloud files travel as the message's attachment ids, and the
 				// worker writes the real paths: no reference reaches the agent or the
 				// transcript. The captures stay inlined, and the quotes follow them.
 				const message = cloudMessageAttachments(text, displayText, fileReferences);
 				const content = cloudAnnotationContent(excerpts, fileReferences);
 				const agentText = excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
+				// The driver's next message after Edit sends the suggestion it came from.
+				const edited = editingSuggestion.current?.sessionId === session.id ? editingSuggestion.current.suggestionId : undefined;
+				editingSuggestion.current = undefined;
 				return send.mutateAsync({
+					mentions,
+					...(edited ? { suggestionId: edited } : {}),
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,
@@ -1782,6 +1956,7 @@ export function CloudSessionChatSurface({
 			workspaceActiveTabKey={workspaceActiveTabKey}
 		/>
 		</AdaptiveStreamPacingContext.Provider>
+		</AsideActionsContext.Provider>
 		</CloudAttachmentSourceProvider>
 	);
 }

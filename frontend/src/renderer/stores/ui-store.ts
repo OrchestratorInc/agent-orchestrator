@@ -189,6 +189,9 @@ export type UiState = {
 	terminalCopyOnSelect: boolean;
 	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
 	chatSendKeyMode: ChatSendKeyMode;
+	/** Cloud sessions: leave teammates' asides out of the timeline, on this device. */
+	hideAsides: boolean;
+	setHideAsides: (hide: boolean) => void;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
@@ -342,6 +345,7 @@ const sideChatsStorageKey = "ao.sideChats";
 const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
+const hideAsidesStorageKey = "ao.hideAsides";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
@@ -446,6 +450,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
+	hideAsides: getLocalStorage()?.getItem(hideAsidesStorageKey) === "true",
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
@@ -553,6 +558,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
 		set({ chatSendKeyMode });
+	},
+	setHideAsides: (hideAsides) => {
+		getLocalStorage()?.setItem(hideAsidesStorageKey, String(hideAsides));
+		set({ hideAsides });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
