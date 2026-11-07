@@ -18,7 +18,7 @@ function pendingSend() {
 	return { onSend, resolve, reject };
 }
 
-function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false) {
+function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false, commandError?: string) {
 	return render(
 		<TooltipProvider>
 			<ChatComposer
@@ -26,6 +26,7 @@ function renderComposer(sessionId: string, onSend: Parameters<typeof ChatCompose
 				onSend={onSend}
 				nativeImages={attachments}
 				onStageAttachments={attachments ? vi.fn().mockResolvedValue([".ao/attachments/original.png"]) : undefined}
+				commandError={commandError}
 			/>
 		</TooltipProvider>,
 	);
@@ -237,6 +238,80 @@ describe("optimistic message delivery", () => {
 		expect(replacement).toHaveTextContent("message to restore");
 		expect(replacement).toHaveAttribute("contenteditable", "true");
 	});
+
+	it("keeps retrying a send nobody answered from the strip, with the box free, and stops at a coded refusal", async () => {
+		const sessionId = "optimistic-transport-retry";
+		let refuse: (reason: unknown) => void = () => {};
+		const onSend = vi.fn()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockRejectedValueOnce({ code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" })
+			.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }))
+			.mockResolvedValue(undefined);
+		renderComposer(sessionId, onSend);
+		await startSend(onSend, "status here");
+		const field = screen.getByLabelText("Message the agent");
+		const strip = await screen.findByTestId("unsent-message-strip");
+		expect(strip).toHaveTextContent("Not sent, retrying…");
+		expect(strip).toHaveTextContent("status here");
+		await typeInLexicalEditor(field, "typed during the outage");
+
+		// Sample every commit across the attempts: the box never locks and the strip never leaves.
+		const flickers: string[] = [];
+		const observer = new MutationObserver(() => {
+			if (field.getAttribute("contenteditable") !== "true") flickers.push("box locked");
+			if (!screen.queryByTestId("unsent-message-strip")) flickers.push("strip gone");
+		});
+		observer.observe(document.body, { attributes: true, childList: true, subtree: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3), { timeout: 6_000 });
+		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
+		expect(onSend.mock.calls[2]).toEqual(onSend.mock.calls[0]);
+		observer.disconnect();
+		expect(flickers).toEqual([]);
+
+		await act(async () => refuse({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
+		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).not.toHaveTextContent("retrying"));
+		expect(field).toHaveTextContent("typed during the outage");
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(onSend).toHaveBeenCalledTimes(3);
+		expect(readChatSessionDraft(sessionId).unsent?.state).toBe("dispatching");
+	});
+
+	it.each([
+		["hides", "a send retrying by itself", new TypeError("Failed to fetch"), false],
+		["keeps", "a coded failure", { code: "CHAT_SEND_FAILED", message: "The agent refused" }, true],
+	])("%s the raw send error after %s", async (_verb, reason, error, shown) => {
+		const raw = "Host h_1 is not connected";
+		const onSend = vi.fn().mockRejectedValue(error);
+		renderComposer(`optimistic-raw-error-${reason}`, onSend, false, raw);
+		expect(screen.getByRole("alert")).toHaveTextContent(raw);
+		await startSend(onSend, "status here");
+		await screen.findByTestId("unsent-message-strip");
+		await waitFor(() => expect(Boolean(screen.queryByText(raw))).toBe(shown));
+	});
+
+	it("delivers both a retrying strip send and a second unanswered send held in the box", async () => {
+		const sessionId = "optimistic-two-unanswered";
+		let online = false;
+		const delivered: string[] = [];
+		const onSend = vi.fn(async (text: string) => {
+			if (!online) throw new TypeError("Failed to fetch");
+			delivered.push(text);
+		});
+		renderComposer(sessionId, onSend);
+		const field = await startSend(onSend, "first");
+		await screen.findByTestId("unsent-message-strip");
+		await typeInLexicalEditor(field, "second");
+		fireEvent.keyDown(field, { key: "Enter" });
+		// The strip has one slot, so the second send stays in the box and retries from there.
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery?.requestText).toBe("second"));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
+
+		online = true;
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 12_000 });
+		expect(delivered.sort()).toEqual(["first", "second"]);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(readChatSessionDraft(sessionId).unsent).toBeUndefined();
+	}, 20_000);
 
 	it.each([
 		["response lost", new Error("response lost")],

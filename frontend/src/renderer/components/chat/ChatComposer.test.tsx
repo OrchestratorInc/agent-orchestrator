@@ -3434,7 +3434,7 @@ describe("unsent message strip", () => {
 		onSend.mockRejectedValue(new Error("tunnel still down"));
 		await typeInComposer(field, "second message");
 		fireEvent.keyDown(field, { key: "Enter" });
-		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		await waitFor(() => expect(field.textContent).toBe("second message"));
 		expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled();
 		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
@@ -3451,25 +3451,26 @@ describe("unsent message strip", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
 		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
+		onSend.mockRejectedValue(new Error("tunnel still down"));
 		await act(async () => pending.resolve());
-		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		await waitFor(() => expect(field.textContent).toBe("sent during undo"));
 
 		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
 		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
 		expect(field.textContent).toBe("sent during undo");
-		expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(screen.getByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		expect(readChatSessionDraft("unsent-undo-window-loss").unsent?.clientMessageId).toBe("unsent-undo-window-loss-old");
 	});
 
 	it("parks a send that failed during the undo window once the window ends", async () => {
 		const { onSend, field } = restoreUnsent("unsent-undo-window-ends");
 		await screen.findByTestId("unsent-message-strip");
-		onSend.mockRejectedValueOnce(new Error("tunnel still down"));
+		onSend.mockRejectedValue(new Error("tunnel still down"));
 		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
 		await typeInComposer(field, "sent during undo");
 		fireEvent.keyDown(field, { key: "Enter" });
-		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("sent during undo"), { timeout: 8000 });
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(field.textContent).toBe("");
@@ -3515,7 +3516,7 @@ describe("unsent message strip", () => {
 		const { field } = renderComposer({ onSend, draftSessionId: sessionId });
 		await typeInComposer(field, "about this excerpt");
 		fireEvent.keyDown(field, { key: "Enter" });
-		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		await waitFor(() => expect(field.textContent).toBe("about this excerpt"));
 		expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument();
 		expect(readChatSessionDraft(sessionId).composer.delivery?.excerpts).toHaveLength(EXCERPTS.length);

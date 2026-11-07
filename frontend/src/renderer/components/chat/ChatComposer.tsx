@@ -469,6 +469,12 @@ export const ChatComposer = memo(function ChatComposer({
 	const [sendError, setSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
+	/**
+	 * Sends the daemon never answered (a dropped tunnel, an unreachable host), by
+	 * delivery ID, with the attempt that drives the backoff. They are retried until
+	 * it does. The daemon deduplicates that ID, so a retry cannot start a second turn.
+	 */
+	const [transportRetries, setTransportRetries] = useState<Readonly<Record<string, number>>>({});
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
 			draftScope !== undefined &&
@@ -765,7 +771,8 @@ export const ChatComposer = memo(function ChatComposer({
 			!staged &&
 			!deliveryUncertain &&
 			durableDelivery?.kind === "send" &&
-			durableDelivery.state === "dispatching",
+			durableDelivery.state === "dispatching" &&
+			transportRetries[durableDelivery.clientMessageId] === undefined,
 	);
 	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
 	// send never reads as a vanished draft.
@@ -1264,6 +1271,16 @@ export const ChatComposer = memo(function ChatComposer({
 		void submitRef.current().then(finish, finish);
 	}, [durableDelivery, retryingUnsent]);
 
+	// Try an unanswered send again: the one holding the box first, then the strip's.
+	const unsentRetryBlocked = Boolean(busy || disabled || durableDelivery || submitting || composerMutation.pending);
+	const heldRetry = canRecoverDelivery && durableDelivery && !retryingUnsent ? transportRetries[durableDelivery.clientMessageId] : undefined;
+	const nextRetry = heldRetry ?? (unsent && !unsentRetryBlocked ? transportRetries[unsent.clientMessageId] : undefined);
+	useEffect(() => {
+		if (nextRetry === undefined) return;
+		const timer = window.setTimeout(() => void (durableDelivery ? submitRef.current() : retryUnsent()), Math.min(1_000 * 2 ** nextRetry, 5_000));
+		return () => window.clearTimeout(timer);
+	}, [nextRetry, durableDelivery?.clientMessageId, unsent?.clientMessageId]);
+
 	const discardUnsent = () => {
 		if (!draftScope || !unsent) return;
 		if (!discardUnsentChatComposerDelivery(draftScope, unsent.clientMessageId).ok) {
@@ -1722,10 +1739,10 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		setDurableDelivery(delivery);
 		setTextDraftPersistenceError(null);
-		setDeliveryRecoveryNotice(
+		setDeliveryRecoveryNotice((current) =>
 			delivery.state === "accepted"
 				? "chat.draft.acceptedMessage"
-				: null,
+				: current === "chat.draft.sendRetrying" ? current : null,
 		);
 		if (delivery.state === "accepted") {
 			acceptAndClearDurableDelivery(delivery);
@@ -1814,15 +1831,21 @@ export const ChatComposer = memo(function ChatComposer({
 				return;
 			}
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
+			// No daemon answered (no error code, or one of the remote proxy's own
+			// 502s), so keep trying. A coded refusal needs the person's decision.
+			const code = apiErrorCode(error);
+			const unanswered = delivery.kind === "send" && (code === undefined || code === "UPSTREAM_UNAVAILABLE" || code === "HOST_IDENTITY_UNVERIFIED");
+			setTransportRetries(({ [delivery.clientMessageId]: attempt, ...others }) =>
+				unanswered ? { ...others, [delivery.clientMessageId]: (attempt ?? -1) + 1 } : others);
 			if (parks) {
-				if (prepared.recovered) setSendError("chat.draft.unsentRetryFailed");
+				if (prepared.recovered && !unanswered) setSendError("chat.draft.unsentRetryFailed");
 				return;
 			}
 			setDeliveryUncertain(true);
 			setDeliveryRecoveryNotice(
 				delivery.kind === "steer"
 					? "chat.draft.steerUncertain"
-					: "chat.draft.sendUncertain",
+					: unanswered ? "chat.draft.sendRetrying" : "chat.draft.sendUncertain",
 			);
 		} finally {
 			if (!mutationFinished) cancelChatComposerMutation(draftScope, mutationToken);
@@ -2008,6 +2031,8 @@ export const ChatComposer = memo(function ChatComposer({
 		};
 	}, []);
 
+	// A send retrying by itself is already on show, so its failed attempts aren't news.
+	const retryingBySelf = [unsent, durableDelivery].some((delivery) => delivery && transportRetries[delivery.clientMessageId] !== undefined);
 	const attachmentError =
 		fileAttachments.error ??
 		draftPersistenceError ??
@@ -2015,16 +2040,21 @@ export const ChatComposer = memo(function ChatComposer({
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
-		commandError;
+		(retryingBySelf ? undefined : commandError);
 	// The strip shows the unsent message, the same message while its retry runs, or a short undo after a discard.
 	const retryingDelivery = retryingUnsent && durableDelivery?.clientMessageId === retryingUnsent ? durableDelivery : undefined;
-	const stripDelivery = unsent ?? retryingDelivery;
+	// A send retrying by itself passes through the delivery slot on every attempt.
+	// It stays the strip's the whole time, so neither the strip nor the box flickers.
+	const automaticRetry = parkUnsentSends && !unsent && !discardedUnsent && isParkableChatComposerDelivery(durableDelivery) &&
+		transportRetries[durableDelivery.clientMessageId] !== undefined ? durableDelivery : undefined;
+	const stripDelivery = unsent ?? retryingDelivery ?? automaticRetry;
 	const unsentStrip = stripDelivery?.draft ? (
 		<UnsentMessageStrip
 			text={stripDelivery.draft.text}
 			attachmentCount={stripDelivery.draft.attachments.length}
 			sending={!unsent}
-			retryDisabled={Boolean(busy || disabled || durableDelivery || submitting || composerMutation.pending)}
+			retrying={transportRetries[stripDelivery.clientMessageId] !== undefined}
+			retryDisabled={unsentRetryBlocked}
 			onRetry={retryUnsent}
 			onDiscard={discardUnsent}
 		/>
@@ -2256,7 +2286,7 @@ export const ChatComposer = memo(function ChatComposer({
 					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
-					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && !automaticRetry && (submitting || draftMutationPending)))}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
