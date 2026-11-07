@@ -823,6 +823,11 @@ const api = {
 		unlink: (confirmReplacement: boolean, expectedTarget?: string | null) =>
 			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 	},
+	cliShadow: {
+		inspect: () => ipcRenderer.invoke("cliShadow:inspect") as Promise<import("./shared/cli-shadow").CliShadowStatus>,
+		replace: (path: string, target: string) => ipcRenderer.invoke("cliShadow:replace", path, target) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
+		reveal: () => ipcRenderer.invoke("cliShadow:reveal") as Promise<void>,
+	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
 		set: (settings: UpdateSettings) => ipcRenderer.invoke("updateSettings:set", settings) as Promise<void>,
