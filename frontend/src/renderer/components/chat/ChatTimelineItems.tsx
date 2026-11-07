@@ -2201,6 +2201,16 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Whether a tool payload field carries anything. The daemon stores an ACP tool
+ * call's missing input or content as JSON null (Hermes rows have left it out
+ * since #6635; other ACP providers and older Hermes rows still carry it), so
+ * null counts as absent: printing it would show the word "null" as the body.
+ */
+function present(value: unknown): boolean {
+	return value !== undefined && value !== null;
+}
+
+/**
  * A call to a tool served by an MCP server.
  *
  * Deliberately not shaped like a command row. These used to render as though the
@@ -2218,9 +2228,9 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
-			detail?.result !== undefined ||
-			detail?.content !== undefined ||
+			present(detail?.arguments) ||
+			present(detail?.result) ||
+			present(detail?.content) ||
 			detail?.error ||
 			detail?.progress,
 	);
@@ -2285,13 +2295,13 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							{detail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
-						<JsonPayload label="Arguments" value={detail.arguments} />
+					{present(detail?.arguments) ? (
+						<JsonPayload label="Arguments" value={detail?.arguments} />
 					) : null}
-					{detail?.result !== undefined ? (
-						<JsonPayload label="Result" value={detail.result} />
+					{present(detail?.result) ? (
+						<JsonPayload label="Result" value={detail?.result} />
 					) : null}
-					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+					{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 					{detail?.progress ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-caption text-muted-foreground/70">
