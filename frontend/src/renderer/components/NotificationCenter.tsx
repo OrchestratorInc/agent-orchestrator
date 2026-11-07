@@ -16,7 +16,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,

@@ -4,7 +4,7 @@ import {
 	SquareTerminal,
 	TriangleAlert,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {

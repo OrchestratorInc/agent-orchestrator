@@ -1,4 +1,4 @@
-import { Copy, FolderOpen, Globe, SquareTerminal, X } from "lucide-react";
+import { Copy, FolderOpen, Globe, SquareTerminal, X } from "@/components/app-icons";
 import { useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";

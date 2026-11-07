@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, LayoutDashboard, Plus } from "lucide-react";
+import { Archive, LayoutDashboard, Plus } from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";

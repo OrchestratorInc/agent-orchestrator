@@ -1,4 +1,4 @@
-import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
+import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountProviderFor, followsSavedAccount } from "../../../hooks/useAgentAccounts";

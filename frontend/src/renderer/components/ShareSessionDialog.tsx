@@ -1,5 +1,5 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Info } from "lucide-react";
+import { ChevronRight, Info } from "@/components/app-icons";
 import { RadioGroup } from "radix-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";

@@ -1,4 +1,4 @@
-import { ChevronDown, Copy } from "lucide-react";
+import { ChevronDown, Copy } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpenTargetId } from "../../shared/editor-handoff";

@@ -1,4 +1,4 @@
-import { ChevronDown, CircleAlert, CircleCheck, LoaderCircle, LogOut, Trash2, UserRound } from "lucide-react";
+import { ChevronDown, CircleAlert, CircleCheck, LoaderCircle, LogOut, Trash2, UserRound } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { codexAccountAuthorized, codexAuthenticationDisplay } from "../../hooks/codex-accounts-state";
 import type { CodexAccount, CodexActiveLogin } from "../../hooks/useCodexAccountsQuery";

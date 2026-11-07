@@ -1,5 +1,5 @@
 import { BrowserIcon } from "./icons";
-import { File, FileText } from "lucide-react";
+import { File, FileText } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";

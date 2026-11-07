@@ -1,5 +1,5 @@
 import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";

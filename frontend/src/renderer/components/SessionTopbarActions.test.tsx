@@ -391,7 +391,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		renderTopbar(sessionWith({ kind }));
 
 		const runner = screen.getByRole("button", { name: "Run a cue" });
-		expect(runner.querySelector(".lucide-play")).not.toBeNull();
+		expect(runner.querySelector(".icon-play")).not.toBeNull();
 		expect(runner).toBeEnabled();
 		expect(screen.getByTestId("workspace-topbar-actions")).toContainElement(runner);
 	});
