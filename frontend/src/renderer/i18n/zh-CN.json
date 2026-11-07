@@ -3897,6 +3897,7 @@
 	"settings.harness.loginUi.catalogProvider": "提供商",
 	"settings.harness.loginUi.catalogChoose": "选择提供商",
 	"settings.harness.loginUi.catalogSearch": "搜索提供商",
+	"settings.harness.loginUi.catalogCount": "{{total}} 个提供商",
 	"settings.harness.loginUi.catalogEmpty": "没有匹配的提供商",
 	"settings.harness.loginUi.catalogModels_one": "{{count}} 个模型",
 	"settings.harness.loginUi.catalogModels_other": "{{count}} 个模型",

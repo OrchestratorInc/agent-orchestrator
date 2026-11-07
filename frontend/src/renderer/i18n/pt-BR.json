@@ -3984,6 +3984,7 @@
 	"settings.harness.loginUi.catalogProvider": "Provedor",
 	"settings.harness.loginUi.catalogChoose": "Escolha um provedor",
 	"settings.harness.loginUi.catalogSearch": "Buscar provedores",
+	"settings.harness.loginUi.catalogCount": "{{total}} provedores",
 	"settings.harness.loginUi.catalogEmpty": "Nenhum provedor correspondente",
 	"settings.harness.loginUi.catalogModels_one": "{{count}} modelo",
 	"settings.harness.loginUi.catalogModels_many": "{{count}} de modelos",

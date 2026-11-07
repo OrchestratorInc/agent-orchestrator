@@ -6,7 +6,6 @@ import { agentLabel } from "../../lib/agent-options";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { DeviceEnvToggle, KeyStatusDot, savedKeySummary } from "./providerKeyUi";
-import { SettingsRow } from "./SettingsRow";
 import { SettingsSearch } from "./SettingsSearch";
 import { SettingsSection } from "./SettingsSection";
 
@@ -50,8 +49,8 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 		titleHidden={titleHidden}
 		grouped
 		// The search stays mounted while typing, even when nothing matches.
-		toolbar={<SettingsSearch aria-label={t("settings.apiKeys.search")} placeholder={t("settings.apiKeys.search")} value={query} onChange={setQuery} />}
-		action={<span className="text-xs text-settings-muted tabular-nums">{t("settings.apiKeys.savedCount", { saved, total: all.length })}</span>}
+		toolbar={<SettingsSearch aria-label={t("settings.apiKeys.search")} placeholder={t("settings.apiKeys.search")} value={query} onChange={setQuery}
+			trailing={<span className="shrink-0 px-1 text-xs text-settings-muted tabular-nums">{t("settings.apiKeys.savedCount", { saved, total: all.length })}</span>} />}
 	>
 		{visible.length === 0 ? <p role="status" className="settings-content-row text-control text-settings-muted">{t("settings.apiKeys.noMatches")}</p> : null}
 		{visible.map((key) => {
@@ -108,26 +107,38 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 		} finally { setChecking(false); }
 	};
 	const agentNames = key.agents.map(agentLabel);
-	const usedBy = agentNames.length <= 3
-		? t("settings.apiKeys.usedBy", { names: agentNames.join(", ") })
-		: t("settings.apiKeys.usedByMore", { names: agentNames.slice(0, 3).join(", "), extra: agentNames.length - 3 });
-	const state = savedKeySummary(t, key) ?? t("settings.apiKeys.notSet");
-	// The key's state and who reads it always stay visible; a check or save
-	// result is added on its own line instead of replacing them.
-	const description = <>
-		<span className="block">{state} · {usedBy}</span>
-		{notice ? <span role={notice.tone === "error" ? "alert" : "status"} className={`mt-0.5 block ${notice.tone === "error" ? "text-error" : "text-success"}`}>{notice.text}</span> : null}
-	</>;
-	return <SettingsRow label={key.label} leading={<KeyStatusDot configured={key.configured} />} description={description}>
-		<div className="flex items-center gap-1">
-			{key.configured && key.checkable && !editing ? <Button type="button" size="sm" variant="ghost" disabled={checking} onClick={() => void check()}>
+	// "Claude Code, memcode, Pi +9": who reads the key, on the label's line.
+	const usedBy = agentNames.length <= 3 ? agentNames.join(", ") : `${agentNames.slice(0, 3).join(", ")} +${agentNames.length - 3}`;
+	return <div className="settings-row-bar min-h-10 py-1.5!" data-key-status={key.configured ? "saved" : "unset"}>
+		<div className="flex min-w-0 flex-1 items-baseline gap-2">
+			<span className="shrink-0 text-sm leading-5 text-settings-label">{key.label}</span>
+			<span className="min-w-0 truncate text-xs leading-4 text-settings-muted" title={agentNames.join(", ")}>
+				<span className="sr-only">{t("settings.apiKeys.usedBy", { names: "" })}</span>{usedBy}
+			</span>
+		</div>
+		{notice ? <span role={notice.tone === "error" ? "alert" : "status"} className={`max-w-[45%] truncate text-xs leading-4 ${notice.tone === "error" ? "text-error" : "text-success"}`} title={notice.text}>{notice.text}</span>
+			: key.configured ? <SavedKeyBadge providerKey={key} />
+			: null}
+		<div className="flex shrink-0 items-center">
+			{key.configured && key.checkable && !editing ? <Button type="button" size="xs" variant="quiet" disabled={checking} onClick={() => void check()}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.apiKeys.check")}
 			</Button> : null}
-			<Button type="button" size="sm" variant={key.configured || editing ? "ghost" : "secondary"} aria-expanded={editing} onClick={onEdit}>
-				{t(editing ? "settings.apiKeys.close" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
+			<Button type="button" size="xs" variant={key.configured || editing ? "quiet" : "ghost"} aria-expanded={editing} aria-label={`${t(editing ? "settings.apiKeys.close" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")} · ${key.label}`} onClick={onEdit}>
+				{t(editing ? "settings.apiKeys.cancel" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
 			</Button>
 		</div>
-	</SettingsRow>;
+	</div>;
+}
+
+/** Saved state at the row's trailing edge: a green dot and the key's last four. */
+function SavedKeyBadge({ providerKey: key }: { providerKey: ProviderKey }) {
+	const { t } = useTranslation();
+	return <span className="flex shrink-0 items-center gap-1.5 text-xs leading-4 text-settings-muted" title={savedKeySummary(t, key)}>
+		<KeyStatusDot configured />
+		<span className="sr-only">{savedKeySummary(t, key)}</span>
+		<span aria-hidden="true" className="font-mono tabular-nums">{key.hint ? `••••${key.hint}` : t("settings.apiKeys.saved")}</span>
+		{key.device ? <span aria-hidden="true">· {t("settings.apiKeys.outsideAo")}</span> : null}
+	</span>;
 }
 
 function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: ProviderKey; onDone: (notice?: Notice) => void }) {
@@ -182,17 +193,13 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 		} finally { setBusy(false); }
 	};
 
-	// Indented to the row label, past the status dot.
-	return <form className="settings-content-row space-y-3 pt-0 pl-[calc(var(--settings-row-inset)+0.5rem+var(--size-settings-row-icon-gap))]" onSubmit={(event) => void submit(event)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(); } }}>
-		<div className="space-y-1.5">
-			<div className="flex items-baseline justify-between gap-2">
-				<label htmlFor={inputId} className="text-xs leading-4 font-medium text-settings-label">{t("settings.harness.loginUi.apiKey")}</label>
-				<code className="truncate font-mono text-xs text-settings-muted">{key.name}</code>
-			</div>
+	return <form className="flex flex-col gap-2 px-(--settings-row-inset) pt-0.5 pb-3" onSubmit={(event) => void submit(event)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(); } }}>
+		<div className="flex items-center gap-1.5">
 			<Input
 				id={inputId}
 				autoFocus
-				className="font-mono text-control placeholder:font-sans"
+				aria-label={key.label}
+				className="h-control-md min-w-0 flex-1 font-mono text-control placeholder:font-mono placeholder:text-settings-muted/70"
 				type="password"
 				value={secret}
 				disabled={busy}
@@ -200,24 +207,21 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 				spellCheck={false}
 				maxLength={16384}
 				aria-invalid={error ? true : undefined}
-				placeholder={key.configured ? t("settings.apiKeys.keepSaved") : undefined}
+				placeholder={key.configured ? t("settings.apiKeys.keepSaved") : key.name}
 				onChange={(event) => { setSecret(event.target.value); setError(""); }}
 			/>
+			<Button type="submit" size="sm" disabled={busy || !changed || (!typed && !key.configured)}>
+				{busy && !confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+				{t(typed && key.checkable ? "settings.apiKeys.checkAndSave" : "settings.apiKeys.save")}
+			</Button>
 		</div>
-		<DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} />
-		{error ? <p role="alert" className="text-control text-error">{error}</p> : null}
-		<div className="flex flex-wrap items-center gap-2">
-			{key.configured ? <Button type="button" size="sm" variant="ghost" className="-ml-2 text-error hover:text-error" disabled={busy} onClick={() => void remove()}>
+		{error ? <p role="alert" className="text-xs leading-4 text-error">{error}</p> : null}
+		<div className="flex min-h-6 items-center gap-3">
+			<DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} />
+			{key.configured ? <Button type="button" size="xs" variant="destructive-ghost" className="ml-auto" disabled={busy} onClick={() => void remove()}>
 				{busy && confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 				{t(confirmRemove ? "settings.apiKeys.confirmRemove" : "settings.apiKeys.remove")}
 			</Button> : null}
-			<div className="ml-auto flex items-center gap-2">
-				<Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => onDone()}>{t("settings.apiKeys.cancel")}</Button>
-				<Button type="submit" size="sm" disabled={busy || !changed || (!typed && !key.configured)}>
-					{busy && !confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-					{t(typed && key.checkable ? "settings.apiKeys.checkAndSave" : "settings.apiKeys.save")}
-				</Button>
-			</div>
 		</div>
 	</form>;
 }
