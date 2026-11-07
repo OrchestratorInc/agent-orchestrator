@@ -349,7 +349,7 @@ func trackerRepo(project domain.ProjectRecord, cfg domain.TrackerIntakeConfig) (
 
 // parseRepoNative extracts the provider-native repo identifier ("owner/repo"
 // or "group/subgroup/repo") from a remote URL. For GitHub it accepts
-// github.com, *.github.com, and *.ghe.io hosts. For GitLab it accepts any
+// domain.IsGitHubHost hosts. For GitLab it accepts any
 // host (self-managed hosts are validated by the SCM provider at fetch time).
 func parseRepoNative(remote string, provider domain.TrackerProvider) (string, bool) {
 	remote = strings.TrimSpace(remote)
@@ -364,8 +364,7 @@ func parseRepoNative(remote string, provider domain.TrackerProvider) (string, bo
 	}
 	if u, err := url.Parse(remote); err == nil && u.Host != "" {
 		if provider == domain.TrackerProviderGitHub {
-			host := strings.TrimPrefix(strings.ToLower(u.Host), "www.")
-			if host == "github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io") {
+			if domain.IsGitHubHost(u.Host) {
 				return cleanRepoPath(u.Path, provider), true
 			}
 			return "", false
@@ -377,12 +376,12 @@ func parseRepoNative(remote string, provider domain.TrackerProvider) (string, bo
 }
 
 // repoHostFromOrigin extracts the host from the SCM origin URL for the given
-// provider. For GitHub the host is always "" (GitHub tracker IDs don't use
-// Host). For GitLab, "gitlab.com" and "www.gitlab.com" normalize to ""
+// provider. For GitHub the host is "" except for a GHE.com tenant, which keeps
+// its host. For GitLab, "gitlab.com" and "www.gitlab.com" normalize to ""
 // (zero value = gitlab.com); self-managed hosts pass through unchanged.
 func repoHostFromOrigin(remote string, provider domain.TrackerProvider) string {
 	if provider != domain.TrackerProviderGitLab {
-		return ""
+		return domain.GHECloudTrackerHost(hostFromRemote(remote))
 	}
 	host := hostFromRemote(remote)
 	host = strings.ToLower(strings.TrimSpace(host))

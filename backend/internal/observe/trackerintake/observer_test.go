@@ -574,6 +574,11 @@ func TestParseRepoNativeGitHubKeepsLastTwo(t *testing.T) {
 			remote: "https://ghe.corp.ghe.io/acme/demo.git",
 			want:   "acme/demo",
 		},
+		{
+			name:   "ghe.com tenant",
+			remote: "https://acme.ghe.com/acme/demo.git",
+			want:   "acme/demo",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -675,5 +680,21 @@ func TestCanonicalIssueIDGitLabHostDisambiguates(t *testing.T) {
 	internal := CanonicalIssueID(domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "group/repo#7", Host: "gitlab.internal"})
 	if dotCom == internal {
 		t.Fatalf("gitlab.com and self-managed with same native produced identical IssueID %q", dotCom)
+	}
+}
+
+func TestTrackerRepoKeepsGHECloudHost(t *testing.T) {
+	project := domain.ProjectRecord{
+		ID:            "demo",
+		RepoOriginURL: "https://acme.ghe.com/team/app.git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled:  true,
+			Provider: domain.TrackerProviderGitHub,
+			Assignee: "alice",
+		}},
+	}
+	repo, ok := trackerRepo(project, project.Config.TrackerIntake.WithDefaults())
+	if !ok || repo.Host != "acme.ghe.com" || repo.Native != "team/app" {
+		t.Fatalf("trackerRepo = %+v, %v, want team/app on acme.ghe.com", repo, ok)
 	}
 }

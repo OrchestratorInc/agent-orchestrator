@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -21,6 +22,64 @@ import (
 func newGitHubTracker() (ports.Tracker, error) {
 	return trackergithub.New(trackergithub.Options{Token: &ghTokenSource{}})
 }
+
+// githubTenantTrackerOptions configures the GitHub tracker of one GHE.com
+// tenant: its API base and only that host's gh login.
+func githubTenantTrackerOptions(host string) (trackergithub.Options, error) {
+	base, ok := domain.GHECloudAPIBase(host)
+	if !ok {
+		return trackergithub.Options{}, fmt.Errorf("github tracker: %q is not a GHE.com tenant host", host)
+	}
+	return trackergithub.Options{Token: githubHostToken(host), BaseURL: base, Host: host}, nil
+}
+
+func newGitHubTenantTracker(host string) (ports.Tracker, error) {
+	opts, err := githubTenantTrackerOptions(host)
+	if err != nil {
+		return nil, err
+	}
+	return trackergithub.New(opts)
+}
+
+// githubHostTracker serves the "github" tracker key: host "" (github.com) goes
+// to def, each GHE.com tenant host to its own lazily built tracker.
+type githubHostTracker struct {
+	def    ports.Tracker
+	build  func(host string) (ports.Tracker, error)
+	logger *slog.Logger
+
+	mu     sync.Mutex
+	byHost map[string]ports.Tracker
+}
+
+func (g *githubHostTracker) forHost(host string) ports.Tracker {
+	if host == "" {
+		return g.def
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if t := g.byHost[host]; t != nil {
+		return t
+	}
+	if g.byHost == nil {
+		g.byHost = map[string]ports.Tracker{}
+	}
+	t := &lazyTracker{name: "github " + host, logger: g.logger, build: func() (ports.Tracker, error) { return g.build(host) }}
+	g.byHost[host] = t
+	return t
+}
+
+func (g *githubHostTracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, error) {
+	return g.forHost(id.Host).Get(ctx, id)
+}
+
+func (g *githubHostTracker) List(ctx context.Context, repo domain.TrackerRepo, filter domain.ListFilter) ([]domain.Issue, error) {
+	return g.forHost(repo.Host).List(ctx, repo, filter)
+}
+
+func (g *githubHostTracker) Preflight(ctx context.Context) error { return g.def.Preflight(ctx) }
+
+var _ ports.Tracker = (*githubHostTracker)(nil)
 
 // ghTokenSource mirrors the SCM credential precedence: AO_GITHUB_TOKEN →
 // GITHUB_TOKEN (via EnvTokenSource) → `gh auth token` CLI fallback with
@@ -102,15 +161,17 @@ func newMultiTracker(gitlabCfg config.GitLabConfig, logger *slog.Logger) ports.T
 	// Probing the environment is a cheap read — no subprocess. Only when no
 	// env token exists do we defer to the gh CLI fallback, lazily.
 	env := trackergithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}}
+	var github ports.Tracker = &lazyTracker{name: "github", logger: logger, build: newGitHubTracker}
 	if _, err := env.Token(context.Background()); err == nil {
 		if t, err := newGitHubTracker(); err != nil {
 			logTrackerDisabled(logger, "github", err)
 		} else {
-			named = append(named, trackermulti.NamedTracker{Key: "github", Tracker: t})
+			github = t
 		}
-	} else {
-		named = append(named, trackermulti.NamedTracker{Key: "github", Tracker: &lazyTracker{name: "github", logger: logger, build: newGitHubTracker}})
 	}
+	// GHE.com tenants use their own gh login, so they stay available even
+	// when the github.com tracker cannot be built.
+	named = append(named, trackermulti.NamedTracker{Key: "github", Tracker: &githubHostTracker{def: github, build: newGitHubTenantTracker, logger: logger}})
 
 	if t, err := newGitLabTracker(gitlabCfg); err != nil {
 		logTrackerDisabled(logger, "gitlab", err)

@@ -2076,3 +2076,172 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 		t.Fatalf("list requests = %d, want 1", n)
 	}
 }
+
+// hostRecorder is a network-free transport recording which API host and
+// bearer token each request used; responses are minimal canned bodies.
+type hostRecorder struct {
+	mu   sync.Mutex
+	reqs []recordedHostReq
+}
+
+type recordedHostReq struct{ Host, Auth, Path string }
+
+func (h *hostRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	h.mu.Lock()
+	h.reqs = append(h.reqs, recordedHostReq{Host: r.URL.Host, Auth: r.Header.Get("Authorization"), Path: r.URL.Path})
+	h.mu.Unlock()
+	body := "[]"
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/graphql") && r.URL.Host == "api.acme.ghe.com":
+		body = `{"data":{"pr0":{"pullRequest":{"number":7,"url":"https://acme.ghe.com/team/app/pull/7","state":"OPEN"}}}}`
+	case strings.HasSuffix(r.URL.Path, "/graphql"):
+		body = `{"data":{"pr0":{"pullRequest":{"number":1,"url":"https://github.com/o/r/pull/1","state":"OPEN"}}}}`
+	case strings.HasSuffix(r.URL.Path, "/check-runs"):
+		body = `{"total_count":0,"check_runs":[]}`
+	case r.URL.Path == "/user" && r.URL.Host == "api.acme.ghe.com":
+		body = `{"login":"ghe-user","type":"User"}`
+	case r.URL.Path == "/user":
+		body = `{"login":"com-user","type":"User"}`
+	case strings.HasSuffix(r.URL.Path, "/merge"):
+		body = `{"sha":"` + strings.Repeat("b", 40) + `","merged":true}`
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+}
+
+func (h *hostRecorder) calls() []recordedHostReq {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]recordedHostReq(nil), h.reqs...)
+}
+
+func newHostProvider(t *testing.T, rec *hostRecorder, hostToken func(string) TokenSource) *Provider {
+	t.Helper()
+	p, err := NewProvider(ProviderOptions{
+		Token:              StaticTokenSource("com-tok"),
+		HostToken:          hostToken,
+		HTTPClient:         &http.Client{Transport: rec},
+		SkipTokenPreflight: true,
+	})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	return p
+}
+
+func tenantToken(string) TokenSource { return StaticTokenSource("ghe-tok") }
+
+var (
+	tenantRepo = makeGitHubRepo("acme.ghe.com", "team", "app")
+	comRepo    = makeGitHubRepo("github.com", "o", "r")
+)
+
+func exerciseTenantSCM(p *Provider) {
+	ref := ports.SCMPRRef{Repo: tenantRepo, Number: 7}
+	sha := strings.Repeat("a", 40)
+	_, _ = p.RepoPRListGuard(ctx(), tenantRepo, "")
+	_, _ = p.CommitChecksGuard(ctx(), tenantRepo, sha, "")
+	_, _ = p.FetchPullRequests(ctx(), []ports.SCMPRRef{ref})
+	_, _ = p.FetchReviewThreads(ctx(), ref)
+	_, _ = p.MergePullRequest(ctx(), ports.SCMMergeRequest{PR: ref, ExpectedHeadSHA: sha, Method: ports.SCMMergeSquash})
+}
+
+func TestTenantRepoUsesTenantAPI(t *testing.T) {
+	rec := &hostRecorder{}
+	exerciseTenantSCM(newHostProvider(t, rec, tenantToken))
+	calls := rec.calls()
+	if len(calls) < 5 {
+		t.Fatalf("got %d requests, want at least 5: %+v", len(calls), calls)
+	}
+	for _, c := range calls {
+		if c.Host != "api.acme.ghe.com" {
+			t.Errorf("request %s went to %q, want api.acme.ghe.com", c.Path, c.Host)
+		}
+	}
+}
+
+func TestFetchPullRequestsSplitsBatchByHost(t *testing.T) {
+	rec := &hostRecorder{}
+	p := newHostProvider(t, rec, tenantToken)
+	out, err := p.FetchPullRequests(ctx(), []ports.SCMPRRef{{Repo: comRepo, Number: 1}, {Repo: tenantRepo, Number: 7}})
+	if err != nil {
+		t.Fatalf("FetchPullRequests: %v", err)
+	}
+	if len(out) != 2 || !out[0].Fetched || out[0].PR.Number != 1 || !out[1].Fetched || out[1].PR.Number != 7 {
+		t.Fatalf("out = %+v, want github.com PR 1 then tenant PR 7", out)
+	}
+	hosts := map[string]int{}
+	for _, c := range rec.calls() {
+		hosts[c.Host]++
+	}
+	if hosts["api.github.com"] != 1 || hosts["api.acme.ghe.com"] != 1 || len(hosts) != 2 {
+		t.Fatalf("hosts = %v, want one batch each on api.github.com and api.acme.ghe.com", hosts)
+	}
+}
+
+func TestAuthenticatedIdentityForHostCachesPerHost(t *testing.T) {
+	rec := &hostRecorder{}
+	p := newHostProvider(t, rec, tenantToken)
+	for range 2 {
+		com, err := p.AuthenticatedIdentityForHost(ctx(), "github.com")
+		if err != nil || com.Login != "com-user" {
+			t.Fatalf("github.com identity = %+v, %v", com, err)
+		}
+		ghe, err := p.AuthenticatedIdentityForHost(ctx(), "acme.ghe.com")
+		if err != nil || ghe.Login != "ghe-user" {
+			t.Fatalf("tenant identity = %+v, %v", ghe, err)
+		}
+	}
+	if n := len(rec.calls()); n != 2 {
+		t.Fatalf("got %d /user requests, want 2 (one per host, then cached)", n)
+	}
+}
+
+func TestTenantRequestNeverCarriesDefaultToken(t *testing.T) {
+	rec := &hostRecorder{}
+	p := newHostProvider(t, rec, tenantToken)
+	exerciseTenantSCM(p)
+	_, _ = p.RepoPRListGuard(ctx(), comRepo, "")
+	for _, c := range rec.calls() {
+		want := "Bearer ghe-tok"
+		if c.Host == "api.github.com" {
+			want = "Bearer com-tok"
+		}
+		if c.Auth != want {
+			t.Errorf("%s %s carried %q, want %q", c.Host, c.Path, c.Auth, want)
+		}
+	}
+}
+
+func TestTenantWithoutHostTokenFailsClosed(t *testing.T) {
+	for name, hostToken := range map[string]func(string) TokenSource{
+		"nil HostToken": nil,
+		"no gh login":   func(string) TokenSource { return StaticTokenSource("") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &hostRecorder{}
+			p := newHostProvider(t, rec, hostToken)
+			if _, err := p.RepoPRListGuard(ctx(), tenantRepo, ""); err == nil {
+				t.Fatal("RepoPRListGuard: want error without tenant login")
+			}
+			exerciseTenantSCM(p)
+			if calls := rec.calls(); len(calls) != 0 {
+				t.Fatalf("sent %d requests without tenant login: %+v", len(calls), calls)
+			}
+		})
+	}
+}
+
+func TestFetchPullRequestsTenantFailureKeepsGitHubCom(t *testing.T) {
+	rec := &hostRecorder{}
+	p := newHostProvider(t, rec, func(string) TokenSource { return StaticTokenSource("") })
+	out, err := p.FetchPullRequests(ctx(), []ports.SCMPRRef{{Repo: comRepo, Number: 1}, {Repo: tenantRepo, Number: 7}})
+	if err != nil {
+		t.Fatalf("FetchPullRequests: %v", err)
+	}
+	if !out[0].Fetched || out[0].PR.Number != 1 {
+		t.Fatalf("github.com PR = %+v, want fetched despite tenant failure", out[0])
+	}
+	if out[1].Fetched || out[1].Error == nil || out[1].Host != "acme.ghe.com" || out[1].PR.Number != 7 {
+		t.Fatalf("tenant PR = %+v, want unfetched placeholder with error", out[1])
+	}
+}

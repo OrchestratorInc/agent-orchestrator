@@ -55,7 +55,11 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	q.Set("sort", "updated")
 	q.Set("direction", "desc")
 	q.Set("per_page", "1")
-	resp, err := p.client.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "pulls"), q, etag)
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return ports.SCMGuardResult{}, err
+	}
+	resp, err := c.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "pulls"), q, etag)
 	if err != nil {
 		return ports.SCMGuardResult{}, err
 	}
@@ -67,6 +71,10 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 // pulls endpoint using state=open and sort=updated
 func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return nil, err
+	}
 	out := []ports.SCMPRObservation{}
 	for page := 1; ; page++ {
 		q := url.Values{}
@@ -78,7 +86,7 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		if !updatedAfter.IsZero() {
 			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
 		}
-		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+		resp, err := c.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +115,11 @@ func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, 
 	q.Set("state", "open")
 	q.Set("head", repo.Owner+":"+branch)
 	q.Set("per_page", "100")
-	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +170,11 @@ func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, he
 	}
 	q := url.Values{}
 	q.Set("per_page", strconv.Itoa(githubCheckRunsPageSize))
-	resp, err := p.client.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "commits", headSHA, "check-runs"), q, etag)
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return ports.SCMGuardResult{}, err
+	}
+	resp, err := c.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "commits", headSHA, "check-runs"), q, etag)
 	if err != nil {
 		return ports.SCMGuardResult{}, err
 	}
@@ -205,12 +221,16 @@ func decodeRestCheckRunsPage(body []byte) (restCheckRunsPage, error) {
 // fetchRemainingCommitCheckRuns gathers the check runs a commit carries beyond
 // the first page and returns every run across all pages.
 func (p *Provider) fetchRemainingCommitCheckRuns(ctx context.Context, repo ports.SCMRepo, headSHA string, page restCheckRunsPage) ([]restCommitCheckRun, error) {
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return nil, err
+	}
 	runs := append([]restCommitCheckRun(nil), page.CheckRuns...)
 	for pageNum := 2; len(runs) < page.TotalCount && pageNum <= githubCheckRunsMaxPages; pageNum++ {
 		q := url.Values{}
 		q.Set("per_page", strconv.Itoa(githubCheckRunsPageSize))
 		q.Set("page", strconv.Itoa(pageNum))
-		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "commits", headSHA, "check-runs"), q, nil)
+		resp, err := c.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "commits", headSHA, "check-runs"), q, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -261,8 +281,47 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 	if len(refs) > 25 {
 		return nil, fmt.Errorf("github scm: batch size %d exceeds 25", len(refs))
 	}
+	// One GraphQL batch per API host: github.com and each GHE.com tenant.
+	var hosts []*Client
+	groups := map[*Client][]int{}
+	for i, ref := range refs {
+		c, err := p.clientFor(ref.Repo.Host)
+		if err != nil {
+			return nil, err
+		}
+		if _, seen := groups[c]; !seen {
+			hosts = append(hosts, c)
+		}
+		groups[c] = append(groups[c], i)
+	}
+	out := make([]ports.SCMObservation, len(refs))
+	for _, c := range hosts {
+		idx := groups[c]
+		batch := make([]ports.SCMPRRef, len(idx))
+		for j, i := range idx {
+			batch[j] = refs[i]
+		}
+		got, err := p.fetchPullRequestBatch(ctx, c, batch)
+		if err != nil && len(hosts) == 1 {
+			return nil, err
+		}
+		for j, i := range idx {
+			if err != nil {
+				// One host failing (a tenant without a login, its own rate
+				// limit) must not blank the other hosts' PRs in this batch.
+				ref := refs[i]
+				out[i] = ports.SCMObservation{Provider: ref.Repo.Provider, Host: ref.Repo.Host, Repo: repoFullName(ref.Repo), PR: ports.SCMPRObservation{Number: ref.Number, URL: ref.URL}, Error: err}
+				continue
+			}
+			out[i] = got[j]
+		}
+	}
+	return out, nil
+}
+
+func (p *Provider) fetchPullRequestBatch(ctx context.Context, c *Client, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	query, aliases := buildSCMBatchQuery(refs)
-	data, err := p.client.doGraphQL(ctx, query, nil)
+	data, err := c.doGraphQL(ctx, query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +362,11 @@ func (p *Provider) FetchFailedCheckLogTail(ctx context.Context, repo ports.SCMRe
 	if jobID <= 0 {
 		return "", nil
 	}
-	log, err := p.fetchJobLogTail(ctx, repo.Owner, repo.Name, jobID)
+	c, err := p.clientFor(repo.Host)
+	if err != nil {
+		return "", err
+	}
+	log, err := fetchJobLogTail(ctx, c, repo.Owner, repo.Name, jobID)
 	if err != nil {
 		return "", err
 	}
@@ -438,13 +501,17 @@ func (p *Provider) fetchRemainingCheckContexts(ctx context.Context, ref ports.SC
 	if contexts == nil {
 		return nil
 	}
+	c, err := p.clientFor(ref.Repo.Host)
+	if err != nil {
+		return err
+	}
 	cursor := pageInfoEndCursor(contexts)
 	if cursor == "" {
 		return fmt.Errorf("github scm: paginated check contexts for %s#%d missing end cursor", repoFullName(ref.Repo), ref.Number)
 	}
 	for {
 		query := buildCheckContextsQuery(ref, cursor)
-		data, err := p.client.doGraphQL(ctx, query, nil)
+		data, err := c.doGraphQL(ctx, query, nil)
 		if err != nil {
 			return fmt.Errorf("github scm: fetch remaining check contexts for %s#%d: %w", repoFullName(ref.Repo), ref.Number, err)
 		}
@@ -711,8 +778,12 @@ func mergeabilityObservation(providerMergeable, providerMergeState, ci, review s
 }
 
 func (p *Provider) fetchReviewThreadPage(ctx context.Context, ref ports.SCMPRRef, beforeCursor string, includeReviews bool) ([]ports.SCMReviewThreadObservation, []ports.SCMReviewSummaryObservation, string, map[string]any, error) {
+	c, err := p.clientFor(ref.Repo.Host)
+	if err != nil {
+		return nil, nil, "", nil, err
+	}
 	query := buildReviewThreadsQuery(ref, beforeCursor, includeReviews)
-	data, err := p.client.doGraphQL(ctx, query, nil)
+	data, err := c.doGraphQL(ctx, query, nil)
 	if err != nil {
 		return nil, nil, "", nil, err
 	}
@@ -828,7 +899,7 @@ func parseGitHubRepo(remote string) (ports.SCMRepo, bool) {
 		}
 		host := strings.ToLower(parts[0])
 		owner, name, ok := splitOwnerRepo(parts[1])
-		return makeGitHubRepo(host, owner, name), ok && isGitHubHost(host)
+		return makeGitHubRepo(host, owner, name), ok && domain.IsGitHubHost(host)
 	}
 	if !strings.Contains(raw, "://") && strings.Count(strings.Trim(raw, "/"), "/") == 1 {
 		owner, name, ok := splitOwnerRepo(raw)
@@ -840,7 +911,7 @@ func parseGitHubRepo(remote string) (ports.SCMRepo, bool) {
 	}
 	host := strings.ToLower(u.Host)
 	owner, name, ok := splitOwnerRepo(u.Path)
-	return makeGitHubRepo(host, owner, name), ok && isGitHubHost(host)
+	return makeGitHubRepo(host, owner, name), ok && domain.IsGitHubHost(host)
 }
 
 func splitOwnerRepo(p string) (string, string, bool) {
@@ -855,10 +926,6 @@ func splitOwnerRepo(p string) (string, string, bool) {
 
 func makeGitHubRepo(host, owner, name string) ports.SCMRepo {
 	return ports.SCMRepo{Provider: "github", Host: host, Owner: owner, Name: name, Repo: owner + "/" + name}
-}
-
-func isGitHubHost(host string) bool {
-	return host == "github.com" || host == "www.github.com" || host == "api.github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io")
 }
 
 func graphQLString(s string) string {

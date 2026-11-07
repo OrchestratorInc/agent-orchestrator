@@ -3,7 +3,9 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +112,9 @@ type GHTokenSource struct {
 	// to `exec.CommandContext("gh", "auth", "token")`; tests inject a
 	// fake to avoid touching the real binary.
 	GH func(ctx context.Context) (string, error)
+	// Hostname selects the gh login (`gh auth token --hostname`); empty
+	// means gh's default host.
+	Hostname string
 	// TokenTTL is how long a successful read is memoized. Zero means use
 	// defaultGHTokenCacheTTL.
 	TokenTTL time.Duration
@@ -131,7 +136,7 @@ func (s *GHTokenSource) Token(ctx context.Context) (string, error) {
 	}
 	run := s.GH
 	if run == nil {
-		run = ghAuthToken
+		run = func(ctx context.Context) (string, error) { return ghAuthToken(ctx, s.Hostname) }
 	}
 	out, err := run(ctx)
 	if err != nil {
@@ -169,8 +174,34 @@ func (s *GHTokenSource) ttl() time.Duration {
 	return defaultGHTokenCacheTTL
 }
 
-func ghAuthToken(ctx context.Context) (string, error) {
-	out, err := aoprocess.CommandContext(ctx, "gh", "auth", "token").Output()
+// ghHostTokenTimeout caps a per-host gh call so a hung gh (a locked keyring)
+// cannot block tenant calls forever.
+const ghHostTokenTimeout = 5 * time.Second
+
+func ghAuthToken(ctx context.Context, hostname string) (string, error) {
+	if hostname == "" {
+		out, err := aoprocess.CommandContext(ctx, "gh", "auth", "token").Output()
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, ghHostTokenTimeout)
+	defer cancel()
+	cmd := aoprocess.CommandContext(ctx, "gh", "auth", "token", "--hostname", hostname)
+	// gh applies GH_TOKEN/GITHUB_TOKEN to github.com and every *.ghe.com host.
+	// They are github.com credentials, so a tenant only uses its own gh login.
+	cmd.Env = []string{}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GH_TOKEN=") && !strings.HasPrefix(kv, "GITHUB_TOKEN=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	out, err := cmd.Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return "", fmt.Errorf("gh auth token --hostname %s: %w", hostname, ErrNoToken)
+	}
 	if err != nil {
 		return "", err
 	}

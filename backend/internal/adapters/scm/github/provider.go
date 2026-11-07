@@ -28,6 +28,9 @@ type ProviderOptions struct {
 	Client     *Client
 	HTTPClient *http.Client
 	Token      TokenSource
+	// HostToken returns the credential for a GHE.com tenant host. Tenant
+	// calls never use Token; nil means tenant calls fail with ErrNoToken.
+	HostToken func(host string) TokenSource
 	// SkipTokenPreflight defers token validation until the first provider call.
 	// Daemon wiring uses this so gh-token shell-out never blocks readiness.
 	SkipTokenPreflight bool
@@ -47,6 +50,14 @@ type Provider struct {
 	identityMu       sync.Mutex
 	identity         ports.SCMIdentity
 	identityResolved bool
+
+	// GHE.com tenants get their own lazily built client and identity.
+	httpClient   *http.Client
+	userAgent    string
+	hostToken    func(host string) TokenSource
+	hostMu       sync.Mutex
+	hostClients  map[string]*Client
+	hostIdentity map[string]ports.SCMIdentity
 }
 
 // NewProvider returns a Provider. If opts.Client is supplied it is used
@@ -75,7 +86,36 @@ func NewProvider(opts ProviderOptions) (*Provider, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Provider{client: c, logger: logger}, nil
+	return &Provider{
+		client: c, logger: logger,
+		httpClient: opts.HTTPClient, userAgent: opts.UserAgent, hostToken: opts.HostToken,
+		hostClients: map[string]*Client{}, hostIdentity: map[string]ports.SCMIdentity{},
+	}, nil
+}
+
+// clientFor returns the client serving repositories on host: a per-tenant
+// client for GHE.com hosts, the default client for every other host.
+func (p *Provider) clientFor(host string) (*Client, error) {
+	base, tenant := domain.GHECloudAPIBase(host)
+	if !tenant {
+		return p.client, nil
+	}
+	p.hostMu.Lock()
+	defer p.hostMu.Unlock()
+	if c := p.hostClients[base]; c != nil {
+		return c, nil
+	}
+	tenantHost := strings.TrimPrefix(base, "https://api.")
+	if p.hostToken == nil {
+		return nil, fmt.Errorf("github scm: %s: %w", tenantHost, ErrNoToken)
+	}
+	tokens := p.hostToken(tenantHost)
+	if tokens == nil {
+		return nil, fmt.Errorf("github scm: %s: %w", tenantHost, ErrNoToken)
+	}
+	c := NewClient(ClientOptions{HTTPClient: p.httpClient, Token: tokens, RESTBase: base, GraphQLURL: base + "/graphql", UserAgent: p.userAgent})
+	p.hostClients[base] = c
+	return c, nil
 }
 
 // SCMCredentialsAvailable checks whether this provider can obtain a token. The
@@ -103,7 +143,45 @@ func (p *Provider) AuthenticatedIdentity(ctx context.Context) (ports.SCMIdentity
 	if p.identityResolved {
 		return p.identity, nil
 	}
-	resp, err := p.client.doREST(ctx, http.MethodGet, "/user", nil, nil)
+	identity, err := fetchIdentity(ctx, p.client)
+	if err != nil {
+		return ports.SCMIdentity{}, err
+	}
+	p.identity = identity
+	p.identityResolved = true
+	return p.identity, nil
+}
+
+// AuthenticatedIdentityForHost returns the account for host's credential.
+// GHE.com tenants resolve and cache their own login; other hosts share
+// AuthenticatedIdentity.
+func (p *Provider) AuthenticatedIdentityForHost(ctx context.Context, host string) (ports.SCMIdentity, error) {
+	base, tenant := domain.GHECloudAPIBase(host)
+	if !tenant {
+		return p.AuthenticatedIdentity(ctx)
+	}
+	c, err := p.clientFor(host)
+	if err != nil {
+		return ports.SCMIdentity{}, err
+	}
+	p.hostMu.Lock()
+	identity, ok := p.hostIdentity[base]
+	p.hostMu.Unlock()
+	if ok {
+		return identity, nil
+	}
+	identity, err = fetchIdentity(ctx, c)
+	if err != nil {
+		return ports.SCMIdentity{}, err
+	}
+	p.hostMu.Lock()
+	p.hostIdentity[base] = identity
+	p.hostMu.Unlock()
+	return identity, nil
+}
+
+func fetchIdentity(ctx context.Context, c *Client) (ports.SCMIdentity, error) {
+	resp, err := c.doREST(ctx, http.MethodGet, "/user", nil, nil)
 	if err != nil {
 		return ports.SCMIdentity{}, err
 	}
@@ -114,12 +192,10 @@ func (p *Provider) AuthenticatedIdentity(ctx context.Context) (ports.SCMIdentity
 	if err := json.Unmarshal(resp.Body, &user); err != nil {
 		return ports.SCMIdentity{}, fmt.Errorf("github scm: decode authenticated user: %w", err)
 	}
-	p.identity = ports.SCMIdentity{
+	return ports.SCMIdentity{
 		Login: strings.TrimSpace(user.Login),
 		Human: strings.EqualFold(strings.TrimSpace(user.Type), "User"),
-	}
-	p.identityResolved = true
-	return p.identity, nil
+	}, nil
 }
 
 // Observe fetches the current state of one PR by its github.com URL and
@@ -133,8 +209,16 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 		return out, err
 	}
 	out.Number = number
+	host := ""
+	if u, err := url.Parse(prURL); err == nil {
+		host = u.Host
+	}
+	c, err := p.clientFor(host)
+	if err != nil {
+		return out, err
+	}
 
-	rest, err := p.fetchRESTPull(ctx, owner, repo, number)
+	rest, err := fetchRESTPull(ctx, c, owner, repo, number)
 	if err != nil {
 		// Network/auth/rate-limit failures must surface as Fetched:false.
 		// Stable terminal states like 404 also surface that way — the PR
@@ -146,7 +230,7 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 	out.Merged = rest.Merged || (rest.MergedAt != "")
 	out.Closed = strings.EqualFold(rest.State, "closed") && !out.Merged
 
-	gq, err := p.fetchGraphQL(ctx, owner, repo, number)
+	gq, err := fetchGraphQL(ctx, c, owner, repo, number)
 	if err != nil {
 		return out, scmObserveError(err)
 	}
@@ -168,7 +252,7 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 		if jobID == 0 {
 			continue
 		}
-		log, fetchErr := p.fetchJobLogTail(ctx, owner, repo, jobID)
+		log, fetchErr := fetchJobLogTail(ctx, c, owner, repo, jobID)
 		if fetchErr != nil {
 			out.Checks[i].LogTail = fmt.Sprintf("<log fetch failed: %s>", scrubError(fetchErr))
 			continue
@@ -203,8 +287,8 @@ type restPull struct {
 	MergeableState string `json:"mergeable_state"`
 }
 
-func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number int) (restPull, error) {
-	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(owner, repo, "pulls", strconv.Itoa(number)), nil, nil)
+func fetchRESTPull(ctx context.Context, c *Client, owner, repo string, number int) (restPull, error) {
+	resp, err := c.doREST(ctx, http.MethodGet, repoPath(owner, repo, "pulls", strconv.Itoa(number)), nil, nil)
 	if err != nil {
 		return restPull{}, err
 	}
@@ -288,9 +372,9 @@ const prObservationQuery = `query($owner:String!,$repo:String!,$number:Int!){
   }
 }`
 
-func (p *Provider) fetchGraphQL(ctx context.Context, owner, repo string, number int) (map[string]any, error) {
+func fetchGraphQL(ctx context.Context, c *Client, owner, repo string, number int) (map[string]any, error) {
 	q := strings.Replace(prObservationQuery, "CONTEXT_LIMIT", strconv.Itoa(graphQLCheckContextLimit), 1)
-	data, err := p.client.doGraphQL(ctx, q, map[string]any{"owner": owner, "repo": repo, "number": number})
+	data, err := c.doGraphQL(ctx, q, map[string]any{"owner": owner, "repo": repo, "number": number})
 	if err != nil {
 		return nil, err
 	}
@@ -306,9 +390,9 @@ func (p *Provider) fetchGraphQL(ctx context.Context, owner, repo string, number 
 // REST: per-job log tail
 // ---------------------------------------------------------------------------
 
-func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobID int64) (string, error) {
+func fetchJobLogTail(ctx context.Context, c *Client, owner, repo string, jobID int64) (string, error) {
 	logPath := repoPath(owner, repo, "actions", "jobs", strconv.FormatInt(jobID, 10), "logs")
-	body, err := p.client.fetchPlainText(ctx, logPath)
+	body, err := c.fetchPlainText(ctx, logPath)
 	if err != nil {
 		return "", err
 	}
@@ -689,19 +773,10 @@ func parsePRURL(prURL string) (string, string, int, error) {
 		return "", "", 0, fmt.Errorf("%w: parse url: %w", ErrNotFound, err)
 	}
 	host := strings.ToLower(u.Host)
-	// Accept github.com (web) and api.github.com (REST/GraphQL). GitHub
-	// Enterprise hosts must end in .github.com or .ghe.io (GitHub's own
-	// dedicated TLDs); anything else looks like a bad URL or a different
-	// SCM and is rejected.
-	switch {
-	case host == "":
-		// Allow path-only URLs (parsePRURL is also exercised via API
-		// paths without a host in some tests).
-	case host == "github.com", host == "www.github.com", host == "api.github.com":
-		// canonical
-	case strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io"):
-		// enterprise
-	default:
+	// Accept GitHub-operated hosts only (domain.IsGitHubHost); anything else
+	// looks like a bad URL or a different SCM and is rejected. Path-only
+	// URLs are allowed (API paths without a host in some tests).
+	if host != "" && !domain.IsGitHubHost(host) {
 		return "", "", 0, fmt.Errorf("%w: host %q is not a github host", ErrNotFound, host)
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")

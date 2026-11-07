@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	scmgithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/github"
 	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
@@ -84,4 +85,11 @@ func TestSCMWiring_ObserverConfigHasScopedResolver(t *testing.T) {
 
 func testGitLabConfig() config.GitLabConfig {
 	return config.GitLabConfig{}
+}
+
+func TestGitHubHostTokenUsesHostLogin(t *testing.T) {
+	src, ok := githubHostToken("acme.ghe.com").(*scmgithub.GHTokenSource)
+	if !ok || src.Hostname != "acme.ghe.com" {
+		t.Fatalf("githubHostToken = %#v, want gh login for acme.ghe.com", src)
+	}
 }

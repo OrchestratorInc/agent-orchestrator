@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
+	scmgithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/github"
 	trackergitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/gitlab"
 	trackermulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -364,5 +366,54 @@ func writeRecordingGHExecutable(t *testing.T, dir string) {
 	content := "#!/bin/sh\necho called >> \"$GH_MARKER\"\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(content), 0o755); err != nil {
 		t.Fatalf("write fake gh: %v", err)
+	}
+}
+
+// namedStub records which tracker served each call.
+type namedStub struct {
+	name string
+	seen *[]string
+}
+
+func (s namedStub) Get(context.Context, domain.TrackerID) (domain.Issue, error) {
+	*s.seen = append(*s.seen, s.name)
+	return domain.Issue{}, nil
+}
+
+func (s namedStub) List(context.Context, domain.TrackerRepo, domain.ListFilter) ([]domain.Issue, error) {
+	*s.seen = append(*s.seen, s.name)
+	return nil, nil
+}
+
+func (namedStub) Preflight(context.Context) error { return nil }
+
+func TestGitHubHostTrackerRoutesTenantToTenantTracker(t *testing.T) {
+	var seen, builds []string
+	g := &githubHostTracker{
+		def: namedStub{name: "default", seen: &seen},
+		build: func(host string) (ports.Tracker, error) {
+			builds = append(builds, host)
+			return namedStub{name: host, seen: &seen}, nil
+		},
+	}
+	tenant := domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "team/app", Host: "acme.ghe.com"}
+	_, _ = g.List(context.Background(), tenant, domain.ListFilter{})
+	_, _ = g.List(context.Background(), tenant, domain.ListFilter{})
+	_, _ = g.List(context.Background(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "o/r"}, domain.ListFilter{})
+	_, _ = g.Get(context.Background(), domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "team/app#5", Host: "acme.ghe.com"})
+	if want := []string{"acme.ghe.com", "acme.ghe.com", "default", "acme.ghe.com"}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("served by %v, want %v", seen, want)
+	}
+	if want := []string{"acme.ghe.com"}; !reflect.DeepEqual(builds, want) {
+		t.Fatalf("builds = %v, want %v (one tenant tracker, reused)", builds, want)
+	}
+
+	opts, err := githubTenantTrackerOptions("acme.ghe.com")
+	src, _ := opts.Token.(*scmgithub.GHTokenSource)
+	if err != nil || opts.BaseURL != "https://api.acme.ghe.com" || opts.Host != "acme.ghe.com" || src == nil || src.Hostname != "acme.ghe.com" {
+		t.Fatalf("githubTenantTrackerOptions = %+v, %v", opts, err)
+	}
+	if _, err := githubTenantTrackerOptions("github.com"); err == nil {
+		t.Fatal("githubTenantTrackerOptions(github.com): want error for non-tenant host")
 	}
 }

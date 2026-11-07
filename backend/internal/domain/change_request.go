@@ -47,7 +47,8 @@ func ParseChangeRequestURL(raw string) (ChangeRequestReference, error) {
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	provider := RepositoryProvider(u.Host)
 	hostname := strings.ToLower(u.Hostname())
-	if provider == "github" && hostname != "github.com" && hostname != "www.github.com" && !strings.HasSuffix(hostname, ".ghe.io") {
+	_, tenant := GHECloudAPIBase(hostname)
+	if provider == "github" && hostname != "github.com" && hostname != "www.github.com" && !strings.HasSuffix(hostname, ".ghe.io") && !tenant {
 		return ChangeRequestReference{}, ErrInvalidChangeRequestURL
 	}
 	if provider == "github" && u.Port() != "" {
