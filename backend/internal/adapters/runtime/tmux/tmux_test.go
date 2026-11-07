@@ -904,7 +904,68 @@ func TestIsAliveKeepsAmbiguousNamedSocketFailureInNamedNamespace(t *testing.T) {
 	}
 }
 
+// withLegacyDefaultSocket points TMUX_TMPDIR at a fresh directory and, when
+// present is true, creates the legacy default socket path inside it.
+func withLegacyDefaultSocket(t *testing.T, present bool) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("TMUX_TMPDIR", root)
+	if !present {
+		return
+	}
+	dir := filepath.Join(root, "tmux-"+strconv.Itoa(os.Getuid()))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "default"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIsAliveTreatsAbsentLegacySocketAsMissingWithoutSystemTmux(t *testing.T) {
+	withLegacyDefaultSocket(t, false)
+	r := New(Options{Binary: "bundled-tmux-test", SocketName: "ao", Timeout: time.Second})
+	r.legacyBinary = ""
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("can't find session: sess-1"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || alive {
+		t.Fatalf("IsAlive = (%v, %v), want (false, nil)", alive, err)
+	}
+	for i, call := range fr.calls {
+		if call.name != "bundled-tmux-test" || len(call.args) < 2 || call.args[1] != "ao" {
+			t.Fatalf("call %d = %s %#v, want bundled tmux on the private socket", i, call.name, call.args)
+		}
+	}
+}
+
+// Reviewer relaunch destroys any stale pane on its stable handle before
+// creating a new one (issue #6649). Without a system tmux that teardown must
+// not abort when no legacy server can exist.
+func TestDestroyMissingSessionSucceedsWithoutSystemTmux(t *testing.T) {
+	withLegacyDefaultSocket(t, false)
+	r := New(Options{Binary: "bundled-tmux-test", SocketName: "ao", Timeout: time.Second})
+	r.legacyBinary = ""
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("can't find session: review-w1"), err: &exec.ExitError{}},
+	}}
+	r.runner = fr
+
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-w1"}); err != nil {
+		t.Fatalf("Destroy err = %v, want nil for an absent session", err)
+	}
+	for i, call := range fr.calls {
+		if call.name != "bundled-tmux-test" || len(call.args) < 2 || call.args[1] != "ao" {
+			t.Fatalf("call %d = %s %#v, want bundled tmux on the private socket", i, call.name, call.args)
+		}
+	}
+}
+
 func TestIsAliveReportsMissingLegacyClientAsProbeInconclusive(t *testing.T) {
+	withLegacyDefaultSocket(t, true)
 	r := New(Options{Binary: "bundled-tmux-test", SocketName: "ao", Timeout: time.Second})
 	r.legacyBinary = ""
 	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
