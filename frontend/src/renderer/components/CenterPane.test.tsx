@@ -547,7 +547,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
 		expect(tabStripAction).toHaveTextContent("New terminal");
-		expect(document.querySelector(".session-tab-scroll-fade")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-tab-scroll-region]")).not.toHaveAttribute("data-fade-end");
 	});
 
 	it("keeps terminal creation with the workspace actions without Developer Mode", () => {

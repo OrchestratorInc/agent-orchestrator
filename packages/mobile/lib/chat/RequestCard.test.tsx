@@ -3,14 +3,20 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { afterEach, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+const { keyboard } = vi.hoisted(() => ({ keyboard: { isVisible: false, height: 0 } }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "ios" },
 	ActivityIndicator: "ActivityIndicator",
 	Pressable: "Pressable",
+	ScrollView: "ScrollView",
 	Text: "Text",
 	TextInput: "TextInput",
 	View: "View",
 	StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 0.5 },
+	useWindowDimensions: () => ({ width: 390, height: 844 }),
+}));
+vi.mock("react-native-keyboard-controller", () => ({
+	useKeyboardState: (select: (state: typeof keyboard) => unknown) => select(keyboard),
 }));
 vi.mock("react-native-gesture-handler", () => {
 	const fling = () => ({ direction: () => fling(), onEnd: () => fling(), runOnJS: () => fling() });
@@ -33,7 +39,13 @@ import type { RequestDockModel, RequestDockPage } from "./requestDockModel";
 
 type Props = ComponentProps<typeof RequestCard>;
 let renderer: ReactTestRenderer | undefined;
-afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; vi.clearAllMocks(); });
+afterEach(() => {
+	if (renderer) act(() => renderer!.unmount());
+	renderer = undefined;
+	vi.clearAllMocks();
+	keyboard.isVisible = false;
+	keyboard.height = 0;
+});
 
 const page = (over: Partial<RequestDockPage> = {}): RequestDockPage => ({
 	question: "Which branch?",
@@ -110,4 +122,47 @@ it("fires one haptic for an answer, when it lands", async () => {
 	expect(haptics.success).toHaveBeenCalledOnce();
 	expect(haptics.tap).not.toHaveBeenCalled();
 	expect(haptics.select).not.toHaveBeenCalled();
+});
+
+const LONG_COMMAND = Array.from({ length: 40 }, (_, line) => `echo "step ${line}"`).join("; ");
+const longApproval = () => model({
+	kind: "approval",
+	title: "Approval needed",
+	pages: [page({ question: LONG_COMMAND, propertyName: undefined, options: [{ id: "allow", label: "Allow" }, { id: "deny", label: "Deny" }] })],
+});
+const insideScroll = (node: ReactTestInstance) => {
+	for (let parent = node.parent; parent; parent = parent.parent) if ((parent.type as unknown) === "ScrollView") return true;
+	return false;
+};
+const cardMaxHeight = () => {
+	const style = renderer!.root.findAll((node) => (node.type as unknown) === "View")[0].props.style as object[];
+	return Object.assign({}, ...style).maxHeight as number;
+};
+
+it("scrolls a long approval command while its decisions and close stay pinned outside it", () => {
+	render({ model: longApproval() });
+	expect(insideScroll(renderer!.root.findByProps({ children: LONG_COMMAND }))).toBe(true);
+	expect(insideScroll(byLabel("Allow"))).toBe(false);
+	expect(insideScroll(byLabel("Deny"))).toBe(false);
+	expect(insideScroll(byLabel("Dismiss and type instead"))).toBe(false);
+});
+
+it("caps the card at half the screen, and at half of what the keyboard leaves", () => {
+	render({ model: longApproval() });
+	expect(cardMaxHeight()).toBe(422);
+	act(() => renderer!.unmount());
+	keyboard.isVisible = true;
+	keyboard.height = 336;
+	render({ model: longApproval() });
+	expect(cardMaxHeight()).toBe(254);
+});
+
+it("scrolls a question's options with it and pins the typed answer and the send for several answers", () => {
+	render({ model: model({ pages: [page({ freeText: { name: "question_1_custom", placeholder: "Type your answer…", numeric: false } })] }) });
+	expect(insideScroll(byLabel("develop"))).toBe(true);
+	expect(insideScroll(renderer!.root.findByProps({ accessibilityLabel: "Type your answer…" }))).toBe(false);
+	act(() => renderer!.unmount());
+	render({ model: model({ pages: [page({ multi: true })] }) });
+	expect(insideScroll(byLabel("main"))).toBe(true);
+	expect(insideScroll(byLabel("Send answers"))).toBe(false);
 });

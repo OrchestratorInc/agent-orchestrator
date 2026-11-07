@@ -27,12 +27,12 @@ function ReviewerConversationContent() {
 	const { reviewId = "", sessionId = "", title, hostId: routeHostId } = useLocalSearchParams<{ reviewId: string; sessionId?: string; title?: string; hostId?: string }>();
 	const workerSessionId = sessionId.trim();
 	const navigation = useNavigation();
-	const { config, currentHostId } = useApp();
+	const { config, machine, currentHostId } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	// The review id owns the conversation routes; the worker id owns attachment
 	// staging and SSE refresh. Never stage reviewer attachments under a review id.
-	const conversation = useMobileConversation(hostMatches ? config : null, workerSessionId, { reviewId, eventSessionId: workerSessionId });
+	const conversation = useMobileConversation(hostMatches ? config : null, hostMatches ? machine : "", workerSessionId, { reviewId, eventSessionId: workerSessionId });
 	// The session chat's keyboard handling, so the reviewer composer sits above
 	// the keyboard the same way on both platforms.
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });

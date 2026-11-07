@@ -939,6 +939,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
+					confirming={stayAwake.busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
 						if (next) stayAwake.setLid(true);
@@ -971,24 +972,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	confirming = false,
 	onCheckedChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	/** A wake request is in flight; the helper may not have acknowledged it yet. */
+	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// While a request is in flight the switch already shows it, so hide the
+	// transient "starting" line. Once it settles, a lease that never armed
+	// stays visible: closing the lid would otherwise sleep the Mac silently.
+	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
 		lidUnavailable ||
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		(keepAwake.enabled && keepAwake.lidClosed && !(confirming && lidStarting)) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
 	const status = keepAwake.lidActive && keepAwake.enabled
 		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
 		: keepAwake.lidReason || lidUnavailable
-			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
 			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
 		<SettingsRow

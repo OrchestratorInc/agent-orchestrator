@@ -29,6 +29,25 @@ export function terminalFontSizeDelta(chord: ShortcutChord, isMac: boolean): -1 
 	return 0;
 }
 
+/** The renderer reports whether an artifact viewer that can zoom is under the pointer or holds focus. */
+export const SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL = "artifactZoom:setEngaged";
+/** Main sends the zoom chord it claimed for an engaged artifact viewer. */
+export const ARTIFACT_ZOOM_SHORTCUT_CHANNEL = "artifactZoom:shortcut";
+export type ArtifactZoomAction = "in" | "out" | "reset";
+
+/**
+ * The artifact zoom a chord asks for: Cmd+= / Cmd+- / Cmd+0 on macOS, Ctrl
+ * elsewhere, the same chords as the app's View zoom.
+ */
+export function artifactZoomAction(chord: Pick<ShortcutChord, "alt" | "code" | "ctrl" | "key" | "meta">, isMac: boolean): ArtifactZoomAction | undefined {
+	const hasPrimaryModifier = isMac ? chord.meta && !chord.ctrl : chord.ctrl && !chord.meta;
+	if (!hasPrimaryModifier || chord.alt) return undefined;
+	if (chord.key === "=" || chord.key === "+" || chord.code === "NumpadAdd") return "in";
+	if (chord.key === "-" || chord.key === "_" || chord.code === "NumpadSubtract") return "out";
+	if (chord.key === "0" || chord.code === "Numpad0") return "reset";
+	return undefined;
+}
+
 export type AppShortcutId =
 	| "new-session"
 	| "new-shell-terminal"

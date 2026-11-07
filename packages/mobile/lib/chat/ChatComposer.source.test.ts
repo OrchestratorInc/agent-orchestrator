@@ -143,7 +143,9 @@ describe("collapsed and expanded composer", () => {
 	// takes it back to the slim pill.
 	it("opens on focus and stays open while anything waits to be sent, until the mic opens", () => {
 		expect(composer).toContain("const dictating = listening || transcribing;");
-		expect(composer).toContain("const expanded = !dictating && (focused || hasDraft || attachments.length > 0);");
+		// `keyboardSend.holding` covers a hardware-Return send, whose read-only field
+		// is away for a moment after the draft clears (see useKeyboardSendRefocus).
+		expect(composer).toContain("const expanded = !dictating && (focused || keyboardSend.holding || hasDraft || attachments.length > 0);");
 		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"}');
 	});
 

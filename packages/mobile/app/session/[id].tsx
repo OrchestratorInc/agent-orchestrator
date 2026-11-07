@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
-import { isConfigured, machineIdentity } from "../../lib/config";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
@@ -35,12 +34,13 @@ function SessionRouteContent() {
 	const { id: rawId, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { sessions, orchestrators, config, currentHostId, connection, loading } = useApp();
+	// `machine` and `paired`, not `config`: the verified connection drops on every
+	// app switch and endpoint race, and this screen must stay mounted through
+	// both (see viewMachine.ts).
+	const { sessions, orchestrators, config, machine, paired, currentHostId, connection, loading } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
-	const configured = config === null ? null : isConfigured(config);
-	const machine = config ? machineIdentity(config) : "";
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);
@@ -54,9 +54,9 @@ function SessionRouteContent() {
 	// for the same machine, which restarts the store's poll and so re-runs the
 	// effect through `connection` anyway. Declared first, so it has run by the time
 	// that effect does.
-	const latest = useRef({ config, configured, lookup });
+	const latest = useRef({ config, paired, lookup });
 	useEffect(() => {
-		latest.current = { config, configured, lookup };
+		latest.current = { config, paired, lookup };
 	});
 	const machineRef = useRef(machine);
 
@@ -82,7 +82,7 @@ function SessionRouteContent() {
 			!now.config ||
 			!sessionLookupDue({
 				listed: isListed,
-				configured: now.configured,
+				paired: now.paired,
 				connection,
 				// Read, not a dependency: a foreground restarts the store's poll, which
 				// re-runs this effect through `connection` once it opens.
@@ -119,7 +119,7 @@ function SessionRouteContent() {
 		setAttempt((n) => n + 1);
 	}, []);
 
-	const view = sessionRouteView({ listed, configured, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
+	const view = sessionRouteView({ listed, paired, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
 
 	switch (view.kind) {
 		case "screen":

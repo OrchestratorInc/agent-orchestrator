@@ -82,6 +82,10 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	// the plus and the mic; there the text starts that much lower, the field
 	// the same height.
 	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingTop: space.md + ANDROID_TEXT_DROP, paddingBottom: space.md - ANDROID_TEXT_DROP, paddingHorizontal: 0, textAlignVertical: "top" },
+	// iOS wraps the field in `HardwareReturn`, which then holds the field's place in
+	// the row. A row of its own keeps the field's `flex: 1` on the horizontal axis,
+	// so the field still sets its own height.
+	inputSlot: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "flex-end" },
 	// Clipped so the Android ripple keeps to the circle.
 	send: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	stop: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
