@@ -722,6 +722,8 @@ export interface ChatModel {
 	supportsFast?: boolean;
 	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator". */
+	hint?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -749,6 +751,8 @@ export interface ChatConfigChoice {
 	groupName?: string;
 	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator"; the provider never sends it. */
+	hint?: string;
 }
 
 /** The two value shapes ACP session config supports. */

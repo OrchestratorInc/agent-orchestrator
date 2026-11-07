@@ -630,12 +630,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	font-size: var(--font-size-md);
 }
 
-/* The floating bar's tabs are pills with no end margin, so New terminal brings
- * its own space after the last tab's separator; the action region starts one
- * gap after it; and the reserve for the panel's trailing controls drops the
- * surface's 1px edge padding. */
+/* The last tab's trailing gap (and separator) already spaces New terminal from
+ * it like any other tab; the action region starts one gap after it; and the
+ * reserve for the panel's trailing controls drops the surface's 1px edge
+ * padding. */
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
-	padding-inline-start: var(--space-2);
+	padding-inline-start: 0;
 }
 
 .center-panel-shell--floating-topbar .session-topbar-actions {
@@ -732,20 +732,23 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * short separators between them. Hover is a rounded pill around the label;
  * the selected tab is the same pill, filled more strongly and outlined with
  * the panel frame's line, so it reads as current at a glance (translucent
- * windows included, where fills are faint). */
+ * windows included, where fills are faint). Every tab, the last included,
+ * ends in the same gap with its separator centered in it, so tabs and New
+ * terminal are evenly spaced and the separators never move or vanish. */
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+	--floating-tab-gap: var(--space-1);
+	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
 	font-size: var(--font-size-md);
 	/* A stacking context so the pill can sit behind the label. */
 	z-index: 0;
 	height: var(--size-topbar-control);
 	align-self: center;
-	margin-inline-end: 0;
-	padding-inline: var(--space-1);
+	margin-inline-end: calc(2 * var(--floating-tab-gap) + 1px);
+	padding-inline: 0;
 	border-right: 0;
 	border-radius: 0;
-	/* The separator, on the trailing edge. */
-	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
-	background: linear-gradient(var(--floating-tab-separator), var(--floating-tab-separator)) right center / 1px var(--space-4) no-repeat;
+	/* The pill below replaces the frame's own hover and selected fills. */
+	background: none;
 }
 
 /* The pill. */
@@ -753,19 +756,34 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	content: "";
 	position: absolute;
 	z-index: -1;
-	inset: 0 var(--space-0_5);
+	inset: 0;
 	border: 1px solid transparent;
 	border-radius: var(--radius-topbar-control);
 	pointer-events: none;
 }
 
-/* No separator against a pill: hovered and selected tabs drop their own, and
- * the tab before one drops its. Each auxiliary tab is the only child of its
- * reorder wrapper; the session tab's wrapper precedes the reorder group. */
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active]),
-.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] > [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active])) > [data-terminal-tab-frame],
-.center-panel-shell--floating-topbar [data-tab-scroll-region] > div > div:first-child:has(+ * > [data-terminal-tab-key]:first-child > [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active])) [data-terminal-tab-frame] {
-	background: none;
+/* The separator, centered in the trailing gap. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: calc(-1 * var(--floating-tab-gap) - 1px);
+	width: 1px;
+	height: var(--space-4);
+	translate: 0 -50%;
+	background-color: var(--floating-tab-separator);
+	pointer-events: none;
+}
+
+/* With nothing after the strip (orchestrators have no New terminal), the last
+ * tab ends at its pill. It is the reorder group's last tab, or the session tab
+ * when that group is empty. */
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame] {
+	margin-inline-end: 0;
+}
+
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame]::after {
+	content: none;
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,
@@ -6576,13 +6594,17 @@ body.is-pane-dragging webview {
 }
 
 /* On the floating top bar a tab is a pill: round the ghost to match and
-   drop the trailing separator. */
+   drop the trailing gap and separator, which sit outside the measured box. */
 .pane-drag-ghost.center-panel-shell--floating-topbar {
 	border-radius: var(--radius-topbar-control);
 }
 
 .pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
-	background: none;
+	margin-inline-end: 0;
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame]::after {
+	content: none;
 }
 
 .pane-drag-ghost[data-lifted] {

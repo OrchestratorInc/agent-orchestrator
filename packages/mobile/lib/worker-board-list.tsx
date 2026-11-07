@@ -126,7 +126,7 @@ export function WorkerBoardList({
 	/**
 	 * How much of the list's top a translucent header covers. The list insets
 	 * its rows itself; what floats over it, and Android's pull-to-refresh
-	 * spinner, start this far down.
+	 * spinner, start this far down. iOS's spinner is left where UIKit puts it.
 	 */
 	overlayTopInset?: number;
 	refreshing: boolean;
@@ -526,6 +526,10 @@ export function WorkerBoardList({
 		restingTop.current = insets.top;
 	}, []);
 	const insetsForBars = Platform.OS === "ios" && contentInsetAdjustmentBehavior === "automatic";
+	// Android's spinner alone. UIKit already sets iOS's under the large-title
+	// bar; an offset there moved it a whole header lower, onto the rows, and
+	// jumped it as the bar's height changed during the pull.
+	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
 	// The Archive footer is sized the same way, so it rests just above the tab bar.
 	const contentContainerStyle = insetsForBars && visibleHeight && (listData.length === 0 || archiveOnly)
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
@@ -562,7 +566,7 @@ export function WorkerBoardList({
 					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={overlayTopInset} {...refreshControlColors(t)} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={spinnerOffset} {...refreshControlColors(t)} />}
 					ListHeaderComponent={header}
 					ListHeaderComponentStyle={archiveOnly ? styles.archiveOnly : undefined}
 					ListEmptyComponent={archiveOnly ? null : ListEmptyComponent}
