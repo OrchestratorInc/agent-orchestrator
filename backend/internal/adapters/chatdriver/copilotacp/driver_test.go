@@ -3,6 +3,8 @@ package copilotacp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -114,6 +116,31 @@ func TestLaunchSessionOptionsSelectsProfile(t *testing.T) {
 	}
 	if got := launchSessionOptions(acpdriver.LaunchConfig{SessionID: "s1"}); got != nil {
 		t.Errorf("no standing instructions: options = %v, want none", got)
+	}
+}
+
+// A project-owned agent at AO's generated name must not be selected over AO's
+// own profile, in Chat any more than in the terminal (#6752).
+func TestLaunchSessionOptionsMovesAsideWhenProjectOwnsTheProfileName(t *testing.T) {
+	workspace := t.TempDir()
+	profilePath := filepath.Join(workspace, ".github", "agents", "ao-proj-1-x.agent.md")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, []byte("---\nname: project-owned\n---\nproject rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := launchSessionOptions(acpdriver.LaunchConfig{
+		SessionID:     "proj_1.x",
+		SystemPrompt:  "be AO",
+		WorkspacePath: workspace,
+	})
+	if len(got) != 1 {
+		t.Fatalf("options = %v, want exactly one agent option", got)
+	}
+	if got[0].ID != "agent" || got[0].Value == "ao-proj-1-x" {
+		t.Fatalf("options = %v, want a disambiguated agent profile", got)
 	}
 }
 

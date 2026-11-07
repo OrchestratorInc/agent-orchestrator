@@ -54,7 +54,8 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 
 	// System prompt is never injected via a flag for cursor; the prompt is
 	// positional and last, guarded by a `--` end-of-options sentinel so a
-	// leading "-" is not parsed as a flag.
+	// leading "-" is not parsed as a flag. Standing instructions reach Cursor
+	// as an always-applied .cursor/rules entry installed by GetAgentHooks.
 	want := []string{
 		"cursor-agent",
 		"--yolo",
@@ -394,6 +395,166 @@ func TestGetAgentHooksInstallsCursorHooks(t *testing.T) {
 	}
 	if !trust.AOManaged {
 		t.Fatal("aoManaged = false, want true")
+	}
+}
+
+// Cursor has no system-prompt flag, so the generated always-applied rule is the
+// only channel that carries AO's role prompt (#6752).
+func TestGetAgentHooksInstallsStandingRule(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cursor-agent"}
+	workspace := t.TempDir()
+	cfg := ports.WorkspaceHookConfig{
+		DataDir:       t.TempDir(),
+		SessionID:     "sess-1",
+		SystemPrompt:  "You are an AO worker. Follow AGENTS.md conventions.",
+		WorkspacePath: workspace,
+	}
+
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// prepareWorkspace runs before every launch and every restore, so a second
+	// install must rewrite AO's own rule in place.
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+
+	data, err := os.ReadFile(cursorStandingRulePath(workspace))
+	if err != nil {
+		t.Fatalf("standing rule was not installed: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"---\n",
+		"alwaysApply: true\n",
+		cursorStandingRuleMarker,
+		cfg.SystemPrompt,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("standing rule is missing %q:\n%s", want, body)
+		}
+	}
+	// The rule must not become untracked worktree dirt that blocks teardown.
+	ignore, err := os.ReadFile(filepath.Join(workspace, ".cursor", "rules", ".gitignore"))
+	if err != nil {
+		t.Fatalf("read rules gitignore: %v", err)
+	}
+	if !strings.Contains(string(ignore), "/"+cursorStandingRuleName) {
+		t.Fatalf("standing rule is not gitignored:\n%s", ignore)
+	}
+}
+
+func TestGetAgentHooksReadsStandingInstructionsFromThePromptFile(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cursor-agent"}
+	workspace := t.TempDir()
+	promptFile := filepath.Join(t.TempDir(), "system.md")
+	if err := os.WriteFile(promptFile, []byte("read me from disk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir:          t.TempDir(),
+		SessionID:        "sess-1",
+		SystemPromptFile: promptFile,
+		WorkspacePath:    workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(cursorStandingRulePath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "read me from disk") {
+		t.Fatalf("standing rule did not carry the prompt file:\n%s", data)
+	}
+}
+
+func TestGetAgentHooksWithoutStandingInstructionsWritesNoRule(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cursor-agent"}
+	workspace := t.TempDir()
+
+	if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir:       t.TempDir(),
+		SessionID:     "sess-1",
+		WorkspacePath: workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cursorStandingRulePath(workspace)); !os.IsNotExist(err) {
+		t.Fatalf("standing rule written without standing instructions (err=%v)", err)
+	}
+}
+
+func TestGetAgentHooksRefusesToOverwriteAForeignRule(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cursor-agent"}
+	workspace := t.TempDir()
+	rulePath := cursorStandingRulePath(workspace)
+	if err := os.MkdirAll(filepath.Dir(rulePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const userRule = "---\nalwaysApply: true\n---\n\nproject rule\n"
+	if err := os.WriteFile(rulePath, []byte(userRule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir:       t.TempDir(),
+		SessionID:     "sess-1",
+		SystemPrompt:  "AO role prompt",
+		WorkspacePath: workspace,
+	})
+	if err == nil {
+		t.Fatal("GetAgentHooks: want an error for a non-AO rule at the generated path")
+	}
+	data, err := os.ReadFile(rulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != userRule {
+		t.Fatalf("user-owned rule was modified:\n%s", data)
+	}
+}
+
+func TestUninstallHooksRemovesOnlyTheAOManagedStandingRule(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cursor-agent"}
+
+	// A user-authored rule at AO's generated path is left alone.
+	userWorkspace := t.TempDir()
+	userRulePath := cursorStandingRulePath(userWorkspace)
+	if err := os.MkdirAll(filepath.Dir(userRulePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const userRule = "---\nalwaysApply: true\n---\n\nproject rule\n"
+	if err := os.WriteFile(userRulePath, []byte(userRule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.UninstallHooks(context.Background(), userWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(userRulePath)
+	if err != nil {
+		t.Fatalf("user-owned rule was removed: %v", err)
+	}
+	if string(data) != userRule {
+		t.Fatalf("user-owned rule was modified:\n%s", data)
+	}
+
+	// AO's own rule is removed.
+	aoWorkspace := t.TempDir()
+	if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		DataDir:       t.TempDir(),
+		SessionID:     "sess-1",
+		SystemPrompt:  "AO role prompt",
+		WorkspacePath: aoWorkspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rulePath := cursorStandingRulePath(aoWorkspace)
+	if err := plugin.UninstallHooks(context.Background(), aoWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(rulePath); !os.IsNotExist(err) {
+		t.Fatalf("AO standing rule survived uninstall (err=%v)", err)
 	}
 }
 
