@@ -117,9 +117,15 @@ func TestInterfaceTransitionHermesWithDeclaredPairKeepsStrictHandoff(t *testing.
 // resume identity — found only when resumeFound is set.
 type hermesDegradedTransitionAgent struct {
 	fakeAgent
-	resumeFound  bool
-	preparedIDs  []string
-	restoreCalls int
+	resumeFound   bool
+	preparedIDs   []string
+	restoreCalls  int
+	launchPrompts []string
+}
+
+func (a *hermesDegradedTransitionAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	a.launchPrompts = append(a.launchPrompts, cfg.Prompt)
+	return a.fakeAgent.GetLaunchCommand(ctx, cfg)
 }
 
 func (a *hermesDegradedTransitionAgent) PrepareNativeTerminalResume(_ context.Context, _, _, nativeConversationID, _ string) (bool, error) {
@@ -244,6 +250,54 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 		t.Fatalf("controller order = %s", got)
 	}
 	awaitDegradedMarker(t, store, transition.ID, degradedTerminalFreshMarkerText)
+}
+
+// A Chat that already ran the session's prompt must not hand it to the fresh
+// terminal, or the agent starts the task again. A Chat that never accepted
+// anything still owes that prompt to the terminal. Either way the session keeps
+// its prompt. (Guard reused from OrchestratorInc/agent-orchestrator#7725 by
+// Meraj-08.)
+func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		conversation *domain.ConversationRecord
+		want         string
+	}{
+		{name: "chat ran the prompt", conversation: &domain.ConversationRecord{LatestSequence: 4}},
+		{name: "chat accepted nothing", conversation: &domain.ConversationRecord{}, want: "original task"},
+		{name: "chat never started", want: "original task"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
+			useFastInterfaceTransitionTimings(manager)
+			agent := &hermesDegradedTransitionAgent{}
+			manager.agents = singleAgent{agent: agent}
+			rec := store.sessions["session-1"]
+			rec.Harness = domain.HarnessHermes
+			rec.Metadata.Prompt = "original task"
+			store.sessions["session-1"] = rec
+			if tc.conversation != nil {
+				store.conversations = map[domain.SessionID]domain.ConversationRecord{"session-1": *tc.conversation}
+			}
+
+			transition, err := manager.StartInterfaceTransition(context.Background(), "session-1",
+				domain.SessionModeTUI, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := awaitTransition(t, store, transition.ID)
+			if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("phase = %s, code = %s, error = %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+			}
+			// The last build is the real launch; the first is the preflight's.
+			if got := agent.launchPrompts[len(agent.launchPrompts)-1]; got != tc.want {
+				t.Fatalf("fresh terminal prompt = %q, want %q (builds: %q)", got, tc.want, agent.launchPrompts)
+			}
+			if got := store.sessions["session-1"].Metadata.Prompt; got != "original task" {
+				t.Fatalf("session prompt = %q, want it kept", got)
+			}
+		})
+	}
 }
 
 // awaitDegradedMarker polls the transition outbox until the degraded boundary

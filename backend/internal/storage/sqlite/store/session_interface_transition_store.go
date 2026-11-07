@@ -377,37 +377,41 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, nil
 	}
 	if source == domain.SessionModeChat && target == domain.SessionModeTUI && nativeID == "" {
-		if !archivedChat {
-			// A fresh TUI will choose its own native identity. Release the unused
-			// Chat reservation and event namespace in the same transaction, so a
-			// later return can bind that identity without inventing inherited history.
-			released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
-				SessionID:       &id,
-				ProviderScopeID: uuid.NewString(),
-			})
-			if err != nil {
-				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
-			}
-			if released == 0 {
-				// A Chat whose controller never started (its start failed, or it
-				// was never opened) has no conversation row: the freshness proof
-				// accepts that, and there is no reservation to release.
-				_, lookupErr := q.SelectConversationBySession(ctx, &id)
-				switch {
-				case errors.Is(lookupErr, sql.ErrNoRows):
-					released = 1
-				case lookupErr != nil:
-					return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
-				}
-			}
-			if released != 1 {
-				return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
+		// A fresh TUI will choose its own native identity. Release the unused
+		// Chat reservation and event namespace in the same transaction, so a
+		// later return can bind that identity without inventing inherited
+		// history. The degraded archived-chat commit runs this release first
+		// too: only a Chat whose conversation actually holds messages keeps
+		// its binding archived (upstream issue #7724).
+		released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
+			SessionID:       &id,
+			ProviderScopeID: uuid.NewString(),
+		})
+		if err != nil {
+			return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
+		}
+		if released == 0 {
+			// A Chat whose controller never started (its start failed, or it
+			// was never opened) has no conversation row: the freshness proof
+			// accepts that, and there is no reservation to release.
+			if _, lookupErr := q.SelectConversationBySession(ctx, &id); errors.Is(lookupErr, sql.ErrNoRows) {
+				released = 1
+			} else if lookupErr != nil {
+				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
+			} else if archivedChat {
+				// The proof refused, so the Chat conversation holds real
+				// content (activity or turns). A degraded identity-reset
+				// fresh TUI archives that messaged Chat exactly as it is,
+				// provider binding included: its messages stay in Chat
+				// instead of having to prove the root untouched (upstream
+				// issue #7724). Without the degraded admission the commit
+				// still fails below.
+				released = 1
 			}
 		}
-		// An archivedChat commit (a degraded identity-reset fresh TUI) keeps the
-		// source Chat conversation archived as-is, provider binding included:
-		// its messages stay in Chat instead of having to prove the root
-		// untouched (upstream issue #7724).
+		if released != 1 {
+			return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit controller epoch transaction for %s: %w", id, err)

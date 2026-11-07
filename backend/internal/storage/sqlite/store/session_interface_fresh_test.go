@@ -130,6 +130,56 @@ func TestArchivedChatInterfaceEpochKeepsMessagedChatArchived(t *testing.T) {
 	}
 }
 
+// A degraded identity-reset fresh TUI whose Chat conversation never accepted a
+// message still releases the unused Chat provider reservation and event
+// namespace, exactly as the strict fresh commit does: only a messaged Chat
+// keeps its binding archived (upstream PR #7740 review, P2).
+func TestArchivedChatInterfaceEpochReleasesUntouchedChatProvider(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "archived-empty-chat")
+	now := time.Now()
+	rec := sampleRecord("archived-empty-chat")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ProviderConversationID = "reserved-chat-id"
+	rec.Metadata.ControllerGeneration = "chat-generation"
+	sess, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := st.CreateConversation(ctx, "chat-conversation", domain.ConversationScopeSession,
+		sess.ProjectID, sess.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := st.CommitSessionControllerEpochArchivedChat(ctx, sess.ID, domain.SessionModeChat, domain.SessionModeTUI, "", now)
+	if err != nil || !changed {
+		t.Fatalf("archived-chat epoch for an empty Chat changed=%v err=%v", changed, err)
+	}
+	after, err := st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ProviderConversationID != "" || after.ProviderScopeID == before.ProviderScopeID || after.ProviderScopeID == "" {
+		t.Fatalf("untouched Chat kept its provider reservation: before=%+v after=%+v", before, after)
+	}
+	current, _, err := st.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Mode != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want tui", current.Mode)
+	}
+	if current.Metadata.ProviderConversationID != "" {
+		t.Fatalf("session provider id = %q, want it cleared with the reservation", current.Metadata.ProviderConversationID)
+	}
+}
+
 // Orchestrator conversations are project-owned: session_id is empty and the
 // active orchestrator is recorded only as current_session_id.
 func TestFreshInterfaceEpochReleasesUntouchedProjectConversation(t *testing.T) {
