@@ -74,11 +74,16 @@ export function useAgentAccountUsage(days = 30) {
 	});
 }
 
+/** The account a session runs on, for each provider. */
+export async function fetchSessionAgentAccounts(sessionId: string) {
+	return unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId } } })) ?? {};
+}
+
 export function useSessionAgentAccounts(sessionId: string | undefined) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? ""),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: () => fetchSessionAgentAccounts(sessionId ?? ""),
 	});
 }
 

@@ -39,6 +39,7 @@ import {
 	FileDiff,
 	Gauge,
 	History,
+	Hourglass,
 	KeyRound,
 	Keyboard,
 	ListChecks,
@@ -112,6 +113,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationTurn,
 	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
@@ -560,6 +562,7 @@ export function TurnOutcome({
 	error,
 	failureCode,
 	onConfigure,
+	login,
 	retry,
 	usageLimit,
 	copyText,
@@ -569,8 +572,10 @@ export function TurnOutcome({
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
-	failureCode?: "provider_key_missing";
+	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
+	/** The provider refused the agent's login: a quiet line in place of its CLI advice. */
+	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -593,6 +598,16 @@ export function TurnOutcome({
 					rollbackDisabled={rollbackDisabled}
 					timestamp={timestamp}
 				/>
+			</div>
+		);
+	}
+	// A refused login is offered on the chat box, where the user was about to
+	// write. The turn keeps one quiet line saying what happens to its message;
+	// the provider's own advice ("run /login") is for its CLI and never shows.
+	if (state === "failed" && failureCode === "auth_required" && login) {
+		return (
+			<div data-turn-outcome={state} className="flex min-w-0">
+				<LoginStatusNote status={login.status} />
 			</div>
 		);
 	}
@@ -641,6 +656,42 @@ export function TurnOutcome({
 			/>
 		</div>
 	);
+}
+
+const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Loader2, resend: undefined, stopped: undefined } as const;
+
+/**
+ * What happens to a message the agent refused for its login. A message whose
+ * turn did nothing else leads its own row under the bubble with it, before the
+ * time and copy; otherwise it is the turn's last line. While the message waits,
+ * its hourglass turns over now and then.
+ */
+export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"] }) {
+	const { t } = useTranslation();
+	const Icon = LOGIN_STATUS_ICON[status];
+	return (
+		<div
+			data-testid="login-status"
+			data-login-status={status}
+			className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
+		>
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" && "animate-spin")} /> : null}
+			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
+		</div>
+	);
+}
+
+/** How a message the agent refused for its login reads in the timeline. */
+export interface TurnOutcomeLogin {
+	/**
+	 * queued: sends again by itself once the user logs in. waiting: the Agents
+	 * page was opened and the login has not taken yet. sending: logged in, sending
+	 * it again. resend: the user sends it again (it did work, or nothing watches
+	 * the login). stopped: an earlier refusal, since sent again or moved past.
+	 */
+	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
+	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
+	align: "end" | "start";
 }
 
 interface TurnActionsProps {
@@ -948,6 +999,7 @@ export function HumanMessage({
 	activateBranchPending = false,
 	activateBranchError,
 	onSelectAnnotation,
+	status,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
@@ -975,6 +1027,11 @@ export function HumanMessage({
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/**
+	 * Where the message stands (a refused login's). It leads the row under the
+	 * bubble, and the row then stays in place with its time and actions in view.
+	 */
+	status?: ReactNode;
 }) {
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
@@ -1061,8 +1118,11 @@ export function HumanMessage({
 			{editing ? null : (
 				// Hover-only actions float under the bubble instead of reserving a blank row;
 				// a branch navigator is always visible, so it keeps its place in the flow.
-				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
-					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+				// So does a status: it leads the row, and the time and actions follow it in
+				// view, one line under the bubble.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10")}>
+					{status ? <div className="mr-1 flex items-center">{status}</div> : null}
+					<div className={cn("flex items-center gap-1", !status && "opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none")}>
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Button

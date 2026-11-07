@@ -156,6 +156,28 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/**
+ * A chat whose agent refused its login, waiting while the user logs in from the
+ * Agents page. A login that takes there closes the page; the chat then sends
+ * its refused message again when that is safe, or says the user is in.
+ */
+export type LoginReturn = {
+	sessionId: string;
+	agentId: string;
+	/** The remote host whose login is being fixed; omitted for this computer. */
+	hostId?: string;
+	/**
+	 * The account the session runs on, by id (the computer's own login is one
+	 * too). A login to another account does not fix the session, so it does not
+	 * count. Unknown for a remote host, whose accounts this app cannot read.
+	 */
+	accountId?: string;
+	/** When the login took. */
+	loggedInAt?: number;
+	/** The chat has seen the login and sent nothing again: it says the user is in. */
+	settled?: boolean;
+};
+
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
 // ephemeral UI: theme, sidebar collapse, command palette, per-session inspector
@@ -280,6 +302,17 @@ export type UiState = {
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
+	loginReturn: LoginReturn | null;
+	/** Remember a chat whose agent refused its login while that login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled">) => void;
+	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
+	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
+	/** The account the waiting chat's session runs on, once read; only its login counts. */
+	setLoginReturnAccount: (sessionId: string, accountId: string) => void;
+	/** The waiting chat saw the login and sent nothing again. */
+	settleLoginReturn: (sessionId: string) => void;
+	/** Drop the waiting chat, or only when it is this session's. */
+	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -586,6 +619,31 @@ export const useUiStore = create<UiState>((set, get) => ({
 	closeSettings: () => set((state) => ({
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
+	loginReturn: null,
+	startLoginReturn: (intent) => set({ loginReturn: intent }),
+	completeLoginReturn: (agentId, hostId, accountId) => set((state) => {
+		const waiting = state.loginReturn;
+		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
+		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		const modal = state.settingsModal;
+		// A login only finishes while the Agents page shows it, so closing global
+		// settings here returns the user to the chat they came from.
+		return {
+			loginReturn: { ...waiting, loggedInAt: Date.now() },
+			...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+		};
+	}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt === undefined
+			? { loginReturn: { ...state.loginReturn, accountId } }
+			: {}),
+	settleLoginReturn: (sessionId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
+			? { loginReturn: { ...state.loginReturn, settled: true } }
+			: {}),
+	clearLoginReturn: (sessionId) => set((state) =>
+		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;

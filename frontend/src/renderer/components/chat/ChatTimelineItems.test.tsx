@@ -110,6 +110,30 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
 	});
 
+	it("ends a refused login on one quiet line under the message, and never the CLI's advice", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry: vi.fn() }}
+			onRollback={vi.fn()} login={{ status: "queued", align: "end" }} />);
+
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Queued");
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
+		// The login is offered on the chat box, so the turn has no action of its own.
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
+		expect(document.querySelector("[data-turn-actions]")).toBeNull();
+	});
+
+	it("ends a refused turn that did work on its own last line", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" login={{ status: "resend", align: "start" }} />);
+		expect(screen.getByTestId("login-status").closest("[data-turn-outcome]")).toBeInTheDocument();
+		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
+	});
+
+	it("shows a refused login with no way to log in as the plain failure", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" />);
+		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Log in" })).not.toBeInTheDocument();
+	});
+
 	it("leaves generic ACP failures without configuration guidance", () => {
 		render(<TurnOutcome state="failed" error="ACP internal detail" />);
 		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
