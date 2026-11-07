@@ -23,6 +23,7 @@ import {
 import { useState, type ReactNode } from "react";
 import type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 import type { Theme } from "./theme";
+import { secondaryForeground } from "./swiftUIStyles";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useNativeTextInput } from "./useNativeTextInput";
@@ -54,7 +55,7 @@ export function sectionModifiers(t: Theme): ModifierConfig[] {
 export function FormFooter({ children, error = false }: { children?: string; error?: boolean }) {
 	const t = useTheme();
 	if (!children) return null;
-	return <Text modifiers={[foregroundStyle(error ? t.red : { type: "hierarchical", style: "secondary" })]}>{children}</Text>;
+	return <Text modifiers={[error ? foregroundStyle(t.red) : secondaryForeground]}>{children}</Text>;
 }
 
 /**
