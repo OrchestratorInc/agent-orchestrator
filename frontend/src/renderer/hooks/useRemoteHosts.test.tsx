@@ -8,10 +8,12 @@ const remotes = vi.hoisted(() => ({
 	disconnect: vi.fn(),
 	connected: vi.fn(),
 }));
+const telemetry = vi.hoisted(() => ({ captureRendererException: vi.fn() }));
 const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, session: account.status === "authenticated" ? { user: { id: "user-a" } } : null }) }));
+vi.mock("../lib/telemetry", () => telemetry);
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
@@ -256,4 +258,21 @@ it("does not replace a newer proxy when an old offline retry finishes late", asy
 	expect(baseUrlForHost("box-a")).toBe("http://127.0.0.1:4001");
 	expect(remotes.disconnect).toHaveBeenCalledWith(oldUrl);
 	expect(remotes.disconnect).not.toHaveBeenCalledWith(newUrl);
+});
+
+it("reports once and keeps polling when the saved-host list cannot be read", async () => {
+	useUiStore.setState({ remoteHosts: true });
+	remotes.list.mockReset().mockRejectedValue(new Error("Sign in to AO Cloud to use remote hosts."));
+	const unhandled: unknown[] = [];
+	const onRejection = (reason: unknown) => { unhandled.push(reason); };
+	process.on("unhandledRejection", onRejection);
+	const { result } = renderHook(() => useRemoteHosts());
+	await act(async () => { requestRemoteHostsRefresh(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+	await act(async () => { requestRemoteHostsRefresh(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+	process.off("unhandledRejection", onRejection);
+	expect(remotes.list).toHaveBeenCalledTimes(3);
+	expect(unhandled).toEqual([]);
+	expect(result.current.hosts).toEqual([]);
+	expect(telemetry.captureRendererException).toHaveBeenCalledTimes(1);
+	expect(telemetry.captureRendererException).toHaveBeenCalledWith(expect.any(Error), { source: "remote-hosts", operation: "list_saved_hosts_signed_out" });
 });
