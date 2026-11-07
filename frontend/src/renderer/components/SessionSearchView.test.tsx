@@ -4,10 +4,18 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
-const { getMock, navigateMock, workspaceQueryMock } = vi.hoisted(() => ({
+const { getMock, navigateMock, workspaceQueryMock, remoteSearchMock, NO_REMOTES } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	navigateMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
+	remoteSearchMock: vi.fn(),
+	NO_REMOTES: { answers: [], settled: true },
+}));
+
+// Search across machines is its own hook with its own tests; here it says what
+// the other machines answered, and records what the page asked them.
+vi.mock("../hooks/useRemoteMachineSearch", () => ({
+	useRemoteMachineSearch: (...args: unknown[]) => remoteSearchMock(...args),
 }));
 
 // The local daemon's client is mocked, not host resolution: a search on this
@@ -24,12 +32,13 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useNavigate: () => navigateMock,
 }));
 
-vi.mock("./useWorkspaceQuery", () => ({
+vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => workspaceQueryMock(),
 }));
 
 import { SessionSearchView } from "./SessionSearchView";
 import { peekSessionSearchReveal, resetSessionSearchReveals } from "../lib/session-search-reveal";
+import { sessionUiKey } from "../lib/hosts";
 import { useUiStore } from "../stores/ui-store";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -73,6 +82,8 @@ describe("SessionSearchView", () => {
 		useUiStore.setState({ chatMessageFocusRequest: null });
 		getMock.mockReset();
 		navigateMock.mockReset();
+		remoteSearchMock.mockReset();
+		remoteSearchMock.mockReturnValue(NO_REMOTES);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -356,6 +367,124 @@ describe("SessionSearchView", () => {
 				params: { query: expect.objectContaining({ sort: "recent" }) },
 			});
 		});
+	});
+
+	// Found in review: "Show more" was decided by how many distinct rows were on
+	// screen. A newer session arriving between pages moves one row onto the next
+	// page, the repeat is dropped, and 49 of 50 rows hid "Show more" though the
+	// last page was full and 150 sessions remained.
+	it("keeps Show more when a session moves between pages", async () => {
+		const all = Array.from({ length: 200 }, (_, index) => ({
+			...result,
+			sessionId: `proj-${index}`,
+			messageId: `msg-${index}`,
+			sessionName: `Session ${index}`,
+		}));
+		getMock.mockImplementation(async (path: string, options?: { params?: { query?: { limit?: number; offset?: number } } }) => {
+			if (path !== "/api/v1/search/sessions") return response();
+			const { limit = 25, offset = 0 } = options?.params?.query ?? {};
+			// By the second page a newer session has pushed everything down one.
+			const rows = offset === 0 ? all.slice(0, limit) : all.slice(offset - 1, offset - 1 + limit);
+			return response({ results: rows, total: all.length, limit, offset });
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Session 24")).toBeInTheDocument());
+		await user.click(screen.getByRole("button", { name: /Show \d+ more/ }));
+		await waitFor(() => expect(screen.getByText("Session 48")).toBeInTheDocument());
+		// Session 24 came back on the second page and is shown once.
+		expect(screen.getAllByText("Session 24")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
+	});
+
+	// Found in review: two machines' short lists can together outrun one page.
+	// With 20 matches here and 20 on another machine, both ran out on the first
+	// request, the merge held 40, the page showed 25, and "Show more" was hidden
+	// because every machine had run out, stranding the other 15.
+	it("keeps Show more for fetched rows past the page when every machine ran out", async () => {
+		const local = Array.from({ length: 20 }, (_, index) => ({ ...result, sessionId: `proj-${index}`, messageId: `msg-${index}`, sessionName: `Local ${index}` }));
+		getMock.mockResolvedValue(response({ results: local, total: 20 }));
+		const remote = Array.from({ length: 20 }, (_, index) => ({ ...result, sessionId: `air-${index}`, sessionName: `Air ${index}` }));
+		remoteSearchMock.mockReturnValue({
+			answers: [{ hostId: "h_air", label: "MacBook Air", outcome: "searched", results: remote, total: 20, exhausted: true }],
+			settled: true,
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByTestId("session-search-count")).toHaveTextContent("25 of 40 sessions"));
+		await user.click(screen.getByRole("button", { name: /Show 15 more/ }));
+		await waitFor(() => expect(screen.getByTestId("session-search-count")).toHaveTextContent("40 of 40 sessions"));
+		expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+	});
+
+	it("keeps Show more while another machine has more, after this one ran out", async () => {
+		getMock.mockResolvedValue(response({ results: [result], total: 1 }));
+		const remote = Array.from({ length: 25 }, (_, index) => ({
+			...result,
+			sessionId: `air-${index}`,
+			sessionName: `Air session ${index}`,
+			createdAt: "2026-08-08T12:00:00Z",
+		}));
+		remoteSearchMock.mockReturnValue({
+			answers: [{ hostId: "h_air", label: "MacBook Air", outcome: "searched", results: remote, total: 60, exhausted: false }],
+			settled: true,
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Air session 0")).toBeInTheDocument());
+		expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
+	});
+
+	it("searches every connected machine and opens a remote session there", async () => {
+		getMock.mockResolvedValue(response());
+		remoteSearchMock.mockReturnValue({ settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...result, messageId: "remote-msg", sessionName: "Fix the login test on azure" }] },
+			{ hostId: "h_desk", label: "Desk", outcome: "offline", total: 0, results: [] },
+		] });
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Fix the login test on azure")).toBeInTheDocument());
+		expect(screen.getByText("Fix the login test")).toBeInTheDocument();
+		expect(screen.getByTestId("search-result-machine").textContent).toBe("AzureLinux");
+		expect(screen.getByTestId("search-machines-not-searched").textContent).toBe("Not searched on Desk (offline).");
+		// The count is every machine's, not just this one's.
+		expect(screen.getByTestId("session-search-count").textContent).toContain("2");
+
+		await user.click(screen.getByRole("button", { name: /Fix the login test on azure/ }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "h_azure", projectId: "proj", sessionId: "proj-1" },
+		});
+		// This machine also has a proj-1: the remote match is keyed by host and id,
+		// so the local session never takes it.
+		expect(peekSessionSearchReveal(sessionUiKey("proj-1", "h_azure"))).toMatchObject({ messageId: "remote-msg" });
+		expect(peekSessionSearchReveal("proj-1")).toBeUndefined();
+	});
+
+	it("asks the other machines with the same words and dates, and only this one for a project", async () => {
+		getMock.mockResolvedValue(response());
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-01-01" } });
+		await waitFor(() => expect(remoteSearchMock.mock.calls.at(-1)).toEqual([
+			expect.objectContaining({ query: "flaky", from: "2026-01-01" }),
+			true,
+		]));
+
+		// A project id names a project on this machine.
+		await user.click(screen.getByRole("button", { name: "Filter by project" }));
+		await user.click(await screen.findByRole("menuitem", { name: "proj" }));
+		await waitFor(() => expect(remoteSearchMock.mock.calls.at(-1)?.[1]).toBe(false));
 	});
 
 	it("does not query a single character", async () => {
