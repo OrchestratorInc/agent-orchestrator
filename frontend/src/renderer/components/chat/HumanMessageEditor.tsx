@@ -5,6 +5,7 @@ import type { ConversationContentSummary } from "../../types/conversation";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { ConversationContentItems } from "./ConversationContentItems";
 import {
 	IMAGE_ATTACHMENT_PATH,
@@ -86,6 +87,16 @@ export function HumanMessageEditor({
 	const sendDisabled =
 		pending || sendBlocked || busy || unchanged || composed.trim().length === 0 || (locked && !recoveryLabel);
 	const busyMessage = busy ? t("chat.edit.stopCurrentTurn") : undefined;
+	// Delivery starts by recording the edit for recovery, which hands this editor
+	// Retry or Clear while the send is still in flight. Send keeps the label it was
+	// clicked with until the send settles, so the label under the spinner, and with
+	// it the button's width, stays the same.
+	const [sendingRecoveryLabel, setSendingRecoveryLabel] = useState(recoveryLabel);
+	if (!pending && sendingRecoveryLabel !== recoveryLabel) setSendingRecoveryLabel(recoveryLabel);
+	const shownRecoveryLabel = pending ? sendingRecoveryLabel : recoveryLabel;
+	// The bubble's fold is keyed by the text it shows; reading the same key opens the
+	// editor folded or open as the bubble was.
+	const [foldKey] = useState(() => originalText ?? text);
 	const hasImages = attachments.some((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	// A native image block is the same picture as its staged image; listing both
 	// would show it twice.
@@ -148,49 +159,55 @@ export function HumanMessageEditor({
 				className={className}
 				style={startWidth ? { minWidth: `min(${startWidth}px, 100%)` } : undefined}
 			>
-				{leading}
-				<StagedAttachmentItems
-					paths={attachments}
-					sessionId={sessionId}
-					apiBaseUrl={apiBaseUrl}
-					ariaLabel={t("chat.attachment.list")}
-					className="mb-2"
-					onRemove={pending || locked ? undefined : removeAttachment}
-				/>
-				{cloudAttachments}
-				{/* A hidden copy of the draft sizes the field (see styles.css), so the box
-				    fits its text exactly as the bubble did and grows only with the text. */}
-				<div className="chat-human-edit-field" data-value={draft}>
-					<textarea
-						ref={textarea}
-						value={draft}
-						onChange={(event) => {
-							setDraft(event.target.value);
-							publish(event.target.value, attachments);
-						}}
-						onKeyDown={onKeyDown}
-						aria-label={t("chat.edit.label")}
-						aria-describedby={error || busyMessage ? undefined : branchNoteId}
-						disabled={pending || locked}
-						autoFocus
-						rows={1}
-						cols={1}
-						className="chat-composer-scrollbar w-full min-w-0 resize-none overflow-y-auto overscroll-contain bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
+				{/* The bubble's own fold, so a long message keeps its height, folded or open.
+				    Folded, the editor scrolls instead of clipping, so all of it stays reachable. */}
+				<CollapsibleHumanBody stateKey={foldKey} scrollWhenFolded>
+					{leading}
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel={t("chat.attachment.list")}
+						className="mb-2"
+						onRemove={pending || locked ? undefined : removeAttachment}
 					/>
-				</div>
-				<ConversationContentItems
-					content={otherContent}
-					ariaLabel={t("chat.edit.preservedContent")}
-					imageLabel={t("chat.edit.image")}
-					className="mt-2"
-				/>
+					{cloudAttachments}
+					{/* A hidden copy of the draft sizes the field (see styles.css), so the box
+					    fits its text exactly as the bubble did and grows only with the text. */}
+					<div className="chat-human-edit-field" data-value={draft}>
+						<textarea
+							ref={textarea}
+							value={draft}
+							onChange={(event) => {
+								setDraft(event.target.value);
+								publish(event.target.value, attachments);
+							}}
+							onKeyDown={onKeyDown}
+							aria-label={t("chat.edit.label")}
+							aria-describedby={error || busyMessage ? undefined : branchNoteId}
+							disabled={pending || locked}
+							autoFocus
+							rows={1}
+							cols={1}
+							className="w-full min-w-0 resize-none overflow-hidden bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
+						/>
+					</div>
+					<ConversationContentItems
+						content={otherContent}
+						ariaLabel={t("chat.edit.preservedContent")}
+						imageLabel={t("chat.edit.image")}
+						className="mt-2"
+					/>
+				</CollapsibleHumanBody>
+				{/* Below the field it belongs to, on its own line, so all of it reads. */}
+				{error ? (
+					<p role="alert" className="mt-2 text-pretty text-xs text-destructive">
+						{error}
+					</p>
+				) : null}
 			</div>
 			<div className={cn(actionsClassName, "max-w-full")}>
-				{error ? (
-					<span role="alert" title={error} className="mr-1 min-w-0 max-w-80 truncate text-xs text-destructive">
-						{error}
-					</span>
-				) : busyMessage ? (
+				{error ? null : busyMessage ? (
 					<span className="mr-1 min-w-0 max-w-80 truncate text-xs text-muted-foreground">{busyMessage}</span>
 				) : (
 					<>
@@ -231,16 +248,16 @@ export function HumanMessageEditor({
 								size="xs"
 								onClick={submit}
 								disabled={sendDisabled}
-								aria-label={recoveryLabel ?? t("chat.edit.send")}
+								aria-label={shownRecoveryLabel ?? t("chat.edit.send")}
 								className="relative"
 							>
 								{/* The spinner sits over the label, so the button keeps its width. */}
-								<span className={cn(pending && "invisible")}>{recoveryLabel ?? t("chat.edit.sendAction")}</span>
+								<span className={cn(pending && "invisible")}>{shownRecoveryLabel ?? t("chat.edit.sendAction")}</span>
 								{pending ? <Loader2 aria-hidden="true" className="absolute size-3.5 animate-spin" /> : null}
 							</Button>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{busyMessage ?? recoveryLabel ?? t("chat.edit.sendShortcut")}</TooltipContent>
+					<TooltipContent side="bottom">{busyMessage ?? shownRecoveryLabel ?? t("chat.edit.sendShortcut")}</TooltipContent>
 				</Tooltip>
 			</div>
 		</>

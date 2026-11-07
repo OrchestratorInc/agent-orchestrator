@@ -32,7 +32,10 @@ export function StagedAttachmentItems({
 		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 			{paths.map((path) => {
 				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
+				const image = IMAGE_ATTACHMENT_PATH.test(path);
+				// An image with no preview URL shows as a file chip, but it still can't go.
+				const remove = image ? undefined : onRemove;
+				return image && apiBaseUrl !== null ? (
 					<li key={path} className="max-w-full">
 						<ChatImage
 							src={attachmentURL(apiBaseUrl, sessionId, path)}
@@ -50,17 +53,17 @@ export function StagedAttachmentItems({
 								aria-hidden="true"
 								className={cn(
 									"size-3.5",
-									onRemove && "group-focus-within/attachment:opacity-0 group-hover/attachment:opacity-0",
+									remove && "group-focus-within/attachment:opacity-0 group-hover/attachment:opacity-0",
 								)}
 							/>
 							{/* Remove takes the icon's place on hover, so the chip keeps its size. */}
-							{onRemove ? (
+							{remove ? (
 								<span className="absolute -inset-[5px] flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">
 									<Button
 										type="button"
 										variant="destructive-ghost"
 										size="icon-xs"
-										onClick={() => onRemove(path)}
+										onClick={() => remove(path)}
 										aria-label={t("chat.attachment.remove", { name })}
 									>
 										<X aria-hidden="true" className="size-3" />

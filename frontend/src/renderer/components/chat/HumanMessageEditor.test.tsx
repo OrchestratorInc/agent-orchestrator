@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { TooltipProvider } from "../ui/tooltip";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("HumanMessageEditor", () => {
 	it("sends with Cmd+Enter while Enter inserts a newline", async () => {
@@ -203,6 +206,96 @@ describe("HumanMessageEditor", () => {
 		expect(onSend).toHaveBeenCalledWith("prompt");
 	});
 
+	it("never offers to remove an image, even when it shows as a file chip", () => {
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor
+					text={"look\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12.png\n- .ao/attachments/attachment-cd34.pdf"}
+					content={[]}
+					sessionId="session-1"
+					apiBaseUrl={null}
+					pending={false}
+					busy={false}
+					onCancel={vi.fn()}
+					onSend={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+		// With no asset URL the image has no preview, but the edit still resends it.
+		expect(screen.getByRole("list", { name: "Attached files" })).toHaveTextContent("attachment-ab12.png");
+		expect(screen.queryByRole("button", { name: "Remove attachment-ab12.png" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Remove attachment-cd34.pdf" })).toBeInTheDocument();
+	});
+
+	it("keeps the clicked label on Send while the send is in flight", () => {
+		const props = {
+			text: "prompt",
+			content: [],
+			sessionId: "session-1",
+			apiBaseUrl: null,
+			busy: false,
+			onCancel: vi.fn(),
+			onSend: vi.fn(),
+		};
+		const { rerender } = render(
+			<TooltipProvider>
+				<HumanMessageEditor {...props} pending={false} />
+			</TooltipProvider>,
+		);
+		// Delivery records the edit for recovery as it starts, which brings a Retry label.
+		rerender(
+			<TooltipProvider>
+				<HumanMessageEditor {...props} pending locked recoveryLabel="Retry edit safely" />
+			</TooltipProvider>,
+		);
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		expect(send).toHaveTextContent("Send");
+		expect(send).not.toHaveTextContent("Retry");
+		// Retry shows only once the send has stalled.
+		rerender(
+			<TooltipProvider>
+				<HumanMessageEditor {...props} pending={false} locked recoveryLabel="Retry edit safely" />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Retry edit safely" })).toHaveTextContent("Retry edit safely");
+		// A retry keeps its own label while it runs.
+		rerender(
+			<TooltipProvider>
+				<HumanMessageEditor {...props} pending locked recoveryLabel="Retry edit safely" />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Retry edit safely" })).toHaveTextContent("Retry edit safely");
+	});
+
+	it("opens a long message folded, as its bubble was, and scrolls inside the fold", () => {
+		const long = "a long message";
+		// The bubble measured the message and folded it (see CollapsibleHumanBody.test).
+		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
+		render(<CollapsibleHumanBody stateKey={long}><p>{long}</p></CollapsibleHumanBody>).unmount();
+		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(0);
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor
+					text={long}
+					originalText={long}
+					content={[]}
+					sessionId="session-1"
+					apiBaseUrl={null}
+					pending={false}
+					busy={false}
+					onCancel={vi.fn()}
+					onSend={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+		const toggle = screen.getByRole("button", { name: "Show more" });
+		const fold = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+		expect(fold).toHaveAttribute("data-folded");
+		expect(fold).toHaveAttribute("data-scroll-folded");
+		expect(fold.style.height).toBe("220px");
+		expect(fold).toContainElement(screen.getByRole("textbox", { name: "Edit message" }));
+	});
+
 	it("explains the branch through the field's description", () => {
 		render(
 			<TooltipProvider>
@@ -222,5 +315,8 @@ describe("HumanMessageEditor", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("prompt");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
+		// On its own line in the box, under the field, not squeezed into the button row.
+		expect(screen.getByRole("alert").parentElement).toContainElement(screen.getByRole("textbox", { name: "Edit message" }));
+		expect(screen.getByRole("alert").parentElement).not.toContainElement(screen.getByRole("button", { name: "Send edited message" }));
 	});
 });
