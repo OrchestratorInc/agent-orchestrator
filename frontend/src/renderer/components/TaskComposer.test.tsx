@@ -138,6 +138,8 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { cacheAgentModels, clearCachedAgentModels } from "../lib/agent-model-cache";
 import { useUiStore } from "../stores/ui-store";
+import { subscribeCloudSessionEvents } from "../lib/cloud-cp/session-events-hub";
+import type { CloudCpStreamEvent } from "../../main/cloud-cp-proxy";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
 	children: ReactNode;
@@ -3723,17 +3725,38 @@ describe("TaskComposer Cloud model catalog", () => {
 });
 
 describe("TaskComposer Cloud orchestrator model", () => {
-	const orchestratorSettingsKey = "cloud-chat-settings:org-1:orch-1:claude-code";
+	const PREFERENCES = "ao.taskComposer.preferences.v1";
+	const liveCleanups: Array<() => void> = [];
 	afterEach(() => {
-		window.localStorage.removeItem(orchestratorSettingsKey);
+		for (const leave of liveCleanups.splice(0)) leave();
 	});
+
+	function orchestratorSession(overrides: Record<string, unknown> = {}) {
+		return { id: "orch-1", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-opus-test", currentModel: "claude-opus-test", status: "working", isTerminated: false, createdAt: "2026-11-01T00:00:00Z", ...overrides };
+	}
 
 	/** The project's sessions as the sidebar's poll left them: its running orchestrator, and any others. */
 	function seedSessions(queryClient: QueryClient, orchestrator: Record<string, unknown> = {}, others: Array<Record<string, unknown>> = []) {
-		queryClient.setQueryData(["cloud-sessions", h.cloudBaseUrl, h.cloudOrgId], [
-			{ id: "orch-1", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-opus-test", status: "working", isTerminated: false, createdAt: "2026-11-01T00:00:00Z", ...orchestrator },
-			...others,
-		]);
+		queryClient.setQueryData(["cloud-sessions", h.cloudBaseUrl, h.cloudOrgId], [orchestratorSession(orchestrator), ...others]);
+	}
+
+	/** The orchestrator's Chat, open elsewhere in this window, following its live state; returns how to send that state. */
+	async function openOrchestratorChat() {
+		const listeners = new Map<string, (event: CloudCpStreamEvent) => void>();
+		const bridge = {
+			openStream: vi.fn(async () => ({ streamId: "orch-stream" })),
+			closeStream: vi.fn((streamId: string) => listeners.delete(streamId)),
+			onStreamEvent: vi.fn((streamId: string, listener: (event: CloudCpStreamEvent) => void) => {
+				listeners.set(streamId, listener);
+				return () => listeners.delete(streamId);
+			}),
+		};
+		liveCleanups.push(subscribeCloudSessionEvents({ baseUrl: h.cloudBaseUrl, orgId: h.cloudOrgId, sessionId: "orch-1" }, { live: true }, { bridge }));
+		await waitFor(() => expect(listeners.has("orch-stream")).toBe(true));
+		return (chatSettings: Record<string, string>) => act(() => listeners.get("orch-stream")?.({
+			type: "chunk",
+			data: `event: session.live\ndata: ${JSON.stringify({ type: "session.live", viewers: [], composer: { holder: null, epoch: 0, waitlist: [] }, canTakeOver: false, you: "user-1", chatSettings, canConfigure: true })}\n\n`,
+		}));
 	}
 
 	const catalog = () => releaseCatalog([
@@ -3742,43 +3765,76 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		{ id: "claude-haiku-test", displayName: "Haiku", default: false, efforts: ["low", "medium", "high"] },
 	]);
 
-	async function startWithDefaults() {
+	const savedPreference = () => JSON.parse(window.localStorage.getItem(PREFERENCES) ?? "{}")["cloud-1"]?.agents?.["claude-code"];
+
+	async function startWithDefaults(call = 0) {
 		fireEvent.change(task(), { target: { value: "Follow the orchestrator" } });
 		await waitForTaskReady();
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
-		return h.cloudCreateSession.mock.calls[0][1] as Record<string, unknown>;
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(call + 1));
+		return h.cloudCreateSession.mock.calls[call][1] as Record<string, unknown>;
 	}
 
-	it("starts a worker of the orchestrator's agent on the model the orchestrator runs, over the project's worker model", async () => {
-		const queryClient = cloudFixture("claude-code", { model: "claude-sonnet-test" });
-		seedSessions(queryClient);
-		h.cloudListUserAgentModels.mockResolvedValue(catalog());
-		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		const picker = await screen.findByRole("button", { name: "Model" });
-		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
-		await userEvent.click(picker);
-		expect(await screen.findByRole("menuitem", { name: /Opus.*Same as orchestrator/ })).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
-		await userEvent.keyboard("{Escape}");
-		expect(await startWithDefaults()).toMatchObject({ harness: "claude-code", model: "claude-opus-test" });
-	});
-
-	it("follows the model and effort the orchestrator's Chat is set to over the one it started with", async () => {
-		window.localStorage.setItem(orchestratorSettingsKey, JSON.stringify({ model: "claude-haiku-test", reasoningEffort: "high" }));
-		const queryClient = cloudFixture("claude-code");
+	it("starts on the project's worker model over the orchestrator's, and names the orchestrator's in the menu", async () => {
+		const queryClient = cloudFixture("claude-code", { model: "claude-haiku-test" });
 		seedSessions(queryClient);
 		h.cloudListUserAgentModels.mockResolvedValue(catalog());
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await waitFor(() => expect(picker).toHaveTextContent("Haiku"));
-		expect(await startWithDefaults()).toMatchObject({ model: "claude-haiku-test", reasoningEffort: "high" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: /Opus.*Same as orchestrator/ })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Haiku" })).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(await startWithDefaults()).toMatchObject({ harness: "claude-code", model: "claude-haiku-test" });
+	});
+
+	it("starts a worker of the orchestrator's agent on the model and effort the orchestrator runs when the project names no model", async () => {
+		const queryClient = cloudFixture("claude-code");
+		seedSessions(queryClient, { model: "claude-sonnet-test", currentModel: "claude-opus-test", currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		expect(await startWithDefaults()).toMatchObject({ harness: "claude-code", model: "claude-opus-test", reasoningEffort: "high" });
+	});
+
+	it("reads the model an older control plane's session started with", async () => {
+		const queryClient = cloudFixture("claude-code");
+		seedSessions(queryClient, { model: "claude-opus-test", currentModel: undefined });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test" });
+	});
+
+	it("follows the orchestrator's open Chat, whose Default names no model", async () => {
+		const queryClient = cloudFixture("claude-code");
+		// Started on the agent's default, then set to Opus in its Chat: no model it started with to fall back on.
+		seedSessions(queryClient, { model: "" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		const sendLive = await openOrchestratorChat();
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
+		sendLive({ model: "claude-haiku-test", reasoningEffort: "low" });
+		await waitFor(() => expect(picker).toHaveTextContent("Haiku"));
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
+		// Set to the agent's own default, the orchestrator names no model to follow.
+		sendLive({ model: "default" });
+		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+		expect(screen.queryByText("Same as orchestrator")).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-sonnet-test" });
 	});
 
 	it("leaves out an orchestrator effort its model does not offer", async () => {
-		window.localStorage.setItem(orchestratorSettingsKey, JSON.stringify({ model: "claude-haiku-test", reasoningEffort: "max" }));
 		const queryClient = cloudFixture("claude-code");
-		seedSessions(queryClient);
+		seedSessions(queryClient, { currentModel: "claude-haiku-test", currentReasoningEffort: "max" });
 		h.cloudListUserAgentModels.mockResolvedValue(catalog());
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Model" });
@@ -3788,11 +3844,97 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		expect(request.reasoningEffort).not.toBe("max");
 	});
 
-	it("keeps a model remembered for the project and agent over the orchestrator's", async () => {
-		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({
-			"cloud-1": { lastAgent: "claude-code", agents: { "claude-code": { model: "claude-sonnet-test", mode: "" } } },
+	it("takes the effort that goes with the model shown: the project's with its model, the orchestrator's with the orchestrator's", async () => {
+		const queryClient = cloudFixture("claude-code", { model: "claude-haiku-test", effort: "low" });
+		seedSessions(queryClient, { currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(picker).toHaveTextContent("Haiku"));
+		await waitFor(() => expect(effort).toHaveTextContent("Low"));
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Opus.*Same as orchestrator/ }));
+		await waitFor(() => expect(effort).toHaveTextContent("High"));
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test", reasoningEffort: "high" });
+	});
+
+	it("does not remember an effort nobody chose: after a launch the default still follows the orchestrator's", async () => {
+		const queryClient = cloudFixture("claude-code");
+		seedSessions(queryClient, { currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(effort).toHaveTextContent("High"));
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test", reasoningEffort: "high" });
+		expect(savedPreference()).toEqual({ model: "", mode: "" });
+
+		act(() => seedSessions(queryClient, { currentReasoningEffort: "low" }));
+		await waitFor(() => expect(effort).toHaveTextContent("Low"));
+		expect(await startWithDefaults(1)).toMatchObject({ model: "claude-opus-test", reasoningEffort: "low" });
+	});
+
+	it("remembers an effort the user picks, over the orchestrator's", async () => {
+		const queryClient = cloudFixture("claude-code");
+		seedSessions(queryClient, { currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		const { unmount } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(effort).toHaveTextContent("High"));
+		await userEvent.click(effort);
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test", reasoningEffort: "low" });
+		expect(savedPreference()).toEqual({ model: "", mode: "", effort: "low", effortChosen: true });
+		unmount();
+
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Opus"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low"));
+		expect(await startWithDefaults(1)).toMatchObject({ reasoningEffort: "low" });
+	});
+
+	it("lets an effort saved before choices were marked give way to the orchestrator's, and apply where none is named", async () => {
+		window.localStorage.setItem(PREFERENCES, JSON.stringify({
+			"cloud-1": { lastAgent: "claude-code", agents: { "claude-code": { model: "", mode: "", effort: "low" } } },
 		}));
 		const queryClient = cloudFixture("claude-code");
+		seedSessions(queryClient, { currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(effort).toHaveTextContent("High"));
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test", reasoningEffort: "high" });
+
+		act(() => seedSessions(queryClient, { currentReasoningEffort: undefined }));
+		await waitFor(() => expect(effort).toHaveTextContent("Low"));
+		expect(await startWithDefaults(1)).toMatchObject({ model: "claude-opus-test", reasoningEffort: "low" });
+	});
+
+	it("does not keep a model or effort nobody chose when switching agents and back", async () => {
+		const queryClient = cloudFixture("claude-code", {}, [
+			{ id: "claude-connection", provider: "claude-code", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} },
+			{ id: "codex-connection", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} },
+		]);
+		seedSessions(queryClient, { currentReasoningEffort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Opus"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High"));
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "claude-code"));
+
+		act(() => seedSessions(queryClient, { currentModel: "claude-haiku-test", currentReasoningEffort: "low" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Haiku"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low"));
+	});
+
+	it("keeps a model remembered for the project and agent over the project's and the orchestrator's", async () => {
+		window.localStorage.setItem(PREFERENCES, JSON.stringify({
+			"cloud-1": { lastAgent: "claude-code", agents: { "claude-code": { model: "claude-sonnet-test", mode: "" } } },
+		}));
+		const queryClient = cloudFixture("claude-code", { model: "claude-haiku-test" });
 		seedSessions(queryClient);
 		h.cloudListUserAgentModels.mockResolvedValue(catalog());
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
@@ -3821,9 +3963,9 @@ describe("TaskComposer Cloud orchestrator model", () => {
 	it("leaves a worker of another agent, and a stopped or other project's orchestrator, to the usual defaults", async () => {
 		const queryClient = cloudFixture("claude-code");
 		// Models no catalog lists, so only an orchestrator default could pick them.
-		seedSessions(queryClient, { harness: "codex", model: "gpt-5.6-sol" }, [
-			{ id: "orch-old", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-stopped-test", status: "terminated", isTerminated: true, createdAt: "2026-11-02T00:00:00Z" },
-			{ id: "orch-other", projectId: "cloud-2", kind: "orchestrator", harness: "claude-code", model: "claude-elsewhere-test", status: "working", isTerminated: false, createdAt: "2026-11-03T00:00:00Z" },
+		seedSessions(queryClient, { harness: "codex", model: "gpt-5.6-sol", currentModel: "gpt-5.6-sol" }, [
+			orchestratorSession({ id: "orch-old", model: "claude-stopped-test", currentModel: "claude-stopped-test", status: "terminated", isTerminated: true, createdAt: "2026-11-02T00:00:00Z" }),
+			orchestratorSession({ id: "orch-other", projectId: "cloud-2", model: "claude-elsewhere-test", currentModel: "claude-elsewhere-test", createdAt: "2026-11-03T00:00:00Z" }),
 		]);
 		h.cloudListUserAgentModels.mockResolvedValue(catalog());
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
@@ -3838,7 +3980,7 @@ describe("TaskComposer Cloud orchestrator model", () => {
 
 	it("never starts on an orchestrator model the account's own Cloud list lacks", async () => {
 		const queryClient = cloudFixture("claude-code");
-		seedSessions(queryClient, { model: "claude-retired-test" });
+		seedSessions(queryClient, { model: "claude-retired-test", currentModel: "claude-retired-test" });
 		h.cloudListUserAgentModels.mockResolvedValue(accountCatalog([
 			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true },
 			{ id: "claude-opus-test", displayName: "Opus", default: false },
