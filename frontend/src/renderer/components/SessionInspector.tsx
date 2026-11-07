@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -34,9 +34,8 @@ import {
 	Info,
 	Play,
 	Loader2,
-	SearchCheck,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
@@ -122,37 +121,12 @@ const VIEW_DEFS: {
 	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
-	{
-		id: "summary",
-		labelKey: "inspector.summary",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<line x1="8" y1="7" x2="20" y2="7" />
-				<line x1="8" y1="12" x2="20" y2="12" />
-				<line x1="8" y1="17" x2="16" y2="17" />
-				<circle cx="4" cy="7" r="1" />
-				<circle cx="4" cy="12" r="1" />
-				<circle cx="4" cy="17" r="1" />
-			</svg>
-		),
-	},
-	{
-		id: "reviews",
-		labelKey: "inspector.reviewTab",
-		icon: <SearchCheck aria-hidden="true" />,
-	},
-	{
-		id: "browser",
-		labelKey: "inspector.browser",
-		icon: <BrowserIcon aria-hidden="true" />,
-	},
-	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{
-		id: "files",
-		labelKey: "inspector.files",
-		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
-	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
+	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
+	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
+	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
+	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -163,7 +137,7 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
 	browserOnly = false,

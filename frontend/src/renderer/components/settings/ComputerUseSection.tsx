@@ -1,6 +1,6 @@
 import { apiErrorException } from "../../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "lucide-react";
+import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";

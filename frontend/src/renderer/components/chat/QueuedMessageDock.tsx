@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";

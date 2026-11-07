@@ -10,7 +10,7 @@
  * the list, so they take the chrome and keep their own contents.
  */
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/app-icons";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";

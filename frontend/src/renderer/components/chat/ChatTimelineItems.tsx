@@ -52,7 +52,7 @@ import {
 	Undo2,
 	User,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 
 /** Fixed icon column, matching the prototype's row anatomy. */
 const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {

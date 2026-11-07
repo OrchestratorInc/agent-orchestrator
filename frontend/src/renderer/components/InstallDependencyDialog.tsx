@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { RadioGroup } from "radix-ui";
-import { Check, Copy, XCircle } from "lucide-react";
+import { Check, Copy, XCircle } from "@/components/app-icons";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";

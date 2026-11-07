@@ -1,4 +1,4 @@
-import { Archive, Columns2, Pencil, Rows2, X } from "lucide-react";
+import { Archive, Columns2, Pencil, Rows2, X } from "@/components/app-icons";
 import { createContext, useContext, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AppShortcutId } from "../../shared/shortcuts";

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Eye, PencilLine, X } from "lucide-react";
+import { Check, ChevronDown, Eye, PencilLine, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareRole } from "../../lib/cloud-cp";

@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/app-icons";
 import { useId, type ReactNode } from "react";
 import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";

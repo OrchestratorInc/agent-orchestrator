@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { File, FileText, Globe, Image, Table2, Workflow } from "lucide-react";
+import { File, FileText, Globe, Image, Table2, Workflow } from "@/components/app-icons";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";

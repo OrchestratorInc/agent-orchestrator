@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "@/components/app-icons";
 import { type RefObject, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";

@@ -2788,7 +2788,7 @@ describe("SessionView", () => {
 
 		expect(screen.queryByText("ao/sess-1")).not.toBeInTheDocument();
 		expect(screen.queryByTitle("ao/sess-1")).not.toBeInTheDocument();
-		expect(document.querySelector(".lucide-git-branch")).toBeNull();
+		expect(document.querySelector(".icon-git-branch")).toBeNull();
 		// The session's own actions still ride in the same top-bar slot.
 		expect(screen.getByTestId("mock-session-topbar")).toBeInTheDocument();
 		expect(Boolean(screen.queryByRole("button", { name: "New terminal" }))).toBe(offersNewTerminal);
@@ -3256,7 +3256,7 @@ describe("SessionView", () => {
 		expect(loader).toBeInTheDocument();
 		expect(within(loader).getByRole("status", { name: label })).toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Stopping controller");
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 		expect(loader.querySelector("[data-testid='multi-step-loader']")).toBeNull();
 		expect(loader.querySelector(".text-success")).toBeNull();
 	});
@@ -3314,7 +3314,7 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
 		expect(within(loader).getByRole("status", { name: "Switching to Chat UI" })).toBeInTheDocument();
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 	});
 
 	it("keeps the Cloud switch loader over the stopped terminal until the session mode catches up", () => {

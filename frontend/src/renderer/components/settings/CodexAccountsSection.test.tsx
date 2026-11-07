@@ -153,7 +153,7 @@ it("shows a simple empty state when Codex is signed out on the device", async ()
 	expect(firstRow.querySelector('button[aria-expanded="false"]')).toBeInTheDocument();
 	// The header is the shared settings row: identity, chevron and Use all sit on its centre line.
 	expect(firstRow.firstElementChild).toHaveClass("settings-row-bar");
-	expect(firstRow.querySelector(".lucide-chevron-down")).not.toHaveClass("mt-1.5");
+	expect(firstRow.querySelector(".icon-chevron-down")).not.toHaveClass("mt-1.5");
 });
 
 it("does not offer an empty provider expand interaction when no accounts exist", async () => {
@@ -170,7 +170,7 @@ it("does not offer an empty provider expand interaction when no accounts exist",
 	expect(await screen.findByText("Sign in to use Codex.")).toBeInTheDocument();
 	const provider = container.querySelector('[data-agent-provider="codex"]') as HTMLElement;
 	expect(provider.querySelector('header button[aria-expanded]')).not.toBeInTheDocument();
-	expect(provider.querySelector("header .lucide-chevron-down")).not.toBeInTheDocument();
+	expect(provider.querySelector("header .icon-chevron-down")).not.toBeInTheDocument();
 	expect(within(provider).getByRole("button", { name: "Add account" })).toBeEnabled();
 });
 

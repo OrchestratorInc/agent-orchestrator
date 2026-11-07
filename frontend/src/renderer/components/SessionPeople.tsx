@@ -1,4 +1,4 @@
-import { Share2 } from "lucide-react";
+import { Share2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";

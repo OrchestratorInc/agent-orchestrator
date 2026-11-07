@@ -15,7 +15,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "lucide-react";
+import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";

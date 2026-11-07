@@ -3,7 +3,7 @@ import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, PanelRight, Plus, SquareTerminal } from "lucide-react";
+import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {

@@ -2108,7 +2108,7 @@ describe("SessionInspector tabs", () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Files"]);
+    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));

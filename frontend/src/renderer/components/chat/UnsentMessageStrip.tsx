@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, CircleAlert, Copy, Loader2, RotateCw, Trash2 } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Copy, Loader2, RotateCw, Trash2 } from "@/components/app-icons";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 

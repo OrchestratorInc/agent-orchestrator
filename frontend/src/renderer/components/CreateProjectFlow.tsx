@@ -21,7 +21,7 @@ import {
 	Lock,
 	MessageSquarePlus,
 	XCircle,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";

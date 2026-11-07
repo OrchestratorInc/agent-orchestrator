@@ -1,4 +1,4 @@
-import { ArrowRightLeft, LoaderCircle, Plus, UserRound } from "lucide-react";
+import { ArrowRightLeft, LoaderCircle, Plus, UserRound } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";

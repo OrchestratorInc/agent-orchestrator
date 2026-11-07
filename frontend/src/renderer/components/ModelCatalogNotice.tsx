@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle, LogIn, RotateCw } from "lucide-react";
+import { LoaderCircle, LogIn, RotateCw } from "@/components/app-icons";
 import type { ModelCatalogAuthIssue } from "../hooks/useAgentModelsQuery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";

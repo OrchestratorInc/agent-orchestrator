@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, FolderClosed, MessageSquarePlus } from "lucide-react";
+import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";

@@ -14,7 +14,7 @@ import {
 	GitPullRequestDraft,
 	Loader2,
 	Pencil,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";

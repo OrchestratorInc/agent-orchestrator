@@ -1,4 +1,4 @@
-import { Check, LogIn } from "lucide-react";
+import { Check, LogIn } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";

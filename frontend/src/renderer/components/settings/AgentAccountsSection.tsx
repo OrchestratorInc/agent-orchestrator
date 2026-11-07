@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";

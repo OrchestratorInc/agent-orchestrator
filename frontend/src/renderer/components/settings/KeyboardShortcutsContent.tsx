@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Keyboard, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, Keyboard, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";

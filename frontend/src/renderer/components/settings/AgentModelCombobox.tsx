@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
+import { Check, ChevronDown, Loader2, RefreshCw, Search } from "@/components/app-icons";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
