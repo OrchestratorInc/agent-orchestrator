@@ -91,7 +91,7 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -615,13 +615,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
+		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
+	// This session's background resume failed; the chat shows why.
+	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
 		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
-		if (!sessionAgentExited(session)) {
+		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
 			return;
 		}
@@ -1672,7 +1674,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderedSessionMode = interfaceUi.renderedMode;
 	const showChatSurface =
 		session !== undefined &&
-		renderedSessionMode === "chat" &&
+		(renderedSessionMode === "chat" || session.needsResume) &&
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
 	const chatViewActive =
 		session?.mode === "chat" &&
@@ -2609,8 +2611,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
-									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
-										? apiErrorMessage(autoResume.error) : undefined}
+									controllerResumeError={autoResumeFailed ? apiErrorMessage(autoResume.error) : undefined}
+									controllerResumeOpenElsewhere={autoResumeFailed && resumeOpenElsewhere(autoResume.error)}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
 									arriving={interfaceUi.optimisticTarget === "chat"}

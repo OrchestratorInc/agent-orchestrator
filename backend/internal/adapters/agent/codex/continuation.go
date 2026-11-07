@@ -2,10 +2,7 @@ package codex
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -55,7 +52,7 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
-	_, ok, err := findCodexTranscript(ctx, filepath.Join(ref.ConfigDir, "sessions"), sessionID)
+	_, ok, err := findCodexRollout(ctx, filepath.Join(ref.ConfigDir, "sessions"), sessionID, codexRolloutStored)
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
@@ -93,27 +90,22 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 }
 
 func findCodexTranscript(ctx context.Context, root, sessionID string) (string, bool, error) {
-	var found string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), "-"+sessionID+".jsonl") {
-			found = path
-			return fs.SkipAll
-		}
-		return nil
-	})
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
+	return findCodexRollout(ctx, root, sessionID, func(name, id string) bool { return strings.HasSuffix(name, "-"+id+".jsonl") })
+}
+
+// codexRolloutStored also accepts the forms Codex stores a resumable thread in:
+// an inactive rollout compressed to .jsonl.zst, and `<thread>_<segment>` files.
+func codexRolloutStored(name, id string) bool {
+	thread := nativeconfig.CodexRolloutThread(name)
+	return thread != "" && strings.EqualFold(thread, id)
+}
+
+func findCodexRollout(ctx context.Context, root, sessionID string, match func(name, id string) bool) (string, bool, error) {
+	path, found, err := nativeconfig.FindFile(ctx, root, func(name string) bool { return match(name, sessionID) })
 	if err != nil {
 		return "", false, fmt.Errorf("codex: scan transcripts: %w", err)
 	}
-	return found, found != "", nil
+	return path, found, nil
 }
 
 func validateCodexNativeSessionID(value string) (string, error) {

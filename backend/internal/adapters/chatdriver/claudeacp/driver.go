@@ -153,6 +153,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
+			if cfg.ProviderConversationID != "" {
+				pinResumedModel(env, cfg.Env, cfg.Model)
+			}
 			return acpdriver.Launch{
 				Command: runtimeLaunch.command,
 				Args:    runtimeLaunch.args,
@@ -315,6 +318,20 @@ func claudeNestedMap(meta map[string]any, key string) map[string]any {
 	}
 	value, _ := meta[key].(map[string]any)
 	return value
+}
+
+// pinResumedModel keeps a resumed chat on the model AO resumes it with.
+// Loading a resumed session re-applies settings.json's model over the one AO
+// starts with, writing a /model switch into the transcript; ANTHROPIC_MODEL
+// outranks settings.json. The variable is inherited by every tool subprocess
+// and overrides settings.json, so only a resume sets it: a fresh chat starts
+// on AO's selection through the ACP model option. A project's own pin is
+// kept, and "default" is Claude Code's own choice, not a model to pin.
+func pinResumedModel(env, input map[string]string, selectedModel string) {
+	selected := strings.TrimSpace(selectedModel)
+	if _, configured := input["ANTHROPIC_MODEL"]; selected != "" && selected != "default" && !configured && strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")) == "" {
+		env["ANTHROPIC_MODEL"] = selected
+	}
 }
 
 // claudeACPLaunchEnv gives claude-agent-acp the same provider model IDs AO

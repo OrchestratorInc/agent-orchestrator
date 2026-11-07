@@ -441,6 +441,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 
 	replayCheckpoint := nativeHistoryCheckpoint{harness: cfg.Harness}
 	nativeEvidence := ""
+	importingHistory := false
 	if cfg.HistoryMode == ports.ChatHistoryRequired {
 		if s.sessions == nil {
 			return nil, errors.New("native history replay requires a session reader")
@@ -452,6 +453,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		if !found {
 			return nil, ports.ErrSessionNotFound
 		}
+		importingHistory = rec.NeedsImportResume()
 		nativeEvidence = rec.Metadata.NativeCheckpointEvidence
 		replayCheckpoint.latestUserPromptAt = rec.Metadata.LatestUserPromptAt
 		replayCheckpoint.latestAssistantUpdateAt = rec.Metadata.LatestAssistantUpdateAt
@@ -1109,6 +1111,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ctx, existing.Turns, existing.Messages, existing.Activities,
 			(cfg.HistoryMode == ports.ChatHistoryRequired), replayCheckpoint,
 		)
+		if historyErr == nil && importingHistory && !slices.ContainsFunc(events, func(event ports.ChatEvent) bool {
+			return (event.Kind == ports.ChatEventUserMessageCompleted || event.Kind == ports.ChatEventMessageCompleted) &&
+				strings.TrimSpace(event.Text) != ""
+		}) {
+			historyErr = fmt.Errorf("%w: the provider returned no readable messages for the imported conversation", ports.ErrChatHistoryUnavailable)
+		}
 		if historyErr != nil {
 			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil && (cfg.HistoryMode == ports.ChatHistoryRequired) {
 				return nil, fmt.Errorf("%w: failed history target shutdown: %w",
@@ -2018,6 +2026,41 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 	return out
 }
 
+// adoptedImportSnapshot is the whole history of an adopted import: every page
+// of the paged read, which alone puts the archive in place of the provider's
+// replay, joined oldest first, as a full Snapshot promises.
+func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
+	snap, err := s.SnapshotPage(ctx, id, 0, 0)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	seenTurns := make(map[string]bool, len(snap.Turns))
+	for _, turn := range snap.Turns {
+		seenTurns[turn.ID] = true
+	}
+	for snap.HasMoreBefore && snap.OldestSequence > 0 {
+		page, err := s.SnapshotPage(ctx, id, snap.OldestSequence, 0)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if page.OldestSequence <= 0 || page.OldestSequence >= snap.OldestSequence {
+			break // No progress: stop rather than loop on a malformed page.
+		}
+		var turns []domain.ConversationTurn
+		for _, turn := range page.Turns {
+			if !seenTurns[turn.ID] {
+				seenTurns[turn.ID] = true
+				turns = append(turns, turn)
+			}
+		}
+		snap.Turns = append(turns, snap.Turns...)
+		snap.Messages = append(page.Messages, snap.Messages...)
+		snap.Activities = append(page.Activities, snap.Activities...)
+		snap.OldestSequence, snap.HasMoreBefore = page.OldestSequence, page.HasMoreBefore
+	}
+	return snap, nil
+}
+
 // Snapshot reads a session's conversation.
 //
 // It does not require a live controller: history must remain readable after the
@@ -2025,9 +2068,18 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 // controller state is reported separately so the client can distinguish "no
 // history" from "agent not running".
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
+	}
+
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, 0, 100)
+	}
+	// An adopted import shows its archive in place of the provider's replay,
+	// which only the paged read assembles.
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && s.pageReader != nil {
+		return s.adoptedImportSnapshot(ctx, id)
 	}
 
 	conversation, err := s.store.ConversationForSession(ctx, id)
@@ -2134,10 +2186,14 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, beforeSequence, limit)
+	}
+
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {
 		return Snapshot{
@@ -2158,6 +2214,11 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
+	}
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && !rows.HasMoreBefore {
+		if rows, err = s.withImportedHistory(ctx, id, source.HistoryThrough, rows, beforeSequence, limit); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	waking := s.isWaking(id)
 	state := idleControllerState(record)

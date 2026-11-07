@@ -244,6 +244,7 @@ var shippedMigrations = map[int64]string{
 	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
+	20261103000000000: "20261103000000000_session_import.sql",
 	20261103094403671: "20261103094403671_backfill_spanning_plan_copies.sql",
 }
 

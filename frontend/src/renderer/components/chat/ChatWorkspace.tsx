@@ -455,6 +455,8 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
+	/** resumeError says another app still holds this chat. */
+	resumeOpenElsewhere?: boolean;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -768,6 +770,7 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
+	resumeOpenElsewhere,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -1901,21 +1904,6 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
-						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
-						automaticWakePending={suppressStopped}
-						reconnecting={startupReconnecting}
-						terminated={terminated}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner
 						staleBinary={session?.staleBinary}
@@ -2008,6 +1996,24 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
+								<ControllerBanner
+									controller={snapshot.controller}
+									provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+									quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
+									needsResume={session?.needsResume}
+									automaticWakePending={suppressStopped}
+									transitioning={controllerTransitioning || agentResuming}
+									reconnecting={startupReconnecting}
+									terminated={terminated}
+									onResume={newWorkDisabled ? undefined : onResumeAgent}
+									resuming={resumingAgent}
+									resumeError={resumeError}
+									resumeOpenElsewhere={resumeOpenElsewhere}
+									harness={snapshot.harness}
+									onOpenShell={onOpenShell}
+									openingShell={openingShell}
+									shellError={shellError}
+								/>
 								<WelcomePromptSuggestions
 									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
@@ -2030,7 +2036,9 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									<ChatComposer
+									{session?.mode === "tui" && session.needsResume ? (
+										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
+									) : <ChatComposer
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
@@ -2131,6 +2139,7 @@ function ChatWorkspaceContent({
 										showSteerButton={showSteerButton}
 										canSteer={Boolean(onSteer) && turn?.state === "running"}
 										sendPending={sendPending || agentResuming}
+										waitingForAgent={agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
@@ -2144,7 +2153,7 @@ function ChatWorkspaceContent({
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
-									/>
+									/>}
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
@@ -2513,6 +2522,13 @@ function ChatHeader({
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }
 
+const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
+
+/** Starts an action whose failure the banner already shows. */
+function runIgnoringErrors(run?: () => void | Promise<unknown>) {
+	void Promise.resolve().then(() => run?.()).catch(() => {});
+}
+
 /**
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
@@ -2520,6 +2536,7 @@ function ChatHeader({
 function ControllerBanner({
 	controller,
 	provisionState,
+	needsResume,
 	transitioning,
 	automaticWakePending,
 	reconnecting,
@@ -2527,6 +2544,8 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
+	resumeOpenElsewhere,
+	harness,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -2536,6 +2555,7 @@ function ControllerBanner({
 	/** The chat already shows the opening brief as working; connecting needs no banner. */
 	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
+	needsResume?: boolean;
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
@@ -2545,20 +2565,35 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
+	resumeOpenElsewhere?: boolean;
+	harness?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
 	const { t } = useTranslation();
+	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
+	// An archived session is restored, never resumed, so it is not "open elsewhere".
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
+	const resumeRef = useRef(onResume);
+	resumeRef.current = onResume;
+	// The other app releases the chat without telling AO (Codex can hold a closed
+	// one for many minutes), so keep checking instead of waiting for Retry; but
+	// not while a handoff, restart or startup owns the agent.
+	const recheck = openElsewhere && Boolean(onResume) && !resuming && !transitioning && !reconnecting &&
+		provisionState !== "provisioning" && provisionState !== "failed";
+	useEffect(() => {
+		if (!recheck) return;
+		const timer = window.setTimeout(() => runIgnoringErrors(resumeRef.current), OPEN_ELSEWHERE_RECHECK_MS);
+		return () => window.clearTimeout(timer);
+	}, [recheck]);
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
 	// Nothing to act on yet: offering Resume here invites a click the daemon is
 	// about to make unnecessary.
 	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
-	const resumeClick = () => {
-		void Promise.resolve().then(() => onResume?.()).catch(() => {});
-	};
+	const resumeClick = () => runIgnoringErrors(onResume);
 
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
@@ -2580,11 +2615,15 @@ function ControllerBanner({
 			title: terminated
 				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
 				: waking
-					? "Waking agent…"
+					? t("chat.controller.resumingChat")
 					: restarting
 						? "Reconnecting to the agent…"
-						: "The agent controller stopped",
-			tone: terminated || waking || restarting ? "text-muted-foreground" : "text-destructive",
+						: openElsewhere
+							? t("chat.controller.openElsewhere")
+							: needsResume
+								? t("chat.controller.couldNotConnect")
+								: "The agent controller stopped",
+			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2596,7 +2635,8 @@ function ControllerBanner({
 		<div
 			role={actionable && !terminated ? "alert" : "status"}
 			aria-atomic="true"
-			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
+			// Docked above the composer, like the queued-message dock, so it takes the same frame.
+			className="flex shrink-0 items-start gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5"
 		>
 			{loading ? (
 				<Loader2
@@ -2620,41 +2660,51 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{terminated ? t("chat.archived.body") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{terminated
+								? t("chat.archived.body")
+								: openElsewhere
+									? [
+										t("chat.controller.openElsewhereBody"),
+										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+									].filter(Boolean).join(" ")
+									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
-						{resumeError || shellError ? (
+						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
 						) : null}
-						<div className="mt-1.5 flex flex-wrap gap-2">
-							{onResume ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									onClick={resumeClick}
-									disabled={resuming}
-								>
-									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : "Resume agent"}
-								</Button>
-							) : null}
-							{/* Once the worktree is gone a shell would open in the project root. */}
-							{onOpenShell && !terminated ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={onOpenShell}
-									disabled={openingShell}
-								>
-									{openingShell ? "Opening shell…" : "Open shell"}
-								</Button>
-							) : null}
-						</div>
 					</>
 				) : null}
 			</div>
+			{actionable ? (
+				<div className="flex shrink-0 flex-wrap justify-end gap-2 self-center">
+					{onResume ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							onClick={resumeClick}
+							disabled={resuming}
+						>
+							{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : resumeError || needsResume ? t("chat.controller.retry") : "Resume agent"}
+						</Button>
+					) : null}
+					{/* Once the worktree is gone a shell would open in the project root. */}
+					{onOpenShell && !needsResume && !terminated ? (
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							onClick={onOpenShell}
+							disabled={openingShell}
+						>
+							{openingShell ? "Opening shell…" : "Open shell"}
+						</Button>
+					) : null}
+				</div>
+			) : null}
 		</div>
 	);
 }
