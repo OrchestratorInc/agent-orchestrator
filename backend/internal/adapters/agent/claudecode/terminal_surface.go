@@ -20,7 +20,7 @@ var claudeComposerChromeLabels = []string{"Claude Code"}
 // Claude Code's current TUI. Claude may keep its composer visible while a turn
 // is active, so an empty composer never overrides an active footer marker.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
-	composer := terminalui.LastBorderedPromptComposerState(output, "❯", claudeComposerChromeLabels...)
+	composer := terminalui.LastBorderedPromptComposerStateWithCursorPlaceholder(output, "❯", claudeComposerChromeLabels...)
 	if composer == terminalui.ComposerUnknown {
 		composer = terminalui.LastPromptComposerState(output, "❯", claudeComposerChromeLabels...)
 	}
