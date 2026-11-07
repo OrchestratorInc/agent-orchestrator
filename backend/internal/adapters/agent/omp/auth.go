@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,22 +121,7 @@ func ompAgentDBAuthStatus(ctx context.Context, path string) (status ports.AgentA
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 
-	db, err := sql.Open("sqlite", path+"?mode=ro")
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
-	}
-	defer func() {
-		_ = db.Close()
-	}()
-
-	var total int
-	var enabled int
-	err = db.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*),
-			COUNT(CASE WHEN trim(coalesce(data, '')) <> '' AND disabled_cause IS NULL THEN 1 END)
-		FROM auth_credentials
-	`).Scan(&total, &enabled)
+	total, enabled, err := ompCountCredentials(ctx, path)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
@@ -147,4 +133,36 @@ func ompAgentDBAuthStatus(ctx context.Context, path string) (status ports.AgentA
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// ompCountCredentials counts stored and enabled credentials without writing.
+// agent.db uses WAL: while OMP is not running there is no -shm file, and a
+// read-only connection cannot create one, so the open fails. With no -wal
+// file every change is in the main file, so an immutable read is complete.
+func ompCountCredentials(ctx context.Context, path string) (total, enabled int, err error) {
+	count := func(dsn string) error {
+		db, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = db.Close()
+		}()
+		return db.QueryRowContext(ctx, `
+			SELECT
+				COUNT(*),
+				COUNT(CASE WHEN trim(coalesce(data, '')) <> '' AND disabled_cause IS NULL THEN 1 END)
+			FROM auth_credentials
+		`).Scan(&total, &enabled)
+	}
+	if err = count(path + "?mode=ro"); err == nil || ctx.Err() != nil {
+		return total, enabled, err
+	}
+	if _, statErr := os.Stat(path + "-wal"); os.IsNotExist(statErr) {
+		snapshot := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}).String()
+		if count(snapshot) == nil {
+			return total, enabled, nil
+		}
+	}
+	return 0, 0, err
 }

@@ -13,7 +13,35 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
+
+// claimClaudeAPIKey saves an Anthropic key from Claude Code's and Crush's AO
+// panels, as the daemon does, so a test can check what a sign-in releases.
+func claimClaudeAPIKey(t *testing.T, dataDir string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := providerkeys.Save(ctx, dataDir, "ANTHROPIC_API_KEY", "sk-ant-api-saved"); err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{"claude-code", "crush"} {
+		if err := providerkeys.ClaimForHarness(ctx, dataDir, "ANTHROPIC_API_KEY", harness); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// assertClaudeAPIKeyReleased checks Claude Code no longer receives the saved
+// key while it stays saved for Crush.
+func assertClaudeAPIKeyReleased(t *testing.T, dataDir string) {
+	t.Helper()
+	if _, withhold, err := providerkeys.ForSession(dataDir, "claude-code"); err != nil || !slices.Equal(withhold, []string{"ANTHROPIC_API_KEY"}) {
+		t.Errorf("Claude Code still receives the saved API key after signing in: withhold=%v err=%v", withhold, err)
+	}
+	if inject, _, err := providerkeys.ForSession(dataDir, "crush"); err != nil || inject["ANTHROPIC_API_KEY"] != "sk-ant-api-saved" {
+		t.Errorf("Crush lost the shared key: err=%v", err)
+	}
+}
 
 func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 	tests := []struct {
@@ -33,6 +61,8 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 			if err := claudecode.SaveLocalOAuthToken(dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
 				t.Fatal(err)
 			}
+			// Nor may an API key saved from Claude Code's AO panel.
+			claimClaudeAPIKey(t, dataDir)
 			var gotName string
 			var gotArgs []string
 			deps := Deps{
@@ -66,6 +96,7 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 			if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !os.IsNotExist(err) {
 				t.Errorf("earlier setup token survived a new sign-in, stat error = %v", err)
 			}
+			assertClaudeAPIKeyReleased(t, dataDir)
 		})
 	}
 }
@@ -107,8 +138,10 @@ func runClaudeSetupTokenLogin(t *testing.T, token string) string {
 func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AO_DATA_DIR", dataDir)
+	claimClaudeAPIKey(t, dataDir)
 	const token = "sk-ant-oat01-local-setup-token"
 	output := runClaudeSetupTokenLogin(t, token)
+	assertClaudeAPIKeyReleased(t, dataDir)
 	path := claudecode.LocalOAuthTokenPath(dataDir)
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != token {
@@ -184,5 +217,31 @@ func TestClaudeLoginSucceedsWhenSetupTokenCleanupFails(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Warning:") {
 		t.Fatalf("stderr = %q, want a cleanup warning", stderr.String())
+	}
+}
+
+func TestClaudeLoginKeepsTheAPIKeyWhenTheSetupTokenCannotBeSaved(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	claimClaudeAPIKey(t, dataDir)
+	// A non-empty directory where the token file belongs cannot be replaced.
+	if err := os.MkdirAll(filepath.Join(claudecode.LocalOAuthTokenPath(dataDir), "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{
+		In: strings.NewReader("4\n"), Out: io.Discard, Err: io.Discard,
+		ReadSecret: func(io.Reader) ([]byte, error) { return []byte("sk-ant-oat01-unsaved-setup-token"), nil },
+	}
+	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", "/managed/bin/claude"})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("Execute succeeded although the setup token could not be saved")
+	}
+	// The previous sign-in, the saved API key, stays in place.
+	if inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code"); err != nil || len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "sk-ant-api-saved" {
+		t.Fatalf("Claude Code lost its API key after a failed token save: withhold=%v err=%v", withhold, err)
 	}
 }

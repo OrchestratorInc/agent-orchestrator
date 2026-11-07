@@ -27,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -6339,7 +6340,14 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
 func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
-	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id))
+	return m.runtimeEnvForHarness(id, project, issue, projectEnv, "")
+}
+
+// runtimeEnvForHarness is runtimeEnv for a session of harness, which decides
+// the AO-stored provider keys it receives (providerkeys.ForSession). An empty
+// harness receives every key.
+func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, harness domain.AgentHarness) map[string]string {
+	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id), harness)
 	if err != nil {
 		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}
@@ -6350,9 +6358,47 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 // environment could not be resolved, for callers that must not go on under
 // another login (an account move's preflight). A nonempty accountID replaces
 // the session's binding.
-func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
+func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string, harness domain.AgentHarness) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
+	if m.dataDir != "" {
+		if keys, withhold, err := providerkeys.ForSession(m.dataDir, string(harness)); err == nil {
+			overridden := func(key string) bool {
+				for configured := range projectEnv {
+					if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
+						return true
+					}
+				}
+				return false
+			}
+			for key, value := range keys {
+				if !overridden(key) {
+					setProtectedEnv(env, key, value, caseInsensitive)
+				}
+			}
+			// The daemon exports stored keys to itself for auth probes, and
+			// runtimes start from its environment. A withheld key gets back
+			// what the user exported before AO replaced it, or is blanked
+			// when they exported nothing; a value AO never touched is kept.
+			stored, loadErr := providerkeys.Load(m.dataDir)
+			for _, key := range withhold {
+				if overridden(key) {
+					continue
+				}
+				if value, set, exported := providerkeys.Inherited(key); exported {
+					if set {
+						setProtectedEnv(env, key, value, caseInsensitive)
+					} else {
+						setProtectedEnv(env, key, "", caseInsensitive)
+					}
+				} else if loadErr == nil && os.Getenv(key) == stored[key] {
+					setProtectedEnv(env, key, "", caseInsensitive)
+				}
+			}
+		} else {
+			m.logger.Warn("provider environment unavailable", "error", err)
+		}
+	}
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.
@@ -6468,7 +6514,11 @@ func pinRuntimePermissionEnv(env map[string]string, mode domain.PermissionMode) 
 }
 
 func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) (map[string]string, string, error) {
-	env := m.runtimeEnv(id, project, issue, projectEnv)
+	return m.launchRuntimeEnvForHarness(id, project, issue, projectEnv, "")
+}
+
+func (m *Manager) launchRuntimeEnvForHarness(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, harness domain.AgentHarness) (map[string]string, string, error) {
+	env := m.runtimeEnvForHarness(id, project, issue, projectEnv, harness)
 	if m.browserCapabilities == nil {
 		return env, "", nil
 	}
@@ -6491,7 +6541,7 @@ func (m *Manager) prepareWorkerLaunchEnv(
 	rec domain.SessionRecord,
 	projectEnv map[string]string,
 ) (domain.SessionRecord, map[string]string, error) {
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv)
+	env, verifier, err := m.launchRuntimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, rec.Harness)
 	if err != nil {
 		return rec, nil, err
 	}
@@ -6511,7 +6561,7 @@ func (m *Manager) prepareChatControllerEnv(
 	projectEnv map[string]string,
 	expected domain.SessionControllerOwner,
 ) (domain.SessionRecord, map[string]string, error) {
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv)
+	env, verifier, err := m.launchRuntimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, rec.Harness)
 	if err != nil {
 		return rec, nil, err
 	}
@@ -6867,7 +6917,7 @@ func (m *Manager) cleanupAgentWorkspace(ctx context.Context, rec domain.SessionR
 	}
 	env := spawnEnv(rec.ID, rec.ProjectID, rec.IssueID, m.dataDir, nil)
 	if project, err := m.loadProject(ctx, rec.ProjectID); err == nil {
-		env = m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+		env = m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	} else {
 		m.logger.Warn("workspace cleanup: project env unavailable; agent cleanup using AO env only",
 			"sessionID", rec.ID, "projectID", rec.ProjectID, "error", err)

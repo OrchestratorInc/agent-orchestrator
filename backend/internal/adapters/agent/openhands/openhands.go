@@ -18,6 +18,7 @@ package openhands
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -139,6 +140,10 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 	var cmd []string
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		cmd = append(cmd, "env", modelEnvVar+"="+model, bin, "--override-with-envs")
+	} else if os.Getenv("LLM_API_KEY") != "" {
+		// OpenHands ignores LLM_API_KEY without this flag. The saved native
+		// model remains in effect when AO did not request a model override.
+		cmd = append(cmd, bin, "--override-with-envs")
 	} else {
 		cmd = append(cmd, bin)
 	}
