@@ -5845,15 +5845,15 @@ func DefaultOrchestratorBranch(prefix, dataDir string) string {
 	return defaultSessionBranch("", domain.KindOrchestrator, prefix, generatedBranchNamespace(dataDir))
 }
 
-// aoBranch builds a generated session branch under the "orchestrator/" prefix.
-// Sessions created before the rename keep their recorded "ao/" branches, which
-// PR attribution still matches.
 // LegacyOrchestratorBranch is the orchestrator branch a session created before
 // the "orchestrator/" rename recorded, still accepted where branches are checked.
 func LegacyOrchestratorBranch(prefix, dataDir string) string {
 	return strings.Replace(DefaultOrchestratorBranch(prefix, dataDir), domain.SessionBranchPrefix+"/", domain.LegacySessionBranchPrefix+"/", 1)
 }
 
+// aoBranch builds a generated session branch under the "orchestrator/" prefix.
+// Sessions created before the rename keep their recorded "ao/" branches, which
+// PR attribution still matches.
 func aoBranch(namespace string, parts ...string) string {
 	all := []string{domain.SessionBranchPrefix}
 	if namespace != "" {
