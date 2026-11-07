@@ -20,6 +20,7 @@ import {
 	Notification as ElectronNotification,
 	powerMonitor,
 	protocol,
+	safeStorage,
 	screen,
 	shell,
 	session,
@@ -158,12 +159,15 @@ import {
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
+	protectedStorageAvailable,
+	readAuthStore,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { ShareLinkRecords } from "./main/cloud-share-links";
+import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
@@ -3476,6 +3480,14 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
+// Session and project share links this device made, so Copy link works again
+// later; only the signed-in account's, which the file names.
+const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
+	available: protectedStorageAvailable,
+	encrypt: (text) => safeStorage.encryptString(text),
+	decrypt: (value) => safeStorage.decryptString(value),
+}, async () => (await readAuthStore(cloudDataDir())).session?.user.id);
+registerSessionShareUrlsIpc(ipcMain, sessionShareUrls);
 registerAgentLoginIpc({
 	ipcMain,
 	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
@@ -3808,11 +3820,22 @@ const pendingCloudSignIn = createPendingCloudSignIn();
 
 ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 
+// The account this run last told the renderer about, to notice another one signing in.
+let notifiedCloudUserId: string | undefined;
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
 	pendingCloudSignIn.note(account, signIn);
+	// Share URLs belong to the account that made them: they go when it signs
+	// out or someone else signs in. The first notice of a run has no account
+	// to compare with; the store itself never shows another account's (its
+	// file names the owner), so one who signed in since the last run never sees them.
+	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
+		void sessionShareUrls.clear().catch(() => undefined);
+	}
+	notifiedCloudUserId = account?.user.id;
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();

@@ -31,6 +31,11 @@ export interface CloudCpOrganization {
 	role: string;
 	/** This org's own offering (`/me` organizations[i].offering); absent on an older control plane. */
 	offering?: CloudCpOffering;
+	/**
+	 * Whose workspace this is: "personal" (one person's own), "team" or
+	 * "enterprise". Absent on an older control plane.
+	 */
+	kind?: string;
 }
 
 /** Sandbox providers a control plane offers (`/me` sandboxProviders). */
@@ -1819,6 +1824,16 @@ export interface CloudCpShareLink {
 	 * links turned on: the link's 22-character code (letters and digits).
 	 */
 	code?: string;
+	/**
+	 * Only in the creation response, with a code, and only when the control
+	 * plane names a public origin for share links: https://<origin>/s/<code>.
+	 */
+	shortUrl?: string;
+	/**
+	 * How many people hold access because they opened this link. Absent on a
+	 * control plane that predates it, which also can't remove them on revoke.
+	 */
+	joinedCount?: number;
 }
 
 /** A project or session someone shared with the caller. */
