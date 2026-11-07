@@ -4378,6 +4378,37 @@ func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) 
 
 // A nil closer (SetShellTerminalCloser never called, e.g. a daemon boot path
 // that skips shellterm) must be a no-op, not a nil-pointer panic.
+type fakeBranchStateRecorder struct {
+	st    *fakeStore
+	ws    *fakeWorkspace
+	calls []string
+}
+
+func (f *fakeBranchStateRecorder) ReconcileSessionBranchState(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, fmt.Sprintf("%s terminated=%v destroyed=%d", id, f.st.sessions[id].IsTerminated, f.ws.destroyed))
+	return nil
+}
+
+// The branch observer skips terminated sessions and ticks every 30 s, so a
+// branch the agent switched to just before the archive is recorded by the kill
+// itself, while the row is live and the worktree still exists.
+func TestKill_RecordsTheWorktreeBranchBeforeTeardown(t *testing.T) {
+	m, st, _, ws := newManager()
+	recorder := &fakeBranchStateRecorder{st: st, ws: ws}
+	m.SetBranchStateRecorder(recorder)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if want := []string{"mer-1 terminated=false destroyed=0"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Fatalf("branch records = %v, want %v", recorder.calls, want)
+	}
+	if ws.destroyed != 1 || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("destroyed=%d terminated=%v, want the kill to finish", ws.destroyed, st.sessions["mer-1"].IsTerminated)
+	}
+}
+
 func TestKill_NilShellTerminalCloserIsNoop(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
