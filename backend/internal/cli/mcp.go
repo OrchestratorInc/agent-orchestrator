@@ -300,7 +300,8 @@ var mcpTools = []map[string]any{
 				"artifact": map[string]any{
 					"type": "boolean",
 					"description": "Also keep the page as a session artifact, a deliverable the user keeps. " +
-						"Set it only when the user asks to keep the page.",
+						"Set it only when the user asks to keep the page, then run ao artifact add on the path this " +
+						"returns, or the page may not be listed as an artifact.",
 				},
 			},
 			"required": []string{"html", "title"},

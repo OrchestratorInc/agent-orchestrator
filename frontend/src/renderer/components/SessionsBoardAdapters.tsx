@@ -27,7 +27,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
+import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -299,7 +299,7 @@ function DesktopSessionCard({
 			action={action}
 			artifacts={
 				interactive && onOpenArtifact ? (
-					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} onOpenInspector={onOpenArtifacts} session={session} />
+					<BoardArtifactLinks artifacts={sessionDeliverables(session)} onOpen={onOpenArtifact} onOpenInspector={onOpenArtifacts} session={session} />
 				) : undefined
 			}
 			branchAction={branchAction}

@@ -2428,6 +2428,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/artifact-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register files in the session's artifact directory as its deliverables */
+        post: operations["registerSessionArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/artifact-versions": {
         parameters: {
             query?: never;
@@ -6841,6 +6858,18 @@ export interface components {
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
         };
+        RegisterArtifactsRequest: {
+            /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
+            paths: string[];
+        };
+        RegisterArtifactsResponse: {
+            /** @description How many of the session's files are not registered. */
+            otherFiles: number;
+            /** @description The unregistered files at the root of the artifact directory. */
+            otherRootFiles: string[];
+            /** @description The requested paths, relative to the artifact directory. */
+            registered: string[];
+        };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
             deviceName?: string;
@@ -7106,6 +7135,7 @@ export interface components {
             path: string;
             previewUrl?: string;
             rawUrl?: string;
+            registered?: boolean;
             /** Format: int64 */
             size: number;
             /** Format: date-time */
@@ -16819,6 +16849,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    registerSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

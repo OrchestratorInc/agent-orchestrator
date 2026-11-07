@@ -45,9 +45,12 @@ import (
 )
 
 type fakeSessionService struct {
-	deleted       []domain.SessionID
-	deleteCleanup []bool
-	deleteErr     error
+	artifactsRegistered   []string
+	artifactsUnregistered []string
+	registerArtifactsErr  error
+	deleted               []domain.SessionID
+	deleteCleanup         []bool
+	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -443,6 +446,19 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	s.Status = domain.StatusTerminated
 	f.sessions[id] = s
 	return true, nil
+}
+
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+	if f.registerArtifactsErr != nil {
+		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
+	}
+	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
+}
+
+func (f *fakeSessionService) UnregisterArtifact(_ context.Context, _ domain.SessionID, path string) error {
+	f.artifactsUnregistered = append(f.artifactsUnregistered, path)
+	return nil
 }
 
 func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
