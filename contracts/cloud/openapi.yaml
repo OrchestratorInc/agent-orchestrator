@@ -6245,6 +6245,20 @@ components:
             invalid_branch; a branch a live session of the project already
             works on is refused with 409 branch_in_use. The error's details
             carry the reason and, for branch_in_use, the session id.
+        model:
+          type: string
+          maxLength: 500
+          description: >-
+            Coding-agent model the worker runs (harness-native id). One the
+            account cannot run is refused with MODEL_UNAVAILABLE. Omitted, a
+            worker on the orchestrator's harness runs the orchestrator's current
+            model, else the project's worker model, else the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the worker's opening prompt runs with. Optional;
+            empty uses the model's default.
     ChatMessageInput:
       type: object
       additionalProperties: false
@@ -6945,6 +6959,19 @@ components:
           description: >-
             Coding-agent model the session launched with; empty means the harness
             default.
+        currentModel:
+          type: string
+          description: >-
+            Coding-agent model the session runs now: its owner's Chat pick, else
+            the model it launched with. Omitted when that is the harness default.
+            Absent from older control planes; read `model` then.
+        currentReasoningEffort:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the session's turns run with now: its owner's Chat
+            pick, else the effort it launched with. Omitted when that is the
+            model's default.
         deniedCommands:
           type: array
           items:
