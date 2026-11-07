@@ -1,7 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as renderPlain, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudCpSuggestion } from "../../lib/cloud-cp/types";
+import { TooltipProvider } from "../ui/tooltip";
 import { MentionAccessBar, MentionTeamBar, SuggestionBar, SuggestionEditBar, SuggestionNotice, joinNames } from "./TeamComposerBars";
+
+const render = (ui: ReactElement) => renderPlain(<TooltipProvider>{ui}</TooltipProvider>);
 
 const suggestion: CloudCpSuggestion = {
 	id: "sg-1", orgId: "org-1", sessionId: "s-1", kind: "aside", asideId: "a1", text: "Also cover a refresh after the cookie expires.",
@@ -10,24 +14,33 @@ const suggestion: CloudCpSuggestion = {
 };
 
 describe("SuggestionBar", () => {
-	it("says who suggests what on one line, with Send, Edit and Dismiss", () => {
+	it("says who suggests what on one line, with Send and Edit, and a ✕ to dismiss", () => {
 		const onSend = vi.fn();
 		const onEdit = vi.fn();
 		const onDismiss = vi.fn();
 		render(<SuggestionBar suggestion={suggestion} onSend={onSend} onEdit={onEdit} onDismiss={onDismiss} />);
-		expect(screen.getByRole("region", { name: "Chen Wei suggests" })).toHaveTextContent("Chen Wei suggests Also cover a refresh after the cookie expires.");
+		expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Chen Wei suggests: Also cover a refresh after the cookie expires.");
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		const dismiss = screen.getByRole("button", { name: "Dismiss" });
+		// Dismiss is an icon, named for screen readers and in its tooltip.
+		expect(dismiss).toHaveTextContent("");
+		fireEvent.click(dismiss);
 		expect(onSend).toHaveBeenCalledTimes(1);
 		expect(onEdit).toHaveBeenCalledTimes(1);
 		expect(onDismiss).toHaveBeenCalledTimes(1);
 	});
 
-	it("holds its buttons while one runs, and says when one failed", () => {
-		render(<SuggestionBar suggestion={suggestion} onSend={vi.fn()} onEdit={vi.fn()} onDismiss={vi.fn()} busy notice={{ text: "Couldn't do that. Try again.", tone: "error" }} />);
+	it("holds every button while one runs, spins the one running, and says when one failed", () => {
+		const { container, rerender } = render(<SuggestionBar suggestion={suggestion} onSend={vi.fn()} onEdit={vi.fn()} onDismiss={vi.fn()} pending="send" notice={{ text: "Couldn't do that. Try again.", tone: "error" }} />);
 		expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Dismiss" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Send" }).querySelector(".animate-spin")).not.toBeNull();
 		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't do that. Try again.");
+		rerender(<TooltipProvider><SuggestionBar suggestion={suggestion} onSend={vi.fn()} onEdit={vi.fn()} onDismiss={vi.fn()} pending="dismiss" /></TooltipProvider>);
+		expect(screen.getByRole("button", { name: "Dismiss" }).querySelector(".animate-spin")).not.toBeNull();
+		expect(container.querySelectorAll(".animate-spin")).toHaveLength(1);
 	});
 
 	it("says an ordinary outcome on one calm line", () => {
@@ -93,14 +106,23 @@ describe("MentionTeamBar", () => {
 	});
 
 	it("asks before notifying a big team, and says how many can't open the session", () => {
-		const onNotify = vi.fn();
 		const onCancel = vi.fn();
-		render(<MentionTeamBar team={{ kind: "team", id: "t", name: "Platform", memberCount: 6, membersWithoutAccess: 2, namesWithoutAccess: ["Dana Kim"] }} onNotify={onNotify} onCancel={onCancel} />);
+		render(<MentionTeamBar team={{ kind: "team", id: "t", name: "Platform", memberCount: 6, membersWithoutAccess: 2, namesWithoutAccess: ["Dana Kim"] }} onNotify={vi.fn()} onCancel={onCancel} />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Notify 6 people in Platform? 2 of them can't open this session");
-		fireEvent.click(screen.getByRole("button", { name: "Notify" }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-		expect(onNotify).toHaveBeenCalledTimes(1);
 		expect(onCancel).toHaveBeenCalledTimes(1);
+	});
+
+	it("notifies once: a second click finds Notify busy", () => {
+		const onNotify = vi.fn();
+		render(<MentionTeamBar team={{ kind: "team", id: "t", name: "Platform", memberCount: 6 }} onNotify={onNotify} onCancel={vi.fn()} />);
+		const notify = screen.getByRole("button", { name: "Notify" });
+		fireEvent.click(notify);
+		fireEvent.click(notify);
+		expect(onNotify).toHaveBeenCalledTimes(1);
+		expect(notify).toBeDisabled();
+		expect(notify.querySelector(".animate-spin")).not.toBeNull();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
 	});
 
 	it("leaves the access line out when everyone can open it", () => {

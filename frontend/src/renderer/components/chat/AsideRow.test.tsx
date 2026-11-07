@@ -24,12 +24,18 @@ function renderRow(activity: ConversationActivity, actions: AsideActions = {}) {
 }
 
 describe("AsideRow", () => {
-	it("reads as a note: author, text, and that the agent can't see it", () => {
+	it("reads as a note: author, text, and an eye-off mark that says the agent can't see it", () => {
 		const { container } = renderRow(aside());
 		expect(screen.getByText("Chen Wei")).toBeInTheDocument();
 		expect(screen.getByText(/One nit: cover the expired cookie/)).toBeInTheDocument();
-		expect(screen.getByText("Agent can't see this")).toBeInTheDocument();
-		expect(container.querySelector("[data-aside]")?.className).toContain("border-dashed");
+		// The words are the mark's name and tooltip, not repeated text on every row.
+		expect(screen.getByRole("img", { name: "Agent can't see this" })).toBeInTheDocument();
+		expect(screen.queryByText("Agent can't see this")).toBeNull();
+		const edge = container.querySelector("[data-aside]")!.className;
+		expect(edge).toContain("border-dashed");
+		// The muted text color in full: 3:1 or better in both themes, never a faint tint of it.
+		expect(edge).toMatch(/border-muted-foreground(\s|$)/);
+		expect(screen.getByRole("img", { name: "Agent can't see this" }).className).toContain("text-muted-foreground");
 		// Nothing to do without a way to suggest it.
 		expect(screen.queryByRole("button", { name: /Suggest to agent/ })).toBeNull();
 	});
@@ -89,6 +95,18 @@ describe("AsideRow", () => {
 		renderRow(aside(), { onSuggest: vi.fn(), onWithdraw, selfUserId: "u-me", suggestionFor: () => suggestion });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Withdraw" })));
 		expect(onWithdraw).toHaveBeenCalledWith(suggestion);
+	});
+
+	it("says quietly that it was sent to the agent, instead of offering Suggest again", () => {
+		renderRow(aside(), { onSuggest: vi.fn(), selfUserId: "u-me", suggestionFor: () => undefined, sentFor: (asideId) => asideId === "a1" });
+		expect(screen.getByText("Sent to agent")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Suggest to agent" })).toBeNull();
+	});
+
+	it("may be suggested again once its suggestion was dismissed", () => {
+		renderRow(aside(), { onSuggest: vi.fn(), selfUserId: "u-me", suggestionFor: () => undefined, sentFor: () => false });
+		expect(screen.queryByText("Sent to agent")).toBeNull();
+		expect(screen.getByRole("button", { name: "Suggest to agent" })).toBeInTheDocument();
 	});
 
 	it("draws the people and teams it names as chips", () => {

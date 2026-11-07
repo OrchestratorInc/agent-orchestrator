@@ -446,19 +446,31 @@ export interface ChatWorkspaceProps {
 	/**
 	 * A shared cloud session's two composer modes: Agent writes to the agent,
 	 * Aside writes to the people here and never reaches it. Each keeps its own
-	 * draft; Shift+Tab and a small toggle switch between them.
+	 * draft; Shift+Tab and a small toggle switch between them. Without
+	 * onModeChange the mode is fixed (a viewer writes asides only) and nothing
+	 * offers a switch.
 	 */
 	composerModes?: {
 		mode: ComposerMode;
-		onModeChange: (mode: ComposerMode) => void;
+		onModeChange?: (mode: ComposerMode) => void;
+		/** This device hides asides: Aside mode's footer says so, with Show. */
+		asidesHidden?: boolean;
+		onShowAsides?: () => void;
 		onSendAside: (text: string, clientMessageId: string | undefined, mentions: ComposerMention[] | undefined) => Promise<unknown>;
 		/** Asides can't be posted right now (a deleted session). */
 		asideDisabled?: boolean;
 	};
 	/** People and teams in the composer's @ menu, in either mode. */
 	composerMentions?: ComposerMentionSource;
-	/** Text added to the agent draft (a suggestion being edited); each new id applies once. */
-	composerDraftRequest?: { id: string; text: string };
+	/**
+	 * A suggestion the driver is editing: while set, the agent composer is one
+	 * of its own, seeded with the suggestion (and its chips), in place of the
+	 * driver's draft, which comes back untouched when it is cleared. A new id
+	 * starts over.
+	 */
+	composerEdit?: { id: string; text: string; mentions?: ComposerMention[] };
+	/** A new value puts focus back in the composer (after a bar above it was answered). */
+	composerFocusRequest?: number;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
 		requestId: string,
@@ -805,7 +817,8 @@ function ChatWorkspaceContent({
 	onComposerInput,
 	composerModes,
 	composerMentions,
-	composerDraftRequest,
+	composerEdit,
+	composerFocusRequest,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1229,6 +1242,7 @@ function ChatWorkspaceContent({
 					await onEditQueuedTurn(queueEdit.turnId, text, {
 						clientMessageId: prepared.draft.queuedEdit.clientMessageId,
 						...(attachments?.length ? { attachments } : {}),
+						...(mentions?.length ? { mentions } : {}),
 						retainedContent: queueEdit.attachments === undefined ? undefined : retainedContent,
 						expectedRevision: queueEdit.expectedRevision,
 					});
@@ -1269,9 +1283,6 @@ function ChatWorkspaceContent({
 	const toggleComposerMode = useCallback(() => {
 		if (currentMode) onModeChange?.(currentMode === "agent" ? "aside" : "agent");
 	}, [currentMode, onModeChange]);
-	const modeToggle = composerModes ? (
-		<ComposerModeToggle mode={composerModes.mode} onChange={composerModes.onModeChange} />
-	) : null;
 	const onSendAside = composerModes?.onSendAside;
 	const handleAsideSend = useCallback(
 		async (text: string, _attachments?: unknown, clientMessageId?: string, _retained?: number[], _excerpts?: ChatDraftExcerptReference[], _files?: ChatFileReference[], _display?: string, mentions?: ComposerMention[]) => {
@@ -1280,15 +1291,40 @@ function ChatWorkspaceContent({
 		},
 		[onSendAside],
 	);
-	// A suggestion being edited joins the agent draft, once Agent mode's composer is up.
-	const appliedDraftRequest = useRef<string | undefined>(undefined);
+	// In Aside mode "Add to chat" writes to the draft on screen, the aside's,
+	// as a quote in text (an aside carries no references), never into the
+	// hidden agent draft.
+	const addQuoteToAside = useCallback((excerpt: ChatDraftExcerptReference) => {
+		composerFocusRef.current?.appendDraft(excerpt.text.split("\n").map((line) => `> ${line}`).join("\n"));
+	}, []);
+	// Editing a suggestion: a composer of its own in place of the agent draft,
+	// which is never touched and comes back when the edit ends.
+	const editingSuggestion = !asideMode && !queueEdit && composerEdit ? composerEdit : undefined;
+	// Without a saved draft scope, each mode's draft is kept here as it is
+	// typed, so switching modes or editing a suggestion never loses one.
+	const memoryDrafts = useRef<Partial<Record<ComposerMode, { text: string; mentions: ComposerMention[] }>>>({});
+	const keepsMemoryDrafts = Boolean(composerModes) && !draftPersistenceAvailable;
+	const draftMode: ComposerMode = asideMode ? "aside" : "agent";
+	const recordDraftInput = useCallback((text: string, caret?: number, mentions?: readonly ComposerMention[]) => {
+		if (keepsMemoryDrafts && !editingSuggestion) memoryDrafts.current[draftMode] = { text, mentions: [...(mentions ?? [])] };
+		if (!asideMode) onComposerInput?.(text, caret);
+	}, [asideMode, draftMode, editingSuggestion, keepsMemoryDrafts, onComposerInput]);
+	const memoryDraft = keepsMemoryDrafts && !queueEdit && !editingSuggestion ? memoryDrafts.current[draftMode] : undefined;
+	const memorySeed = memoryDraft ? { id: `memory:${draftMode}`, text: memoryDraft.text, mentions: memoryDraft.mentions } : undefined;
+	// Focus follows the edit: into its composer when Edit opens it, back to the
+	// draft when it ends; and back to the composer after a bar above it answers.
+	const lastEditId = useRef(editingSuggestion?.id);
 	useEffect(() => {
-		if (!composerDraftRequest || asideMode || appliedDraftRequest.current === composerDraftRequest.id) return;
-		const composer = composerFocusRef.current;
-		if (!composer) return;
-		appliedDraftRequest.current = composerDraftRequest.id;
-		composer.appendDraft(composerDraftRequest.text);
-	}, [asideMode, composerDraftRequest]);
+		if (lastEditId.current === editingSuggestion?.id) return;
+		lastEditId.current = editingSuggestion?.id;
+		composerFocusRef.current?.focus();
+	}, [editingSuggestion?.id]);
+	const lastFocusRequest = useRef(composerFocusRequest);
+	useEffect(() => {
+		if (lastFocusRequest.current === composerFocusRequest) return;
+		lastFocusRequest.current = composerFocusRequest;
+		composerFocusRef.current?.focus();
+	}, [composerFocusRequest]);
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);
 	const beginQueuedEdit = useCallback(
@@ -1659,6 +1695,16 @@ function ChatWorkspaceContent({
 			) : undefined,
 		[onResolveInput, stablePendingUserInput],
 	);
+	// The Agent/Aside switch, where the composer's tools sit, and on an
+	// approval or question that has taken the composer's place: that is when a
+	// team needs to talk. Writing an aside while one waits, Agent shows a dot.
+	const modeToggle = composerModes?.onModeChange ? (
+		<ComposerModeToggle
+			agentNeedsYou={Boolean(composerApproval || composerElicitation)}
+			mode={composerModes.mode}
+			onChange={composerModes.onModeChange}
+		/>
+	) : null;
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
 	const composerQueuedDock = useMemo(
@@ -1997,6 +2043,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									onAddToChat={asideMode ? addQuoteToAside : undefined}
 									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
@@ -2089,21 +2136,24 @@ function ChatWorkspaceContent({
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
-										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${asideMode ? "aside" : queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
+										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${asideMode ? "aside" : queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : editingSuggestion ? `suggestion:${editingSuggestion.id}` : "composer"}`}
 										// Aside mode writes to people: nothing in it reaches the agent, so the
 										// agent's docks, files, commands, steering and lease stay with Agent.
 										queuedDock={asideMode ? undefined : composerQueuedDock}
 										approval={asideMode ? undefined : composerApproval}
+										dockFooter={modeToggle ?? undefined}
 										elicitation={asideMode ? undefined : composerElicitation}
 										onSend={asideMode ? handleAsideSend : handleComposerSend}
 										mentions={composerMentions}
 										editorLabel={asideMode ? t("aside.composerLabel") : undefined}
-										onToggleMode={composerModes ? toggleComposerMode : undefined}
+										onToggleMode={composerModes?.onModeChange ? toggleComposerMode : undefined}
 						fileReferencesEnabled={!asideMode && fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
 										sentMessages={asideMode ? undefined : sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
-										draftSeed={asideMode ? undefined : composerDraftSeed}
+										draftSeed={editingSuggestion
+											? { id: `suggestion:${editingSuggestion.id}`, text: editingSuggestion.text, mentions: editingSuggestion.mentions }
+											: asideMode ? memorySeed : composerDraftSeed ?? memorySeed}
 										promptSuggestion={!asideMode && !queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
 											!controllerTransitioning && !loadingQuietly && !agentResuming &&
@@ -2119,7 +2169,7 @@ function ChatWorkspaceContent({
 										onQueuedDraftChange={queueEdit && !asideMode ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}
 										// Typing an aside takes no composer lease.
-										onDraftInput={asideMode ? undefined : onComposerInput}
+										onDraftInput={keepsMemoryDrafts || !asideMode ? recordDraftInput : undefined}
 										queuedDraftScope={queueEdit && !asideMode ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -2127,7 +2177,7 @@ function ChatWorkspaceContent({
 										onContinue={!asideMode && canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={asideMode ? undefined : queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										variant={asideMode ? "aside" : undefined}
-										settings={asideMode ? <>{modeToggle}<AsideComposerHint /></> : draftSettings ?? <>
+										settings={asideMode ? <>{modeToggle}<AsideComposerHint hidden={composerModes?.asidesHidden} onShow={composerModes?.onShowAsides} /></> : draftSettings ?? <>
 											{modeToggle}
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}
@@ -2200,7 +2250,9 @@ function ChatWorkspaceContent({
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}
-										draftSessionId={draftPersistenceAvailable && (asideMode || !queueEdit) ? (asideMode ? asideDraftSessionId(draftScope.sessionId) : draftScope.sessionId) : undefined}
+										// An edited suggestion lives only in its own composer: the driver's
+										// saved draft stays as it was, for when the edit ends.
+										draftSessionId={draftPersistenceAvailable && !editingSuggestion && (asideMode || !queueEdit) ? (asideMode ? asideDraftSessionId(draftScope.sessionId) : draftScope.sessionId) : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}

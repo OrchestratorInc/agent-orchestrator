@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promptSuggestionMessages } from "../../hooks/useCloudPromptSuggestion";
 import type { CloudCpClientEvent, CloudCpSessionLive, CloudCpSessionViewer, CloudCpSuggestion } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { recordTeamCollabSupport, resetTeamCollabSupport, type ComposerMention } from "../../lib/cloud-team-collab";
+import { sessionFollowersQueryKey, sessionFollowQueryKey } from "../../hooks/useSessionFollow";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity, ConversationSnapshot } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -105,9 +106,16 @@ type Props = {
 	onSend: (text: string, attachments?: unknown, clientMessageId?: string, excerpts?: unknown, files?: unknown, display?: string, mentions?: ComposerMention[]) => Promise<unknown>;
 	onSteer?: (text: string, attachments?: unknown, clientMessageId?: string, recoverOnly?: boolean, mentions?: ComposerMention[]) => Promise<unknown>;
 	onStageAttachments?: unknown;
-	composerModes?: { mode: "agent" | "aside"; onModeChange: (mode: "agent" | "aside") => void; onSendAside: (text: string, clientMessageId: string | undefined, mentions: ComposerMention[] | undefined) => Promise<unknown> };
+	composerModes?: {
+		mode: "agent" | "aside";
+		onModeChange?: (mode: "agent" | "aside") => void;
+		onSendAside: (text: string, clientMessageId: string | undefined, mentions: ComposerMention[] | undefined) => Promise<unknown>;
+		asidesHidden?: boolean;
+		onShowAsides?: () => void;
+	};
 	composerMentions?: ComposerMentionSource;
-	composerDraftRequest?: { id: string; text: string };
+	composerEdit?: { id: string; text: string; mentions?: ComposerMention[] };
+	composerFocusRequest?: number;
 	composerLockedPlaceholder?: string;
 };
 const lastProps = () => mocks.chatProps.mock.lastCall?.[0] as Props;
@@ -243,14 +251,44 @@ describe("the composer's Aside mode", () => {
 	it("starts on Agent for someone who can write, and switches", async () => {
 		renderSurface();
 		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("agent"));
-		act(() => lastProps().composerModes!.onModeChange("aside"));
+		act(() => lastProps().composerModes!.onModeChange!("aside"));
 		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
 	});
 
-	it("starts on Aside for a viewer", async () => {
+	it("gives a viewer the aside composer only, with nothing to switch to", async () => {
 		mocks.live = liveState({}, [{ ...me, role: "viewer" }, ben]);
 		renderSurface();
 		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
+		// No switch at all: Agent would only be a dead end for a viewer.
+		expect(lastProps().composerModes?.onModeChange).toBeUndefined();
+	});
+
+	it("shows no modes or Suggest in a solo personal session", async () => {
+		mocks.live = liveState({}, [me]);
+		mocks.me.mockResolvedValue({ user: { id: "user-me", email: "asha@example.test", displayName: "Asha Rao", authProvider: "workos" }, organizations: [{ id: "org-1", slug: "asha", displayName: "Asha", role: "owner", kind: "personal" }] });
+		mocks.listChatEvents.mockResolvedValue({ events: [asideEvent(1, "a-1", "an old note", "user-me", "Asha Rao")], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		await waitFor(() => expect(mocks.listMentionCandidates).toHaveBeenCalledWith("org-1", "session-1", { q: "", limit: 20 }, expect.anything()));
+		await screen.findByText("an old note");
+		await act(async () => undefined);
+		expect(lastProps().composerModes).toBeUndefined();
+		expect(screen.queryByRole("button", { name: "Suggest to agent" })).toBeNull();
+	});
+
+	it("shows them once someone else can open a personal session (a share)", async () => {
+		mocks.live = liveState({}, [me]);
+		mocks.me.mockResolvedValue({ user: { id: "user-me", email: "asha@example.test", displayName: "Asha Rao", authProvider: "workos" }, organizations: [{ id: "org-1", slug: "asha", displayName: "Asha", role: "owner", kind: "personal" }] });
+		mocks.listMentionCandidates.mockResolvedValue({ people: [{ userId: "user-ben", name: "Ben Ortiz", inSession: false, canOpen: true }], teams: [] });
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerModes?.onModeChange).toBeTypeOf("function"));
+	});
+
+	it("says in Aside mode that this device hides asides, and Show brings them back", async () => {
+		useUiStore.setState({ hideAsides: true });
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerModes?.asidesHidden).toBe(true));
+		act(() => lastProps().composerModes!.onShowAsides!());
+		expect(useUiStore.getState().hideAsides).toBe(false);
 	});
 
 	it("posts an aside with its mentions as tokens, without the composer lease", async () => {
@@ -265,6 +303,18 @@ describe("the composer's Aside mode", () => {
 		expect(mocks.createSessionAside).toHaveBeenCalledWith("org-1", "session-1", { text: "@Chen Wei can you check?", mentions: [{ kind: "person", userId: "user-chen" }] }, { idempotencyKey: "aside-key" });
 		expect(mocks.acquireComposer).not.toHaveBeenCalled();
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+	});
+
+	it("refreshes how you follow the session after you write: aside, message, steer or sent suggestion", async () => {
+		renderSurface();
+		await waitFor(() => expect(lastProps().composerModes).toBeDefined());
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const follows = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(sessionFollowQueryKey(BASE, "user-me", "org-1", "session-1"))).length;
+		await act(async () => { await lastProps().composerModes!.onSendAside("Looks right", "k1", undefined); });
+		expect(follows()).toBe(1);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: sessionFollowersQueryKey(BASE, "user-me", "org-1", "session-1") });
+		await act(async () => { await lastProps().onSend("Ship it", undefined, "m-1"); });
+		expect(follows()).toBe(2);
 	});
 
 	it("lets a viewer post an aside", async () => {
@@ -300,7 +350,7 @@ describe("mentions", () => {
 		await waitFor(() => expect(lastProps().composerMentions).toBeDefined());
 		act(() => lastProps().composerMentions!.onQuery("ch"));
 		await waitFor(() => expect(lastProps().composerMentions?.candidates?.people).toHaveLength(1));
-		expect(mocks.listMentionCandidates).toHaveBeenLastCalledWith("org-1", "session-1", { q: "ch", limit: 20 }, expect.anything());
+		await waitFor(() => expect(mocks.listMentionCandidates).toHaveBeenCalledWith("org-1", "session-1", { q: "ch", limit: 20 }, expect.anything()));
 		await waitFor(() => expect(lastProps().composerMentions?.workspaceName).toBe("Northwind"));
 		expect(lastProps().composerMentions?.selfUserId).toBe("user-me");
 		expect([...lastProps().composerMentions!.presentUserIds!]).toEqual(["user-me", "user-ben"]);
@@ -313,6 +363,8 @@ describe("mentions", () => {
 		let answer: Promise<ComposerMention[] | null> | undefined;
 		act(() => { answer = lastProps().composerMentions!.confirm!([platform]); });
 		expect(await screen.findByRole("alert")).toHaveTextContent("Notify 6 people in Platform?");
+		// Enter answers with the primary action, as Notify does.
+		expect(lastProps().composerMentions?.answer).toBeTypeOf("function");
 		fireEvent.click(screen.getByRole("button", { name: "Notify" }));
 		await expect(answer).resolves.toEqual([platform]);
 		act(() => { answer = lastProps().composerMentions!.confirm!([platform]); });
@@ -328,9 +380,12 @@ describe("mentions", () => {
 		let answer: Promise<ComposerMention[] | null> | undefined;
 		act(() => { answer = lastProps().composerMentions!.confirm!([cara]); });
 		expect(await screen.findByRole("alert")).toHaveTextContent("Cara Diaz can't open this session");
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Share and send" })));
 		expect(mocks.createShareGrants).toHaveBeenCalledWith("org-1", "project-1", { sessionId: "session-1", subjects: [{ userId: "user-cara" }], role: "viewer", modeCap: "read-only" });
 		await expect(answer).resolves.toEqual([cara]);
+		// She can open it now: the @ menu reads again and stops asking about her.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-mention-candidates", BASE, "org-1", "session-1"] });
 	});
 
 	it("send without the people who can't open it, sharing nothing", async () => {
@@ -395,82 +450,187 @@ describe("suggestions from asides", () => {
 
 	it("wait above the driver's composer, oldest first, and Send goes through the suggestion's route", async () => {
 		renderSurface();
-		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toHaveTextContent("Also cover a refresh after the cookie expires.");
-		expect(screen.queryByText(/Second/)).toBeNull();
+		expect(await screen.findByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Also cover a refresh after the cookie expires.");
+		expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).not.toHaveTextContent("Second");
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
 		// Its own text, the turn's settings and the driver's grant; no ordinary message.
-		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "", mode: "standard", composerEpoch: 7 }, { idempotencyKey: expect.any(String) });
+		// Keyed on the suggestion: a second click, or a retry, sends it once.
+		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "", mode: "standard", composerEpoch: 7 }, { idempotencyKey: "suggestion-send-sg-1" });
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 		// The next one waits its turn.
-		expect(await screen.findByText(/Second/)).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Second"));
 	});
 
 	it("Dismiss declines it with the driver's grant", async () => {
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Dismiss" })));
 		expect(mocks.dismissSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { composerEpoch: 7 });
-		expect(await screen.findByText(/Second/)).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Second"));
 		expect(mocks.sendSessionSuggestion).not.toHaveBeenCalled();
 	});
 
 	it("say calmly, on one line, that someone else drives now", async () => {
 		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Someone else is writing to the agent.", { status: 409, code: "COMPOSER_LOCKED" }));
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
 		const line = await screen.findByText("Someone else is driving now.");
 		expect(line).toHaveAttribute("role", "status");
 		expect(line).toHaveClass("text-muted-foreground");
 		expect(screen.queryByRole("alert")).toBeNull();
 		// It still waits.
-		expect(screen.getByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+		expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toBeInTheDocument();
 	});
 
 	it("say calmly, on one line, that it was already sent or dismissed, and move on", async () => {
 		mocks.dismissSessionSuggestion.mockRejectedValue(new CloudCpError("Already resolved.", { status: 409, code: "suggestion_resolved" }));
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Dismiss" })));
 		expect(await screen.findByText("Already sent or dismissed.")).toHaveAttribute("role", "status");
 		expect(screen.queryByRole("alert")).toBeNull();
-		expect(await screen.findByText(/Second/)).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Second"));
 	});
 
 	it("say a real failure as one", async () => {
 		mocks.sendSessionSuggestion.mockRejectedValue(new Error("offline"));
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't do that. Try again.");
 	});
 
 	it("Edit puts it in the agent draft, and the next send sends it, as edited, through its route", async () => {
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
-		act(() => lastProps().composerModes!.onModeChange("aside"));
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		act(() => lastProps().composerModes!.onModeChange!("aside"));
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-		await waitFor(() => expect(lastProps().composerDraftRequest).toEqual({ id: "sg-1", text: suggestion.text }));
+		await waitFor(() => expect(lastProps().composerEdit).toEqual({ id: "sg-1:1", text: suggestion.text, mentions: [] }));
 		expect(lastProps().composerModes?.mode).toBe("agent");
 		expect(screen.getByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeInTheDocument();
-		// It goes as text alone, so the composer takes no files meanwhile.
-		expect(lastProps().onStageAttachments).toBeUndefined();
+		// The edit goes whole through its route, so files stay welcome.
+		expect(lastProps().onStageAttachments).toBeTypeOf("function");
 		await act(async () => { await lastProps().onSend("Also cover an expired cookie", undefined, "m-2"); });
 		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "Also cover an expired cookie", mode: "standard", composerEpoch: 7 }, { idempotencyKey: "m-2" });
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 		// Done editing: the next message is an ordinary one.
 		await waitFor(() => expect(screen.queryByRole("region", { name: "Editing Chen Wei's suggestion" })).toBeNull());
-		expect(lastProps().onStageAttachments).toBeTypeOf("function");
+		expect(lastProps().composerEdit).toBeUndefined();
 		await act(async () => { await lastProps().onSend("Thanks", undefined, "m-3"); });
 		expect(mocks.sendSessionMessage).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ text: "Thanks" }), { idempotencyKey: "m-3" });
 	});
 
+	it("an edited send carries its files, chips, quotes and captures through the suggestion's route", async () => {
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit).toBeDefined());
+		const excerpts = [{ id: "x1", order: 1, conversationId: "c", messageId: "m", revision: 1, text: "the old reply" }];
+		await act(async () => {
+			await lastProps().onSend("@Ben Ortiz look", undefined, "m-4", excerpts, undefined, "@Ben Ortiz look", [{ kind: "person", id: "user-ben", name: "Ben Ortiz", canOpen: true }]);
+		});
+		const body = mocks.sendSessionSuggestion.mock.calls[0]![3] as Record<string, unknown>;
+		expect(body).toMatchObject({ mentions: [{ kind: "person", userId: "user-ben" }], displayText: "@Ben Ortiz look", mode: "standard", composerEpoch: 7 });
+		expect(body.text).toContain("@Ben Ortiz look");
+		expect(body.content).toEqual([expect.objectContaining({ type: "excerpt", text: "the old reply" })]);
+		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+	});
+
+	it("offers no steer while a suggestion is being edited: it goes only through its route", async () => {
+		mocks.listChatEvents.mockResolvedValue({ events: [
+			event(1, "chat.user_message", { text: "Fix it", turnId: "t1" }),
+			event(2, "chat.turn_started", { turnId: "t1" }),
+			event(3, "chat.turn_capabilities", { turnId: "t1", steering: true }),
+		], hasMore: false, nextAfter: 3 });
+		renderSurface();
+		await waitFor(() => expect(lastProps().onSteer).toBeTypeOf("function"));
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit).toBeDefined());
+		expect(lastProps().onSteer).toBeUndefined();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(lastProps().onSteer).toBeTypeOf("function"));
+	});
+
+	it("ends an edit when the session changes, and never brings it back", async () => {
+		const view = renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit).toBeDefined());
+		const other = { ...session, id: "session-2" };
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><CloudSessionChatSurface session={other} /></TooltipProvider></QueryClientProvider>);
+		await waitFor(() => expect(lastProps().composerEdit).toBeUndefined());
+		await act(async () => { await lastProps().onSend("For session two", undefined, "m-5"); });
+		expect(mocks.sendSessionSuggestion).not.toHaveBeenCalled();
+		expect(mocks.sendSessionMessage).toHaveBeenCalledWith("org-1", "session-2", expect.objectContaining({ text: "For session two" }), { idempotencyKey: "m-5" });
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><CloudSessionChatSurface session={session} /></TooltipProvider></QueryClientProvider>);
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		expect(lastProps().composerEdit).toBeUndefined();
+	});
+
+	it("starts each Edit afresh: Edit, Cancel, Edit again", async () => {
+		renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit?.id).toBe("sg-1:1"));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(lastProps().composerEdit).toBeUndefined());
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit?.id).toBe("sg-1:2"));
+	});
+
+	it("brings the aside's chips into the edit", async () => {
+		mocks.listChatEvents.mockResolvedValue({ events: [
+			event(1, "chat.aside", { asideId: "a-2", text: "@Ben Ortiz also cover expiry", authorUserId: "user-chen", authorName: "Chen Wei", mentions: [{ kind: "person", userId: "user-ben", name: "Ben Ortiz" }] }),
+		], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit?.mentions).toEqual([{ kind: "person", id: "user-ben", name: "Ben Ortiz" }]));
+	});
+
+	it("puts focus back in the composer after the bar's Send or Dismiss", async () => {
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		const before = lastProps().composerFocusRequest ?? 0;
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+		await waitFor(() => expect(lastProps().composerFocusRequest).toBeGreaterThan(before));
+		const afterSend = lastProps().composerFocusRequest!;
+		await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Dismiss" })));
+		await waitFor(() => expect(lastProps().composerFocusRequest).toBeGreaterThan(afterSend));
+	});
+
+	it("reads a new suggestion out politely", async () => {
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		const announcer = document.querySelector("[data-suggestion-announcer]")!;
+		expect(announcer).toHaveAttribute("aria-live", "polite");
+		expect(announcer).toHaveTextContent("Chen Wei suggests: Also cover a refresh after the cookie expires.");
+	});
+
+	it("never lets a stale list read bring back a resolved suggestion or hide a new one", async () => {
+		let answerRead!: (value: { items: CloudCpSuggestion[] }) => void;
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		// A read starts, then events arrive before it answers.
+		mocks.listSessionSuggestions.mockImplementation(() => new Promise((resolve) => { answerRead = resolve; }));
+		const reading = act(async () => { await queryClient.refetchQueries({ queryKey: ["cloud-aside-suggestions", "org-1", "session-1"] }); });
+		const third: CloudCpSuggestion = { ...suggestion, id: "sg-3", asideId: "a-4", text: "Third", createdAt: "2026-11-07T10:09:00Z", updatedAt: "2026-11-07T10:09:00Z" };
+		appendEvents(
+			event(20, "chat.suggestion_resolved", { ...suggestion, status: "sent" }),
+			event(21, "chat.suggestion_created", third),
+		);
+		await waitFor(() => expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Second"));
+		// The read was asked before those events: it still lists sg-1 and not sg-3.
+		answerRead({ items: [suggestion, second] });
+		await reading;
+		const pending = queryClient.getQueryData<CloudCpSuggestion[]>(["cloud-aside-suggestions", "org-1", "session-1"])!;
+		expect(pending.map((item) => item.id)).toEqual(["sg-2", "sg-3"]);
+	});
+
 	it("Cancel stops editing and the suggestion waits again", async () => {
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+		expect(await screen.findByRole("region", { name: "Chen Wei suggests:" })).toBeInTheDocument();
 		await act(async () => { await lastProps().onSend("Something else", undefined, "m-9"); });
 		expect(mocks.sendSessionSuggestion).not.toHaveBeenCalled();
 	});
@@ -478,7 +638,7 @@ describe("suggestions from asides", () => {
 	it("an edited send that finds it already handled goes back to the composer, calmly", async () => {
 		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Already resolved.", { status: 409, code: "suggestion_resolved" }));
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 		let refusal: unknown;
 		await act(async () => { await lastProps().onSend("Edited", undefined, "m-4").catch((error: unknown) => { refusal = error; }); });
@@ -492,7 +652,7 @@ describe("suggestions from asides", () => {
 	it("an edited send refused because someone else drives keeps the edit, calmly", async () => {
 		mocks.sendSessionSuggestion.mockRejectedValue(new CloudCpError("Locked.", { status: 409, code: "COMPOSER_LOCKED" }));
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 		let refusal: unknown;
 		await act(async () => { await lastProps().onSend("Edited", undefined, "m-6").catch((error: unknown) => { refusal = error; }); });
@@ -506,12 +666,12 @@ describe("suggestions from asides", () => {
 		renderSurface();
 		await waitFor(() => expect(lastProps().snapshot.items).toHaveLength(1));
 		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalledTimes(1));
-		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
+		expect(screen.queryByRole("region", { name: "Chen Wei suggests:" })).toBeNull();
 		appendEvents(event(2, "chat.suggestion_created", suggestion));
-		expect(await screen.findByRole("region", { name: "Chen Wei suggests" })).toBeInTheDocument();
+		expect(await screen.findByRole("region", { name: "Chen Wei suggests:" })).toBeInTheDocument();
 		expect(screen.getByText("Suggested")).toBeInTheDocument();
 		appendEvents(event(3, "chat.suggestion_resolved", { ...suggestion, status: "dismissed" }));
-		await waitFor(() => expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull());
+		await waitFor(() => expect(screen.queryByRole("region", { name: "Chen Wei suggests:" })).toBeNull());
 		expect(screen.queryByText("Suggested")).toBeNull();
 		// The events did it; the list was read once.
 		expect(mocks.listSessionSuggestions).toHaveBeenCalledTimes(1);
@@ -519,7 +679,7 @@ describe("suggestions from asides", () => {
 
 	it("stop editing when someone else settles the suggestion meanwhile", async () => {
 		renderSurface();
-		await screen.findByRole("region", { name: "Chen Wei suggests" });
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
 		await waitFor(() => expect(lastProps().snapshot).toBeDefined());
 		fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 		await screen.findByRole("region", { name: "Editing Chen Wei's suggestion" });
@@ -533,7 +693,7 @@ describe("suggestions from asides", () => {
 		renderSurface();
 		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalled());
 		await act(async () => undefined);
-		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
+		expect(screen.queryByRole("region", { name: "Chen Wei suggests:" })).toBeNull();
 	});
 
 	it("never show to a viewer", async () => {
@@ -541,7 +701,7 @@ describe("suggestions from asides", () => {
 		renderSurface();
 		await waitFor(() => expect(mocks.listSessionSuggestions).toHaveBeenCalled());
 		await act(async () => undefined);
-		expect(screen.queryByRole("region", { name: "Chen Wei suggests" })).toBeNull();
+		expect(screen.queryByRole("region", { name: "Chen Wei suggests:" })).toBeNull();
 	});
 
 	it("mark an aside already waiting as Suggested", async () => {
@@ -574,6 +734,33 @@ describe("suggestions from asides", () => {
 		// Suggestion events draw nothing of their own.
 		expect(snapshot.items).toHaveLength(1);
 	});
+
+	it("credit the reader's own suggestion as theirs", () => {
+		const mine = { ...suggestion, suggestedBy: { userId: "user-me", name: "Asha Rao" } };
+		const snapshot = toSnapshot(session, [
+			event(1, "chat.suggestion_created", mine),
+			event(2, "chat.user_message", { text: "Also cover it", turnId: "t1", authorUserId: "user-ben", authorName: "Ben Ortiz", suggestionId: "sg-1" }),
+		], "user-me");
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ suggestedByYou: true });
+		expect(message).not.toHaveProperty("suggestedBy");
+	});
+
+	it("say Sent to agent on an aside the driver sent, and offer Suggest again after a dismissal", async () => {
+		mocks.listChatEvents.mockResolvedValue({ events: [
+			asideEvent(1, "a-2", "Also cover expiry", "user-chen", "Chen Wei"),
+			asideEvent(2, "a-3", "And the logout path", "user-chen", "Chen Wei"),
+			event(3, "chat.suggestion_resolved", { ...suggestion, asideId: "a-2", status: "sent" }),
+			event(4, "chat.suggestion_resolved", { ...second, asideId: "a-3", status: "dismissed" }),
+		], hasMore: false, nextAfter: 4 });
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [] });
+		renderSurface();
+		const sentRow = (await screen.findByText("Also cover expiry")).closest("[data-aside]") as HTMLElement;
+		expect(within(sentRow).getByText("Sent to agent")).toBeInTheDocument();
+		expect(within(sentRow).queryByRole("button", { name: "Suggest to agent" })).toBeNull();
+		const dismissedRow = screen.getByText("And the logout path").closest("[data-aside]") as HTMLElement;
+		expect(within(dismissedRow).getByRole("button", { name: "Suggest to agent" })).toBeInTheDocument();
+	});
 });
 
 describe("mentions in a steer", () => {
@@ -589,7 +776,8 @@ describe("mentions in a steer", () => {
 		await waitFor(() => expect(lastProps().onSteer).toBeTypeOf("function"));
 		let outcome: unknown;
 		await act(async () => { outcome = await lastProps().onSteer!("@Cara look", undefined, "steer-2", false, [{ kind: "person", id: "user-cara", name: "Cara", canOpen: true }]); });
-		expect(outcome).toEqual({ status: "not-accepted", reason: "You can mention only people in this session." });
+		// The same calm line as a refused send, never a warning.
+		expect(outcome).toEqual({ status: "not-accepted", reason: "You can mention only people in this session.", calm: true });
 	});
 
 	it("go to the steer route as typed tokens", async () => {

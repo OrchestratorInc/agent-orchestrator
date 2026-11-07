@@ -990,11 +990,9 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
-			{(message.authorName || message.suggestedBy) && !editing ? (
+			{(message.authorName || message.suggestedBy || message.suggestedByYou) && !editing ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
-					{[message.authorName, message.suggestedBy ? <SuggestedByCredit key="suggested" name={message.suggestedBy} /> : undefined]
-						.filter(Boolean)
-						.flatMap((part, index) => (index > 0 ? [" · ", part] : [part]))}
+					<MessageByline author={message.authorName} suggestedBy={message.suggestedBy} suggestedByYou={message.suggestedByYou} />
 				</span>
 			) : null}
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
@@ -1103,10 +1101,15 @@ export function HumanMessage({
 	);
 }
 
-/** A message a teammate's suggestion became: who suggested it, as GitHub credits a suggester. */
-function SuggestedByCredit({ name }: { name: string }) {
+/**
+ * Who wrote a message and, for one a suggestion became, who suggested it, as
+ * GitHub credits a suggester: "you" for the reader's own. One translated line.
+ */
+function MessageByline({ author, suggestedBy, suggestedByYou }: { author?: string; suggestedBy?: string; suggestedByYou?: boolean }) {
 	const { t } = useTranslation();
-	return <span data-chat-message-suggested-by="">{t("suggestion.suggestedBy", { name })}</span>;
+	const credit = suggestedByYou ? t("suggestion.suggestedByYou") : suggestedBy ? t("suggestion.suggestedBy", { name: suggestedBy }) : undefined;
+	if (!credit) return <>{author}</>;
+	return <span data-chat-message-suggested-by="">{author ? t("suggestion.withAuthor", { author, credit }) : credit}</span>;
 }
 
 /**

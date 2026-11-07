@@ -1,15 +1,18 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
 	mergeFeedHead,
+	mergeSuggestionRead,
 	probeTeamCollab,
 	subscribeTeamCollabSupport,
 	teamCollabSupport,
 	teamCollabSupportConfirmed,
 	teamCollabUnavailable,
+	withSuggestion,
+	type SuggestionNews,
 	type TeamCollabSupport,
 } from "../lib/cloud-team-collab";
-import type { CloudCpFeedResponse, CloudCpFeedScope, CloudCpMentionCandidates } from "../lib/cloud-cp/types";
+import type { CloudCpFeedResponse, CloudCpFeedScope, CloudCpMentionCandidates, CloudCpSuggestion } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
 
 /** How many feed rows a page asks for. */
@@ -155,14 +158,46 @@ export function useMentionCandidates(orgId: string | undefined, sessionId: strin
 	});
 }
 
-/** A session's pending aside suggestions, oldest first. */
+/** Per query client, then per session (orgId:sessionId), what this window heard about its suggestions. */
+const suggestionNewsByClient = new WeakMap<QueryClient, Map<string, Map<string, SuggestionNews>>>();
+function suggestionNewsFor(queryClient: QueryClient): Map<string, Map<string, SuggestionNews>> {
+	let news = suggestionNewsByClient.get(queryClient);
+	if (!news) {
+		news = new Map();
+		suggestionNewsByClient.set(queryClient, news);
+	}
+	return news;
+}
+
+/**
+ * A session's pending aside suggestions, oldest first. `record` lays what an
+ * event or an answer said over the list at once; a slow read is the safety
+ * net, merged so a read that started before some event can't undo it.
+ */
 export function useAsideSuggestions(orgId: string | undefined, sessionId: string, enabled: boolean) {
 	const { client, ready } = useCloudCp();
-	return useQuery({
+	const queryClient = useQueryClient();
+	const newsKey = `${orgId ?? ""}:${sessionId}`;
+	const query = useQuery({
 		queryKey: asideSuggestionsQueryKey(orgId ?? "", sessionId),
 		enabled: enabled && ready && Boolean(orgId),
 		refetchInterval: SUGGESTIONS_REFRESH_MS,
 		retry: false,
-		queryFn: async ({ signal }) => (await client.listSessionSuggestions(orgId ?? "", sessionId, { signal })).items,
+		queryFn: async ({ signal }) => {
+			const askedAt = performance.now();
+			const read = (await client.listSessionSuggestions(orgId ?? "", sessionId, { signal })).items;
+			const held = queryClient.getQueryData<CloudCpSuggestion[]>(asideSuggestionsQueryKey(orgId ?? "", sessionId)) ?? [];
+			return mergeSuggestionRead(held, read, suggestionNewsFor(queryClient).get(newsKey), askedAt);
+		},
 	});
+	const record = useCallback((heard: readonly CloudCpSuggestion[]) => {
+		if (heard.length === 0) return;
+		const heardAt = performance.now();
+		const sessions = suggestionNewsFor(queryClient);
+		const news = sessions.get(newsKey) ?? new Map<string, SuggestionNews>();
+		sessions.set(newsKey, news);
+		for (const suggestion of heard) news.set(suggestion.id, { heardAt, resolved: suggestion.status !== "pending" });
+		queryClient.setQueryData<CloudCpSuggestion[]>(asideSuggestionsQueryKey(orgId ?? "", sessionId), (current) => heard.reduce(withSuggestion, current ?? []));
+	}, [newsKey, orgId, queryClient, sessionId]);
+	return Object.assign(query, { record });
 }

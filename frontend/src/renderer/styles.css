@@ -3034,7 +3034,8 @@ html.sidebar-reordering * {
 /* Aside mode writes to people, not the agent: the composer takes the dashed edge
    an aside has in the timeline, so nobody writes to the wrong audience. */
 .cursor-chat-composer[data-composer-variant="aside"] {
-	outline: 1px dashed color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+	/* The muted text color itself: at least 3:1 on the composer in both themes. */
+	outline: 1px dashed var(--color-text-muted);
 	outline-offset: -1px;
 }
 

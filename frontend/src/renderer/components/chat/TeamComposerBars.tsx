@@ -1,12 +1,20 @@
-import { Lock } from "lucide-react";
+import { LoaderCircle, Lock } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudCpSuggestion } from "../../lib/cloud-cp/types";
 import type { ComposerMention } from "../../lib/cloud-team-collab";
 import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
 import { Button } from "../ui/button";
+import { CloseButton } from "../ui/close-button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 /** One strip above the composer: a quiet surface, one line, its actions at the end. */
 const BAR_CLASS = "flex min-w-0 items-center gap-2 rounded-(--radius-chat-composer) bg-surface px-3 py-2 text-xs";
+
+/** A bar's spinner, in the button whose action is running, as the bell's approvals show it. */
+function Pending({ on }: { on: boolean }) {
+	return on ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null;
+}
 
 /** Names joined the way the language joins them: "Cara Diaz and Farah Nasser". */
 export function joinNames(names: readonly string[], locale: string): string {
@@ -33,19 +41,22 @@ export function SuggestionNotice({ text, tone }: { text: string; tone: "calm" | 
 
 /**
  * The oldest aside suggestion waiting for the person driving the session:
- * who suggested it and its text on one line, with Send, Edit and Dismiss.
- * Only the driver sees it, so only the driver steers the agent.
+ * who suggested it and its text on one line, with Send and Edit, and a ✕ to
+ * dismiss it. Only the driver sees it, so only the driver steers the agent.
+ * While one action runs every button waits, and that one spins.
  */
-export function SuggestionBar({ suggestion, onSend, onEdit, onDismiss, busy, notice }: {
+export function SuggestionBar({ suggestion, onSend, onEdit, onDismiss, pending, notice }: {
 	suggestion: CloudCpSuggestion;
 	onSend: () => void;
 	onEdit: () => void;
 	onDismiss: () => void;
-	busy?: boolean;
+	/** The action in flight, if any. */
+	pending?: "send" | "dismiss";
 	notice?: { text: string; tone: "calm" | "error" };
 }) {
 	const { t } = useTranslation();
 	const name = suggestion.suggestedBy.name || t("chat.shared.someone");
+	const busy = pending !== undefined;
 	return (
 		<div className="mb-2 flex min-w-0 flex-col" data-aside-suggestion={suggestion.id}>
 			<div className={BAR_CLASS} role="region" aria-label={t("suggestion.suggests", { name })}>
@@ -54,9 +65,23 @@ export function SuggestionBar({ suggestion, onSend, onEdit, onDismiss, busy, not
 					<span className="text-muted-foreground">{t("suggestion.suggests", { name })}</span>
 					<span className="text-foreground"> {suggestion.text}</span>
 				</p>
-				<Button disabled={busy} onClick={onSend} size="xs" type="button" variant="accent">{t("suggestion.send")}</Button>
-				<Button disabled={busy} onClick={onEdit} size="xs" type="button" variant="secondary">{t("suggestion.edit")}</Button>
-				<Button disabled={busy} onClick={onDismiss} size="xs" type="button" variant="quiet">{t("suggestion.dismiss")}</Button>
+				<Button disabled={busy} onClick={onSend} size="sm" type="button" variant="accent">
+					<Pending on={pending === "send"} />
+					{t("suggestion.send")}
+				</Button>
+				<Button disabled={busy} onClick={onEdit} size="sm" type="button" variant="quiet">{t("suggestion.edit")}</Button>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						{pending === "dismiss" ? (
+							<Button aria-label={t("suggestion.dismiss")} disabled size="icon-sm" type="button" variant="quiet">
+								<Pending on />
+							</Button>
+						) : (
+							<CloseButton aria-label={t("suggestion.dismiss")} disabled={busy} onClick={onDismiss} size="icon-sm" />
+						)}
+					</TooltipTrigger>
+					<TooltipContent>{t("suggestion.dismiss")}</TooltipContent>
+				</Tooltip>
 			</div>
 			{notice ? <BarNotice {...notice} /> : null}
 		</div>
@@ -79,7 +104,7 @@ export function SuggestionEditBar({ suggestion, onCancel, notice }: {
 			<div className={BAR_CLASS} role="region" aria-label={t("suggestion.editing", { name })}>
 				<PersonAvatar name={name} size="sm" />
 				<p className="min-w-0 flex-1 truncate text-muted-foreground">{t("suggestion.editing", { name })}</p>
-				<Button onClick={onCancel} size="xs" type="button" variant="quiet">{t("suggestion.cancelEdit")}</Button>
+				<Button onClick={onCancel} size="sm" type="button" variant="quiet">{t("suggestion.cancelEdit")}</Button>
 			</div>
 			{notice ? <BarNotice {...notice} /> : null}
 		</div>
@@ -104,8 +129,11 @@ export function MentionAccessBar({ people, onShare, onSkip, sharing, problem }: 
 				<p className="min-w-0 flex-1 truncate text-foreground">
 					{t("mention.noAccess.title", { names })}
 				</p>
-				<Button disabled={sharing} onClick={onShare} size="xs" type="button" variant="accent">{t("mention.noAccess.share")}</Button>
-				<Button disabled={sharing} onClick={onSkip} size="xs" type="button" variant="quiet">{t("mention.noAccess.skip")}</Button>
+				<Button disabled={sharing} onClick={onShare} size="sm" type="button" variant="accent">
+					<Pending on={Boolean(sharing)} />
+					{t("mention.noAccess.share")}
+				</Button>
+				<Button disabled={sharing} onClick={onSkip} size="sm" type="button" variant="quiet">{t("mention.noAccess.skip")}</Button>
 			</div>
 			{problem === "unknown-person" ? <BarNotice text={t("mention.noAccess.unknownPerson", { names })} tone="calm" /> : null}
 			{problem === "failed" ? <BarNotice text={t("mention.noAccess.shareFailed")} tone="error" /> : null}
@@ -113,13 +141,18 @@ export function MentionAccessBar({ people, onShare, onSkip, sharing, problem }: 
 	);
 }
 
-/** Before a send that mentions a team of more than five people: how many it notifies. */
+/**
+ * Before a send that mentions a team of more than five people: how many it
+ * notifies (the count leaves out the sender). Notify answers once and spins
+ * until the send takes the bar away.
+ */
 export function MentionTeamBar({ team, onNotify, onCancel }: {
 	team: Extract<ComposerMention, { kind: "team" }>;
 	onNotify: () => void;
 	onCancel: () => void;
 }) {
 	const { t, i18n } = useTranslation();
+	const [notifying, setNotifying] = useState(false);
 	const count = team.memberCount ?? 0;
 	const withoutAccess = team.membersWithoutAccess ?? 0;
 	// Named when the names cover everyone it misses, else counted.
@@ -134,8 +167,20 @@ export function MentionTeamBar({ team, onNotify, onCancel }: {
 				<span className="text-foreground">{t("mention.team.title", { count, team: team.name })}</span>
 				{missed ? <span className="text-muted-foreground"> {missed}</span> : null}
 			</p>
-			<Button onClick={onNotify} size="xs" type="button" variant="accent">{t("mention.team.notify")}</Button>
-			<Button onClick={onCancel} size="xs" type="button" variant="quiet">{t("mention.team.cancel")}</Button>
+			<Button
+				disabled={notifying}
+				onClick={() => {
+					setNotifying(true);
+					onNotify();
+				}}
+				size="sm"
+				type="button"
+				variant="accent"
+			>
+				<Pending on={notifying} />
+				{t("mention.team.notify")}
+			</Button>
+			<Button disabled={notifying} onClick={onCancel} size="sm" type="button" variant="quiet">{t("mention.team.cancel")}</Button>
 		</div>
 	);
 }

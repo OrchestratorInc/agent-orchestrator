@@ -179,6 +179,65 @@ export function withSuggestion(pending: readonly CloudCpSuggestion[], suggestion
 	return next.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
+/** What a window heard about one suggestion (an event or an answer), and when, on its own clock. */
+export interface SuggestionNews {
+	heardAt: number;
+	resolved: boolean;
+}
+
+/**
+ * A read of the pending list, laid over what the window already holds, so a
+ * read that was asked before some event and answered after it can't undo the
+ * event: a suggestion heard as sent or dismissed never comes back, and one
+ * heard of after the read was asked stays even when the read lacks it. One
+ * the window knew before asking and the read no longer lists was resolved
+ * without the window hearing, and goes.
+ */
+export function mergeSuggestionRead(
+	held: readonly CloudCpSuggestion[],
+	read: readonly CloudCpSuggestion[],
+	news: ReadonlyMap<string, SuggestionNews> | undefined,
+	askedAt: number,
+): CloudCpSuggestion[] {
+	const merged = new Map<string, CloudCpSuggestion>();
+	for (const suggestion of read) {
+		if (suggestion.status !== "pending" || news?.get(suggestion.id)?.resolved) continue;
+		merged.set(suggestion.id, suggestion);
+	}
+	for (const suggestion of held) {
+		if (merged.has(suggestion.id) || suggestion.status !== "pending") continue;
+		const heard = news?.get(suggestion.id);
+		if (heard && !heard.resolved && heard.heardAt > askedAt) merged.set(suggestion.id, suggestion);
+	}
+	return [...merged.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+}
+
+/**
+ * Per aside, whether the driver sent its last suggestion to the agent, from
+ * the session's suggestion events in order: a later dismissal or a new
+ * suggestion for the same aside clears it.
+ */
+export function sentAsides(events: readonly Pick<CloudCpClientEvent, "type" | "payload">[]): Set<string> {
+	const sent = new Set<string>();
+	for (const event of events) {
+		const suggestion = suggestionFromEvent(event);
+		if (!suggestion?.asideId) continue;
+		if (suggestion.status === "sent") sent.add(suggestion.asideId);
+		else sent.delete(suggestion.asideId);
+	}
+	return sent;
+}
+
+/** The chips a mention token list draws as, for a draft seeded from recorded text. */
+export function composerMentionsOf(mentions: readonly CloudCpMention[] | undefined): ComposerMention[] {
+	return (mentions ?? []).flatMap((mention): ComposerMention[] => {
+		if (!mention.name) return [];
+		if (mention.kind === "person" && mention.userId) return [{ kind: "person", id: mention.userId, name: mention.name }];
+		if (mention.kind === "team" && mention.teamId) return [{ kind: "team", id: mention.teamId, name: mention.name }];
+		return [];
+	});
+}
+
 /** Whether a send or dismiss failed because the suggestion was already sent or dismissed. */
 export function suggestionResolvedError(error: unknown): boolean {
 	return typeof error === "object" && error !== null && (error as { status?: unknown }).status === 409 &&

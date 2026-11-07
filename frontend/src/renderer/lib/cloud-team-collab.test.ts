@@ -7,7 +7,10 @@ import {
 	awayHasNews,
 	composerLockedError,
 	groupFeed,
+	composerMentionsOf,
 	mergeFeedHead,
+	mergeSuggestionRead,
+	sentAsides,
 	type FeedPages,
 	isPathQuery,
 	MAX_MENTIONS,
@@ -181,6 +184,41 @@ describe("the team feed", () => {
 		expect(awayHasNews({ ...nothing, prsMerged: [{ number: 1, url: "", sessionId: "s", orgId: "o", projectId: "p" }] })).toBe(true);
 		expect(awayHasNews({ ...nothing, failed: [{ sessionId: "s", orgId: "o", projectId: "p", title: "t" }] })).toBe(true);
 		expect(awayHasNews({ ...nothing, started: { count: 2, names: ["Ben"] } })).toBe(true);
+	});
+});
+
+describe("suggestion reads and events", () => {
+	const made = (id: string, status: CloudCpSuggestion["status"] = "pending", asideId = `aside-${id}`): CloudCpSuggestion => ({
+		id, orgId: "o", sessionId: "s", kind: "aside", asideId, text: id, status, createdAt: `2026-11-07T10:0${id.length}:00Z`, updatedAt: "2026-11-07T10:00:00Z",
+		suggestedBy: { userId: "u", name: "U" }, author: { userId: "u", name: "U" },
+	});
+
+	it("never lets a read asked before an event undo it", () => {
+		const news = new Map([
+			["sg-1", { heardAt: 20, resolved: true }],
+			["sg-3", { heardAt: 20, resolved: false }],
+		]);
+		// Asked at 10: sg-1 was resolved and sg-3 made after the read was asked.
+		expect(mergeSuggestionRead([made("sg-2"), made("sg-3")], [made("sg-1"), made("sg-2")], news, 10).map((item) => item.id)).toEqual(["sg-2", "sg-3"]);
+	});
+
+	it("drops one the window knew before asking that the read no longer lists", () => {
+		const news = new Map([["sg-2", { heardAt: 5, resolved: false }]]);
+		expect(mergeSuggestionRead([made("sg-2")], [], news, 10)).toEqual([]);
+		expect(mergeSuggestionRead([made("sg-2")], [], undefined, 10)).toEqual([]);
+	});
+
+	it("says which asides were last sent to the agent", () => {
+		const event = (status: CloudCpSuggestion["status"], asideId: string) => ({ type: "chat.suggestion_resolved", payload: made(`sg-${asideId}-${status}`, status, asideId) });
+		expect([...sentAsides([event("sent", "a1"), event("dismissed", "a2"), event("sent", "a3"), { type: "chat.suggestion_created", payload: made("sg-again", "pending", "a3") }])]).toEqual(["a1"]);
+	});
+
+	it("draws recorded mention tokens as chips, skipping any without a name", () => {
+		expect(composerMentionsOf([
+			{ kind: "person", userId: "u-1", name: "Chen Wei" },
+			{ kind: "team", teamId: "t-1", name: "Platform" },
+			{ kind: "person", userId: "u-2" },
+		])).toEqual([{ kind: "person", id: "u-1", name: "Chen Wei" }, { kind: "team", id: "t-1", name: "Platform" }]);
 	});
 });
 
