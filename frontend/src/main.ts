@@ -1337,7 +1337,7 @@ async function fetchDesktopSessionPath(
 	unavailableMessage: string,
 ): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
-		throw workspaceCheckUnavailable("Orchestrator daemon is not ready.");
+		throw workspaceCheckUnavailable("Daemon is not ready.");
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
