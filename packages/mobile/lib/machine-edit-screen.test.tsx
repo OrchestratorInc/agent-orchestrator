@@ -186,7 +186,7 @@ describe("editing a machine", () => {
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("environment-password-a", "right");
 		// Cleared but still mounted, so the field being typed in keeps focus.
-		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: undefined });
+		expect(connectionSection().props.footer.props).toMatchObject({ error: false, children: undefined });
 	});
 
 	it("explains an out-of-range port and keeps Save off", async () => {

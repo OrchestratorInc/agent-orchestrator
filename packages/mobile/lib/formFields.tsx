@@ -59,16 +59,19 @@ export function FormFooter({ children, error = false }: { children?: string; err
 }
 
 /**
- * A form section whose footer is always mounted: use it for a section with text
- * fields whose footer can change. @expo/ui builds a different SwiftUI Section
- * with and without a footer, so adding or removing one rebuilds the section's
- * fields, and the field being typed in loses focus and the keyboard. Here the
- * footer slot is always there and only what it holds changes; @expo/ui keeps
- * the same Section for an empty slot.
+ * A form section whose footer is always mounted. @expo/ui builds a different
+ * SwiftUI Section with and without a footer, so adding or removing one rebuilds
+ * the section's fields, and the field being typed in loses focus and the
+ * keyboard. Here the footer slot is always there and only what it holds changes;
+ * @expo/ui keeps the same Section for an empty slot, which draws nothing. Use it
+ * for any footer that can come and go (formSection.source.test.ts enforces it).
+ *
+ * The footer shows `error` in red when there is one, otherwise `hint`: one pair
+ * of props, so the text and its colour can't drift apart.
  */
-export function FormSection({ title, footer, footerError = false, modifiers, children }: { title?: string; footer?: string; footerError?: boolean; modifiers?: ModifierConfig[]; children: ReactNode }) {
+export function FormSection({ title, error, hint, modifiers, children }: { title?: string; error?: string; hint?: string; modifiers?: ModifierConfig[]; children: ReactNode }) {
 	return (
-		<Section title={title} footer={<FormFooter error={footerError}>{footer}</FormFooter>} modifiers={modifiers}>
+		<Section title={title} footer={<FormFooter error={Boolean(error)}>{error || hint}</FormFooter>} modifiers={modifiers}>
 			{children}
 		</Section>
 	);

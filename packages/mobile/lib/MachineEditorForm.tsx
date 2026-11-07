@@ -23,7 +23,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 	return (
 		<Host style={{ flex: 1 }} colorScheme={scheme}>
 			<Form modifiers={formModifiers(t)}>
-				<FormSection footer={editor.accountManaged ? failure?.message : undefined} footerError modifiers={sectionModifiers(t)}>
+				<FormSection error={editor.accountManaged ? failure?.message : undefined} modifiers={sectionModifiers(t)}>
 					<FormTextField
 						label="Name"
 						value={draft.machineName}
@@ -42,7 +42,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 						</LabeledContent>
 					</Section>
 				) : (
-					<FormSection title="Connection" footer={connectionError} footerError modifiers={sectionModifiers(t)}>
+					<FormSection title="Connection" error={connectionError} modifiers={sectionModifiers(t)}>
 						<FormTextField
 							label="Host"
 							value={draft.config.host}
