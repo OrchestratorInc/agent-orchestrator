@@ -206,9 +206,9 @@ export function FirstRunOnboarding() {
 			onFinish={() => {
 				setOpen(false);
 				markSeen();
-				// The tour starts on Home, where projects are added.
-				startGuidedTour();
-				void navigate({ to: "/" });
+				// The tour starts on Home, where projects are added, once it's
+				// showing (not on whatever page was behind the onboarding).
+				void navigate({ to: "/" }).then(startGuidedTour);
 			}}
 		/>
 	);

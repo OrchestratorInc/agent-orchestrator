@@ -209,7 +209,8 @@ function HomePageContent() {
 		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
-					<section className="space-y-3 px-3">
+					{/* The guided tour's first stop, add actions and recent projects together (GuidedTour). */}
+					<section className="space-y-3 px-3" data-tour="add-project">
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
@@ -223,8 +224,7 @@ function HomePageContent() {
 							</button>
 						</div>
 
-						{/* The guided tour's first stop (GuidedTour). */}
-						<div className="grid grid-cols-2 gap-3" data-tour="add-project">
+						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
 								icon={<GitFork strokeWidth={1.8} />}
 								label={t("createProject.cloneFromGit")}
@@ -263,7 +263,7 @@ function HomePageContent() {
 									<ProjectRow
 										key={project.id}
 										project={project}
-										// The guided tour offers the latest project before adding one (GuidedTour).
+										// Tells the guided tour there are projects to open (GuidedTour).
 										tourTarget={index === 0 ? "recent-project" : undefined}
 										onClick={() => {
 										if (project.kind === STANDALONE_PROJECT_KIND) {

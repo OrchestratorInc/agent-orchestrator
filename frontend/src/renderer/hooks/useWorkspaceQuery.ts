@@ -273,7 +273,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 				? (window as unknown as { __aoFakeAgent?: FakeAgentSeam }).__aoFakeAgent
 				: undefined;
 		const snapshot = fake ? fake.snapshot() : mockWorkspaces;
-		return applyOptimisticSessionKills(snapshot) ?? snapshot;
+		return withDevFakeProject(applyOptimisticSessionKills(snapshot) ?? snapshot);
 	}
 	if (!hasTrustedApiBaseUrl()) {
 		throw new DaemonNotReadyError();
