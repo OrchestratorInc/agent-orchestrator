@@ -1654,12 +1654,15 @@ export function CloudSessionChatSurface({
 		};
 	};
 	// Send goes through the suggestion's own route, as the driver's message; an
-	// edit goes there too, whole. The bar's Send keys on the suggestion, so a
-	// second click (or a retry) sends it once.
+	// edit goes there too, whole. The bar's Send keys on the suggestion and the
+	// attempt, so a burst of clicks sends it once, while a try after a refusal
+	// (someone else drove, say) is a new command with a new key.
+	const sendAttempts = useRef(new Map<string, number>());
 	const sendSuggestion = useMutation({
 		mutationFn: ({ suggestion, edit, clientMessageId }: { suggestion: CloudCpSuggestion; edit?: SuggestionEdit; clientMessageId?: string }) => {
 			if (!orgId) throw new Error("Cloud session context is unavailable.");
-			return client.sendSessionSuggestion(orgId, session.id, suggestion.id, suggestionMessage(edit), { idempotencyKey: clientMessageId ?? `suggestion-send-${suggestion.id}` });
+			const key = clientMessageId ?? `suggestion-send-${suggestion.id}-${sendAttempts.current.get(suggestion.id) ?? 0}`;
+			return client.sendSessionSuggestion(orgId, session.id, suggestion.id, suggestionMessage(edit), { idempotencyKey: key });
 		},
 		onMutate: () => setSuggestionNotice(undefined),
 		onSuccess: (answer) => {
@@ -1671,6 +1674,7 @@ export function CloudSessionChatSurface({
 			noteWritten();
 		},
 		onError: (error, { suggestion, edit }) => {
+			sendAttempts.current.set(suggestion.id, (sendAttempts.current.get(suggestion.id) ?? 0) + 1);
 			// An edited send reports in the composer, which keeps its text.
 			if (edit) return;
 			setSuggestionNotice({ sessionId: session.id, ...suggestionOutcome(error, suggestion) });

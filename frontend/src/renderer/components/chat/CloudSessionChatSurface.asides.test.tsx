@@ -454,11 +454,22 @@ describe("suggestions from asides", () => {
 		expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).not.toHaveTextContent("Second");
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
 		// Its own text, the turn's settings and the driver's grant; no ordinary message.
-		// Keyed on the suggestion: a second click, or a retry, sends it once.
-		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "", mode: "standard", composerEpoch: 7 }, { idempotencyKey: "suggestion-send-sg-1" });
+		// Keyed on the suggestion and the attempt: a burst of clicks sends it once.
+		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "", mode: "standard", composerEpoch: 7 }, { idempotencyKey: "suggestion-send-sg-1-0" });
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 		// The next one waits its turn.
 		await waitFor(() => expect(screen.getByRole("region", { name: "Chen Wei suggests:" })).toHaveTextContent("Second"));
+	});
+
+	it("tries again after a refusal with a new key, never replaying the refused one", async () => {
+		mocks.sendSessionSuggestion.mockRejectedValueOnce(new CloudCpError("Someone else is writing.", { status: 409, code: "COMPOSER_LOCKED" }));
+		renderSurface();
+		await screen.findByRole("region", { name: "Chen Wei suggests:" });
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+		await screen.findByText("Someone else is driving now.");
+		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+		await waitFor(() => expect(mocks.sendSessionSuggestion).toHaveBeenCalledTimes(2));
+		expect(mocks.sendSessionSuggestion.mock.calls.map((call) => (call[4] as { idempotencyKey: string }).idempotencyKey)).toEqual(["suggestion-send-sg-1-0", "suggestion-send-sg-1-1"]);
 	});
 
 	it("Dismiss declines it with the driver's grant", async () => {
