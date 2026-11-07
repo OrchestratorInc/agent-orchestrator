@@ -83,6 +83,7 @@ import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
+import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppShortcut } from "../hooks/useAppShortcut";
@@ -316,8 +317,19 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces();
+	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
+	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
+	// What each host showed last stays only for the hosts still saved, and shows
+	// while they connect or are offline.
+	useEffect(() => {
+		if (remoteHostsListed) void syncRemoteCache(queryClient, remoteHostIds);
+	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
+	useEffect(() => {
+		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
+	}, [queryClient, refusedRemoteHostKey]);
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -1095,7 +1107,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
 			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
-			await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
+			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
+			// Only a new orchestrator must be in the list before its route can find it.
+			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
