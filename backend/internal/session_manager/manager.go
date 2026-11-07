@@ -6971,12 +6971,19 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 }
 
 // provisionWorkspace applies the project's per-workspace setup after the
-// worktree exists: symlink shared files from the project repo, then run any
-// post-create commands. Either failing aborts the spawn so a half-provisioned
-// workspace never launches an agent.
+// worktree exists: symlink shared files from the project repo, copy the files
+// .worktreeinclude names, then run any post-create commands. Symlinks go first
+// so the explicit project setting wins over the repository's file. Any step
+// failing aborts the spawn so a half-provisioned workspace never launches an
+// agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindScratch {
+		if err := copyWorktreeInclude(ctx, project.Path, workspacePath); err != nil {
+			return err
+		}
 	}
 	var aoEnv map[string]string
 	if m.takeForkWorkspace(workspacePath) {

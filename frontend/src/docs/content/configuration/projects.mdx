@@ -109,6 +109,14 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
 
+Git projects also honor a `.worktreeinclude` file at the repository root, the same file Claude Code and the Codex app read. It uses `.gitignore` syntax. Each new session workspace gets its own copy of every file that matches it and that Git ignores, such as `.env`, so tracked files are never duplicated. Orchestrator reads the file from your source checkout, so it works even when `.worktreeinclude` itself is not committed. Copying runs after `symlinks` and before `postCreate`: a path listed in `symlinks` stays a link, existing workspace files are not overwritten, and symlinks in the source checkout are skipped.
+
+```text
+.env
+.env.local
+config/secrets.json
+```
+
 Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
 
 Setup steps run in order in separate shells. Each step has its own time limit: 30 minutes unless you set one from 1 to 120 minutes for the step in **Project settings > Scripts**. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a total start budget of 10 minutes plus the setup steps' limits, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
@@ -215,7 +223,7 @@ Keep the harness installed and signed in. Recovery may restore the session, work
 
 **The project does not appear in the dashboard.** Add it in the desktop app or run `ao project add --path /absolute/path/to/repo`. `ao start` opens the app; it does not register a repository. If the repository moved, remove and re-add it or relink it instead of editing `storageKey` manually.
 
-**The agent starts without environment variables.** Add `.env` or the relevant tool configuration directory to `symlinks`. Orchestrator does not copy secrets into worktrees by default.
+**The agent starts without environment variables.** List `.env` in the repository's `.worktreeinclude` to copy it into each session, or add it to `symlinks` to share one live file across sessions. Orchestrator copies nothing into worktrees unless one of these names the file.
 
 **Setup fails before the agent starts.** Check `postCreate`. A failing command stops the session before the agent launches.
 
