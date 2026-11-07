@@ -640,3 +640,34 @@ func TestSweepPicksUpARename(t *testing.T) {
 		t.Fatalf("the old name is still searchable: %s", describe(got))
 	}
 }
+
+// Found in review: the stamp's update time is in whole seconds, so an edit in
+// the same second as the last pass left the stamp unchanged and the sweep
+// skipped it, keeping the old text searchable.
+func TestSweepReindexesAnEditInTheSameSecond(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-same-second", "conv-same-second")
+	created, err := f.store.AppendUserMessage(ctx, "conv-same-second", session.ID, "generation-"+string(session.ID),
+		domain.ConversationMessage{ID: "queued-msg", Origin: domain.MessageOriginHuman, Text: "deploy zzfirst tonight", ClientMessageID: "client-queued"},
+		"turn-queued", testNow)
+	if err != nil || !created {
+		t.Fatalf("AppendUserMessage: created=%v err=%v", created, err)
+	}
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if err := f.store.UpdateQueuedTurnMessage(ctx, "conv-same-second", "turn-queued", "deploy zzsecnd tonight", "", 0,
+		testNow.Add(100*time.Millisecond), domain.ConversationQueuedEditDelivery{}); err != nil {
+		t.Fatalf("UpdateQueuedTurnMessage: %v", err)
+	}
+	if _, err := f.svc.Sweep(ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if got := search(t, f.svc, "zzfirst").Results; len(got) != 0 {
+		t.Fatalf("the edited-away word is still searchable: %s", describe(got))
+	}
+	if len(search(t, f.svc, "zzsecnd").Results) != 1 {
+		t.Fatalf("an edit in the same second was not re-indexed")
+	}
+}

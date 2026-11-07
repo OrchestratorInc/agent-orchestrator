@@ -235,11 +235,11 @@ type SessionSearchConversationStamp struct {
 	ActivitySeqMax int64
 	// UpdatedAt is the newest row timestamp in milliseconds.
 	UpdatedAt int64
-	// Witness covers what changes what is visible or how it is named without
-	// touching a message or activity row: the active branch, rolled-back and
-	// cancelled turns, the conversation's title, and the session's name and
-	// branch. Counts and times alone missed a rollback and a rename, so the
-	// sweep kept serving discarded text and old names.
+	// Witness covers what counts and whole-second times miss: the active
+	// branch, rolled-back and cancelled turns, the conversation's title, the
+	// session's name and branch, and every row's revision with the newest
+	// update time at full precision. Without it the sweep kept serving
+	// discarded text, old names, and text edited in the same second.
 	Witness string
 }
 
@@ -440,6 +440,9 @@ func (r SessionSearchRanking) Weight(kind SessionSearchKind) float64 {
 
 // SessionSearchHit is one ranked index row plus its snippet.
 type SessionSearchHit struct {
+	// DocID is the indexed document's row id. Paging past the candidate cap
+	// uses it to return each result exactly once.
+	DocID     int64
 	SessionID string
 	ProjectID string
 	Harness   string

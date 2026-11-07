@@ -415,3 +415,52 @@ func TestSearchSessionSearchDocsPagesPastTheCandidateCap(t *testing.T) {
 		}
 	}
 }
+
+// Found in review: re-ranking a late page without the cap changed the order
+// between pages. The cap picks by raw bm25, the final order also weighs kinds,
+// so 2,000 short assistant replies filled the cap while 50 longer user
+// messages, which the user weight ranks first, were left out. The page past
+// the cap repeated replies already shown and the user messages were never
+// reached. Paging through everything must return every result exactly once.
+func TestSearchSessionSearchDocsPagingReturnsEveryResultOnceAcrossTheCap(t *testing.T) {
+	s := newTestStore(t)
+	docs := make([]domain.SessionSearchDoc, 0, 2050)
+	for i := range 2000 {
+		docs = append(docs, domain.SessionSearchDoc{
+			SourceKey: fmt.Sprintf("chat:a%04d", i), DocKey: "m1", SessionID: fmt.Sprintf("a%04d", i), ProjectID: "p",
+			Kind: domain.SessionSearchKindAssistant, Body: "zzmixed alpha", IndexedAt: testNow, CreatedAt: testNow,
+		})
+	}
+	for i := range 50 {
+		docs = append(docs, domain.SessionSearchDoc{
+			SourceKey: fmt.Sprintf("chat:u%04d", i), DocKey: "m1", SessionID: fmt.Sprintf("u%04d", i), ProjectID: "p",
+			Kind: domain.SessionSearchKindUser, Body: "zzmixed alpha beta", IndexedAt: testNow, CreatedAt: testNow,
+		})
+	}
+	if err := s.UpsertSessionSearchDocs(context.Background(), docs); err != nil {
+		t.Fatalf("UpsertSessionSearchDocs: %v", err)
+	}
+	for _, group := range []domain.SessionSearchGroup{domain.SessionSearchGroupSession, domain.SessionSearchGroupMessage} {
+		seen := map[string]int{}
+		for offset := 0; offset < 2200; offset += 100 {
+			page, err := s.SearchSessionSearchDocs(context.Background(), domain.SessionSearchParams{
+				MatchQuery: matchExpression("zzmixed"), Limit: 100, Offset: offset, Group: group, SkipSnippets: true,
+			})
+			if err != nil {
+				t.Fatalf("[%s] offset %d: %v", group, offset, err)
+			}
+			for _, hit := range page {
+				seen[hit.SessionID]++
+			}
+		}
+		repeated := 0
+		for _, count := range seen {
+			if count > 1 {
+				repeated++
+			}
+		}
+		if len(seen) != len(docs) || repeated != 0 {
+			t.Fatalf("[%s] paging returned %d distinct results (%d repeated), want all %d exactly once", group, len(seen), repeated, len(docs))
+		}
+	}
+}

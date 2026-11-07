@@ -110,9 +110,12 @@ func (s *Service) indexNativeSession(ctx context.Context, target domain.SessionS
 	// the provider's whole transcript tree, and doing that per session on every
 	// 30-second sweep is the single most expensive thing an idle sweep can do.
 	path := ""
-	if recorded, ok := s.recordedTranscript(target); ok && hadPrevious && recorded == previous.Path {
+	// The transcript the provider last reported is the session's current one,
+	// even when an older one is still on disk: a continuation keeps the AO
+	// session id but starts a new native session and transcript.
+	if recorded, ok := s.recordedTranscript(target); ok {
 		path = recorded
-	} else if hadPrevious && previous.Path != "" {
+	} else if hadPrevious && previous.Path != "" && transcriptNamesSession(previous.Path, target) {
 		for _, root := range s.transcriptRootsFor(target.Harness) {
 			safe, ok := withinRoot(root, previous.Path)
 			if !ok {
@@ -325,6 +328,15 @@ func (s *Service) locateTranscript(target domain.SessionSearchTarget) (string, e
 	default:
 		return "", nil
 	}
+}
+
+// transcriptNamesSession reports whether a cached transcript path still belongs
+// to the session's current native identity. Claude names the file <id>.jsonl
+// and Codex rollout-<time>-<id>.jsonl, so the id appears in the name; a path
+// cached for an earlier native session must be resolved again, not reused.
+func transcriptNamesSession(path string, target domain.SessionSearchTarget) bool {
+	nativeID := strings.TrimSpace(target.NativeSessionID)
+	return nativeID == "" || strings.Contains(filepath.Base(path), nativeID)
 }
 
 // recordedTranscript is the transcript path the provider's hooks reported, if

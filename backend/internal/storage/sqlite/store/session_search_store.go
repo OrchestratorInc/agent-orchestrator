@@ -205,6 +205,9 @@ matched AS (
     FROM candidates c
     JOIN session_search_docs d ON d.id = c.id
     WHERE 1 = 1` + sessionSearchFilterSQL + `
+      -- Paging past the candidate cap leaves out what the capped part returned.
+      AND (? = '' OR d.session_id NOT IN (SELECT value FROM json_each(?)))
+      AND (? = '' OR d.id NOT IN (SELECT value FROM json_each(?)))
 ),
 -- The row's match count ("· 7 matches") is not computed here: these are the
 -- capped, filtered candidates, and the count must equal the find bar's stops.
@@ -346,33 +349,83 @@ func sessionSearchFiltered(params domain.SessionSearchParams) bool {
 // hide matches that exist, and a recency sort wants the newest, not the most
 // relevant, so both run uncapped.
 //
-// A page can also run off the end of the capped candidates: a short page while
-// the cap was reached, or an empty one past the first. The total counts every
-// match, so that page is read again without the cap; otherwise the pages past
-// the first 2,000 documents (and, grouped, far fewer sessions when a few long
-// sessions fill them) were advertised but could never be fetched. The first
-// pages, which nearly every search is, stay capped.
+// The total counts every match, so every page it advertises must be fetchable,
+// and each result must appear exactly once across them. Every page therefore
+// comes from one ranked list: the capped candidates first, in their final
+// order, then everything the cap left out, in the same final order, excluding
+// what the capped part already returned. Re-ranking a late page without the
+// cap would not do: the cap selects by raw bm25, the final order also applies
+// kind weights and tiers, so the two orders disagree and a page past the cap
+// repeated earlier results and never reached others. Pages inside the capped
+// candidates, which nearly every search is, cost one capped pass as before.
 func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams) ([]domain.SessionSearchHit, error) {
 	capped := sessionSearchCandidateCap
 	if params.Sort == domain.SessionSearchSortRecent || sessionSearchFiltered(params) {
 		capped = -1
 	}
-	hits, capReached, err := s.searchSessionSearchDocs(ctx, params, capped)
+	hits, capReached, err := s.searchSessionSearchDocs(ctx, params, sessionSearchPass{capped: capped})
 	if err != nil || capped < 0 {
 		return hits, err
 	}
 	limit := domain.NormalizeSessionSearchLimit(params.Limit)
-	if len(hits) < limit && (capReached || (len(hits) == 0 && params.Offset > 0)) {
-		hits, _, err = s.searchSessionSearchDocs(ctx, params, -1)
+	if len(hits) == limit || (len(hits) > 0 && !capReached) || (len(hits) == 0 && params.Offset <= 0) {
+		return hits, nil
 	}
-	return hits, err
+	// The page runs past the end of the capped part, or past the end of
+	// everything. Listing the capped part tells which, and what to exclude.
+	listing := params
+	listing.Offset, listing.SkipSnippets = 0, true
+	capPart, truncated, err := s.searchSessionSearchDocs(ctx, listing, sessionSearchPass{capped: capped, limit: capped})
+	if err != nil || !truncated {
+		return hits, err
+	}
+	pass := sessionSearchPass{capped: -1, limit: limit - len(hits)}
+	if params.Group != domain.SessionSearchGroupMessage {
+		ids := make([]string, 0, len(capPart))
+		for _, hit := range capPart {
+			ids = append(ids, hit.SessionID)
+		}
+		pass.excludeSessions = jsonArray(ids)
+	} else {
+		ids := make([]int64, 0, len(capPart))
+		for _, hit := range capPart {
+			ids = append(ids, hit.DocID)
+		}
+		encoded, _ := json.Marshal(ids)
+		pass.excludeDocs = string(encoded)
+	}
+	rest := params
+	rest.Offset = max(0, params.Offset-len(capPart))
+	more, _, err := s.searchSessionSearchDocs(ctx, rest, pass)
+	if err != nil {
+		return nil, err
+	}
+	hits = append(hits, more...)
+	for index := range hits {
+		// The rows reach past the cap: the total must be counted exactly.
+		hits[index].MatchTotalCapped = true
+	}
+	return hits, nil
 }
 
-// searchSessionSearchDocs runs one ranked query against the index, keeping at
-// most capped candidates from stage one (-1: all), and reports whether the cap
-// was reached.
-func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams, capped int) ([]domain.SessionSearchHit, bool, error) {
+// sessionSearchPass shapes one ranked query: how many stage-one candidates to
+// keep (-1: all), a row limit overriding the request's (0: the request's), and
+// sessions or documents (JSON arrays) to leave out.
+type sessionSearchPass struct {
+	capped          int
+	limit           int
+	excludeSessions string
+	excludeDocs     string
+}
+
+// searchSessionSearchDocs runs one ranked query against the index and reports
+// whether stage one's candidate cap was reached.
+func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams, pass sessionSearchPass) ([]domain.SessionSearchHit, bool, error) {
+	capped := pass.capped
 	limit := domain.NormalizeSessionSearchLimit(params.Limit)
+	if pass.limit > 0 {
+		limit = pass.limit
+	}
 	offset := max(params.Offset, 0)
 	ranking := params.Ranking
 	recent, grouped, tierFirst := 0, 0, 0
@@ -418,6 +471,7 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 		exact, exact,
 	)
 	args = append(args, sessionSearchFilterArgs(params)...)
+	args = append(args, pass.excludeSessions, pass.excludeSessions, pass.excludeDocs, pass.excludeDocs)
 	skipSnippets := 0
 	if params.SkipSnippets {
 		skipSnippets = 1
@@ -443,6 +497,7 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 			return nil, false, fmt.Errorf("scan session search hit: %w", err)
 		}
 		hit.Kind = domain.SessionSearchKind(kind)
+		hit.DocID = docID
 		hit.CreatedAt = time.UnixMilli(createdAt).UTC()
 		hit.MatchTotalCapped = capped > 0 && candidates >= int64(capped)
 		capReached = capReached || hit.MatchTotalCapped
@@ -1106,7 +1161,14 @@ SELECT c.id,
        COALESCE(s.display_name, '') || char(31) || COALESCE(s.branch, '') || char(31) ||
        (SELECT COUNT(*) || ':' || COALESCE(MAX(t.rolled_back_at), '') || ':' || COALESCE(MAX(t.completed_at), '')
         FROM conversation_turns t
-        WHERE t.conversation_id = c.id AND (t.rolled_back_at IS NOT NULL OR t.state = 'cancelled'))
+        WHERE t.conversation_id = c.id AND (t.rolled_back_at IS NOT NULL OR t.state = 'cancelled')) || char(31) ||
+       -- Every write to a row bumps its revision, and the newest update time is
+       -- kept at full precision: the millisecond column above rounds to whole
+       -- seconds, so an edit in the same second as the last pass went unseen.
+       (SELECT COALESCE(SUM(m.revision), 0) || ':' || COALESCE(MAX(m.updated_at), '')
+        FROM conversation_messages m WHERE m.conversation_id = c.id) || char(31) ||
+       (SELECT COALESCE(SUM(a.revision), 0) || ':' || COALESCE(MAX(a.updated_at), '')
+        FROM conversation_activities a WHERE a.conversation_id = c.id)
 FROM conversations c
 LEFT JOIN review r ON r.id = c.current_review_id
 LEFT JOIN sessions s ON s.id = COALESCE(c.current_session_id, r.session_id)
