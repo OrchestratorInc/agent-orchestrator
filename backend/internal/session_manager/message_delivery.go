@@ -82,7 +82,7 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 		if mode == domain.SessionModeTUI {
 			if detector != nil {
 				ready = false
-				if output, outputErr := m.runtime.GetOutput(ctx, handle, messageDeliveryReadyLines); outputErr == nil {
+				if output, outputErr := m.terminalActivityOutput(ctx, detector, handle, messageDeliveryReadyLines); outputErr == nil {
 					state, authoritative := detector.DetectTerminalActivity(output)
 					ready = authoritative && state == domain.ActivityIdle
 					if !authoritative &&
