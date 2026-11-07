@@ -32,11 +32,32 @@ func (f *fakePanes) Execute(_ context.Context, _ string, action string, args jso
 	return f.result, f.err
 }
 
+// paneAuth stands in for the session lookup and capability check: session
+// "s-1" owns capability "cap-s-1".
+type paneAuth struct{}
+
+func (paneAuth) Get(_ context.Context, id domain.SessionID) (domain.Session, error) {
+	if id != "s-1" {
+		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "no such session")
+	}
+	return domain.Session{ID: id}, nil
+}
+
+func (paneAuth) Valid(id domain.SessionID, token, _ string) bool {
+	return id == "s-1" && token == "cap-s-1"
+}
+
+func paneRequest(method, target, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("X-AO-Browser-Capability", "cap-s-1")
+	return req
+}
+
 func servePanes(t *testing.T, svc controllers.PaneService, method, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := chi.NewRouter()
-	(&controllers.PanesController{Svc: svc}).Register(r)
-	req := httptest.NewRequest(method, "/sessions/s-1/panes", strings.NewReader(body))
+	(&controllers.PanesController{Svc: svc, Sessions: paneAuth{}, Capabilities: paneAuth{}}).Register(r)
+	req := paneRequest(method, "/sessions/s-1/panes", body)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	return rec
@@ -145,9 +166,9 @@ func (f *fakePaneTerminals) CloseSessionTerminal(context.Context, domain.Session
 func servePaneTerminals(t *testing.T, terms *fakePaneTerminals, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := chi.NewRouter()
-	(&controllers.PanesController{Svc: &fakePanes{}, Terminals: terms}).Register(r)
+	(&controllers.PanesController{Svc: &fakePanes{}, Terminals: terms, Sessions: paneAuth{}, Capabilities: paneAuth{}}).Register(r)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
+	r.ServeHTTP(rec, paneRequest(method, target, body))
 	return rec
 }
 
@@ -188,5 +209,31 @@ func TestPaneOutputReturnsTheScreenAndServiceErrors(t *testing.T) {
 	terms.err = apierr.NotFound("PANE_TERMINAL_NOT_FOUND", "no such terminal")
 	if rec := servePaneTerminals(t, terms, http.MethodGet, "/sessions/s-1/panes/output?tab=nope", ""); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "PANE_TERMINAL_NOT_FOUND") {
 		t.Fatalf("not found: status = %d, body = %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPaneRoutesRequireTheSessionCapability(t *testing.T) {
+	terms := &fakePaneTerminals{}
+	r := chi.NewRouter()
+	(&controllers.PanesController{Svc: &fakePanes{connected: true}, Terminals: terms, Sessions: paneAuth{}, Capabilities: paneAuth{}}).Register(r)
+	for _, tc := range []struct{ method, target, body, capability string }{
+		{http.MethodPost, "/sessions/s-1/panes/input", `{"tab":"sh-1","text":"rm -rf"}`, ""},
+		{http.MethodPost, "/sessions/s-1/panes/input", `{"tab":"sh-1","text":"rm -rf"}`, "cap-other"},
+		{http.MethodGet, "/sessions/s-1/panes/output?tab=sh-1", "", ""},
+		{http.MethodGet, "/sessions/s-1/panes", "", "wrong"},
+		{http.MethodPost, "/sessions/s-1/panes", `{"action":"ungroup"}`, ""},
+	} {
+		req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
+		if tc.capability != "" {
+			req.Header.Set("X-AO-Browser-Capability", tc.capability)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "PANE_CAPABILITY_INVALID") {
+			t.Fatalf("%s %s cap=%q: status = %d, body = %s", tc.method, tc.target, tc.capability, rec.Code, rec.Body)
+		}
+	}
+	if terms.typed != "" {
+		t.Fatalf("typed %q without the capability", terms.typed)
 	}
 }

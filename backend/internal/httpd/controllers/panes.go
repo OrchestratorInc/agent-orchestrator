@@ -104,11 +104,48 @@ type PaneCommandRequest struct {
 	Group  *string `json:"group,omitempty" description:"For ungroup: group id. Defaults to the group on screen."`
 }
 
+// PaneSessionLookup finds the session a pane request names, for its
+// capability verifier.
+type PaneSessionLookup interface {
+	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
+}
+
 // PanesController serves split-pane layouts and requests for agents, and
 // lets an agent drive its own session's terminal tabs.
+//
+// Like `ao browser`, every route requires the session's capability
+// (X-AO-Browser-Capability, injected into the owning agent only): a session
+// id alone is not proof, and without it any local process could type into
+// another session's terminals.
 type PanesController struct {
-	Svc       PaneService
-	Terminals PaneTerminalService
+	Svc          PaneService
+	Terminals    PaneTerminalService
+	Sessions     PaneSessionLookup
+	Capabilities SessionCapabilityValidator
+}
+
+// authorize checks that the caller holds the capability of the session it
+// names. It writes the error response and returns false when it does not.
+func (c *PanesController) authorize(w http.ResponseWriter, r *http.Request, sessionID domain.SessionID) bool {
+	if c.Sessions == nil || c.Capabilities == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return false
+	}
+	sess, err := c.Sessions.Get(r.Context(), sessionID)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return false
+	}
+	if sess.IsTerminated {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_TERMINATED", "Session is terminated", nil)
+		return false
+	}
+	if !c.Capabilities.Valid(sessionID, strings.TrimSpace(r.Header.Get(browserCapabilityHeader)), sess.Metadata.BrowserCapabilityVerifier) {
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PANE_CAPABILITY_INVALID",
+			"Pane commands need the owning session's capability; run ao pane from inside that session", nil)
+		return false
+	}
+	return true
 }
 
 // Register mounts the pane routes.
@@ -125,6 +162,9 @@ func (c *PanesController) input(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
+	if !c.authorize(w, r, sessionID) {
+		return
+	}
 	var in PaneInputRequest
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
@@ -159,6 +199,9 @@ func (c *PanesController) output(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
+	if !c.authorize(w, r, sessionID) {
+		return
+	}
 	tab := r.URL.Query().Get("tab")
 	lines := 0
 	if raw := r.URL.Query().Get("lines"); raw != "" {
@@ -183,6 +226,9 @@ func (c *PanesController) layout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := chi.URLParam(r, "sessionId")
+	if !c.authorize(w, r, domain.SessionID(sessionID)) {
+		return
+	}
 	raw, ok := c.Svc.Layout(sessionID)
 	if !ok {
 		writePaneUnavailable(w, r, c.Svc.Connected())
@@ -202,6 +248,9 @@ func (c *PanesController) command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := chi.URLParam(r, "sessionId")
+	if !c.authorize(w, r, domain.SessionID(sessionID)) {
+		return
+	}
 	var in PaneCommandRequest
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
