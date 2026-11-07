@@ -909,17 +909,20 @@ func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID
 	if err != nil {
 		return false, fmt.Errorf("delete session %s: read: %w", id, err)
 	}
+	// The session's own conversations and its reviewers' cascade away with it.
+	// A reviewer's turns name the worker session, though its conversation has
+	// no session_id, so only turns and heads in any other conversation are
+	// shared history.
+	const cascaded = `SELECT id FROM conversations WHERE session_id = ?1
+UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
 	var shared bool
 	if err := tx.QueryRowContext(ctx, `
 SELECT EXISTS (
-    SELECT 1 FROM conversation_turns t
-    JOIN conversations c ON c.id = t.conversation_id
-    WHERE t.handled_by_session_id = ?1
-      AND (c.session_id IS NULL OR c.session_id <> ?1)
+    SELECT 1 FROM conversation_turns
+    WHERE handled_by_session_id = ?1 AND conversation_id NOT IN (`+cascaded+`)
 ) OR EXISTS (
     SELECT 1 FROM conversations
-    WHERE current_session_id = ?1
-      AND (session_id IS NULL OR session_id <> ?1)
+    WHERE current_session_id = ?1 AND id NOT IN (`+cascaded+`)
 )`, id).Scan(&shared); err != nil {
 		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
 	}
@@ -947,8 +950,6 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	// pointing row too. Those links stay inside one conversation, and the
 	// session's own conversations and its reviewers' all go with it, so unlink
 	// them first.
-	const cascaded = `SELECT id FROM conversations WHERE session_id = ?1
-UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_turns SET retry_of_turn_id = NULL
 WHERE retry_of_turn_id IS NOT NULL AND conversation_id IN (`+cascaded+`)`, id); err != nil {

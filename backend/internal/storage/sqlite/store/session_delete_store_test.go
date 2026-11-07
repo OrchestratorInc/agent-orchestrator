@@ -204,7 +204,9 @@ func TestDeleteTerminatedSessionRemovesLinkedConversationHistory(t *testing.T) {
 				t.Fatalf("CreateConversationBranch: %v", err)
 			}
 		},
-		// A reviewer that cannot resume its thread starts a branch under its root.
+		// A reviewer's turns name the worker session, though its conversation
+		// has none. After a turn and a retry, a reviewer that cannot resume
+		// its thread starts a branch under its root.
 		"reviewer": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, _ domain.ConversationRecord) {
 			ctx := context.Background()
 			review := domain.Review{ID: "review-delete", SessionID: session.ID, ProjectID: session.ProjectID,
@@ -212,11 +214,22 @@ func TestDeleteTerminatedSessionRemovesLinkedConversationHistory(t *testing.T) {
 			mustNoError(t, s.UpsertReview(ctx, review))
 			reviewer, err := s.CreateReviewConversation(ctx, "review-delete-conversation", review.ID, session.ProjectID, session.ID, testNow)
 			mustNoError(t, err)
+			if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "review-provider", "review-generation", testNow); err != nil || !claimed {
+				t.Fatalf("ClaimReviewChatController: claimed=%v err=%v", claimed, err)
+			}
+			msg := domain.ConversationMessage{ID: "review-message-1", Origin: domain.MessageOriginHuman, Text: "Review the change"}
+			if created, err := s.AppendReviewUserMessage(ctx, reviewer.ID, session.ID, review.ID, "review-generation", msg, "review-turn-1", testNow); err != nil || !created {
+				t.Fatalf("AppendReviewUserMessage: created=%v err=%v", created, err)
+			}
+			msg.ID = "review-message-2"
+			if created, err := s.AppendReviewRetryUserMessage(ctx, reviewer.ID, session.ID, review.ID, "review-generation", msg, "review-turn-2", "review-turn-1", testNow.Add(time.Second)); err != nil || !created {
+				t.Fatalf("AppendReviewRetryUserMessage: created=%v err=%v", created, err)
+			}
 			mustNoError(t, s.CreateAndActivateReviewConversationBranch(ctx, review.ID, domain.ConversationBranch{
 				ID: "review-fresh", ConversationID: reviewer.ID, SessionID: session.ID,
 				ParentBranchID: reviewer.ActiveBranchID, ProviderConversationID: "fresh-provider",
 				ProviderScopeID: "review-fresh", ProviderIDsScoped: true, CreatedAt: testNow,
-			}, "review-generation", testNow.Add(time.Second)))
+			}, "review-generation", testNow.Add(2*time.Second)))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -231,8 +244,10 @@ func TestDeleteTerminatedSessionRemovesLinkedConversationHistory(t *testing.T) {
 			if err != nil || !deleted {
 				t.Fatalf("delete = %v, %v; want deleted", deleted, err)
 			}
-			if has, err := s.HasConversationTurns(ctx, conversation.ID); err != nil || has {
-				t.Fatalf("turns survived the session: has=%v err=%v", has, err)
+			for _, id := range []string{conversation.ID, "review-delete-conversation"} {
+				if has, err := s.HasConversationTurns(ctx, id); err != nil || has {
+					t.Fatalf("turns of %s survived the session: has=%v err=%v", id, has, err)
+				}
 			}
 		})
 	}
@@ -307,7 +322,7 @@ func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
 // Retention leaves out the sessions delete refuses for shared history: an
 // earlier orchestrator whose turns stay in the project conversation, and the
 // one that conversation now belongs to. Otherwise every pass would retry them.
-// A session's own conversation does not hold it back.
+// A session's own conversation and its reviewer's do not hold it back.
 func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -330,6 +345,12 @@ func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T)
 	ownConversation, err := s.CreateConversation(ctx, "conv-own", domain.ConversationScopeSession, "ret", own.ID, now)
 	mustNoError(t, err)
 	mustNoError(t, s.AdoptProviderTurn(ctx, ownConversation.ID, own.ID, "gen-1", "turn-2", "provider-turn-2", now))
+	review := domain.Review{ID: "review-own", SessionID: own.ID, ProjectID: own.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	mustNoError(t, s.UpsertReview(ctx, review))
+	reviewer, err := s.CreateReviewConversation(ctx, "conv-own-review", review.ID, own.ProjectID, own.ID, now)
+	mustNoError(t, err)
+	mustNoError(t, s.AdoptReviewProviderTurn(ctx, reviewer.ID, own.ID, review.ID, "gen-1", "turn-3", "provider-turn-3", now))
 
 	got, err := s.ListReleasedArchivedSessions(ctx)
 	mustNoError(t, err)
