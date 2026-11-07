@@ -33,13 +33,7 @@ func TestCLIStatusDiagnosticsPreserveFailureWithoutRawOutput(t *testing.T) {
 				}
 				return []byte(tc.output), tc.err
 			}
-			// Only the timeout case may hit the deadline; a 1ms budget let the
-			// others time out under -race on CI.
-			timeout := time.Minute
-			if tc.wait {
-				timeout = time.Millisecond
-			}
-			status, steps, err := CLIStatusWithDiagnostics(context.Background(), "/bin/mock", [][]string{{"status"}}, timeout, nil)
+			status, steps, err := CLIStatusWithDiagnostics(context.Background(), "/bin/mock", [][]string{{"status"}}, time.Millisecond, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
