@@ -1,0 +1,50 @@
+
+BEFORE this PR: the launcher pins ao from the install directory
+--------------------------------------------------------------
+
+PS> whoami
+    yash\codexsandboxoffline
+
+PS> $install = "C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon"
+
+PS> icacls $install
+    Successfully processed 0 files; Failed processing 1 files
+    C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon: Access is denied.
+
+PS> $env:PATH = "$install;$env:PATH"
+PS> ao status
+    CommandNotFoundException: The term 'ao' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+PS> Test-Path "$install\ao.exe"
+    Access is denied
+
+the sandbox can neither stat nor run ao from there
+
+AFTER this PR: the launcher pins ao from the data-directory shim
+---------------------------------------------------------------
+
+PS> whoami
+    yash\codexsandboxoffline
+
+PS> $shim = "C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18"
+
+PS> (Get-Acl $shim).Access | ? IdentityReference -match CodexSandbox
+    
+IdentityReference         FileSystemRights AccessControlType
+-----------------         ---------------- -----------------
+YASH\CodexSandboxUsers Modify, Synchronize             Allow
+
+PS> $env:PATH = "$shim;$env:PATH"
+PS> where.exe ao
+    C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18\ao.cmd
+    C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18\ao.exe
+
+PS> ao --version
+    ao version dev
+
+PS> ao status
+    AO daemon: stopped
+      run file: C:\Users\ACER\.ao\dev\pr-7771-evidence\running.json
+      data dir: C:\Users\ACER\.ao\dev\pr-7771-evidence
+
+ao runs inside the sandbox
