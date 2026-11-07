@@ -7,6 +7,8 @@ import {
 	awayHasNews,
 	composerLockedError,
 	groupFeed,
+	mergeFeedHead,
+	type FeedPages,
 	isPathQuery,
 	MAX_MENTIONS,
 	mentionAskSteps,
@@ -176,9 +178,38 @@ describe("the team feed", () => {
 		expect(awayHasNews(undefined)).toBe(false);
 		expect(awayHasNews(nothing)).toBe(false);
 		expect(awayHasNews({ ...nothing, needsYou: 1 })).toBe(true);
-		expect(awayHasNews({ ...nothing, prsMerged: [{ number: 1, url: "", sessionId: "s", orgId: "o" }] })).toBe(true);
-		expect(awayHasNews({ ...nothing, failed: [{ sessionId: "s", orgId: "o", title: "t" }] })).toBe(true);
+		expect(awayHasNews({ ...nothing, prsMerged: [{ number: 1, url: "", sessionId: "s", orgId: "o", projectId: "p" }] })).toBe(true);
+		expect(awayHasNews({ ...nothing, failed: [{ sessionId: "s", orgId: "o", projectId: "p", title: "t" }] })).toBe(true);
 		expect(awayHasNews({ ...nothing, started: { count: 2, names: ["Ben"] } })).toBe(true);
+	});
+});
+
+describe("mergeFeedHead", () => {
+	const row = (sessionId: string) => ({ orgId: "o", sessionId }) as CloudCpFeedItem;
+	const ids = (data: { pages: Array<{ items: CloudCpFeedItem[] }> }) => data.pages.map((page) => page.items.map((item) => item.sessionId));
+	const fresh = (sessionIds: string[], away?: unknown) => ({ items: sessionIds.map(row), page: { hasMore: true, nextCursor: "fresh" }, ...(away ? { away } : {}) }) as never;
+
+	it("takes a refreshed first page as it is when nothing more was loaded", () => {
+		const data: FeedPages = { pages: [{ items: [row("a")], page: { hasMore: true, nextCursor: "c1" } }], pageParams: [undefined] };
+		const merged = mergeFeedHead(data, fresh(["n", "a"], { needsYou: 1 }));
+		expect(ids(merged)).toEqual([["n", "a"]]);
+		expect(merged.pages[0]!.page.nextCursor).toBe("fresh");
+		expect(merged.pages[0]!.away).toEqual({ needsYou: 1 });
+	});
+
+	it("lays it over the pages Show more loaded, losing no row and showing none twice", () => {
+		const data: FeedPages = {
+			pages: [
+				{ items: [row("a"), row("b")], page: { hasMore: true, nextCursor: "c1" } },
+				{ items: [row("c"), row("d")], page: { hasMore: false } },
+			],
+			pageParams: [undefined, "c1"],
+		};
+		// n is new, d moved up; b fell off the refreshed page but sits under it.
+		const merged = mergeFeedHead(data, fresh(["n", "d", "a"]));
+		expect(ids(merged)).toEqual([["n", "d", "a", "b"], ["c"]]);
+		expect(merged.pageParams).toEqual([undefined, "c1"]);
+		expect(merged.pages[0]!.page.nextCursor).toBe("c1");
 	});
 });
 

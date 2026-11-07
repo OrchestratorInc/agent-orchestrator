@@ -338,12 +338,8 @@ export type CloudCpSuggestion = Suggestion;
 export type CloudCpSuggestionEnvelope = SuggestionEnvelope;
 /** chat.suggestion_created or chat.suggestion_resolved, with the suggestion as its payload. */
 export type CloudCpSuggestionEvent = SuggestionEvent;
-/**
- * POST .../suggestions takes only the aside: a suggestion is always the aside's own
- * words, and the CP refuses any other field with a 400. Rewording happens only on
- * the driver's side, through /send with `text`, attributed to the driver.
- */
-export type CloudCpCreateSuggestionInput = Pick<CreateSuggestionInput, "asideId">;
+/** POST .../suggestions: the aside alone; a suggestion says what its aside says. */
+export type CloudCpCreateSuggestionInput = CreateSuggestionInput;
 export type CloudCpSendSuggestionInput = SendSuggestionInput;
 export type CloudCpSendSuggestionResult = SendSuggestionResult;
 export type CloudCpDismissSuggestionInput = DismissSuggestionInput;
@@ -356,6 +352,8 @@ export type CloudCpFeedAway = FeedAway;
 /** GET /me/feed: newest activity first, paginated by (updated_at, id); the first page carries `away`. */
 export type CloudCpFeedResponse = FeedPage;
 export type CloudCpMarkFeedSeenResult = MarkFeedSeenResult;
+/** POST /me/feed/seen: caught up now, or at `seenAt` (never later than now). */
+export type CloudCpMarkFeedSeenInput = MarkFeedSeenInput;
 
 export interface CloudCpFeedQuery extends CloudCpListQuery {
 	scope?: CloudCpFeedScope;
@@ -375,6 +373,7 @@ import type {
 	FeedItem,
 	FeedPage,
 	FeedScope,
+	MarkFeedSeenInput,
 	MarkFeedSeenResult,
 	Mention,
 	MentionCandidates,

@@ -27,6 +27,8 @@ export interface UseCloudCpResult {
 	baseUrl: string;
 	/** Signed-in cloud user id, or "" when signed out. */
 	userId: string;
+	/** Known to be signed out (not still finding out). */
+	signedOut: boolean;
 }
 
 /**
@@ -47,5 +49,6 @@ export function useCloudCp(enabled = true): UseCloudCpResult {
 		ready: cloudEnabled && status === "authenticated" && baseUrl !== "",
 		baseUrl,
 		userId: session?.user.id ?? "",
+		signedOut: status === "unauthenticated",
 	};
 }

@@ -1,7 +1,7 @@
 import { CircleX, Eye, GitMerge, GitPullRequest, Hand, LoaderCircle, Plus, Users } from "lucide-react";
 import { ScrollArea } from "radix-ui";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useMarkFeedSeen, useTeamCollabSupport, useTeamFeed } from "../hooks/useTeamCollab";
@@ -15,11 +15,13 @@ import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { PersonAvatar } from "./teams/TeamVisuals";
 import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Pressable } from "./ui/pressable";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { joinNames } from "./chat/TeamComposerBars";
 
 const TABS = [
-	{ scope: "team", label: "feed.tab.team" },
+	{ scope: "team", label: "feed.tab.all" },
 	{ scope: "mine", label: "feed.tab.mine" },
 	{ scope: "following", label: "feed.tab.following" },
 ] as const satisfies ReadonlyArray<{ scope: CloudCpFeedScope; label: string }>;
@@ -34,51 +36,66 @@ const EMPTY = {
 const ROW_PEOPLE = 3;
 
 /**
- * What the team's agents are doing, across projects: Team, Mine and
+ * What the team's agents are doing, across projects: All, Mine and
  * Following; what changed since your last visit; then the sessions that need
  * someone, the ones working now, and the rest. A row opens its session.
  */
 export function TeamFeedView() {
 	const { t, i18n } = useTranslation();
 	const support = useTeamCollabSupport();
+	const { userId, signedOut } = useCloudCp();
 	const [scope, setScope] = useState<CloudCpFeedScope>("team");
 	const feed = useTeamFeed(scope, support !== "unsupported");
 	const markSeen = useMarkFeedSeen();
 	const navigateToSession = useNavigateToSession();
-	const { client } = useCloudCp();
 	const openBell = useUiStore((state) => state.requestNotificationCenterOpen);
 	const listTop = useRef<HTMLDivElement>(null);
+	const tabsId = useId();
+	const tabRefs = useRef<Partial<Record<CloudCpFeedScope, HTMLButtonElement | null>>>({});
 
 	const pages = feed.data?.pages ?? [];
 	const items = pages.flatMap((page) => page.items);
 	const away = pages[0]?.away;
 	const groups = groupFeed(items);
 
-	// Leaving the page is the visit: the next "While you were away" counts from it.
-	const seen = useRef({ visited: false, mark: markSeen.mutate });
+	// Leaving the page is the visit, as of the last read someone could see: the
+	// next "While you were away" counts from there. Nothing is recorded when the
+	// last read failed, or when the window stayed hidden the whole time.
+	const seen = useRef<{ at?: number; failed: boolean; mark: (seenAt?: string) => void }>({ failed: false, mark: markSeen.mutate });
 	seen.current.mark = markSeen.mutate;
-	if (feed.isSuccess) seen.current.visited = true;
+	seen.current.failed = feed.lastReadFailed;
+	const readAt = feed.isSuccess ? feed.readAt : 0;
+	useEffect(() => {
+		const note = () => {
+			if (readAt > 0 && document.visibilityState === "visible") seen.current.at = readAt;
+		};
+		note();
+		document.addEventListener("visibilitychange", note);
+		return () => document.removeEventListener("visibilitychange", note);
+	}, [readAt]);
 	useEffect(() => () => {
-		if (seen.current.visited) seen.current.mark();
+		const { at, failed, mark } = seen.current;
+		if (at && !failed) mark(new Date(at).toISOString());
 	}, []);
 
 	const openSession = (projectId: string | undefined, sessionId: string) => navigateToSession(projectId, sessionId);
-	// A merged PR or a stopped session names its organization: its project comes
-	// from the feed when the session is on it, else from the session itself.
-	const openAwaySession = (orgId: string, sessionId: string) => {
-		const listed = items.find((item) => item.orgId === orgId && item.sessionId === sessionId);
-		if (listed) {
-			openSession(listed.projectId, sessionId);
-			return;
-		}
-		void client.getSession(orgId, sessionId).then(
-			(answer) => openSession(answer.session.projectId, sessionId),
-			() => openSession(undefined, sessionId),
-		);
+	const moveTab = (event: KeyboardEvent<HTMLDivElement>) => {
+		const at = TABS.findIndex((tab) => tab.scope === scope);
+		const next = event.key === "ArrowRight" ? (at + 1) % TABS.length
+			: event.key === "ArrowLeft" ? (at - 1 + TABS.length) % TABS.length
+			: event.key === "Home" ? 0
+			: event.key === "End" ? TABS.length - 1
+			: -1;
+		if (next < 0) return;
+		event.preventDefault();
+		setScope(TABS[next]!.scope);
+		tabRefs.current[TABS[next]!.scope]?.focus();
 	};
 
 	let body: ReactNode;
-	if (support === "unsupported") {
+	if (signedOut) {
+		body = <p className="py-16 text-center text-sm text-muted-foreground" data-feed-signed-out="">{t("feed.signedOut")}</p>;
+	} else if (support === "unsupported") {
 		body = <p className="py-16 text-center text-sm text-muted-foreground">{t("feed.unavailable")}</p>;
 	} else if (feed.isPending) {
 		body = <p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("feed.loading")}</p>;
@@ -96,9 +113,10 @@ export function TeamFeedView() {
 					<AwayCard
 						away={away!}
 						locale={i18n.language}
-						onMarkCaughtUp={() => markSeen.mutate()}
+						markFailed={markSeen.isError}
+						onMarkCaughtUp={() => markSeen.mutate(undefined)}
 						onNeedsYou={openBell}
-						onOpenSession={openAwaySession}
+						onOpenSession={openSession}
 						onStarted={() => {
 							setScope("team");
 							listTop.current?.scrollIntoView({ block: "start" });
@@ -109,7 +127,7 @@ export function TeamFeedView() {
 				{groups.length === 0 ? (
 					<p className="py-16 text-center text-sm text-muted-foreground" data-feed-empty={scope}>{t(EMPTY[scope])}</p>
 				) : (
-					<FeedGroups groups={groups} locale={i18n.language} onOpen={(item) => openSession(item.projectId, item.sessionId)} />
+					<FeedGroups groups={groups} locale={i18n.language} me={userId} onOpen={(item) => openSession(item.projectId, item.sessionId)} />
 				)}
 				{feed.hasNextPage ? (
 					<div className="flex justify-center">
@@ -129,16 +147,20 @@ export function TeamFeedView() {
 				lead={
 					<>
 						<PageTopbarTitle as="h1" icon={<Users className="size-icon-md" aria-hidden="true" />}>{t("feed.title")}</PageTopbarTitle>
-						<div aria-label={t("feed.tabsLabel")} className="inline-flex shrink-0 items-center gap-0.5" role="tablist">
+						<div aria-label={t("feed.tabsLabel")} className="inline-flex shrink-0 items-center gap-0.5" onKeyDown={moveTab} role="tablist">
 							{TABS.map((tab) => (
 								<TopbarButton
+									aria-controls={`${tabsId}-panel`}
 									aria-selected={scope === tab.scope}
 									className="data-[active=true]:text-foreground"
 									data-active={scope === tab.scope ? "true" : undefined}
 									highlightActive={scope === tab.scope}
+									id={`${tabsId}-${tab.scope}`}
 									key={tab.scope}
 									onClick={() => setScope(tab.scope)}
+									ref={(node: HTMLButtonElement | null) => { tabRefs.current[tab.scope] = node; }}
 									role="tab"
+									tabIndex={scope === tab.scope ? 0 : -1}
 									variant="secondary"
 								>
 									{t(tab.label)}
@@ -151,7 +173,7 @@ export function TeamFeedView() {
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-5 py-4" role="tabpanel">
+						<div aria-labelledby={`${tabsId}-${scope}`} className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-5 py-4" id={`${tabsId}-panel`} role="tabpanel">
 							{body}
 						</div>
 					</ScrollArea.Viewport>
@@ -162,14 +184,14 @@ export function TeamFeedView() {
 }
 
 /** The feed's groups, each a heading with its count and one shared list of rows. */
-export function FeedGroups({ groups, locale, onOpen }: { groups: FeedGroup[]; locale: string; onOpen: (item: CloudCpFeedItem) => void }) {
+export function FeedGroups({ groups, locale, me, onOpen }: { groups: FeedGroup[]; locale: string; me?: string; onOpen: (item: CloudCpFeedItem) => void }) {
 	const { t } = useTranslation();
 	return groups.map((group) => (
 		<section aria-label={groupTitle(group.id, group.items.length, t)} className="flex flex-col gap-1.5" data-feed-group={group.id} key={group.id}>
 			<h2 className="px-1 text-caption text-muted-foreground">{groupTitle(group.id, group.items.length, t)}</h2>
 			<ul className="flex flex-col overflow-hidden rounded-lg bg-card">
 				{group.items.map((item) => (
-					<FeedRow item={item} key={`${item.orgId}:${item.sessionId}`} locale={locale} onOpen={() => onOpen(item)} />
+					<FeedRow item={item} key={`${item.orgId}:${item.sessionId}`} locale={locale} me={me} onOpen={() => onOpen(item)} />
 				))}
 			</ul>
 		</section>
@@ -185,45 +207,57 @@ function groupTitle(id: FeedGroupId, count: number, t: TFunction): string {
 /**
  * What changed since the last visit, one line each, each one clickable: the
  * count that needs you opens the bell, a merged PR or a failed session opens
- * its session, and new sessions show the whole team.
+ * its session, and new sessions show the whole team. When it counts from
+ * sits in the title's tooltip; ✕ marks it all seen.
  */
-export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSession, onStarted }: {
+export function AwayCard({ away, locale, markFailed, onMarkCaughtUp, onNeedsYou, onOpenSession, onStarted }: {
 	away: CloudCpFeedAway;
 	locale: string;
+	/** The last "Mark caught up" didn't go through. */
+	markFailed?: boolean;
 	onMarkCaughtUp: () => void;
 	onNeedsYou: () => void;
-	onOpenSession: (orgId: string, sessionId: string) => void;
+	onOpenSession: (projectId: string, sessionId: string) => void;
 	onStarted: () => void;
 }) {
 	const { t } = useTranslation();
-	const since = sinceLabel(away.since, locale);
+	const since = sinceLabel(away.since, locale, t);
 	const line = "flex min-w-0 items-center gap-2 text-xs text-muted-foreground";
+	const count = <b className="font-semibold text-foreground tabular-nums" />;
+	const title = <h2 className="text-control font-medium text-foreground" tabIndex={since ? 0 : undefined}>{t("feed.away.title")}</h2>;
 	return (
 		<section aria-label={t("feed.away.title")} className="flex flex-col gap-2 rounded-lg bg-card px-4 py-3" data-feed-away="">
 			<div className="flex min-w-0 items-center gap-2">
-				<h2 className="text-control font-medium text-foreground">{t("feed.away.title")}</h2>
-				{since ? <span className="truncate text-caption text-muted-foreground">{t("feed.away.since", { time: since })}</span> : null}
+				{since ? (
+					<Tooltip>
+						<TooltipTrigger asChild>{title}</TooltipTrigger>
+						<TooltipContent>{t("feed.away.since", { time: since })}</TooltipContent>
+					</Tooltip>
+				) : title}
 				<span className="flex-1" />
-				<Button onClick={onMarkCaughtUp} size="xs" type="button" variant="quiet">{t("feed.away.markCaughtUp")}</Button>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<CloseButton aria-label={t("feed.away.markCaughtUp")} onClick={onMarkCaughtUp} size="icon-xs" />
+					</TooltipTrigger>
+					<TooltipContent>{t("feed.away.markCaughtUp")}</TooltipContent>
+				</Tooltip>
 			</div>
 			<ul className="flex flex-col gap-1.5">
 				{away.needsYou > 0 ? (
 					<li>
 						<Pressable className={cn(line, "hover:text-foreground")} data-away="needs" onClick={onNeedsYou} type="button">
 							<Hand aria-hidden="true" className="size-3.5 shrink-0 text-status-needs-you" />
-							<b className="font-semibold text-foreground tabular-nums">{away.needsYou}</b>
-							<span>{t("feed.away.needsYou", { count: away.needsYou })}</span>
+							<span><Trans t={t} i18nKey="feed.away.needsYou" count={away.needsYou} components={{ b: count }} /></span>
 						</Pressable>
 					</li>
 				) : null}
 				{away.prsMerged.length > 0 ? (
 					<li className={line} data-away="merged">
 						<GitMerge aria-hidden="true" className="size-3.5 shrink-0 text-status-merged" />
-						<b className="font-semibold text-foreground tabular-nums">{away.prsMerged.length}</b>
-						<span className="shrink-0">{t("feed.away.prsMerged", { count: away.prsMerged.length })}</span>
+						<span className="shrink-0"><Trans t={t} i18nKey="feed.away.prsMerged" count={away.prsMerged.length} components={{ b: count }} /></span>
 						<span className="flex min-w-0 flex-wrap gap-x-1.5">
 							{away.prsMerged.map((pr) => (
-								<Button className="h-auto p-0 text-xs" key={`${pr.sessionId}:${pr.number}`} onClick={() => onOpenSession(pr.orgId, pr.sessionId)} type="button" variant="link">
+								<Button className="h-auto p-0 text-xs" key={`${pr.sessionId}:${pr.number}`} onClick={() => onOpenSession(pr.projectId, pr.sessionId)} type="button" variant="link">
 									#{pr.number}
 								</Button>
 							))}
@@ -233,11 +267,10 @@ export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSessi
 				{away.failed.length > 0 ? (
 					<li className={line} data-away="failed">
 						<CircleX aria-hidden="true" className="size-3.5 shrink-0 text-error" />
-						<b className="font-semibold text-foreground tabular-nums">{away.failed.length}</b>
-						<span className="shrink-0">{t("feed.away.failed", { count: away.failed.length })}</span>
+						<span className="shrink-0"><Trans t={t} i18nKey="feed.away.failed" count={away.failed.length} components={{ b: count }} /></span>
 						<span className="flex min-w-0 flex-wrap gap-x-1.5">
 							{away.failed.map((session) => (
-								<Button className="h-auto max-w-full truncate p-0 text-xs" key={session.sessionId} onClick={() => onOpenSession(session.orgId, session.sessionId)} type="button" variant="link">
+								<Button className="h-auto max-w-full truncate p-0 text-xs" key={session.sessionId} onClick={() => onOpenSession(session.projectId, session.sessionId)} type="button" variant="link">
 									{session.title}
 								</Button>
 							))}
@@ -248,55 +281,88 @@ export function AwayCard({ away, locale, onMarkCaughtUp, onNeedsYou, onOpenSessi
 					<li>
 						<Pressable className={cn(line, "hover:text-foreground")} data-away="started" onClick={onStarted} type="button">
 							<Plus aria-hidden="true" className="size-3.5 shrink-0" />
-							<b className="font-semibold text-foreground tabular-nums">{away.started.count}</b>
-							<span className="truncate">{t("feed.away.started", { count: away.started.count, names: joinNames(away.started.names, locale) })}</span>
+							<span className="truncate">
+								{away.started.names.length > 0
+									? <Trans t={t} i18nKey="feed.away.started" count={away.started.count} values={{ names: joinNames(away.started.names, locale) }} components={{ b: count }} />
+									: <Trans t={t} i18nKey="feed.away.startedNoNames" count={away.started.count} components={{ b: count }} />}
+							</span>
 						</Pressable>
 					</li>
 				) : null}
 			</ul>
+			{markFailed ? <p className="text-xs text-muted-foreground" role="status">{t("feed.away.markFailed")}</p> : null}
 		</section>
 	);
 }
 
-function sinceLabel(since: string, locale: string): string | undefined {
-	const at = Date.parse(since);
-	if (!Number.isFinite(at)) return undefined;
+const DAY_MS = 86_400_000;
+
+/**
+ * When "While you were away" counts from, as a chat app says it: the time
+ * today, "yesterday" and the time, the weekday and time within the week, and
+ * the date beyond it, so last Sunday never reads as this morning.
+ */
+export function sinceLabel(since: string, locale: string, t: TFunction, now = new Date()): string | undefined {
+	const at = new Date(since);
+	if (!Number.isFinite(at.getTime())) return undefined;
+	const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+	const days = Math.round((day(now) - day(at)) / DAY_MS);
 	try {
-		return new Intl.DateTimeFormat(locale, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(at);
+		const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(at);
+		if (days <= 0) return time;
+		if (days === 1) return t("feed.away.yesterday", { time });
+		if (days < 7) return new Intl.DateTimeFormat(locale, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(at);
+		return new Intl.DateTimeFormat(locale, at.getFullYear() === now.getFullYear()
+			? { month: "short", day: "numeric" }
+			: { month: "short", day: "numeric", year: "numeric" }).format(at);
 	} catch {
 		return undefined;
 	}
 }
 
-/** One session: where it stands, whose it is, its title, one line, who else is in it, and when. */
-function FeedRow({ item, locale, onOpen }: { item: CloudCpFeedItem; locale: string; onOpen: () => void }) {
+/**
+ * One session: where it stands, whose it is, its title, one line, who else is
+ * in it, and when. Its tooltip says where it is, who started it and who else
+ * is in it; the eye marks a session you follow but didn't start.
+ */
+function FeedRow({ item, locale, me, onOpen }: { item: CloudCpFeedItem; locale: string; me?: string; onOpen: () => void }) {
 	const { t } = useTranslation();
 	const others = item.people.slice(0, ROW_PEOPLE);
-	const line = item.worker ? `${t("feed.worker", { index: item.worker.index, of: item.worker.of })} · ${item.line}` : item.line;
+	const more = item.people.length - others.length;
+	const line = item.worker ? t("feed.workerLine", { index: item.worker.index, of: item.worker.of, line: item.line }) : item.line;
+	const everyone = item.people.map((person) => person.name);
+	const tooltip = [
+		item.projectName ? t("feed.row.where", { project: item.projectName, title: item.title }) : item.title,
+		t("feed.row.owner", { name: item.owner.name }),
+		...(everyone.length > 0 ? [t("feed.alsoHere", { names: joinNames(everyone, locale) })] : []),
+	].join("\n");
 	return (
 		<li className="border-b border-border last:border-b-0">
 			<Pressable
 				className="grid w-full grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto_3.5rem] items-center gap-x-2.5 px-3 py-2 text-left transition-none hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
 				data-feed-row={item.sessionId}
 				onClick={onOpen}
-				title={item.projectName ? `${item.projectName} · ${item.title}` : item.title}
+				title={tooltip}
 				type="button"
 			>
 				<FeedStatusMark status={item.status} />
-				<PersonAvatar name={item.owner.name} size="sm" />
+				<span aria-label={item.owner.name} className="inline-flex" data-feed-owner="" role="img">
+					<PersonAvatar name={item.owner.name} size="sm" />
+				</span>
 				<span className="flex min-w-0 flex-col">
 					<span className="flex min-w-0 items-center gap-1.5">
 						<span className="truncate text-control text-foreground">{item.title}</span>
-						{item.following ? <Eye aria-label={t("feed.following")} className="size-3 shrink-0 text-passive" role="img" /> : null}
+						{item.following && item.owner.userId !== me ? <Eye aria-label={t("feed.following")} className="size-3 shrink-0 text-muted-foreground" role="img" /> : null}
 					</span>
 					<span className="truncate text-xs text-muted-foreground">{line}</span>
 				</span>
 				<span
-					aria-label={others.length > 0 ? t("feed.alsoHere", { names: joinNames(item.people.map((person) => person.name), locale) }) : undefined}
-					className="flex shrink-0 gap-0.5"
+					aria-label={others.length > 0 ? t("feed.alsoHere", { names: joinNames(everyone, locale) }) : undefined}
+					className="flex shrink-0 items-center gap-0.5"
 					role={others.length > 0 ? "img" : undefined}
 				>
 					{others.map((person) => <PersonAvatar key={person.userId} name={person.name} size="xs" />)}
+					{more > 0 ? <span aria-hidden="true" className="ml-0.5 text-caption tabular-nums text-muted-foreground" data-feed-more="">+{more}</span> : null}
 				</span>
 				<time className="text-right text-caption tabular-nums text-muted-foreground" dateTime={item.updatedAt}>
 					{formatTimeCompact(item.updatedAt)}

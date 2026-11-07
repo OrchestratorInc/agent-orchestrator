@@ -666,11 +666,17 @@ describe("Cloud control-plane asides, mentions and the team feed", () => {
 
 	it("sends a suggestion as the driver's message, with its settings and grant, and dismisses one", async () => {
 		const { fetchImpl, client: cp } = client(() => json({ event: {}, suggestion: {} }, 202));
-		await cp.sendSessionSuggestion("org", "session", "sg 1", { text: "Edited", composerEpoch: 4, model: "opus", reasoningEffort: "high", mode: "standard", approvalMode: "auto" }, { idempotencyKey: "send-1" });
+		const message = {
+			text: "Edited @Chen Wei", attachmentIds: ["file-1"], mentions: [{ kind: "person" as const, userId: "u-chen" }],
+			displayText: "Edited @Chen Wei", content: [{ type: "quote", text: "q" }],
+			composerEpoch: 4, model: "opus", reasoningEffort: "high" as const, mode: "standard" as const, approvalMode: "auto" as const,
+		};
+		await cp.sendSessionSuggestion("org", "session", "sg 1", message, { idempotencyKey: "send-1" });
 		await cp.dismissSessionSuggestion("org", "session", "sg 1", { composerEpoch: 4 });
 		await cp.dismissSessionSuggestion("org", "session", "sg 2");
 		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions/sg%201/send");
-		expect(JSON.parse(call(fetchImpl, 0)[1].body as string)).toEqual({ text: "Edited", composerEpoch: 4, model: "opus", reasoningEffort: "high", mode: "standard", approvalMode: "auto" });
+		// The whole message goes, as POST .../messages takes it.
+		expect(JSON.parse(call(fetchImpl, 0)[1].body as string)).toEqual(message);
 		expect(key(call(fetchImpl, 0)[1])).toBe("send-1");
 		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions/sg%201/dismiss");
 		expect(JSON.parse(call(fetchImpl, 1)[1].body as string)).toEqual({ composerEpoch: 4 });
@@ -680,7 +686,7 @@ describe("Cloud control-plane asides, mentions and the team feed", () => {
 
 	it("reports a resolved suggestion and a locked composer by their codes", async () => {
 		const { client: cp } = client(() => json({ error: "conflict", code: "suggestion_resolved", message: "The suggestion was already sent or dismissed.", requestId: "r" }, 409));
-		await expect(cp.sendSessionSuggestion("org", "session", "sg", {})).rejects.toMatchObject({ status: 409, code: "suggestion_resolved" });
+		await expect(cp.sendSessionSuggestion("org", "session", "sg", { text: "" })).rejects.toMatchObject({ status: 409, code: "suggestion_resolved" });
 		const locked = client(() => json({ error: "conflict", code: "COMPOSER_LOCKED", message: "Someone else is writing.", requestId: "r" }, 409));
 		await expect(locked.client.dismissSessionSuggestion("org", "session", "sg", { composerEpoch: 1 })).rejects.toMatchObject({ status: 409, code: "COMPOSER_LOCKED" });
 	});
@@ -690,10 +696,13 @@ describe("Cloud control-plane asides, mentions and the team feed", () => {
 		await cp.getMyFeed({ scope: "following", cursor: "c1", limit: 30 });
 		await cp.getMyFeed();
 		await expect(cp.markMyFeedSeen()).resolves.toEqual(expect.objectContaining({ seenAt: "2026-11-08T00:00:00Z" }));
+		await cp.markMyFeedSeen({ seenAt: "2026-11-08T09:00:00.000Z" });
 		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed?scope=following&cursor=c1&limit=30");
 		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed");
 		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed/seen");
 		expect(call(fetchImpl, 2)[1].method).toBe("POST");
+		expect(JSON.parse(call(fetchImpl, 2)[1].body as string)).toEqual({});
+		expect(JSON.parse(call(fetchImpl, 3)[1].body as string)).toEqual({ seenAt: "2026-11-08T09:00:00.000Z" });
 	});
 
 	it("sends a message's or a steer's mentions as typed tokens beside the text", async () => {

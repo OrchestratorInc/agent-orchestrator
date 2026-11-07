@@ -48,6 +48,7 @@ import type {
 	CloudCpSuggestion,
 	CloudCpSuggestionEnvelope,
 	CloudCpCreateSuggestionInput,
+	CloudCpMarkFeedSeenInput,
 	CloudCpSendSuggestionInput,
 	CloudCpSendSuggestionResult,
 	CloudCpDismissSuggestionInput,
@@ -595,8 +596,8 @@ export interface CloudCpClient {
 	dismissSessionSuggestion(orgId: string, sessionId: string, suggestionId: string, body?: CloudCpDismissSuggestionInput, options?: CloudCpRequestOptions): Promise<CloudCpSuggestionEnvelope>;
 	/** The sessions the caller may open now, newest activity first, with what changed since their last visit. */
 	getMyFeed(query?: CloudCpFeedQuery, options?: CloudCpRequestOptions): Promise<CloudCpFeedResponse>;
-	/** Records the caller's visit to the feed, so "While you were away" counts from now. */
-	markMyFeedSeen(options?: CloudCpRequestOptions): Promise<CloudCpMarkFeedSeenResult>;
+	/** Records the caller's visit to the feed, so "While you were away" counts from now, or from `seenAt`. */
+	markMyFeedSeen(body?: CloudCpMarkFeedSeenInput, options?: CloudCpRequestOptions): Promise<CloudCpMarkFeedSeenResult>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -1288,7 +1289,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/suggestions/${seg(suggestionId)}/dismiss`, { body: body ?? {}, signal: o?.signal }),
 		getMyFeed: (query, o) =>
 			requestJson("GET", "/me/feed", { query: { scope: query?.scope, cursor: query?.cursor, limit: query?.limit }, signal: o?.signal }),
-		markMyFeedSeen: (o) => requestJson("POST", "/me/feed/seen", { body: {}, signal: o?.signal }),
+		markMyFeedSeen: (body, o) => requestJson("POST", "/me/feed/seen", { body: body ?? {}, signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

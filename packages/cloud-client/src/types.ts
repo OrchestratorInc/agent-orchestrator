@@ -269,6 +269,7 @@ export type CreateSuggestionInput = operations["createSessionSuggestion"]["reque
 export type SendSuggestionInput = NonNullable<operations["sendSessionSuggestion"]["requestBody"]>["content"]["application/json"];
 export type SendSuggestionResult = operations["sendSessionSuggestion"]["responses"][202]["content"]["application/json"];
 export type DismissSuggestionInput = NonNullable<operations["dismissSessionSuggestion"]["requestBody"]>["content"]["application/json"];
+export type MarkFeedSeenInput = NonNullable<operations["markMyFeedSeen"]["requestBody"]>["content"]["application/json"];
 export type MarkFeedSeenResult = operations["markMyFeedSeen"]["responses"][200]["content"]["application/json"];
 
 export interface RequestOptions {

@@ -55,6 +55,29 @@ describe("useTeamCollabSupport", () => {
 		expect(result.current).toBe("unknown");
 	});
 
+	it("draws the last run's answer at once, and still asks this run in the background", async () => {
+		window.localStorage.setItem("ao.teamCollabSupport:https://cp.test", "supported");
+		const { result } = renderHook(() => useTeamCollabSupport(), { wrapper });
+		expect(result.current).toBe("supported");
+		await waitFor(() => expect(mocks.getMyFeed).toHaveBeenCalledTimes(1));
+		expect(result.current).toBe("supported");
+	});
+
+	it("takes this run's answer over the remembered one, and keeps the remembered one while offline", async () => {
+		window.localStorage.setItem("ao.teamCollabSupport:https://cp.test", "supported");
+		mocks.getMyFeed.mockRejectedValue(new CloudCpError("Boom", { status: 503, code: "unavailable" }));
+		const offline = renderHook(() => useTeamCollabSupport(), { wrapper });
+		await waitFor(() => expect(mocks.getMyFeed).toHaveBeenCalled());
+		await act(async () => undefined);
+		expect(offline.result.current).toBe("supported");
+		offline.unmount();
+		client.clear();
+		mocks.getMyFeed.mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
+		const { result } = renderHook(() => useTeamCollabSupport(), { wrapper });
+		await waitFor(() => expect(result.current).toBe("unsupported"));
+		expect(window.localStorage.getItem("ao.teamCollabSupport:https://cp.test")).toBe("unsupported");
+	});
+
 	it("asks nothing while signed out", async () => {
 		mocks.ready = false;
 		const { result } = renderHook(() => useTeamCollabSupport(), { wrapper });
@@ -83,8 +106,10 @@ describe("useTeamFeed and useMarkFeedSeen", () => {
 		const feed = renderHook(() => useTeamFeed("team"), { wrapper });
 		await waitFor(() => expect(feed.result.current.data?.pages[0]?.away).toBeDefined());
 		const seen = renderHook(() => useMarkFeedSeen(), { wrapper });
-		await act(async () => { await seen.result.current.mutateAsync(); });
-		expect(mocks.markMyFeedSeen).toHaveBeenCalledTimes(1);
+		await act(async () => { await seen.result.current.mutateAsync(undefined); });
+		expect(mocks.markMyFeedSeen).toHaveBeenCalledWith({});
+		await act(async () => { await seen.result.current.mutateAsync("2026-11-08T09:00:00.000Z"); });
+		expect(mocks.markMyFeedSeen).toHaveBeenLastCalledWith({ seenAt: "2026-11-08T09:00:00.000Z" });
 		const cached = client.getQueryData<{ pages: Array<{ away?: unknown }> }>(teamFeedQueryKey("https://cp.test", "user-me", "team"));
 		expect(cached?.pages[0]?.away).toBeUndefined();
 	});

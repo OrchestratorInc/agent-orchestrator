@@ -1591,7 +1591,8 @@ export function CloudSessionChatSurface({
 	const suggestionSendBody = (text?: string): CloudCpSendSuggestionInput => {
 		const { reasoningEffort, ...settings } = turnSettingsRequest();
 		return {
-			...(text ? { text } : {}),
+			// Empty, the suggestion goes as its own text.
+			text: text ?? "",
 			...settings,
 			...(reasoningEffort && isSuggestionEffort(reasoningEffort) ? { reasoningEffort } : {}),
 		};

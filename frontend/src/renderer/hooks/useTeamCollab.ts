@@ -1,9 +1,11 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
+	mergeFeedHead,
 	probeTeamCollab,
 	subscribeTeamCollabSupport,
 	teamCollabSupport,
+	teamCollabSupportConfirmed,
 	teamCollabUnavailable,
 	type TeamCollabSupport,
 } from "../lib/cloud-team-collab";
@@ -39,15 +41,17 @@ const retryDelay = (attempt: number) => Math.min(500 * 2 ** attempt, 8_000);
 
 /**
  * Whether the signed-in control plane serves asides, mentions and the team
- * feed. Asks once (a one-row page of the caller's own feed) and remembers the
- * answer for the app run; until it is known everything stays hidden.
+ * feed. Asks once per app run (a one-row page of the caller's own feed). Until
+ * it answers, the last run's answer on this device stands, so nothing pops in
+ * late; with neither, everything stays hidden.
  */
 export function useTeamCollabSupport(): TeamCollabSupport {
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const support = useSyncExternalStore(subscribeTeamCollabSupport, () => teamCollabSupport(baseUrl));
+	const confirmed = useSyncExternalStore(subscribeTeamCollabSupport, () => teamCollabSupportConfirmed(baseUrl));
 	useQuery({
 		queryKey: teamCollabProbeKey(baseUrl, userId),
-		enabled: ready && userId !== "" && support === "unknown",
+		enabled: ready && userId !== "" && !confirmed,
 		staleTime: Infinity,
 		retry: retryUnlessUnavailable,
 		retryDelay,
@@ -57,36 +61,67 @@ export function useTeamCollabSupport(): TeamCollabSupport {
 }
 
 /**
- * One tab of the team feed, a page at a time, refreshed while it is open.
- * The first page carries "While you were away".
+ * One tab of the team feed, a page at a time. The first page carries "While
+ * you were away". While the tab is open only its first page is read again,
+ * every FEED_REFRESH_MS, and merged on top: pages "Show more" loaded stay as
+ * they are, never read again or cancelled.
  */
 export function useTeamFeed(scope: CloudCpFeedScope, enabled = true) {
 	const { client, ready, baseUrl, userId } = useCloudCp();
-	return useInfiniteQuery({
-		queryKey: teamFeedQueryKey(baseUrl, userId, scope),
-		enabled: enabled && ready && userId !== "",
+	const queryClient = useQueryClient();
+	const key = teamFeedQueryKey(baseUrl, userId, scope);
+	const on = enabled && ready && userId !== "";
+	const feed = useInfiniteQuery({
+		queryKey: key,
+		enabled: on,
 		initialPageParam: undefined as string | undefined,
 		retry: retryUnlessUnavailable,
 		retryDelay,
-		refetchInterval: FEED_REFRESH_MS,
+		// The head below keeps it current; reading every page again would refetch
+		// (and cancel) what "Show more" loaded.
+		staleTime: Infinity,
+		refetchOnWindowFocus: false,
+		refetchOnReconnect: false,
 		queryFn: ({ pageParam, signal }): Promise<CloudCpFeedResponse> =>
 			probeTeamCollab(baseUrl, () => client.getMyFeed({ scope, limit: FEED_PAGE_SIZE, ...(pageParam ? { cursor: pageParam } : {}) }, { signal })),
 		getNextPageParam: (last) => (last.page.hasMore && last.page.nextCursor ? last.page.nextCursor : undefined),
 	});
+	const head = useQuery({
+		queryKey: [...key, "head"],
+		enabled: on && feed.isSuccess,
+		// The first load is the first head: the next read is a refresh away.
+		initialData: () => queryClient.getQueryData<InfiniteData<CloudCpFeedResponse>>(key)?.pages[0],
+		initialDataUpdatedAt: () => queryClient.getQueryState(key)?.dataUpdatedAt,
+		staleTime: FEED_REFRESH_MS,
+		refetchInterval: FEED_REFRESH_MS,
+		retry: false,
+		queryFn: async ({ signal }) => {
+			const fresh = await client.getMyFeed({ scope, limit: FEED_PAGE_SIZE }, { signal });
+			queryClient.setQueryData<InfiniteData<CloudCpFeedResponse, string | undefined>>(key, (data) => data ? mergeFeedHead(data, fresh) : data);
+			return fresh;
+		},
+	});
+	return Object.assign(feed, {
+		/** The last read failed, the first load or a refresh: what shows may be old. */
+		lastReadFailed: feed.isError || head.isError,
+		/** When what shows was last read, first load or refresh. */
+		readAt: Math.max(feed.dataUpdatedAt, head.isError ? 0 : head.dataUpdatedAt),
+	});
 }
 
-/** Records a visit to the feed; the next "While you were away" counts from it. */
+/** Records a visit to the feed; the next "While you were away" counts from it (or from `seenAt`). */
 export function useMarkFeedSeen() {
 	const { client, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: () => client.markMyFeedSeen(),
+		mutationFn: (seenAt?: string) => client.markMyFeedSeen(seenAt ? { seenAt } : {}),
 		onSuccess: () => {
 			// Every tab's first page carries the card; they all start over.
 			for (const query of queryClient.getQueryCache().findAll({ queryKey: teamFeedQueryRoot(baseUrl, userId) })) {
-				queryClient.setQueryData<{ pages: CloudCpFeedResponse[]; pageParams: unknown[] }>(query.queryKey, (data) => data
-					? { ...data, pages: data.pages.map((page) => ({ ...page, away: undefined })) }
-					: data);
+				queryClient.setQueryData<{ pages: CloudCpFeedResponse[]; pageParams: unknown[] } | CloudCpFeedResponse>(query.queryKey, (data) => !data ? data
+					: "pages" in data ? { ...data, pages: data.pages.map((page) => ({ ...page, away: undefined })) }
+					// A tab's refreshed first page, kept apart from its pages.
+					: { ...data, away: undefined });
 			}
 		},
 	});

@@ -4,6 +4,7 @@ import type {
 	CloudCpClientEvent,
 	CloudCpFeedAway,
 	CloudCpFeedItem,
+	CloudCpFeedResponse,
 	CloudCpMention,
 	CloudCpMentionPerson,
 	CloudCpMentionTeam,
@@ -12,28 +13,60 @@ import type {
 
 // Asides, mentions and the team feed ship together on the control plane, so
 // one answer says whether a control plane has them. Learned once per control
-// plane from the feed (the probe, the feed page itself, or any of these
-// routes) and kept for the app run, the way the bell learns about the inbox:
-// a missing route (404 without a code, 405, 501) means it has none; any other
-// failure (offline, 5xx) says nothing and stays undecided.
+// plane and app run from the feed (the probe, the feed page itself, or any of
+// these routes), the way the bell learns about the inbox: a missing route
+// (404 without a code, 405, 501) means it has none; any other failure
+// (offline, 5xx) says nothing and stays undecided. The last answer is kept per
+// control plane on this device, so the Team row, tab menu and composer toggle
+// draw at once on the next run while the probe confirms it in the background.
 
 export type TeamCollabSupport = "unknown" | "supported" | "unsupported";
 
 /** Whether an error says the control plane predates asides, mentions and the feed. */
 export const teamCollabUnavailable = cloudInboxUnavailable;
 
+const STORAGE_PREFIX = "ao.teamCollabSupport:";
 const support = new Map<string, TeamCollabSupport>();
 const listeners = new Set<() => void>();
 const supportKey = (baseUrl: string) => baseUrl.replace(/\/+$/, "");
 
+function storage(): Storage | undefined {
+	try {
+		return typeof window === "undefined" ? undefined : window.localStorage;
+	} catch {
+		return undefined;
+	}
+}
+
+function rememberedSupport(key: string): TeamCollabSupport | undefined {
+	try {
+		const value = storage()?.getItem(STORAGE_PREFIX + key);
+		return value === "supported" || value === "unsupported" ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** What this run learned about a control plane, else what the last run did. */
 export function teamCollabSupport(baseUrl: string): TeamCollabSupport {
-	return support.get(supportKey(baseUrl)) ?? "unknown";
+	const key = supportKey(baseUrl);
+	return support.get(key) ?? (key === "" ? undefined : rememberedSupport(key)) ?? "unknown";
+}
+
+/** Whether this run has its own answer yet (a remembered one still gets asked again). */
+export function teamCollabSupportConfirmed(baseUrl: string): boolean {
+	return support.has(supportKey(baseUrl));
 }
 
 export function recordTeamCollabSupport(baseUrl: string, value: Exclude<TeamCollabSupport, "unknown">): void {
 	const key = supportKey(baseUrl);
 	if (key === "" || support.get(key) === value) return;
 	support.set(key, value);
+	try {
+		storage()?.setItem(STORAGE_PREFIX + key, value);
+	} catch {
+		// Without it the next run asks before drawing, as it always did.
+	}
 	for (const listener of listeners) listener();
 }
 
@@ -42,9 +75,16 @@ export function subscribeTeamCollabSupport(listener: () => void): () => void {
 	return () => { listeners.delete(listener); };
 }
 
-/** Test seam: forget what was learned about every control plane. */
+/** Test seam: forget what was learned about every control plane, here and on this device. */
 export function resetTeamCollabSupport(): void {
 	support.clear();
+	const saved = storage();
+	try {
+		const keys = Array.from({ length: saved?.length ?? 0 }, (_, index) => saved?.key(index));
+		for (const key of keys) if (key?.startsWith(STORAGE_PREFIX)) saved?.removeItem(key);
+	} catch {
+		// Nothing remembered to forget.
+	}
 	for (const listener of listeners) listener();
 }
 
@@ -336,6 +376,30 @@ export function groupFeed(items: readonly CloudCpFeedItem[]): FeedGroup[] {
 export function awayHasNews(away: CloudCpFeedAway | undefined): boolean {
 	if (!away) return false;
 	return away.needsYou > 0 || away.prsMerged.length > 0 || away.failed.length > 0 || away.started.count > 0;
+}
+
+/** The pages of one feed tab as the infinite query keeps them. */
+export interface FeedPages {
+	pages: CloudCpFeedResponse[];
+	pageParams: (string | undefined)[];
+}
+
+const feedItemKey = (item: CloudCpFeedItem) => `${item.orgId}:${item.sessionId}`;
+
+/**
+ * A refreshed first page laid over the pages already loaded. With only the
+ * first page it is simply the new first page. With more, the rows the old
+ * first page had and the new one dropped stay under it (they are older than
+ * its last row, so no row falls between the pages), and each later page keeps
+ * only rows the new first page does not already show.
+ */
+export function mergeFeedHead<T extends FeedPages>(data: T, fresh: CloudCpFeedResponse): T {
+	if (data.pages.length <= 1) return { ...data, pages: [fresh], pageParams: data.pageParams.slice(0, 1) };
+	const shown = new Set(fresh.items.map(feedItemKey));
+	const left = data.pages[0]!.items.filter((item) => !shown.has(feedItemKey(item)));
+	for (const item of left) shown.add(feedItemKey(item));
+	const later = data.pages.slice(1).map((page) => ({ ...page, items: page.items.filter((item) => !shown.has(feedItemKey(item))) }));
+	return { ...data, pages: [{ ...fresh, items: [...fresh.items, ...left], page: data.pages[0]!.page }, ...later] };
 }
 
 /** One question before a mentioning send: a big team first, then the people who can't open the session. */

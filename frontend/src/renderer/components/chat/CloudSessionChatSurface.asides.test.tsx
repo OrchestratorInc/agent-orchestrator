@@ -399,7 +399,7 @@ describe("suggestions from asides", () => {
 		expect(screen.queryByText(/Second/)).toBeNull();
 		await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
 		// Its own text, the turn's settings and the driver's grant; no ordinary message.
-		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { mode: "standard", composerEpoch: 7 }, { idempotencyKey: expect.any(String) });
+		expect(mocks.sendSessionSuggestion).toHaveBeenCalledWith("org-1", "session-1", "sg-1", { text: "", mode: "standard", composerEpoch: 7 }, { idempotencyKey: expect.any(String) });
 		expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
 		// The next one waits its turn.
 		expect(await screen.findByText(/Second/)).toBeInTheDocument();
