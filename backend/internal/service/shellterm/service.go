@@ -231,12 +231,20 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 }
 
 func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	return agentlaunch.MergeEnv(projectEnv, s.pinnedChildEnv(projectEnv))
+}
+
+// pinnedChildEnv returns AO's own values for a terminal: the pinned PATH and
+// the login-shell wrappers that keep it first. They must stay on MergeEnv's
+// child side, since it drops every AO_ key from the project side.
+func (s *Service) pinnedChildEnv(projectEnv map[string]string) map[string]string {
+	child := map[string]string{}
 	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return agentlaunch.MergeEnv(projectEnv, nil)
+		return child
 	}
-	child := map[string]string{"PATH": path}
+	child["PATH"] = path
 	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal startup files may put another ao first on PATH", "err", err)
@@ -244,7 +252,7 @@ func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
 	for key, value := range loginEnv {
 		child[key] = value
 	}
-	return agentlaunch.MergeEnv(projectEnv, child)
+	return child
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -491,14 +499,19 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	env := s.pinnedEnv(projectEnv)
-	readiness, err := prepareCueShellReadiness(s.dataDir, argv, env)
+	child := s.pinnedChildEnv(projectEnv)
+	readiness, err := prepareCueShellReadiness(s.dataDir, argv, agentlaunch.MergeEnv(projectEnv, child))
 	if err != nil {
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
 	readiness.env["AO_CUE_COMMAND"] = ""
-	env = agentlaunch.MergeEnv(env, readiness.env)
+	// The readiness values are AO's own too. Merging them over pinnedEnv's
+	// result would drop its AO_ keys, which the login-shell wrappers read.
+	for key, value := range readiness.env {
+		child[key] = value
+	}
+	env := agentlaunch.MergeEnv(projectEnv, child)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {

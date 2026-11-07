@@ -205,6 +205,45 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	}
 }
 
+// TestCueCommandKeepsTheLoginShellPin checks a Cue terminal keeps the AO_ keys
+// AO's login-shell wrappers read once the user's startup files have run. Its
+// readiness hooks must not drop them, and project values still cannot set them.
+func TestCueCommandKeepsTheLoginShellPin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the login-shell wrappers are for zsh and bash on Unix")
+	}
+	daemonExe := filepath.Join(t.TempDir(), "ao")
+	for _, shell := range []string{"bash", "zsh", "sh", "fish"} {
+		t.Run(shell, func(t *testing.T) {
+			t.Setenv("SHELL", filepath.Join("/bin", shell))
+			rt := newFakeShellRuntime()
+			rt.cueReady = true
+			svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{
+				roots: map[domain.ProjectID]string{"portfolio": t.TempDir()},
+				envs: map[domain.ProjectID]map[string]string{"portfolio": {
+					"ZDOTDIR": "/project/zsh", "BASH_ENV": "/project/bash_env",
+					"AO_PATH_PIN": "untrusted", "AO_USER_ZDOTDIR": "untrusted", "AO_USER_BASH_ENV": "untrusted",
+				}},
+			})
+			svc.executable = func() (string, error) { return daemonExe, nil }
+			svc.dataDir = t.TempDir()
+			if _, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Command: "pwd"}); err != nil {
+				t.Fatal(err)
+			}
+			env := rt.created[0].Env
+			for key, want := range map[string]string{
+				"AO_PATH_PIN":      filepath.Dir(daemonExe),
+				"AO_USER_ZDOTDIR":  "/project/zsh",
+				"AO_USER_BASH_ENV": "/project/bash_env",
+			} {
+				if env[key] != want {
+					t.Fatalf("%s = %q, want %q", key, env[key], want)
+				}
+			}
+		})
+	}
+}
+
 func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {
 	root, workspace := t.TempDir(), t.TempDir()
 	rt := newFakeShellRuntime()
