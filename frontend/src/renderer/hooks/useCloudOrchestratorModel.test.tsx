@@ -117,8 +117,12 @@ describe("useCloudOrchestratorModel", () => {
 		const queryClient = new QueryClient();
 		if (sessions) queryClient.setQueryData([...cloudSessionsQueryKey, BASE_URL, "org-1"], sessions);
 		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-		const rendered = renderHook(() => useCloudOrchestratorModel({ baseUrl: BASE_URL, orgId: "org-1", projectId: "project-1", enabled }), { wrapper });
-		return { ...rendered, queryClient };
+		const renders = { count: 0 };
+		const rendered = renderHook(() => {
+			renders.count += 1;
+			return useCloudOrchestratorModel({ baseUrl: BASE_URL, orgId: "org-1", projectId: "project-1", enabled });
+		}, { wrapper });
+		return { ...rendered, queryClient, renders };
 	}
 
 	it("reads what the orchestrator runs from the cached session list, not this computer's saved Chat settings", () => {
@@ -148,6 +152,37 @@ describe("useCloudOrchestratorModel", () => {
 		await waitFor(() => expect(result.current).toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku", reasoningEffort: "low" }));
 		// The hook itself opened nothing.
 		expect(bridge.openStream).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-renders for nothing but a change to the model or effort it reports", async () => {
+		const bridge = fakeBridge();
+		cleanups.push(subscribeCloudSessionEvents({ baseUrl: BASE_URL, orgId: "org-1", sessionId: "orch-1" }, { live: true }, { bridge }));
+		const { result, renders, queryClient } = renderWith([session({ currentModel: "sonnet", currentReasoningEffort: "high" })]);
+		await waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(1));
+		const live = (overrides: Partial<CloudCpSessionLive>): CloudCpStreamEvent => ({
+			type: "chunk",
+			data: `event: session.live\ndata: ${JSON.stringify({
+				type: "session.live", viewers: [], composer: { holder: null, epoch: 0, waitlist: [] },
+				canTakeOver: false, you: "user-1", chatSettings: { model: "haiku" }, canConfigure: true, ...overrides,
+			})}\n\n`,
+		});
+		act(() => bridge.emit("stream-1", live({})));
+		await waitFor(() => expect(result.current?.model).toBe("haiku"));
+		const answer = result.current;
+		const rendered = renders.count;
+
+		// Someone opens the Chat and takes the composer: the settings read here are unchanged.
+		act(() => bridge.emit("stream-1", live({
+			viewers: [{ userId: "user-2", name: "Ada", role: "member" }],
+			composer: { holder: { userId: "user-2", name: "Ada" }, epoch: 1, waitlist: [] },
+		})));
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(renders.count).toBe(rendered);
+		expect(result.current).toBe(answer);
+
+		// A poll that changes nothing it reports keeps the same answer.
+		act(() => queryClient.setQueryData([...cloudSessionsQueryKey, BASE_URL, "org-1"], [session({ currentModel: "sonnet", currentReasoningEffort: "high", status: "idle" })]));
+		expect(result.current).toBe(answer);
 	});
 
 	it("names none until the session list has loaded, and none outside Cloud", () => {

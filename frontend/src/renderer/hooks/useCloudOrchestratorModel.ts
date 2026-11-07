@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { CloudCpSession, CloudCpSessionChatSettings } from "../lib/cloud-cp";
 import { cloudSessionEventsState, subscribeCloudSessionEvents } from "../lib/cloud-cp/session-events-hub";
 import { useCachedQueryData } from "./useCloudScriptRuns";
@@ -84,9 +84,22 @@ export function useCloudOrchestratorModel({ baseUrl, orgId, projectId, enabled }
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- the target's parts are the identity
 		[target.baseUrl, target.orgId, target.sessionId],
 	);
-	const liveSettings = useSyncExternalStore(
-		subscribeLive,
-		() => (target.sessionId ? cloudSessionEventsState(target).live?.chatSettings : undefined),
-	);
-	return session ? cloudOrchestratorModel(session, liveSettings) : undefined;
+	// Only the two fields read here, as one string: a live update that changes
+	// neither (someone opening the Chat, the composer changing hands) re-renders nothing.
+	const liveKey = useSyncExternalStore(subscribeLive, () => {
+		const chat = target.sessionId ? cloudSessionEventsState(target).live?.chatSettings : undefined;
+		return chat ? JSON.stringify([chat.model ?? "", chat.reasoningEffort ?? ""]) : "";
+	});
+	const liveSettings = useMemo(() => {
+		if (!liveKey) return undefined;
+		const [model, reasoningEffort] = JSON.parse(liveKey) as [string, string];
+		return { model, reasoningEffort };
+	}, [liveKey]);
+	const orchestrator = session ? cloudOrchestratorModel(session, liveSettings) : undefined;
+	// The same answer keeps its identity across the session list's polls.
+	const answerKey = orchestrator
+		? JSON.stringify([orchestrator.sessionId, orchestrator.harness, orchestrator.model, orchestrator.reasoningEffort ?? ""])
+		: "";
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the answer's identity
+	return useMemo(() => orchestrator, [answerKey]);
 }
