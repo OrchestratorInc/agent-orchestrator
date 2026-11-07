@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -39,6 +40,13 @@ const (
 	modeYolo     = "yolo"
 )
 
+// thinkingLevelOption is the config option agy_acp_server 1.4 moved reasoning
+// levels into. Its model option then lists gemini-3.8-flash where 1.3 and the
+// agy CLI list gemini-3.8-flash-high.
+const thinkingLevelOption = "thinking_level"
+
+var modelVariantPattern = regexp.MustCompile(`^(.+)-(minimal|low|medium|high|xhigh)$`)
+
 // New constructs the Antigravity ACP Chat driver.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	var agyCLI func(context.Context) (string, error)
@@ -58,6 +66,10 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			ports.ChatCapabilityApprovals: true,
 			ports.ChatCapabilityInterrupt: true,
 			ports.ChatCapabilityResume:    true,
+		},
+		InstallCheck: func(ctx context.Context) error {
+			_, err := resolve.serverPath(ctx)
+			return err
 		},
 		Probe: func(ctx context.Context) error {
 			if _, err := resolve.serverPath(ctx); err != nil {
@@ -95,9 +107,10 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
 		ValidateInitialize: validateInitialize,
-		AfterInitialize:    newAuthBootstrap(agy.GeminiHome).run,
+		AfterInitialize:    newAuthBootstrap(agy.GeminiHome, cliSignedIn(resolve.agyCLI)).run,
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
+		SplitModelVariant:  splitModelVariant,
 		SessionPreamble:    sessionPreamble,
 		// No PermissionPolicy: every request Antigravity raises is answered by
 		// the user. AO never selects allow_always for them, which would let a
@@ -132,11 +145,25 @@ func sessionMode(permission ports.PermissionMode) string {
 	}
 }
 
+// sessionOptions selects the chosen model. It is optional because a task's model
+// comes from the agy CLI's list, which is wider than what the ACP server offers:
+// a session on a model it lacks keeps its default, and the chat's own picker
+// lists what the server really has.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+		return []acpdriver.SessionOption{{ID: "model", Value: model, Optional: true}}
 	}
 	return nil
+}
+
+// splitModelVariant turns gemini-3.8-flash-high into what server 1.4 offers: the
+// gemini-3.8-flash model at thinking level high.
+func splitModelVariant(model string) (string, acpdriver.SessionOption, bool) {
+	match := modelVariantPattern.FindStringSubmatch(model)
+	if match == nil {
+		return "", acpdriver.SessionOption{}, false
+	}
+	return match[1], acpdriver.SessionOption{ID: thinkingLevelOption, Value: match[2], Optional: true}, true
 }
 
 // sessionPreamble delivers AO's standing instructions as a text block ahead of
