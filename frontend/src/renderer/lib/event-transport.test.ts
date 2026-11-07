@@ -275,6 +275,42 @@ describe("createEventTransport", () => {
 		disconnect();
 	});
 
+	it("reopens a dropped host stream and stops polling once it delivers again", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			const streams = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/"));
+			const listPolled = async () => {
+				// A refresh still settling queues one catch-up; let it land first.
+				await vi.advanceTimersByTimeAsync(0);
+				vi.mocked(client.invalidateQueries).mockClear();
+				await vi.advanceTimersByTimeAsync(2_000);
+				return vi.mocked(client.invalidateQueries).mock.calls.some(([filters]) => JSON.stringify(filters) === JSON.stringify({ queryKey: ["remote-workspaces", "box-a"] }));
+			};
+			streams()[0].emit("cursor", "0");
+			expect(await listPolled()).toBe(false);
+
+			// The host stays connected, so nothing else would ever reopen the stream.
+			streams()[0].onerror?.();
+			expect(await listPolled()).toBe(true);
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(streams()).toHaveLength(2);
+			streams()[1].emit("cursor", "0");
+			expect(await listPolled()).toBe(false);
+
+			// A host that leaves cancels the pending reopen.
+			streams()[1].onerror?.();
+			connectedHostsMock.mockReturnValue([]);
+			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(streams()).toHaveLength(2);
+			disconnect();
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("clears an open chat's failed read when its host returns, with no event to prompt one", async () => {
 		const refreshFailed = ["remote-conversation-refresh-error", "box-a", "same"];
 		connectedHostsMock.mockReturnValue(["box-a"]);

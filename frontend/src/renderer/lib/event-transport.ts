@@ -110,6 +110,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				pollTimer?: ReturnType<typeof setInterval>;
 				lastRefreshAt: number;
 				idOnlyTimer?: ReturnType<typeof setTimeout>;
+				// Stream failures since it last delivered a frame, and the pending reopen.
+				failures: number;
+				reopenTimer?: ReturnType<typeof setTimeout>;
 			};
 			const remoteSources = new Map<string, RemoteConnection>();
 			// Only a chat someone is looking at is read over the tunnel. A closed one
@@ -191,11 +194,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				const base = baseUrlForHost(hostId);
 				if (!base) return;
 				if (remoteSources.get(hostId)?.base === base) return;
-				const connection: RemoteConnection = { base, lastRefreshAt: Number.NEGATIVE_INFINITY };
+				const connection: RemoteConnection = { base, lastRefreshAt: Number.NEGATIVE_INFINITY, failures: 0 };
 				remoteSources.set(hostId, connection);
 				refreshRemote(hostId, true);
 				connection.pollTimer = setInterval(() => pollRemote(hostId), 2_000);
-				connection.close = probeRemoteSse(
+				const openStream = () => { connection.close = probeRemoteSse(
 					`${base.replace(/\/+$/, "")}/api/v1/events?after=latest`,
 					CDC_EVENT_TYPES,
 					(event) => {
@@ -235,6 +238,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					},
 					() => {
 						if (remoteSources.get(hostId) !== connection) return;
+						connection.failures = 0;
 						if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 						connection.pollTimer = undefined;
 						refreshRemote(hostId, true);
@@ -246,8 +250,16 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						if (remoteSources.get(hostId) !== connection) return;
 						if (connection.pollTimer === undefined) connection.pollTimer = setInterval(() => pollRemote(hostId), 2_000);
 						refreshRemote(hostId);
+						// A host that stays connected never rebuilds its stream, so without a
+						// reopen one dropped link would leave it on the 2 s poll for good.
+						connection.failures += 1;
+						connection.reopenTimer ??= setTimeout(() => {
+							connection.reopenTimer = undefined;
+							if (!disposed && remoteSources.get(hostId) === connection) openStream();
+						}, computeSseRetryDelayMs(connection.failures));
 					},
-				);
+				); };
+				openStream();
 			};
 			const syncRemoteSources = () => {
 				const active = new Set(connectedHosts());
