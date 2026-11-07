@@ -141,6 +141,13 @@ func validateUsageLimitSource(ctx context.Context, turns Store, store usageLimit
 	if source.UsageLimit.ResetsAt == nil {
 		return ErrUsageLimitResetUnknown
 	}
+	return validateUsageLimitRetry(ctx, turns, store, source)
+}
+
+// validateUsageLimitRetry holds what every automatic usage-limit retry needs,
+// whatever the deadline: the human prompt is still the latest on the active
+// branch, was delivered, and has no retry yet.
+func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn) error {
 	prompt, err := turns.RetryPrompt(ctx, source.ConversationID, source.ID)
 	if err != nil {
 		return err

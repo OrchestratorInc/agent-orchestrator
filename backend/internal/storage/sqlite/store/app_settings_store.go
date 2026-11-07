@@ -33,7 +33,10 @@ type AppSettings struct {
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
-	UpdatedAt            time.Time
+	// AccountHandoff moves a Chat session refused for a usage limit to another
+	// account with quota and retries the prompt there once.
+	AccountHandoff bool
+	UpdatedAt      time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -54,6 +57,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: int(row.SessionRetentionDays),
+		AccountHandoff:       row.AccountHandoff,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -109,6 +113,20 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 		UpdatedAt:            now,
 	}); err != nil {
 		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff persists whether usage-limited Chat sessions move to
+// another account automatically.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

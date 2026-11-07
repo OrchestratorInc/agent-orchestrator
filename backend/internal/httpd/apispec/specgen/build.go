@@ -210,6 +210,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
+	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
+	"ControllersSetSessionStayOnAccountRequest":            "SetSessionStayOnAccountRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -1217,6 +1219,17 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPatch, path: "/api/v1/settings/account-handoff", id: "updateAccountHandoff", tag: "settings",
+			summary: "Choose whether a usage-limited Chat session moves to another account and retries its prompt",
+			reqBody: controllers.UpdateAccountHandoffRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPatch, path: "/api/v1/settings/computer-use", id: "updateComputerUse", tag: "settings",
 			summary: "Choose whether new chat sessions get tools to drive desktop apps through Cua Driver",
 			reqBody: controllers.UpdateComputerUseRequest{},
@@ -2168,6 +2181,12 @@ func agentOperations() []operation {
 			summary: "Start moving a session to another account through the durable controller handoff", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
 			reqBody: controllers.SwitchSessionAgentAccountRequest{},
 			resps:   []respUnit{{http.StatusAccepted, controllers.StartSessionInterfaceTransitionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}/stay", id: "setSessionStayOnAccount", tag: "agents",
+			summary: "Keep a session on its account, or let a usage limit move it", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
+			reqBody: controllers.SetSessionStayOnAccountRequest{},
+			resps:   []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",

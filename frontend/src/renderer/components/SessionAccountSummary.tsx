@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { useSettings } from "../hooks/useSettings";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AccountLimits } from "./settings/AgentAccountsSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Switch } from "./ui/switch";
 
 /** The account the session's agent runs under, its limits, and the move to
  * another account. A move is the session's durable controller handoff: the
@@ -20,6 +22,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const actions = useAgentAccountActions();
 	const label = useAgentAccountLabel();
 	const { transition } = useSessionInterfaceTransitionStatus(provider ? session.id : undefined);
+	const { settings } = useSettings();
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
 	const accountMove = transition?.targetAccountId ? transition : undefined;
@@ -58,6 +61,15 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 		}
 	};
 
+	const setStay = async (stay: boolean) => {
+		setMessage("");
+		try {
+			await actions.setStayOnAccount(session.id, stay);
+		} catch (err) {
+			setMessage(err instanceof Error ? err.message : String(err));
+		}
+	};
+
 	const status = moving
 		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
 		: settledPhase === "completed" && accountMove?.targetAccountId === currentId && !messagedSinceMove
@@ -79,6 +91,15 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 				</Select>
 			</div>
 		</div>
+		{settings?.accountHandoff && session.mode === "chat" ? <div className="mt-2 flex items-center justify-between gap-3">
+			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.stayOnAccount")}</p>
+			<Switch
+				aria-label={t("settings.agentAccounts.stayOnAccount")}
+				checked={current.data?.stayOnAccount ?? false}
+				disabled={!current.data}
+				onCheckedChange={(stay) => void setStay(stay)}
+			/>
+		</div> : null}
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open

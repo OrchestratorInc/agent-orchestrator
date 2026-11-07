@@ -40,6 +40,75 @@ function switchedSnapshot(): ConversationSnapshot {
 	};
 }
 
+/** turn-1 was refused for a usage limit; AO moved the session to acct-b. */
+function handoffSnapshot(retried: boolean): ConversationSnapshot {
+	const at = chatFixture.items[0]!.createdAt;
+	const source = chatFixture.turns.find((turn) => turn.id === "turn-1")!;
+	return {
+		...chatFixture,
+		controller: { state: "ready" },
+		turns: [
+			{
+				...source,
+				state: "failed",
+				completedAt: source.requestedAt,
+				errorMessage: "You've hit your session limit",
+				hasHumanPrompt: true,
+				usageLimit: { resetsAt: new Date(Date.now() + 60 * 60_000).toISOString(), autoResume: false },
+			},
+			...(retried ? [{ id: "retry-1", state: "completed" as const, requestedAt: at, completedAt: at, retryOfTurnId: "turn-1" }] : []),
+		],
+		items: [
+			...chatFixture.items.filter((item) => item.turnId === "turn-1"),
+			{
+				kind: "activity",
+				id: "handoff-1",
+				turnId: "turn-1",
+				sequence: chatFixture.latestSequence + 1,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: "Moved account",
+				detail: { event: "account.limit_handoff", accountId: "acct-b" },
+				createdAt: at,
+			},
+		],
+		latestSequence: chatFixture.latestSequence + 1,
+	};
+}
+
+function renderWithAccounts(snapshot: ConversationSnapshot) {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+	queryClient.setQueryData(agentAccountsQueryKey, [
+		{ id: "acct-b", provider: "claude", device: false, default: false, signedIn: true, email: "b@example.com" },
+	]);
+	render(
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>
+				<ChatWorkspace snapshot={snapshot} onSend={vi.fn()} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+}
+
+describe("ChatWorkspace usage-limit account handoff", () => {
+	it("names the account a usage limit moved the session to", () => {
+		renderWithAccounts(handoffSnapshot(false));
+		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
+		expect(screen.getByText(/retries the refused prompt once on this account/)).toBeInTheDocument();
+		// The limit stays in the thread's history.
+		expect(screen.getAllByTestId("usage-limit-notice").length).toBeGreaterThan(0);
+	});
+
+	it("offers no usage-limit recovery once AO has retried the prompt", () => {
+		renderWithAccounts(handoffSnapshot(true));
+		expect(screen.getByText("Usage limit reached. Moved to b@example.com")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
+	});
+});
+
 describe("ChatWorkspace account switch", () => {
 	it("shows a turn stopped by an account switch as the switch, not as a stop or a failure", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
