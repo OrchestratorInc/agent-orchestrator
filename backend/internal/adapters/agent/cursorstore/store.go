@@ -77,8 +77,11 @@ func SessionPath(root, cwd, id string) (string, error) {
 // Both read the same SQLite store format.
 type Layout int
 
+// The two places Cursor resumes a chat from.
 const (
+	// LayoutTerminal is the terminal CLI's chats/<md5 of cwd>/<id> layout.
 	LayoutTerminal Layout = iota
+	// LayoutACP is `cursor-agent acp`'s acp-sessions/<id> layout.
 	LayoutACP
 )
 
