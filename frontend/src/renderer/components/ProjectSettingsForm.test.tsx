@@ -10,7 +10,7 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate, commitAttributionGate } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),
 	postMock: vi.fn(),
@@ -21,6 +21,7 @@ const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalS
 	captureOrchestratorReplacementFailureMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
 	trackerIntakeGate: { enabled: true },
+	commitAttributionGate: { enabled: false },
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -50,7 +51,7 @@ vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
-	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
+	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled, commitAttribution: commitAttributionGate.enabled }, isLoading: false, error: undefined }),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -204,6 +205,7 @@ beforeEach(() => {
 	captureOrchestratorReplacementFailureMock.mockReset();
 	ensureAgentReadinessMock.mockReset();
 	trackerIntakeGate.enabled = true;
+	commitAttributionGate.enabled = false;
 	putMock.mockResolvedValue({ data: { project: {} }, error: undefined });
 	postMock.mockResolvedValue({
 		data: { orchestrator: { id: "proj-1-orch-2" } },
@@ -781,6 +783,67 @@ describe("ProjectSettingsForm", () => {
 		const request = putMock.mock.calls[0]?.[1];
 		expect(request?.body.config.workersRequestReview).toBe(true);
 		expect(request?.body.config.reviewers).toBeUndefined();
+	});
+
+	it("hides the attribution switches while the beta is off", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		await screen.findByRole("switch", { name: "Workers request AO review" });
+		expect(screen.queryByRole("switch", { name: "Credit Orchestrator on commits" })).toBeNull();
+		expect(screen.queryByRole("switch", { name: "Sign PRs" })).toBeNull();
+	});
+
+	it("shows attribution on by default and saves only the parts turned off", async () => {
+		commitAttributionGate.enabled = true;
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		const trailer = await screen.findByRole("switch", { name: "Credit Orchestrator on commits" });
+		const footer = screen.getByRole("switch", { name: "Sign PRs" });
+		expect(trailer).toBeChecked();
+		expect(footer).toBeChecked();
+
+		await userEvent.click(trailer);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.attribution).toEqual({ disableCommitTrailer: true });
+	});
+
+	it("loads a turned-off PR footer and clears the opt-out when turned back on", async () => {
+		commitAttributionGate.enabled = true;
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" }, attribution: { disablePRFooter: true } },
+		});
+		renderSettings("proj-1", undefined, "general");
+		const footer = await screen.findByRole("switch", { name: "Sign PRs" });
+		expect(footer).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Credit Orchestrator on commits" })).toBeChecked();
+
+		await userEvent.click(footer);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0]?.[1]?.body.config.attribution).toBeUndefined();
 	});
 
 	// With no reviewer configured the daemon reviews with the default worker

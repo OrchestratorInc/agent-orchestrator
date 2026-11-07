@@ -28,6 +28,9 @@ func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time
 func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetCommitAttribution(context.Context, bool, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -226,5 +229,43 @@ func TestSessionRetentionDays(t *testing.T) {
 		if snapshot, err := svc.SetSessionRetentionDays(ctx, days); err != nil || snapshot.SessionRetentionDays != days {
 			t.Fatalf("days=%d: snapshot=%+v err=%v", days, snapshot, err)
 		}
+	}
+}
+
+type commitAttributionStore struct {
+	hibernationSettingsStore
+	enabled bool
+	err     error
+}
+
+func (s *commitAttributionStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{CommitAttribution: s.enabled}, s.err
+}
+
+func (s *commitAttributionStore) SetCommitAttribution(_ context.Context, enabled bool, _ time.Time) error {
+	s.enabled = enabled
+	return nil
+}
+
+// The beta is off by default, read at every spawn, and an unreadable store
+// never turns it on.
+func TestCommitAttributionToggle(t *testing.T) {
+	ctx := context.Background()
+	store := &commitAttributionStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.CommitAttributionEnabled(ctx) {
+		t.Fatal("commit attribution is on by default")
+	}
+	snapshot, err := svc.SetCommitAttribution(ctx, true)
+	if err != nil || !snapshot.CommitAttribution || !svc.CommitAttributionEnabled(ctx) {
+		t.Fatalf("after enabling: snapshot=%+v err=%v", snapshot, err)
+	}
+	store.err = errors.New("database is locked")
+	if svc.CommitAttributionEnabled(ctx) {
+		t.Fatal("unreadable store reported the beta on")
+	}
+	store.err = nil
+	if snapshot, err := svc.SetCommitAttribution(ctx, false); err != nil || snapshot.CommitAttribution || svc.CommitAttributionEnabled(ctx) {
+		t.Fatalf("after disabling: snapshot=%+v err=%v", snapshot, err)
 	}
 }

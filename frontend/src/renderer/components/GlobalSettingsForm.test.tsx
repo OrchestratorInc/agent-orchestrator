@@ -348,6 +348,18 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
 	});
 
+	it("reveals the Orchestrator attribution beta switch only in Developer mode", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Orchestrator attribution (beta)" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Orchestrator attribution (beta)" });
+		// Off until the daemon reports the setting.
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+	});
+
 	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
 		const user = userEvent.setup();
 		renderForm("general");

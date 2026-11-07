@@ -89,6 +89,24 @@ type ProjectConfig struct {
 	// the feature but check with the user or orchestrator before using it.
 	// Read at spawn, when the worker prompt is built.
 	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+
+	// Attribution turns off parts of Orchestrator's credit on this project's
+	// commits and PRs. It only matters while the Orchestrator attribution beta
+	// (Settings, Advanced) is on; then every part is on unless disabled here.
+	// Read at spawn.
+	Attribution AttributionConfig `json:"attribution,omitempty"`
+}
+
+// AttributionConfig is the per-project opt-out for Orchestrator attribution.
+// Opt-out fields keep the zero value meaning "on", so existing projects get
+// the default without a migration.
+type AttributionConfig struct {
+	// DisableCommitTrailer stops the Co-authored-by: Orchestrator trailer on
+	// commits made in this project's session worktrees.
+	DisableCommitTrailer bool `json:"disableCommitTrailer,omitempty"`
+	// DisablePRFooter stops the "Opened with Orchestrator" line at the end of
+	// PR bodies that agents write.
+	DisablePRFooter bool `json:"disablePRFooter,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker

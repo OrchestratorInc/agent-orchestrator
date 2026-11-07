@@ -4040,5 +4040,13 @@
 	"teams.accessVia": "{{access}} · über {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} hat {{thing}} mit {{team}} geteilt",
 	"teams.sharedToastWithYou": "{{name}} hat {{thing}} mit dir geteilt",
-	"teams.open": "Öffnen"
+	"teams.open": "Öffnen",
+	"settings.commitAttribution": "Orchestrator-Nennung (Beta)",
+	"settings.commitAttributionHint": "Neue Sitzungen fügen ihren Commits eine Orchestrator-Co-Autor-Zeile und ihren PRs die Zeile „Opened with Orchestrator“ hinzu. Jedes Projekt kann beides abschalten.",
+	"settings.commitAttributionSaveFailed": "Speichern fehlgeschlagen. Bitte erneut versuchen.",
+	"settings.project.attribution": "Orchestrator-Nennung",
+	"settings.project.attributionCommitTrailer": "Orchestrator in Commits nennen",
+	"settings.project.attributionCommitTrailerDescription": "Fügt Commits in neuen Sitzungen die Zeile Co-authored-by: Orchestrator hinzu. Du bleibst Autor, andere Co-Autoren bleiben erhalten.",
+	"settings.project.attributionPRFooter": "PRs signieren",
+	"settings.project.attributionPRFooterDescription": "Agenten in neuen Sitzungen beenden jede PR-Beschreibung mit „Opened with Orchestrator“."
 }

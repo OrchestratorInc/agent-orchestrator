@@ -4209,5 +4209,13 @@
 	"teams.accessVia": "{{access}} · через {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} открывает команде {{team}} доступ к «{{thing}}»",
 	"teams.sharedToastWithYou": "{{name}} открывает вам доступ к «{{thing}}»",
-	"teams.open": "Открыть"
+	"teams.open": "Открыть",
+	"settings.commitAttribution": "Упоминание Orchestrator (бета)",
+	"settings.commitAttributionHint": "Новые сессии добавляют в коммиты строку соавтора Orchestrator, а в PR — строку «Opened with Orchestrator». В каждом проекте можно отключить любую из них.",
+	"settings.commitAttributionSaveFailed": "Не удалось сохранить. Попробуйте ещё раз.",
+	"settings.project.attribution": "Упоминание Orchestrator",
+	"settings.project.attributionCommitTrailer": "Указывать Orchestrator в коммитах",
+	"settings.project.attributionCommitTrailerDescription": "Добавляет строку Co-authored-by: Orchestrator в коммиты новых сессий. Автором остаётесь вы, другие соавторы сохраняются.",
+	"settings.project.attributionPRFooter": "Подписывать PR",
+	"settings.project.attributionPRFooterDescription": "Агенты в новых сессиях заканчивают описание каждого PR строкой «Opened with Orchestrator»."
 }

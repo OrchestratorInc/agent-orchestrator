@@ -28,6 +28,7 @@ type Store interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
+	SetCommitAttribution(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
 }
 
@@ -42,6 +43,10 @@ type Snapshot struct {
 	// ComputerUse gives new chat sessions the computer-use tools and their
 	// standing instruction (Settings, Computer use agents). Off by default.
 	ComputerUse bool
+	// CommitAttribution is the Orchestrator attribution beta (Settings,
+	// Advanced, in Developer mode): new sessions credit Orchestrator on their
+	// commits and PRs, unless the project turns a part off. Off by default.
+	CommitAttribution bool
 	// SessionRetentionDays is how long an archived session whose worktree is
 	// released is kept before the daemon deletes it (Settings, General). 0, the
 	// default, keeps it.
@@ -195,6 +200,22 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 		}
 	}
 	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
+// CommitAttributionEnabled reports the Orchestrator attribution beta switch.
+// The session manager reads it at spawn; a read failure counts as off.
+func (s *Service) CommitAttributionEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.CommitAttribution
+}
+
+// SetCommitAttribution switches the Orchestrator attribution beta. Sessions
+// already running keep what they started with.
+func (s *Service) SetCommitAttribution(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetCommitAttribution(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)
