@@ -15,6 +15,8 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
+import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
+import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
 import type { Theme } from "../theme";
 import { Frost, FROST_TAIL, frostStops } from "../frost";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
@@ -160,6 +162,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	// The switch has finished but the route still shows Chat until the board's
+	// next poll; the card stays up through that gap instead of showing the
+	// stopped controller.
+	const handoffPending = useInterfaceHandoff(interfaceSwitch.transition, "chat");
+	const switchingToTerminal = interfaceTransitionActive || handoffPending;
 	// The usage sheet follows the conversation while it is up: the numbers move
 	// with every turn.
 	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);
@@ -470,7 +477,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const previewReady = useSessionPreview(config, session.id);
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
-	const menuSwitching = interfaceSwitch.starting || interfaceTransitionActive;
+	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -573,20 +580,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
-	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseLabel(interfaceSwitch.transition?.phase)}`;
-	const interfaceTransitionBanner = {
-		text: interfaceSwitch.fetchFailed
-			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
-			: interfaceTransitionPhaseText,
-		// Cancel stays put while a check is failing: the phase the hook holds is
-		// still cancellable and the cancel is its own request, so a user who wants
-		// out should not have to prove the link first. Retry rides alongside it,
-		// which is also how the terminal card lays the two out.
-		action: mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition) ? (interfaceSwitch.cancelling ? "Cancelling…" : "Cancel") : undefined,
-		onPress: interfaceSwitch.cancelling ? undefined : () => void interfaceSwitch.cancel().catch(() => {}),
-		secondary: interfaceSwitch.fetchFailed || interfaceRecoveryMessage ? (recheckingTransition ? "Retrying…" : "Retry") : undefined,
-		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
-	};
 
 	if (failedStart && !conversation.snapshot) {
 		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
@@ -630,19 +623,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const mcpReloadSupported = can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
-	const banners = (
+	// Held back while the switch card is up: what they report (a stopped
+	// controller above all) is the handoff itself, not something to act on.
+	const banners = switchingToTerminal ? null : (
 		<>
-			{interfaceTransitionActive ? (
-				<InlineBanner
-					tone="warning"
-					icon="busy"
-					title={interfaceTransitionBanner.text}
-					action={interfaceTransitionBanner.action}
-					secondary={interfaceTransitionBanner.secondary}
-					onPress={interfaceTransitionBanner.onPress}
-					onSecondary={interfaceTransitionBanner.onSecondary}
-				/>
-			) : interfaceTransitionNotice ? (
+			{interfaceTransitionNotice ? (
 				<InlineBanner
 					tone={interfaceTransitionRecovered ? "warning" : "danger"}
 					icon={interfaceTransitionRecovered ? "checkCircle" : "warning"}
@@ -727,6 +712,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
+			{switchingToTerminal ? (
+				<InterfaceSwitchCard
+					title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
+					message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+					blocked={Boolean(interfaceRecoveryMessage)}
+					cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
+					cancelling={interfaceSwitch.cancelling}
+					onCancel={() => void interfaceSwitch.cancel().catch(() => {})}
+					error={interfaceSwitch.error}
+					retryable={interfaceSwitch.fetchFailed || Boolean(interfaceRecoveryMessage)}
+					retrying={recheckingTransition}
+					onRetry={() => void retryInterfaceCheck()}
+				/>
+			) : null}
 			{/* Android's frost behind the clear bar: solid under the title, then
 			    dissolving into the page, so the conversation frosts out as it
 			    passes under it rather than meeting a hard edge. */}
@@ -776,7 +775,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					configOptions={conversation.configOptions}
 					models={conversation.models}
 					steerUnavailable={steerUnsupported}
-					disabled={interfaceTransitionActive || Boolean(failedStart)}
+					disabled={switchingToTerminal || Boolean(failedStart)}
 					pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 					interrupting={conversation.pendingActions.includes("interrupt")}
 					onSend={conversation.send}
@@ -840,12 +839,13 @@ function useGlassHeaderOverlap(): number {
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
 function interfacePhaseLabel(phase?: string): string {
 	switch (phase) {
-		case "draining": return "finishing current work";
-		case "source_stopping": return "stopping Chat controller";
-		case "source_stopped": return "Chat controller stopped";
-		case "target_starting": return "resuming terminal controller";
-		case "activating": return "opening Terminal UI";
-		default: return "preparing native handoff";
+		case "draining": return "Waiting for the current turn to finish. New messages are queued safely.";
+		case "source_stopping": return "Stopping the Chat controller before the terminal starts.";
+		case "source_stopped": return "Chat controller stopped. The worktree and native conversation are unchanged.";
+		case "target_starting": return "Resuming the same native conversation in the terminal.";
+		case "activating": return "Opening the Terminal UI.";
+		case "completed": return "Terminal UI is ready. Opening it now.";
+		default: return "Checking that the terminal can resume this agent's native conversation.";
 	}
 }
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
