@@ -1444,12 +1444,15 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	};
 	const rowRef = useRef<HTMLDivElement>(null);
 	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
+	// Why you got it and who acted are short and always shown whole; the
+	// project and session names give way when the row is narrow, and an
+	// orchestrator's session name that repeats its project's is left out.
 	const metaParts = [
-		reasonKey ? t(reasonKey) : undefined,
-		actor,
-		projectName,
-		showSessionMeta ? sessionName : undefined,
-	].filter((part): part is string => Boolean(part));
+		reasonKey ? { text: t(reasonKey), fixed: true } : undefined,
+		actor ? { text: actor, fixed: true } : undefined,
+		projectName ? { text: projectName, fixed: false } : undefined,
+		showSessionMeta && sessionName && sessionName !== projectName ? { text: sessionName, fixed: false } : undefined,
+	].filter((part): part is { text: string; fixed: boolean } => Boolean(part));
 	return (
 		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
 			<div
@@ -1521,9 +1524,9 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						{metaParts.length > 0 ? (
 							<p className="flex min-w-0 max-w-full items-center gap-1.5 text-caption leading-4 text-muted-foreground">
 								{metaParts.map((part, index) => (
-									<span className="contents" key={`${index}:${part}`}>
+									<span className="contents" key={`${index}:${part.text}`}>
 										{index > 0 ? <span aria-hidden="true">·</span> : null}
-										<span className={cn("truncate", index === 0 && (reasonKey || projectName) && "font-medium")}>{part}</span>
+										<span className={cn(part.fixed ? "shrink-0 whitespace-nowrap" : "min-w-0 truncate", index === 0 && (reasonKey || projectName) && "font-medium")}>{part.text}</span>
 									</span>
 								))}
 							</p>

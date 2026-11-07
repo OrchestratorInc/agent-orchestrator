@@ -1271,6 +1271,26 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 		expect(panel.getAllByRole("listitem")).toHaveLength(4);
 	});
 
+	it("keeps why and who whole in a row's footer and leaves out a session name that repeats its project", async () => {
+		const orchestrator: CloudCpNotification = {
+			...merged, id: "cn-orch", sessionId: "csess-orch", title: "Orchestrator opened a pull request",
+			reason: "owner", actor: { userId: "u2", name: "Ben Ortiz" },
+		};
+		cloudNotificationsMock.mockReturnValue(inboxResult([], [orchestrator]));
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "cproj-1", name: "acme/cloud", kind: "cloud", sessions: [{ id: "csess-orch", isTerminated: false, status: "idle", title: "acme/cloud" }] }],
+			isError: false, isPending: false, isSuccess: true, refetch: vi.fn(),
+		});
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		const row = panel.getAllByRole("listitem")[0];
+		expect(within(row).getAllByText("acme/cloud")).toHaveLength(1);
+		expect(within(row).getByText("Owner")).toHaveClass("shrink-0");
+		expect(within(row).getByText("Ben Ortiz")).toHaveClass("shrink-0");
+		expect(within(row).getByText("acme/cloud")).toHaveClass("truncate");
+	});
+
 	it("opens on Updates when nothing blocks the person", async () => {
 		cloudNotificationsMock.mockReturnValue(inboxResult([], [merged]));
 		renderNotificationCenter();

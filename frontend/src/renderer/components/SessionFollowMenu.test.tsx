@@ -60,10 +60,10 @@ describe("SessionFollowMenu", () => {
 		const menu = await screen.findByRole("menu");
 		const levels = within(menu).getAllByRole("menuitemradio");
 		expect(levels.map((item) => item.textContent)).toEqual([
-			"Needs you onlyApprovals, mentions, handoffs",
+			"Needs you onlyApprovals and questions",
 			"ParticipatingPlus PR, CI and failures",
 			"All activityPlus every finished turn",
-			"MutedUntil someone mentions you or hands it to you",
+			"MutedOnly what’s addressed to you",
 		]);
 		expect(within(menu).getByRole("menuitemradio", { name: /^Participating/ })).toHaveAttribute("aria-checked", "true");
 		expect(await within(menu).findByText("Who gets notified · 2")).toBeInTheDocument();
