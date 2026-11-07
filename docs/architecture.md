@@ -53,7 +53,7 @@ flowchart LR
 The only persistent session state is:
 
 - Claude and Codex TUI hook facts: the current parent turn and native subagent IDs are retained per runtime launch so activity stays active while a background subagent works. Codex also retains a successful spawn tool call until its delayed child-start hook supplies the native ID.
-- `activity_state` — What the agent last reported (`active`, `idle`, `waiting_input`, `blocked`, `exited`). In Chat, `waiting_input` means an approval, input request, or reauthentication is pending. TUI hooks can use it for an empty prompt; `blocked` means a pending permission decision. Automation must never inject input into a blocked session.
+- `activity_state` — What the agent last reported (`active`, `idle`, `waiting_input`, `blocked`, `exited`). In Chat, `waiting_input` means an approval, input request, or reauthentication is pending. TUI hooks can use it for an empty prompt, and the activity observer sets it on a stale `active` terminal without an activity detector once its screen stays unchanged with no command running; `blocked` means a pending permission decision. Automation must never inject input into a blocked session.
 - `hibernated_at` — A Chat provider host was deliberately stopped after a settled idle turn; its native conversation can be resumed on new work.
 - `is_terminated` — Whether the session should be treated as over
 - `session_mode` plus its runtime/provider handle and generation — The currently committed controller epoch
