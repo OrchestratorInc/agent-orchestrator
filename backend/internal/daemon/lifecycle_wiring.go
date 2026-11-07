@@ -494,7 +494,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					// Admission resets only on a new runtime handle or launch, so name the
 					// recovery instead of looking like a transient failure.
-					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume Orchestrator input", id)
 				}
 				admission.pending = ""
 			}
@@ -950,7 +950,7 @@ func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.Sessio
 	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
 		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
 	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
-		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+		return fmt.Errorf("%w: Orchestrator could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
 	default:
 		return err
 	}

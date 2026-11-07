@@ -859,13 +859,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	if review.ID != "" {
 		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
 	}
-	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.")
+	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.")
 	return msg.String()
 }
 
 func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	if len(comments) == 0 {
-		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here."
+		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what Orchestrator has provided here."
 	}
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))

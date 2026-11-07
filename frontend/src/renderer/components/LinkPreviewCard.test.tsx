@@ -122,7 +122,7 @@ describe("AppLink link preview", () => {
 		fireEvent.contextMenu(screen.getByRole("link"));
 
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in ao browser", "Open in external browser", "Copy link",
+			"Open in Orchestrator Browser", "Open in external browser", "Copy link",
 		]);
 	});
 });

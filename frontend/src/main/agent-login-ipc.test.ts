@@ -39,7 +39,7 @@ describe("requestAgentLogin", () => {
 		expect(unused).not.toHaveBeenCalled();
 		const offline = vi.fn(async () => { throw new TypeError("fetch failed"); });
 		await expect(requestAgentLogin({ action: "get", agentId: "codex", operationId: "op-1" }, 3002, offline))
-			.resolves.toMatchObject({ status: 503, body: { message: "AO daemon is not reachable." } });
+			.resolves.toMatchObject({ status: 503, body: { message: "Daemon is not reachable." } });
 	});
 });
 

@@ -2342,7 +2342,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	if (url) {
 		lines.push("", `Comment URL: ${url}`);
 	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what AO has provided here.");
+	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
 	return lines.join("\n");
 }
 
@@ -2350,9 +2350,9 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "AO agent review" : "external PR review";
+	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
 	const lines = [
-		`A ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
+		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
 		"",
 		"Review summary:",
 		body,

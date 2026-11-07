@@ -287,7 +287,7 @@ async function withRenderWindow<T>(
 		const onRefused = (destination: string) => {
 			if (refused.has(destination)) return;
 			refused.add(destination);
-			record({ level: "warning", text: `AO blocked a request to ${destination}. ${why}` });
+			record({ level: "warning", text: `Orchestrator blocked a request to ${destination}. ${why}` });
 		};
 		const releasePage = allowRenderPage(page.hostname, Number(page.port || 80), onRefused);
 		checkPages.set(contents.id, { page, onRefused });

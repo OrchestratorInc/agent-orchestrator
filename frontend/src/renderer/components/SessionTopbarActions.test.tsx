@@ -417,7 +417,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 			},
 		]);
 
-		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
 		expect(indicator).toBeNull();
 	});
@@ -431,7 +431,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		} satisfies WorkspaceSession;
 		renderBoardActions([worker, exitedOrchestrator]);
 
-		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
+		await userEvent.click(screen.getByRole("button", { name: "Orchestrator agent, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
 		expect(navigateMock).toHaveBeenCalledTimes(1);

@@ -80,8 +80,8 @@ func newRemoteHostLinkCommand(ctx *commandContext) *cobra.Command {
 	var noQR bool
 	cmd := &cobra.Command{
 		Use:   "link",
-		Short: "Link this machine to your AO account by signing in from another device",
-		Long: "Link this machine to your AO account by signing in from another device.\n\n" +
+		Short: "Link this machine to your Orchestrator account by signing in from another device",
+		Long: "Link this machine to your Orchestrator account by signing in from another device.\n\n" +
 			"Open the printed link on any device, or scan its QR code with your phone, and sign in.\n" +
 			"This machine then appears on every desktop and phone signed in to that account,\n" +
 			"with no address or password to copy. Remote access is turned on if it is off.",
@@ -106,7 +106,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	}
 	cloudBase := strings.TrimRight(settings.CloudControlPlaneURL, "/")
 	if cloudBase == "" {
-		return errors.New("AO Cloud is not configured for this machine's AO")
+		return errors.New("no Orchestrator Cloud connection is configured on this machine")
 	}
 
 	// Nothing on this machine changes until the sign-in succeeds, so a
@@ -137,7 +137,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	client := &http.Client{Timeout: 30 * time.Second}
 	var directory accountHostDirectory
 	if err := cloudJSON(ctx, client, http.MethodGet, cloudBase+"/api/cloud/v1/me/hosts", session.AccessToken, nil, &directory); err != nil {
-		return fmt.Errorf("read your AO account's machines: %w", err)
+		return fmt.Errorf("read your Orchestrator account's machines: %w", err)
 	}
 	listedLabel, listedToken := "", ""
 	for _, host := range directory.Hosts {
@@ -191,7 +191,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		err = cloudJSON(ctx, putClient, http.MethodPut, put, session.AccessToken, registration, nil)
 	}
 	if err != nil {
-		return fmt.Errorf("add this machine to your AO account: %w; run `ao remote-host link` again", err)
+		return fmt.Errorf("add this machine to your Orchestrator account: %w; run `ao remote-host link` again", err)
 	}
 	message := fmt.Sprintf("Linked %q to %s.\n", label, session.User.Email)
 	if listedToken == issued.Token && listedLabel == label {
@@ -269,7 +269,7 @@ func (c *commandContext) signInWithDeviceCode(ctx context.Context, out io.Writer
 	if link == "" {
 		link = device.VerificationURI
 	}
-	if _, err := fmt.Fprintf(out, "\nTo link this machine to your AO account, open this link on any device and sign in:\n\n  %s\n\n", link); err != nil {
+	if _, err := fmt.Fprintf(out, "\nTo link this machine to your Orchestrator account, open this link on any device and sign in:\n\n  %s\n\n", link); err != nil {
 		return workOSDeviceSession{}, err
 	}
 	if showQR {
@@ -359,9 +359,9 @@ type cloudError struct {
 
 func (e *cloudError) Error() string {
 	if e.code != "" {
-		return fmt.Sprintf("AO Cloud answered %d (%s)", e.status, e.code)
+		return fmt.Sprintf("Orchestrator Cloud answered %d (%s)", e.status, e.code)
 	}
-	return fmt.Sprintf("AO Cloud answered %d", e.status)
+	return fmt.Sprintf("Orchestrator Cloud answered %d", e.status)
 }
 
 func cloudJSON(ctx context.Context, client *http.Client, method, target, bearer string, body, out any) error {

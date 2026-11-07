@@ -4966,7 +4966,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		if err != nil {
 			return domain.RetryPrompt{}, fmt.Errorf("encode provider inputs %s: %w", turnID, err)
 		}
-		prompt.ProviderInputText = "AO prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
+		prompt.ProviderInputText = "Orchestrator prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
 	}
 	prompt.DeliveryContentJSON = ""
 	if len(content) > 0 {

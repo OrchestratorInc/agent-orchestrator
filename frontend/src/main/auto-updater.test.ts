@@ -4016,7 +4016,7 @@ describe("quitAndInstallUpdate", () => {
         updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
         return transfer.promise;
       });
-      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
       await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(180_000);
       await assertion;
@@ -5083,8 +5083,8 @@ it("recovers a timed-out native preparation when its native success arrives late
     updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
     await vi.advanceTimersByTimeAsync(3 * 60_000);
     expect(module.getUpdateStatus()).toMatchObject({ state: "error", staged: { ready: false } });
-    expect(module.getUpdateStatus().message).toContain("Relaunch AO");
-    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+    expect(module.getUpdateStatus().message).toContain("Relaunch Orchestrator");
+    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     nativeUpdaterEvents.get("update-downloaded")?.({}, "notes", "2.0.0");
     expect(module.getUpdateStatus().state).toBe("downloaded");

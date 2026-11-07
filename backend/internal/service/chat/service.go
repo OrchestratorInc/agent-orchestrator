@@ -3083,7 +3083,7 @@ func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionVal
 		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
 	}
 	if configID == "mode" && isCopilotAutopilot(value.Select) {
-		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+		return fmt.Errorf("%w: Copilot Autopilot bypasses Orchestrator approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
 	}
 	return nil
 }

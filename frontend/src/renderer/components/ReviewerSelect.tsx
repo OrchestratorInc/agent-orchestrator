@@ -45,7 +45,7 @@ export function reviewerTrustWarning(harness: string): string | null {
 		return "Experimental host-trusted reviewer: this agent is not OS-isolated and may retain shell, plugin, editor, and network access.";
 	}
 	if (USER_APPROVED_REVIEWERS.has(harness)) {
-		return "Experimental user-approved reviewer: AO keeps the agent's native permission prompts enabled; review execution may pause for your approval.";
+		return "Experimental user-approved reviewer: Orchestrator keeps the agent's native permission prompts enabled; review execution may pause for your approval.";
 	}
 	return null;
 }
