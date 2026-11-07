@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -20,7 +21,11 @@ import {
 	Archive,
 	CalendarClock,
 	ChevronRight,
+	CircleAlert,
 	Copy,
+	GitMerge,
+	GitPullRequest,
+	LoaderCircle,
 	Download,
 	LayoutGrid,
 	File,
@@ -75,11 +80,18 @@ import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
-import { getSessionStatusDotView } from "../lib/session-presentation";
+import {
+	getSessionRowMarker,
+	getSessionStatusDotView,
+	isAgentActivityWorking,
+	sessionNeedsInput,
+	type SessionRowMarker,
+} from "../lib/session-presentation";
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -97,6 +109,7 @@ import { useShellMaybe } from "../lib/shell-context";
 import { useSidebarUpdateDismissal } from "../hooks/useSidebarUpdateDismissal";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
+import { useSessionPreviewHover } from "../hooks/useSessionPreviewHover";
 import { effectiveShortcutBindings, shortcutBindingKeys } from "../../shared/shortcuts";
 import {
 	ContextMenu,
@@ -105,6 +118,8 @@ import {
 	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { SessionPreviewCardAdapter } from "./SessionsBoardAdapters";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -127,16 +142,22 @@ import {
 	useSidebar,
 } from "./ui/sidebar";
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { captureRendererException } from "../lib/telemetry";
 import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
-import { applyOrder } from "../lib/sidebar-order";
+import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -158,15 +179,14 @@ const brandInTitlebar = isMac || isLinuxPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
 // One row-action layout shared by project rows, session rows, and the section
-// header "+": 24px square buttons, 14px icons, a 6px gap, and a 4px right inset,
-// vertically centered in the row, so every action's right edge lines up. Never
-// painted: `.sidebar-icon-action` also opts out of the sidebar focus fill in
-// styles.css. Hover/reveal stays instant (no transitions here).
+// header "+": 24px quiet icon buttons (Button size="icon-xs"), 14px icons, a 6px
+// gap, and a 4px right inset, vertically centered in the row, so every action's
+// right edge lines up. `.sidebar-icon-action` opts out of the sidebar focus fill
+// in styles.css; the Button's hover pill owns the fill.
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
 /** Long enough that sweeping the pointer across the list starts no agents. */
 const AGENT_WARM_UP_HOVER_MS = 300;
-const ROW_ACTION_BUTTON_CLASS =
-	"sidebar-icon-action grid size-6 shrink-0 place-items-center rounded-md !bg-transparent text-passive hover:!bg-interactive-hover focus:!bg-transparent focus-visible:!bg-interactive-hover active:!bg-interactive-hover data-[state=open]:!bg-interactive-hover hover:text-foreground focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50 data-[state=open]:text-foreground [&_svg]:size-icon-md";
+const ROW_ACTION_BUTTON_CLASS = "sidebar-icon-action [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 
@@ -204,7 +224,7 @@ const SECTION_ROW_CLASS =
 // Reorder drags start from the row's primary click surface. The 4px activation
 // distance keeps a plain navigation/disclosure click from starting a drag;
 // nested action buttons remain outside that activator surface.
-const REORDER_ACTIVATION_DISTANCE = 4;
+const REORDER_ACTIVATION_DISTANCE = 8;
 // A transparent 1x1 image replaces the browser's default drag ghost, so the
 // dragged row stays put at reduced opacity instead of trailing under the cursor.
 const EMPTY_DRAG_IMAGE = typeof Image === "undefined" ? null : new Image();
@@ -404,48 +424,13 @@ function SidebarSectionScroller({
 	wrapperClassName?: string;
 }) {
 	const scrollerRef = useRef<HTMLDivElement>(null);
-	const [scrollEdges, setScrollEdges] = useState({ top: false, bottom: false });
-	const updateScrollEdges = useCallback(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		const overflow = scroller.scrollHeight - scroller.clientHeight;
-		const next = {
-			top: overflow > 1 && scroller.scrollTop > 1,
-			bottom: overflow > 1 && scroller.scrollTop < overflow - 1,
-		};
-		setScrollEdges((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
-	}, []);
-
-	useLayoutEffect(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		updateScrollEdges();
-		scroller.addEventListener("scroll", updateScrollEdges, { passive: true });
-		const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateScrollEdges);
-		resizeObserver?.observe(scroller);
-		if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-		const mutationObserver =
-			typeof MutationObserver === "undefined"
-				? undefined
-				: new MutationObserver(() => {
-					if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-					updateScrollEdges();
-				});
-		mutationObserver?.observe(scroller, { childList: true, subtree: true });
-		return () => {
-			scroller.removeEventListener("scroll", updateScrollEdges);
-			resizeObserver?.disconnect();
-			mutationObserver?.disconnect();
-		};
-	}, [updateScrollEdges]);
+	useEdgeFade(scrollerRef);
 
 	return (
 		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
-			<div ref={scrollerRef} className={className} data-sidebar-section-scroller="" data-testid={testId} style={style}>
+			<div ref={scrollerRef} className={`edge-fade [--edge-fade-size:var(--space-4)] ${className}`} data-sidebar-section-scroller="" data-testid={testId} style={style}>
 				{children}
 			</div>
-			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
-			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
 		</div>
 	);
 }
@@ -592,10 +577,56 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Colour tracks the session's board section, preserving SCM state while the
-// agent runs; motion stays on raw agent activity. A no-PR idle session turns
-// blue when it starts working. See getSessionStatusDotView for the lane mapping.
-function SessionStatusDot({ session }: { session: WorkspaceSession }) {
+// A row spins while its agent works, ahead of any PR state: it may already be
+// on its next PR, and the hover card has the PR detail.
+function isSessionRowWorking(session: WorkspaceSession): boolean {
+	if (session.displayStatus === "Terminated") return false;
+	// Setting up (worktree, agent) already counts as working, so the row spins from the moment it is created.
+	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
+}
+
+// Rows showing the red alert sit above the rest, but only in the default
+// order: once the user has dragged rows into their own order, it wins. Stable,
+// so the order still holds within each group.
+function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
+	if (hasManualOrder) return sessions;
+	const flagged = sessions.filter((session) => !isSessionRowWorking(session) && getSessionRowMarker(session) === "attention");
+	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
+	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
+}
+
+// The icons a row or a collapsed project can show, plus the working
+// spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
+// Each state has its own glyph, so colour is never the only difference: a red
+// alert needs you now, an orange alert is a person's review next, a green pull
+// request is ready to merge.
+const SESSION_MARKER_ICONS = {
+	attention: { Icon: CircleAlert, tone: "text-destructive" },
+	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
+	review: { Icon: CircleAlert, tone: "text-status-in-review" },
+	// Done, so it sits a step below the colours that ask something of you.
+	merged: { Icon: GitMerge, tone: "text-status-merged opacity-70" },
+} as const satisfies Record<SessionRowMarker, { Icon: unknown; tone: string }>;
+
+function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
+	marker: SessionRowMarker;
+	popped?: boolean;
+	onPopEnd?: () => void;
+} & Record<`data-${string}`, string | undefined>) {
+	const { Icon, tone } = SESSION_MARKER_ICONS[marker];
+	return (
+		<Icon
+			className={cn("-mx-0.5 size-3", tone, popped && "session-marker-pop")}
+			data-session-marker={marker}
+			onAnimationEnd={onPopEnd}
+			{...rest}
+		/>
+	);
+}
+
+// The dot before the new sidebar design (switched off in Developer mode):
+// colour from the board section, breathing while the agent works.
+function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
 	const dot = getSessionStatusDotView(session);
 	return (
 		<span
@@ -610,6 +641,63 @@ function SessionStatusDot({ session }: { session: WorkspaceSession }) {
 				)}
 				data-session-status={session.status}
 			/>
+		</span>
+	);
+}
+
+// A row flags only what the user has something to do about, a spinner while
+// its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
+// there on mount does not.
+function SessionStatusDot({ session, working, legacy }: { session: WorkspaceSession; working: boolean; legacy: boolean }) {
+	// A working agent shows the spinner even when its PR has a state to flag:
+	// the agent may be on another PR, and the hover card has the PR detail.
+	// The marker returns once the agent stops.
+	const marker = working ? null : getSessionRowMarker(session);
+	// Filled until the user has opened the session since it last changed.
+	const unread = useSessionUnread(session);
+	const previous = useRef(marker);
+	const [popped, setPopped] = useState(false);
+	useEffect(() => {
+		if (previous.current !== marker && marker) setPopped(true);
+		previous.current = marker;
+	}, [marker]);
+	if (legacy) return <LegacySessionStatusDot session={session} />;
+	// Rows with nothing to flag still get a quiet dot, so every title starts on
+	// the same column: filled while unread, hollow once the user has read it.
+	const stopped =
+		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
+	return (
+		<span
+			aria-hidden="true"
+			className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5"
+		>
+			{marker ? (
+				<SessionMarkerIcon
+					data-session-status={session.status}
+					marker={marker}
+					onPopEnd={() => setPopped(false)}
+					popped={popped}
+				/>
+			) : working ? (
+				<LoaderCircle
+					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
+					data-session-status={session.status}
+					data-session-spinner=""
+				/>
+			) : (
+				<span
+					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+					data-session-idle={stopped ? "stopped" : "idle"}
+					data-session-status={session.status}
+				>
+					<span
+						className={cn(
+							"size-2 rounded-full",
+							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
+						)}
+					/>
+				</span>
+			)}
 		</span>
 	);
 }
@@ -811,6 +899,7 @@ export function Sidebar({
 	const projectOrder = useSidebarOrderStore((state) => state.projectOrder);
 	const pendingCreatedProjectIds = useSidebarOrderStore((state) => state.pendingCreatedProjectIds);
 	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
+	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
 	useLayoutEffect(() => {
 		// Preserve absent IDs in place: creation can publish its order before the
 		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
@@ -818,8 +907,8 @@ export function Sidebar({
 		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
 	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
-		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
-		[projectOrder, workspaces],
+		() => pinnedFirst(applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"), (workspace) => workspace.id, pinnedProjectIds),
+		[pinnedProjectIds, projectOrder, workspaces],
 	);
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
@@ -833,6 +922,7 @@ export function Sidebar({
 		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND),
 		[workspaces],
 	);
+	const projectAvatars = useProjectAvatars(projectWorkspaces);
 	const {
 		listed: visibleWorkspaces,
 		hiddenCount: hiddenProjectCount,
@@ -890,7 +980,9 @@ export function Sidebar({
 		const row = event.currentTarget;
 		const rect = row.getBoundingClientRect();
 		const placement: ProjectDropPlacement = event.clientY <= rect.top + rect.height / 2 ? "before" : "after";
-		if (reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
+		// Pinned and unpinned projects reorder only within their own group.
+		const pinned = useSidebarOrderStore.getState().pinnedProjectIds;
+		if (pinned.includes(activeId) !== pinned.includes(overId) || reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
 			clearProjectDropIndicator();
 			return;
 		}
@@ -993,7 +1085,7 @@ export function Sidebar({
 				 *   never `focus-visible:outline-none` (global kill would leave it blind).
 				 * - No separate "home" affordance on the mark — the whole brand is the control.
 				 */}
-				<button
+				<Pressable
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
@@ -1011,19 +1103,21 @@ export function Sidebar({
 					>
 						<BuildInfoTooltip>Orchestrator</BuildInfoTooltip>
 					</span>
-				</button>
+				</Pressable>
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<button
+						<Button
 							aria-label={isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
-							className="hidden size-control-board place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground group-data-[collapsible=icon]:grid [&_svg]:size-icon-base"
+							className="hidden size-control-board rounded-lg group-data-[collapsible=icon]:inline-flex [&_svg]:size-icon-base"
 							onClick={toggleSidebar}
+							size="none"
 							type="button"
+							variant="quiet"
 						>
 							<PanelLeft aria-hidden="true" />
-						</button>
+						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="right">
+					<TooltipContent shortcut="toggle-sidebar" side="right">
 						{isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
 					</TooltipContent>
 				</Tooltip>
@@ -1145,6 +1239,7 @@ export function Sidebar({
 												<ProjectItem
 													key={workspace.id}
 													workspace={workspace}
+													avatarUrl={projectAvatars.get(workspace.id)}
 													expanded={expandedIds.has(workspace.id) || (initialActiveSessionProjectId === workspace.id && !dismissedInitialActiveProjectIds.has(workspace.id))}
 													suppressInitialExpandAnimation={expandedIds.has(workspace.id)}
 													selection={selection}
@@ -1265,7 +1360,7 @@ export function Sidebar({
 							status={updateStatus}
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
-						<button
+						<Pressable
 							className={FOOTER_NAV_BUTTON_CLASS}
 							disabled={settingsPage.cueBusy}
 							onClick={settingsPage.close}
@@ -1276,7 +1371,7 @@ export function Sidebar({
 								<ArrowLeft aria-hidden="true" />
 								<span className="tracking-tight">{t("settings.back")}</span>
 							</span>
-						</button>
+						</Pressable>
 					</>
 				) : (
 				<>
@@ -1303,7 +1398,7 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
-					<button
+					<Pressable
 						aria-label={t("settings.connectMobile")}
 						className={FOOTER_NAV_BUTTON_CLASS}
 						onClick={() => selection.goConnectMobile()}
@@ -1315,9 +1410,9 @@ export function Sidebar({
 							<Smartphone aria-hidden="true" />
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
-					</button>
+					</Pressable>
 					<div className="flex w-full items-center gap-1">
-						<button
+						<Pressable
 							aria-label={t("shell.settings")}
 							className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
 							onClick={() => selection.goGlobalSettings()}
@@ -1329,7 +1424,7 @@ export function Sidebar({
 								<Settings aria-hidden="true" />
 								<span className="tracking-tight">{t("shell.settings")}</span>
 							</span>
-						</button>
+						</Pressable>
 						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
 					</div>
 				</div>
@@ -1347,7 +1442,7 @@ export function Sidebar({
 					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={t("settings.connectMobile")}
 								className={FOOTER_RAIL_BUTTON_CLASS}
 								onClick={() => selection.goConnectMobile()}
@@ -1358,13 +1453,13 @@ export function Sidebar({
 								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
 									<Smartphone aria-hidden="true" />
 								</span>
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={t("shell.settings")}
 								className={FOOTER_RAIL_BUTTON_CLASS}
 								onClick={() => selection.goGlobalSettings()}
@@ -1375,9 +1470,9 @@ export function Sidebar({
 								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
 									<Settings aria-hidden="true" />
 								</span>
-							</button>
+							</Pressable>
 						</TooltipTrigger>
-						<TooltipContent side="right">{t("shell.settings")}</TooltipContent>
+						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
 					</Tooltip>
 				</div>
 				</>
@@ -1406,6 +1501,8 @@ type Selection = ReturnType<typeof useSelection>;
 
 type ProjectItemProps = {
 	workspace: WorkspaceSummary;
+	/** The repository owner's avatar, shown in place of the folder icon. */
+	avatarUrl?: string;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
 	expanded: boolean;
@@ -1448,6 +1545,7 @@ function projectItemPropsEqual(previous: ProjectItemProps, next: ProjectItemProp
 
 const ProjectItem = memo(function ProjectItem({
 	workspace,
+	avatarUrl,
 	hostLabel,
 	onOpenOrchestrator,
 	expanded,
@@ -1511,10 +1609,18 @@ const ProjectItem = memo(function ProjectItem({
 		).filter((session) => session.isTerminated !== true),
 		[workspace.sessions, workspace.shared],
 	);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	const projectNeedsInput = useMemo(
+		() => newSidebarDesign && visibleSessions.some(sessionNeedsInput),
+		[newSidebarDesign, visibleSessions],
+	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
-		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
-		[sessionOrder, visibleSessions],
+		() => {
+			const ordered = applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start");
+			return newSidebarDesign ? floatAttention(ordered, sessionOrder.length > 0) : ordered;
+		},
+		[newSidebarDesign, sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -1588,7 +1694,7 @@ const ProjectItem = memo(function ProjectItem({
 		onToggle(workspace.id);
 	};
 
-	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
+	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
 	// Expand a collapsed project so opening the orchestrator also reveals its
 	// session list — otherwise the tree stays shut while you're inside it.
@@ -1639,6 +1745,7 @@ const ProjectItem = memo(function ProjectItem({
 				selection.goSession(workspace.id, sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
+				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 			} finally {
 				setIsSpawning(false);
 			}
@@ -1655,6 +1762,7 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
+			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 		} finally {
 			setIsSpawning(false);
 		}
@@ -1695,6 +1803,11 @@ const ProjectItem = memo(function ProjectItem({
 		setConfirmOpen(true);
 	};
 	const copyToClipboard = useCopyToClipboard();
+	// Pins are a local list preference; remote host rows and the Scratchpad
+	// have their own sections and are not pinnable.
+	const canPin = !isStandalone && !workspace.hostId;
+	const isPinned = useSidebarOrderStore((state) => canPin && state.pinnedProjectIds.includes(workspace.id));
+	const setProjectPinned = useSidebarOrderStore((state) => state.setProjectPinned);
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
@@ -1708,6 +1821,9 @@ const ProjectItem = memo(function ProjectItem({
 		selection.goHome();
 		try {
 			await onRemoveProject(workspace.id);
+			// Project ids come from the folder name, so a stale pin would come
+			// back if the same folder is added again.
+			if (canPin) setProjectPinned(workspace.id, false);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : t("shell.couldNotRemoveProject");
 			setRemoveError(message);
@@ -1767,7 +1883,7 @@ const ProjectItem = memo(function ProjectItem({
 										// Projects header so icons and labels share one left edge.
 										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
-										"pr-sidebar-project-actions",
+										isPinned ? "pr-sidebar-project-actions-pinned" : "pr-sidebar-project-actions",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
@@ -1790,7 +1906,9 @@ const ProjectItem = memo(function ProjectItem({
 											className="inline-flex size-icon-md items-center justify-center transition-[scale] duration-normal ease-[var(--ease-out)] motion-reduce:transition-none"
 											data-project-folder-icon=""
 										>
-											{expanded ? <FolderOpen strokeWidth={1.75} /> : <Folder strokeWidth={1.75} />}
+											{!expanded && projectNeedsInput ? (
+												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
+											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 										</span>
 										<span
 											className={cn(
@@ -1804,12 +1922,20 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight strokeWidth={1.75} />
 										</span>
 									</span>
-									{/* Collapsed icon rail: folder icon */}
+									{/* Collapsed icon rail: the project icon, with a red badge when a session
+									    waits on the user. The session list is hidden here, so the badge
+									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
 										className="relative z-[1] hidden size-8 items-center justify-center group-data-[collapsible=icon]:inline-flex"
 									>
-										{expanded ? <FolderOpen className="size-5" strokeWidth={1.75} /> : <Folder className="size-5" strokeWidth={1.75} />}
+										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
+										{projectNeedsInput ? (
+											<span
+												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
+												data-project-marker="attention"
+											/>
+										) : null}
 									</span>
 									<span
 										className="sidebar-expanded-chrome relative z-[1] min-w-0 flex-1 translate-y-px truncate group-data-[collapsible=icon]:hidden"
@@ -1817,7 +1943,17 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
-									{hostLabel && <Badge variant="outline" className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden">{hostLabel}</Badge>}
+									{workspace.shared ? <SharedProjectMark share={workspace.shared} /> : null}
+									{/* The host badge shrinks and truncates in narrow sidebars so it never
+									    runs under the row actions; half the row stays for the name. */}
+									{hostLabel && (
+										<Badge
+											variant="outline"
+											className="sidebar-expanded-chrome relative z-[1] h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs group-data-[collapsible=icon]:hidden"
+										>
+											<span className="truncate">{hostLabel}</span>
+										</Badge>
+									)}
 									{workspace.kind === "cloud" && (
 										<Badge
 											variant="outline"
@@ -1829,7 +1965,7 @@ const ProjectItem = memo(function ProjectItem({
 								</SidebarMenuButton>
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
 	    the icon area so it intercepts clicks there without nesting buttons. */}
-								<button
+								<Pressable
 									aria-label={t("shell.toggleProject", {
 										name: nameWithHost,
 									})}
@@ -1855,6 +1991,24 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
+								{isPinned ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												size="icon-xs"
+												variant="quiet"
+												aria-label={t("shell.unpinProject")}
+												className={HOVER_ACTION_CLASS}
+												data-project-pinned=""
+												onClick={() => setProjectPinned(workspace.id, false)}
+												type="button"
+											>
+												<Pin aria-hidden="true" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.unpinProject")}</TooltipContent>
+									</Tooltip>
+								) : null}
 								{/* A guest may open a shared orchestrator but never start one, and the
 								    project's own actions belong to its organization. */}
 								{!workspace.shared || orchestrator ? (
@@ -1862,7 +2016,9 @@ const ProjectItem = memo(function ProjectItem({
 										<Tooltip>
 											<TooltipTrigger asChild>
 												<span className="inline-flex">
-													<button
+													<Button
+														size="icon-xs"
+														variant="quiet"
 														aria-current={orchestratorActive ? "page" : undefined}
 														aria-label={
 															orchestrator
@@ -1879,7 +2035,7 @@ const ProjectItem = memo(function ProjectItem({
 														type="button"
 													>
 														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
-													</button>
+													</Button>
 												</span>
 											</TooltipTrigger>
 												<TooltipContent>
@@ -1898,7 +2054,9 @@ const ProjectItem = memo(function ProjectItem({
 									<>
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
-												<button
+												<Button
+													size="icon-xs"
+													variant="quiet"
 													aria-label={t("shell.projectActions", {
 																name: nameWithHost,
 													})}
@@ -1906,14 +2064,20 @@ const ProjectItem = memo(function ProjectItem({
 													type="button"
 												>
 													<MoreVertical aria-hidden="true" />
-												</button>
+												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent side="right" align="start" className="min-w-44">
 												<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
-								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+												{canPin ? (
+													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+														{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+														{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+													</DropdownMenuItem>
+												) : null}
+												<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 													<Settings aria-hidden="true" />
 													{t("shell.projectSettings")}
 												</DropdownMenuItem>
@@ -2060,6 +2224,12 @@ const ProjectItem = memo(function ProjectItem({
 					</>
 				) : null}
 				{!isStandalone ? <ContextMenuSeparator /> : null}
+				{canPin ? (
+					<ContextMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+						{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+						{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+					</ContextMenuItem>
+				) : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -2095,8 +2265,6 @@ function ScratchpadSection({
 }) {
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	// Mirrors the project tree: only termination removes an agent from the
-	// sidebar, so a completed PR session stays reachable.
 	const visibleSessions = useMemo(
 		() => sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true),
 		[workspace.sessions],
@@ -2173,7 +2341,9 @@ function ScratchpadSection({
 										<Tooltip>
 											<TooltipTrigger asChild>
 												<span className="inline-flex">
-													<button
+													<Button
+														size="icon-xs"
+														variant="quiet"
 														aria-label={t("shell.archivedSessions")}
 														className={ROW_ACTION_BUTTON_CLASS}
 														onClick={(event) => {
@@ -2183,7 +2353,7 @@ function ScratchpadSection({
 														type="button"
 													>
 														<Archive aria-hidden="true" />
-													</button>
+													</Button>
 												</span>
 											</TooltipTrigger>
 											<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
@@ -2192,14 +2362,16 @@ function ScratchpadSection({
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<span className="inline-flex">
-												<button
+												<Button
+													size="icon-xs"
+													variant="quiet"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
 													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 													type="button"
 												>
 													<Plus aria-hidden="true" />
-												</button>
+												</Button>
 											</span>
 										</TooltipTrigger>
 										<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
@@ -2473,12 +2645,39 @@ const SessionRow = memo(function SessionRow({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
+	// The open row keeps a full-contrast title, so it gets the spinner without
+	// the shimmer.
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	const working = isSessionRowWorking(session);
+	// Having the session open reads it, including anything that lands while it is open.
+	const markRead = useSessionReadStore((state) => state.markRead);
+	useEffect(() => {
+		if (!active) return;
+		const updated = Date.parse(session.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
+	}, [active, markRead, session]);
+	const shimmer = newSidebarDesign && working && !active;
+	const marker = !newSidebarDesign || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
 		[queryClient, session.hostId],
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
+	const [contextMenuOpen, setContextMenuOpen] = useState(false);
+	// No preview while renaming, dragging, or with the context menu open.
+	const preview = useSessionPreviewHover(
+		Boolean(!newSidebarDesign || reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
+	);
+	const setSortableNode = reorder?.setNodeRef;
+	const setPreviewRow = preview.rowRef;
+	const rowNodeRef = useCallback(
+		(node: HTMLElement | null) => {
+			setSortableNode?.(node);
+			setPreviewRow(node);
+		},
+		[setPreviewRow, setSortableNode],
+	);
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -2501,9 +2700,16 @@ const SessionRow = memo(function SessionRow({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
+	// A session shared from another organization is the sharer's to name.
+	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
+		if (!renamable) return;
+		// The editor replaces the row, unmounting a context menu that is still
+		// open. Radix reports that close from an effect the unmount skips, so
+		// contextMenuOpen would stay true and keep the preview off for good.
+		setContextMenuOpen(false);
 		rename.begin();
-	}, [rename.begin]);
+	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
 
@@ -2518,7 +2724,7 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot session={session} />
+					<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
@@ -2549,13 +2755,18 @@ const SessionRow = memo(function SessionRow({
 	}
 
 	return (
-		<ContextMenu>
+		<ContextMenu onOpenChange={setContextMenuOpen}>
+			{/* Controlled by the hover hook; Radix still reports Escape and outside
+			    presses, which close it. */}
+			<HoverCard closeDelay={0} onOpenChange={(open) => !open && preview.hide()} open={preview.open} openDelay={0}>
 			<ContextMenuTrigger asChild>
+				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
 					className={cn(indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
 					data-dragging={reorder?.isDragging ? "true" : undefined}
-					ref={reorder?.setNodeRef}
+					ref={rowNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
+					{...preview.triggerProps}
 				>
 			<motion.div
 				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
@@ -2570,10 +2781,11 @@ const SessionRow = memo(function SessionRow({
 					)}
 					data-session-row=""
 					data-dragging={reorder?.isDragging ? "true" : undefined}
+					data-preview-open={preview.open ? "" : undefined}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
-						<button
+						<Pressable
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
@@ -2619,12 +2831,17 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot session={session} />
+							<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
 										"min-w-0 flex-1 truncate",
-										active ? "text-foreground" : "text-muted-foreground group-hover/session-row:text-foreground",
+										// Only a session that needs you reads at full brightness; the
+										// rest sit back, so the list has a clear lead.
+										active || marker === "attention"
+											? "text-foreground"
+											: "text-muted-foreground group-hover/session-row:text-foreground",
+										shimmer && "chat-working-shimmer",
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
@@ -2639,9 +2856,9 @@ const SessionRow = memo(function SessionRow({
 								>
 									{session.title}
 								</span>
-								{hostLabel ? <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-2xs">{hostLabel}</Badge> : null}
+								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 							</span>
-						</button>
+						</Pressable>
 					</div>
 					{/* The timestamp is stable at the right edge. Pin and kill use label
 					    space while idle, then reveal without changing the row footprint. */}
@@ -2655,9 +2872,25 @@ const SessionRow = memo(function SessionRow({
 				</div>
 			</motion.div>
 				</SidebarMenuSubItem>
+				</HoverCardTrigger>
 			</ContextMenuTrigger>
+			{/* The board card, still: hovering a row previews the session without opening
+			    it, and the pointer can move onto the card to use its PR links. */}
+			<HoverCardContent
+				align="center"
+				animation={preview.animation}
+				className="w-[17rem] border-0 bg-transparent p-0"
+				collisionPadding={8}
+				side="right"
+				sideOffset={12}
+				{...preview.contentProps}
+			>
+				<SessionPreviewCardAdapter session={session} />
+			</HoverCardContent>
+			</HoverCard>
 			<ContextMenuContent className="min-w-44">
-				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2736,13 +2969,12 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
+				{session.cloud?.shared ? null : <Button
+							size="icon-xs"
+							variant="quiet"
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 							className={cn(
 								SESSION_ACTION_CLASS,
-								"focus-visible:text-foreground",
 								session.isPinned && "text-foreground",
 							)}
 							onClick={(event) => {
@@ -2752,36 +2984,36 @@ const SessionActions = memo(function SessionActions({
 							type="button"
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent side="top">
-						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-					</TooltipContent>
-				</Tooltip>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<SessionArchiveDialog
-								onConfirm={confirmArchive}
-								onOpenChange={onArchiveOpenChange}
-								open={archiveOpen}
-								session={session}
-								trigger={
-									<button
-										aria-label={t("shell.archiveSession")}
-										className={cn(SESSION_ACTION_CLASS, "focus-visible:text-foreground")}
-										disabled={isKilling}
-										onClick={handleArchive}
-										type="button"
-									>
-										<Archive aria-hidden="true" />
-									</button>
-								}
-							/>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>
+						</Button>}
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				{session.cloud?.shared ? null : (
+					<SessionArchiveDialog
+						onConfirm={confirmArchive}
+						onOpenChange={onArchiveOpenChange}
+						open={archiveOpen}
+						session={session}
+						trigger={
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											size="icon-xs"
+											variant="quiet"
+											aria-label={t("shell.archiveSession")}
+											className={SESSION_ACTION_CLASS}
+											disabled={isKilling}
+											onClick={handleArchive}
+											type="button"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
+							</Tooltip>
+						}
+					/>
+				)}
 			</div>
 			<SessionMessageAge session={session} />
 		</div>
@@ -2799,7 +3031,7 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	if (!configured || status !== "unauthenticated") return null;
 
 	return (
-		<button
+		<Pressable
 			aria-label={t("shell.signInToAOCloud")}
 			className={FOOTER_NAV_BUTTON_CLASS}
 			onClick={onSignIn}
@@ -2811,7 +3043,7 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 				<LogIn aria-hidden="true" />
 				<span className="tracking-tight">{t("shell.signInToAOCloud")}</span>
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -2828,7 +3060,7 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
+				<Pressable
 					aria-label={t("shell.signInToAOCloud")}
 					className={FOOTER_RAIL_BUTTON_CLASS}
 					onClick={onSignIn}
@@ -2839,7 +3071,7 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 					<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
 						<LogIn aria-hidden="true" />
 					</span>
-				</button>
+				</Pressable>
 			</TooltipTrigger>
 			<TooltipContent side="right">{t("shell.signInToAOCloud")}</TooltipContent>
 		</Tooltip>
@@ -2860,7 +3092,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<button
+				<Pressable
 					aria-label={t("shell.signedInAs", {
 						email: session?.user.email ?? "AO Cloud",
 					})}
@@ -2879,7 +3111,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 							</span>
 						) : null}
 					</span>
-				</button>
+				</Pressable>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent side="top" align="start" className="min-w-44">
 				<DropdownMenuItem
@@ -2937,7 +3169,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
+				<Pressable
 					aria-label={t("shell.signedInAs", {
 						email: session?.user.email ?? "AO Cloud",
 					})}
@@ -2950,7 +3182,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 					<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
 						<AccountAvatar user={session?.user} />
 					</span>
-				</button>
+				</Pressable>
 			</TooltipTrigger>
 			<TooltipContent side="right">
 				{t("shell.signOutWithEmail", {
@@ -3060,7 +3292,7 @@ function UpdateStatusRow({
 		// announce an update and offer nothing to act on.
 		return (
 			<div className="flex w-full items-center gap-1" data-testid="sidebar-update-available">
-				<button
+				<Pressable
 					aria-label={
 						action.version
 							? t("shell.downloadUpdateVersion", { version: action.version })
@@ -3081,17 +3313,18 @@ function UpdateStatusRow({
 							)}
 						</span>
 					</span>
-				</button>
+				</Pressable>
 				{action.version && (
-					<button
+					<Button
 						aria-label={t("shell.dismissUpdateVersion", { version: action.version })}
-						className="grid size-8 shrink-0 place-items-center text-muted-foreground hover:text-foreground"
 						onClick={onDismissAvailable}
+						size="icon"
 						tabIndex={tabIndex}
 						type="button"
+						variant="quiet"
 					>
 						<X aria-hidden="true" className="size-icon-base" />
-					</button>
+					</Button>
 				)}
 			</div>
 		);
@@ -3114,7 +3347,7 @@ function UpdateStatusRow({
 	}
 
 	return (
-		<button
+		<Pressable
 			aria-label={t("shell.retryUpdateCheck")}
 			className="flex w-full items-center gap-2.5 rounded-lg border border-warning/35 bg-warning/12 p-2.5 text-left text-control font-medium text-warning hover:bg-warning/18 [&_svg]:text-warning"
 			data-testid="sidebar-update-failed"
@@ -3129,7 +3362,7 @@ function UpdateStatusRow({
 					{t("shell.retryUpdateCheck")}
 				</span>
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -3154,7 +3387,7 @@ function UpdateInstallSlide({
 
 	const versionNumber = installVersionNumber(action.version);
 	return (
-		<button
+		<Pressable
 			aria-label={
 				versionNumber
 					? t("shell.restartInstallUpdateVersion", { version: versionNumber })
@@ -3179,7 +3412,7 @@ function UpdateInstallSlide({
 					</>
 				) : null}
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -3206,7 +3439,7 @@ function UpdateStatusRail({
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
+					<Pressable
 						aria-label={
 							action.version
 								? t("shell.downloadUpdateVersion", { version: action.version })
@@ -3221,7 +3454,7 @@ function UpdateStatusRail({
 						<span className="relative z-[1] grid place-items-center [&_svg]:size-4">
 							<Download aria-hidden="true" />
 						</span>
-					</button>
+					</Pressable>
 				</TooltipTrigger>
 				<TooltipContent side="right">{label}</TooltipContent>
 			</Tooltip>
@@ -3251,7 +3484,7 @@ function UpdateStatusRail({
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
+					<Pressable
 						aria-label={t("shell.retryUpdateCheck")}
 						className="grid size-9 place-items-center rounded-lg bg-warning/12 text-warning hover:bg-warning/18 [&_svg]:size-4"
 						onClick={() => void aoBridge.updates.check()}
@@ -3259,7 +3492,7 @@ function UpdateStatusRail({
 						type="button"
 					>
 						<AlertTriangle aria-hidden="true" />
-					</button>
+					</Pressable>
 				</TooltipTrigger>
 				<TooltipContent side="right">
 					{t("shell.updateCheckFailed")} · {t("shell.retryUpdateCheck")}
@@ -3272,7 +3505,7 @@ function UpdateStatusRail({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
+				<Pressable
 					aria-label={
 						versionNumber
 							? t("shell.restartInstallUpdateVersion", { version: versionNumber })
@@ -3284,7 +3517,7 @@ function UpdateStatusRail({
 					type="button"
 				>
 					<RefreshCw aria-hidden="true" />
-				</button>
+				</Pressable>
 			</TooltipTrigger>
 			<TooltipContent side="right">
 				{t("shell.restartToUpdate")}
@@ -3331,6 +3564,86 @@ function ShowMoreRow({
 				<span className="relative z-[1] truncate">{t(expanded ? "shell.showLess" : "shell.showMore")}</span>
 			</motion.button>
 		</AnimatePresence>
+	);
+}
+
+// Tile colours for projects without an avatar. Picked by a hash of the
+// project path, so a project keeps its colour across launches.
+const PROJECT_LETTER_TILE_COLORS = [
+	"bg-red-400/20",
+	"bg-orange-400/20",
+	"bg-amber-400/20",
+	"bg-lime-400/20",
+	"bg-emerald-400/20",
+	"bg-teal-400/20",
+	"bg-sky-400/20",
+	"bg-blue-400/20",
+	"bg-indigo-400/20",
+	"bg-violet-400/20",
+	"bg-fuchsia-400/20",
+	"bg-pink-400/20",
+] as const;
+
+function projectTileColor(seed: string): string {
+	let hash = 0;
+	for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) | 0;
+	return PROJECT_LETTER_TILE_COLORS[Math.abs(hash) % PROJECT_LETTER_TILE_COLORS.length];
+}
+
+/** A project's icon. With repository avatars on: the owner avatar as a 4px-radius
+ *  squircle, or a colour-coded first-letter tile while it loads and when there
+ *  is no avatar or it fails. With them off: a folder. */
+function ProjectIcon({
+	avatarUrl,
+	name,
+	seed,
+	expanded,
+	className,
+}: {
+	avatarUrl?: string;
+	name: string;
+	seed: string;
+	expanded: boolean;
+	className?: string;
+}) {
+	const avatarsEnabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
+	const [loadedUrl, setLoadedUrl] = useState<string>();
+	const [failedUrl, setFailedUrl] = useState<string>();
+	if (!avatarsEnabled) {
+		const Icon = expanded ? FolderOpen : Folder;
+		return <Icon className={className} strokeWidth={1.75} />;
+	}
+	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
+	const loaded = showAvatar && loadedUrl === avatarUrl;
+	const letter = name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?";
+	return (
+		<span className={cn("relative inline-flex shrink-0", className ?? "size-icon-md")}>
+			{loaded ? null : (
+				<span
+					className={cn(
+						"inline-flex size-full items-center justify-center rounded-[4px] font-semibold leading-none text-foreground/80",
+						className ? "text-xs" : "text-[9px]",
+						projectTileColor(seed),
+					)}
+				>
+					{letter}
+				</span>
+			)}
+			{showAvatar ? (
+				<img
+					alt=""
+					className={cn("absolute inset-0 size-full rounded-[4px] object-cover", !loaded && "invisible")}
+					draggable={false}
+					onError={() => setFailedUrl(avatarUrl)}
+					onLoad={() => setLoadedUrl(avatarUrl)}
+					// A cached image can finish before React attaches onLoad.
+					ref={(node) => {
+						if (node?.complete && node.naturalWidth > 0 && loadedUrl !== avatarUrl) setLoadedUrl(avatarUrl);
+					}}
+					src={avatarUrl}
+				/>
+			) : null}
+		</span>
 	);
 }
 
@@ -3389,7 +3702,7 @@ function SectionDisclosure({
 				)}
 			>
 				<NavRowHighlight />
-				<button
+				<Pressable
 					aria-expanded={open}
 					aria-label={label}
 					className="relative z-[1] flex min-w-0 flex-1 self-stretch items-center gap-2 text-left"
@@ -3397,14 +3710,14 @@ function SectionDisclosure({
 					type="button"
 				>
 					{labelRow}
-				</button>
+				</Pressable>
 				<span className="relative z-[1] shrink-0">{trailing}</span>
 			</div>
 		);
 	}
 
 	return (
-		<button
+		<Pressable
 			aria-expanded={open}
 			aria-label={label}
 			className={cn(
@@ -3420,7 +3733,7 @@ function SectionDisclosure({
 			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2">
 				{labelRow}
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -3572,7 +3885,9 @@ function CreateProjectButton({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
-							<button
+							<Button
+								size="icon-xs"
+								variant="quiet"
 								aria-label={t("shell.newProject")}
 								className={ROW_ACTION_BUTTON_CLASS}
 								disabled={disabled}
@@ -3580,7 +3895,7 @@ function CreateProjectButton({
 								type="button"
 							>
 									<Plus aria-hidden="true" />
-							</button>
+							</Button>
 						</span>
 					</TooltipTrigger>
 					<TooltipContent>{label}</TooltipContent>
@@ -3597,14 +3912,16 @@ function CreateProjectListItem() {
 		<SidebarMenuItem className="mb-px group-data-[collapsible=icon]:mb-0">
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
+					<Button
 						aria-label={t("shell.newProject")}
-						className="grid h-control-board w-full place-items-center rounded-lg text-passive transition-colors hover:bg-interactive-hover hover:text-muted-foreground"
+						className="h-control-board w-full rounded-lg"
 						onClick={() => requestCreateProject()}
+						size="none"
 						type="button"
+						variant="quiet"
 					>
 						<Plus className="size-icon-sm" aria-hidden="true" />
-					</button>
+					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="right">{t("shell.newProject")}</TooltipContent>
 			</Tooltip>

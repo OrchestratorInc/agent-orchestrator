@@ -55,6 +55,6 @@ describe("message edit failures", () => {
 		const { readFileSync } = await import("node:fs");
 		const source = readFileSync(new URL("./useConversation.ts", import.meta.url), "utf8");
 		expect(source).toContain("if (banner) setActionError(message);");
-		expect(source).toContain('runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false)');
+		expect(source).toContain('runAction("edit", () => requireConfig(cfg, offline, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false)');
 	});
 });

@@ -495,6 +495,10 @@ type ConversationPlan struct {
 	// list, rather than one plan per turn. A turn ending says nothing about its
 	// steps, and the copy each later turn receives is the same list, not a new plan.
 	SpansTurns bool `json:"spansTurns,omitempty"`
+	// Superseded marks a copy of a list that spans turns which a later copy has
+	// replaced. The daemon sets it as it writes the newer copy, so a client shows
+	// the list once without dating copies itself.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.
@@ -562,6 +566,7 @@ type ConversationTurn struct {
 	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
+	FailureCode  ConversationFailureCode `json:"failureCode,omitempty"`
 	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
 	RequestedAt  time.Time               `json:"requestedAt"`
 	StartedAt    *time.Time              `json:"startedAt,omitempty"`
@@ -582,6 +587,12 @@ type ConversationTurn struct {
 	// earlier ones are the same plan with fewer steps ticked off.
 	Plan *ConversationPlan `json:"plan,omitempty"`
 }
+
+// ConversationFailureCode identifies a provider failure with a known recovery path.
+type ConversationFailureCode string
+
+// ConversationFailureProviderKeyMissing means the provider route lacks a configured API key.
+const ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
 
 // ConversationTurnDiff is the turn's changed-file summary.
 //

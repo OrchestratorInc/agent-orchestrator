@@ -1375,6 +1375,48 @@ func TestProbeRechecksCachedUnauthorizedAuthentication(t *testing.T) {
 	}
 }
 
+// cachingAuthAgent answers auth checks from a cache only an invalidation clears,
+// as the Claude adapter does with its CLI report.
+type cachingAuthAgent struct {
+	mutableAuthAgent
+	cached *ports.AgentAuthStatus
+}
+
+func (a *cachingAuthAgent) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	if a.cached == nil {
+		status, err := a.mutableAuthAgent.AuthStatus(ctx)
+		if err != nil {
+			return status, err
+		}
+		a.cached = &status
+	}
+	return *a.cached, nil
+}
+
+func (a *cachingAuthAgent) InvalidateAuthCache() { a.cached = nil }
+
+func TestProbeDropsTheAdaptersCachedAuthentication(t *testing.T) {
+	status := ports.AgentAuthStatusUnauthorized
+	agent := &cachingAuthAgent{mutableAuthAgent: mutableAuthAgent{status: &status}}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{{
+		Harness:  domain.AgentHarness("claude-code"),
+		Manifest: adapters.Manifest{ID: "claude-code", Name: "Claude Code"},
+		Agent:    agent,
+	}})
+	if _, err := svc.EnsureAgentReadiness(context.Background(), "claude-code", domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatalf("EnsureAgentReadiness: %v", err)
+	}
+
+	status = ports.AgentAuthStatusConfigured
+	got, err := svc.Probe(context.Background(), "claude-code")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got.Agent.AuthStatus != ports.AgentAuthStatusConfigured {
+		t.Fatalf("Probe authStatus = %q, want the login made since the cached answer", got.Agent.AuthStatus)
+	}
+}
+
 func TestProbeReportsUnsupportedAndMissingAgent(t *testing.T) {
 	svc := NewWithAgents([]agentregistry.HarnessAgent{
 		harnessAgent("missing", "Missing", ports.ErrAgentBinaryNotFound),
@@ -1776,7 +1818,7 @@ func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
 	discoveryDir := filepath.Join(t.TempDir(), "model-discovery")
 	svc := NewWithDeps(Deps{ModelDiscoveryDir: discoveryDir})
 
-	request, err := svc.modelDiscoveryRequest("deepseek-harness", "", "/usr/local/bin/dsh")
+	request, err := svc.modelDiscoveryRequest(context.Background(), "deepseek-harness", "", "/usr/local/bin/dsh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2794,5 +2836,55 @@ func TestStartupPrefetchIgnoresRetiredSettingsCatalog(t *testing.T) {
 	}
 	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", ""); !ok {
 		t.Fatal("missing shared catalog")
+	}
+}
+
+func TestModelsAppliesModelGateWithoutCachingItsResult(t *testing.T) {
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, discoverer)
+	var gatedAgent string
+	svc.modelGate = func(_ context.Context, agentID string, catalog ports.AgentModelCatalog) ports.AgentModelCatalog {
+		gatedAgent = agentID
+		models := append([]ports.AgentModelInfo(nil), catalog.Models...)
+		models[0].RequiresVersion = "9.9.9"
+		models[0].UnavailableReason = "update the CLI"
+		catalog.Models = models
+		return catalog
+	}
+
+	catalog, err := svc.Models(context.Background(), "fx", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gatedAgent != "fx" {
+		t.Fatalf("gate agent = %q, want fx", gatedAgent)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].RequiresVersion != "9.9.9" || catalog.Models[0].UnavailableReason != "update the CLI" {
+		t.Fatalf("gated models = %#v", catalog.Models)
+	}
+	stored, ok, err := cache.GetAgentModelCatalog(context.Background(), "fx", "")
+	if err != nil || !ok {
+		t.Fatalf("cached catalog = (%#v, %v, %v)", stored, ok, err)
+	}
+	if strings.Contains(stored.CatalogJSON, "requiresVersion") {
+		t.Fatalf("cache stored the gated catalog: %s", stored.CatalogJSON)
+	}
+
+	// Pickers replace their catalog with the revalidation response, so it must
+	// not re-enable what the read path disabled.
+	revalidated, err := svc.RevalidateModels(context.Background(), "fx", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revalidated.Models) != 1 || revalidated.Models[0].RequiresVersion != "9.9.9" || revalidated.Models[0].UnavailableReason != "update the CLI" {
+		t.Fatalf("revalidated models = %#v", revalidated.Models)
+	}
+	stored, ok, err = cache.GetAgentModelCatalog(context.Background(), "fx", "")
+	if err != nil || !ok {
+		t.Fatalf("cached catalog after revalidation = (%#v, %v, %v)", stored, ok, err)
+	}
+	if strings.Contains(stored.CatalogJSON, "requiresVersion") {
+		t.Fatalf("revalidation cached the gated catalog: %s", stored.CatalogJSON)
 	}
 }

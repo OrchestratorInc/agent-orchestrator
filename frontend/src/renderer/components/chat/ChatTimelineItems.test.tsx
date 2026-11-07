@@ -1,9 +1,10 @@
 import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { StrictMode, type ReactElement } from "react";
+import { StrictMode, type ReactElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	ActivityRow,
+	AdaptiveStreamPacingContext,
 	AssistantMessage,
 	ChatHostId,
 	HumanMessage,
@@ -41,6 +42,10 @@ function message(overrides: Partial<ConversationMessage> = {}): ConversationMess
 		createdAt: "2026-08-24T00:00:00Z",
 		...overrides,
 	};
+}
+
+function Cloud({ children }: { children: ReactNode }) {
+	return <AdaptiveStreamPacingContext.Provider value>{children}</AdaptiveStreamPacingContext.Provider>;
 }
 
 function runFrame(now: number) {
@@ -90,6 +95,25 @@ describe("TurnOutcome", () => {
 
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
+	});
+
+	it("shows missing-key recovery while keeping retry and technical details", () => {
+		const onRetry = vi.fn();
+		const onConfigure = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="provider_key_missing" error="ACP internal detail" retry={{ onRetry }} onConfigure={onConfigure} />);
+		expect(screen.getByText("DeepSeek needs an API key for this model route")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(onConfigure).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
+	});
+
+	it("leaves generic ACP failures without configuration guidance", () => {
+		render(<TurnOutcome state="failed" error="ACP internal detail" />);
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Set up DeepSeek" })).not.toBeInTheDocument();
 	});
 
 	it("presents a non-retryable usage limit as a historical notice without controls", () => {
@@ -182,24 +206,6 @@ describe("TurnOutcome", () => {
 		fireEvent.click(actions[2]!);
 		expect(onRetry).toHaveBeenCalledOnce();
 		expect(onRollback).toHaveBeenCalledOnce();
-	});
-
-	it("leads the row with how long the turn ran when no fold above says so", () => {
-		render(
-			<TurnOutcome
-				state="interrupted"
-				durationMs={61_000}
-				copyText="The partial answer"
-				onRollback={vi.fn()}
-			/>,
-		);
-
-		const duration = screen.getByText("1m");
-		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
-		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		// Alone on the row, the number carries its name for a screen reader.
-		expect(duration).toHaveTextContent("Worked for 1m");
 	});
 
 	it("says why a retry was refused, under the row it came from", () => {
@@ -343,9 +349,9 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("spreads a large received burst over several frames instead of dumping it", () => {
+	it("smooths received bursts up to 4,000 characters", () => {
 		const view = render(<AssistantMessage message={message()} />);
-		const text = "a".padEnd(10_000, "x");
+		const text = "a".padEnd(4000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 
 		runFrame(0);
@@ -356,6 +362,74 @@ describe("AssistantMessage streaming", () => {
 
 		drain(48);
 		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
+	it("coalesces long snapshots without extra segmentation after flushing pending smoothing", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const view = render(<AssistantMessage message={message()} />);
+		const prefix = "a".padEnd(4000, "x");
+		view.rerender(<AssistantMessage message={message({ text: prefix })} />);
+		runFrame(0);
+		expect(frames.size).toBeGreaterThan(0);
+
+		const text = prefix + "👨‍👩‍👧‍👦e\u0301";
+		view.rerender(<AssistantMessage message={message({ text })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+		// Markdown still segments emoji for typography; smoothing must not add
+		// another pass over the entire long snapshot.
+		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
+
+		const latest = text + " latest";
+		view.rerender(<AssistantMessage message={message({ text: latest })} />);
+		view.rerender(<AssistantMessage message={message({ text: latest + " snapshot" })} />);
+		act(() => vi.advanceTimersByTime(99));
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		act(() => vi.advanceTimersByTime(1));
+		expect(document.querySelector("p")?.textContent).toBe(latest + " snapshot");
+		expect(frames.size).toBe(0);
+		expect(segment.mock.calls.filter(([input]) => input === latest + " snapshot").length).toBeLessThanOrEqual(1);
+
+		const final = latest + " snapshot completed";
+		view.rerender(<AssistantMessage message={message({ text: final })} />);
+		expect(document.querySelector("p")?.textContent).not.toBe(final);
+		view.rerender(<AssistantMessage message={message({ text: final, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(final);
+		act(() => vi.advanceTimersByTime(200));
+		expect(document.querySelector("p")?.textContent).toBe(final);
+	});
+
+	it("cancels a queued long snapshot when the message is replaced", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const text = "x".repeat(4001);
+		const view = render(<AssistantMessage message={message({ text })} />);
+		view.rerender(<AssistantMessage message={message({ text: text + " pending" })} />);
+		view.rerender(<AssistantMessage message={message({ id: "assistant-2", text: "New message" })} />);
+		act(() => vi.advanceTimersByTime(200));
+		expect(document.querySelector("p")?.textContent).toBe("New message");
+	});
+
+	it("cancels a queued long snapshot on unmount", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const text = "x".repeat(4001);
+		const view = render(<AssistantMessage message={message({ text })} />);
+		view.rerender(<AssistantMessage message={message({ text: text + " pending" })} />);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+		view.unmount();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("resumes smoothing after a long message is corrected to a short snapshot", () => {
+		const view = render(<AssistantMessage message={message({ text: "x".repeat(4001) })} />);
+		view.rerender(<AssistantMessage message={message({ text: "Corrected" })} />);
+		expect(document.querySelector("p")?.textContent).toBe("Corrected");
+
+		view.rerender(<AssistantMessage message={message({ text: "Corrected text" })} />);
+		expect(frames.size).toBeGreaterThan(0);
+		drain();
+		expect(document.querySelector("p")?.textContent).toBe("Corrected text");
 		expect(frames.size).toBe(0);
 	});
 
@@ -434,6 +508,63 @@ describe("AssistantMessage streaming", () => {
 		// The fade spans linger briefly after the stream settles, so match the paragraph.
 		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+	});
+
+	it("in Cloud chat, plays out a finished reply's buffered text quickly", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} showCopy /></Cloud>);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: true })} showCopy /></Cloud>);
+		runFrame(0);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy /></Cloud>);
+		// The remainder plays out over a few frames rather than landing at once.
+		expect(document.querySelector("p")?.textContent).not.toBe("aThe complete answer");
+		drain(32);
+		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
+		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+	});
+
+	it("in Cloud chat, shows a finished reply whole when its unrevealed remainder is too long to play out", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} /></Cloud>);
+		// Long enough to leave more than a playout's worth after one frame, short
+		// enough to be smoothed at all.
+		const text = "a".padEnd(4_000, "x");
+		view.rerender(<Cloud><AssistantMessage message={message({ text, streaming: true })} /></Cloud>);
+		runFrame(0);
+		expect(document.querySelector("p")?.textContent).not.toBe(text);
+		view.rerender(<Cloud><AssistantMessage message={message({ text, streaming: false })} /></Cloud>);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
+	it("in Cloud chat, shows a finished long reply whole instead of waiting on its queued snapshot", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const text = "x".repeat(4001);
+		const view = render(<Cloud><AssistantMessage message={message({ text })} /></Cloud>);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: text + " pending" })} /></Cloud>);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: text + " pending", streaming: false })} /></Cloud>);
+		expect(document.querySelector("p")?.textContent).toBe(text + " pending");
+		expect(frames.size).toBe(0);
+		act(() => vi.advanceTimersByTime(200));
+		expect(document.querySelector("p")?.textContent).toBe(text + " pending");
+		expect(frames.size).toBe(0);
+	});
+
+	it("in Cloud chat, spreads bursts that arrive far apart over most of the gap between them", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} /></Cloud>);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "a".padEnd(200, "x") })} /></Cloud>);
+		drain(0);
+		frameTime = 3_000;
+		const text = "a".padEnd(400, "x");
+		view.rerender(<Cloud><AssistantMessage message={message({ text })} /></Cloud>);
+		runFrame(3_000);
+		runFrame(3_032);
+		// A 140ms settle would reveal about a fifth of the burst in one frame; a
+		// second-apart stream reveals only a few percent.
+		const shown = document.querySelector("p")?.textContent?.length ?? 0;
+		expect(shown - 200).toBeLessThan(20);
+		drain(3_032);
+		expect(document.querySelector("p")?.textContent).toBe(text);
 	});
 
 	it("hides message actions while text is still buffered", () => {

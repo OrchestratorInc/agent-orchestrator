@@ -16,6 +16,7 @@ import { TargetIcon } from "./TopbarOpenEditorButton";
 import {
 	ContextMenuItem,
 	ContextMenuSeparator,
+	ContextMenuShortcut,
 	ContextMenuSub,
 	ContextMenuSubContent,
 	ContextMenuSubTrigger,
@@ -42,11 +43,15 @@ export function SessionContextMenuItems({
 	session,
 	onArchive,
 	onRename,
+	renameShortcut,
 }: {
 	session: WorkspaceSession;
 	/** Absent where the session cannot be archived from here. */
 	onArchive?: () => void;
-	onRename: () => void;
+	/** Absent where the title is not editable here; the row shows disabled. */
+	onRename?: () => void;
+	/** Key hint for the rename row, where a focused trigger takes one. */
+	renameShortcut?: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -62,8 +67,10 @@ export function SessionContextMenuItems({
 	const canResume = useCanResumeAgent(session.hostId || isOrchestratorSession(session) ? undefined : session);
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = !session.hostId && !session.cloud;
-	// Rename and pin go to the daemon that owns the session; a Cloud session has none.
-	const isCloud = Boolean(session.cloud);
+	// Rename and pin go to whoever owns the session: its daemon, or the control
+	// plane for a Cloud session. A session shared from another organization is
+	// the sharer's to name and lists outside this sidebar's pins.
+	const canRenameAndPin = !session.cloud?.shared;
 
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -75,7 +82,7 @@ export function SessionContextMenuItems({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
-	const hasManageItems = !isCloud || canResume;
+	const hasManageItems = canRenameAndPin || canResume;
 	const hasLinkItems = Boolean(pr) || showBranch;
 	const openPullRequest = (url: string, title: string) => {
 		aoBridge.app.openExternal(url).catch((error: unknown) => {
@@ -86,18 +93,19 @@ export function SessionContextMenuItems({
 	return (
 		<>
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
-			{isCloud ? null : (
+			{canRenameAndPin ? (
 				<>
-					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} disabled={!onRename} onSelect={onRename}>
 						<Pencil aria-hidden="true" />
 						{t("shell.rename")}
+						{renameShortcut ? <ContextMenuShortcut aria-hidden="true">{renameShortcut}</ContextMenuShortcut> : null}
 					</ContextMenuItem>
 					<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
 						{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 					</ContextMenuItem>
 				</>
-			)}
+			) : null}
 			{canResume ? (
 				<ContextMenuItem onSelect={resume}>
 					<Play aria-hidden="true" />

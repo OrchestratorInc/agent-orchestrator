@@ -11,21 +11,16 @@ import {
 	workspaceQueryKey,
 } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
-import { isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
-const isMac = isMacPlatform();
-const dragStyle = isMac
-	? ({ WebkitAppRegion: "drag" } as React.CSSProperties)
-	: undefined;
-const noDragStyle = isMac
-	? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties)
-	: undefined;
 
 export function StandaloneArchiveView() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -47,7 +42,6 @@ export function StandaloneArchiveView() {
 		() => archivedStandaloneSessions(workspaces),
 		[workspaces],
 	);
-	const headerInPanel = usesBoardActionsInPanel();
 	const showStartup = !workspaceQuery.isSuccess && !workspaceQuery.isError;
 
 	useEffect(() => {
@@ -98,31 +92,24 @@ export function StandaloneArchiveView() {
 			className="relative flex h-full min-h-0 flex-col bg-background text-foreground"
 			data-testid="standalone-archive-view"
 		>
-			{headerInPanel ? (
-				<div
-					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-2"
-					style={dragStyle}
-				>
-					<span
-						className={topbarProjectLabelClass}
-						data-testid="standalone-archive-title"
-					>
+			<PageTopbar
+				lead={
+					<PageTopbarTitle data-testid="standalone-archive-title">
 						{t("standalone.archive.heading", { count: archivedSessions.length })}
-					</span>
-					<div className="min-w-0 flex-1" />
-					<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
-						<TopbarButton
-							className="topbar-control--labeled"
-							onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-							type="button"
-							variant="primary"
-						>
-							<Plus className="size-icon-md" aria-hidden="true" />
-							{t("standalone.archive.newAgent")}
-						</TopbarButton>
-					</div>
-				</div>
-			) : null}
+					</PageTopbarTitle>
+				}
+				actions={
+					<TopbarButton
+						className="topbar-control--labeled"
+						onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+						type="button"
+						variant="primary"
+					>
+						<Plus className="size-icon-md" aria-hidden="true" />
+						{t("standalone.archive.newAgent")}
+					</TopbarButton>
+				}
+			/>
 
 			{workspaceQuery.isError ? (
 				<p className="py-10 text-center text-xs text-passive">
@@ -131,7 +118,7 @@ export function StandaloneArchiveView() {
 			) : archivedSessions.length === 0 && workspaceQuery.isSuccess ? (
 				<StandaloneArchiveEmpty />
 			) : (
-				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+				<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] min-h-0 flex-1 overflow-y-auto px-3 py-3">
 					<div
 						aria-label={t("shell.archivedSessions")}
 						className="standalone-archive-grid"

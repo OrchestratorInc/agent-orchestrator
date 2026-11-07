@@ -81,6 +81,7 @@ type Store interface {
 	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
+	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -159,6 +160,7 @@ type Store interface {
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error
 	MarkCompacted(ctx context.Context, conversationID string, at time.Time) error
 	ResolveApproval(ctx context.Context, conversationID, requestID, detailJSON string, now time.Time) error
 	HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error)
@@ -221,6 +223,7 @@ type Controller struct {
 	newID                  IDFactory
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
+	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 
 	// sendMu serializes command dispatch so only one operation mutates the
@@ -307,6 +310,9 @@ type Controller struct {
 	// replacement erases the other half and turns a percentage meter into a bare
 	// token count.
 	usage domain.ConversationUsage
+	// turnlessPlanItemID keys the plan row of the agent's current run of work
+	// outside any turn; see planItemID. Cleared when an event names a turn.
+	turnlessPlanItemID string
 	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
 	// list a client renders does not reshuffle on every turn.
 	mcpServers            map[string]domain.ConversationMCPServer
@@ -388,6 +394,7 @@ func newController(
 	newID IDFactory,
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
+	recheckAccount func(domain.SessionID, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
 ) *Controller {
@@ -405,6 +412,7 @@ func newController(
 		newID:                  newID,
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
+		recheckAccount:         recheckAccount,
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
@@ -493,6 +501,7 @@ type nativeHistoryHighWater struct {
 // completed while Chat was not attached; the AO high-water mark covers an
 // immediate round trip before a resumed TUI has emitted another hook.
 type nativeHistoryCheckpoint struct {
+	harness                 domain.AgentHarness
 	latestUserPromptAt      time.Time
 	latestAssistantUpdateAt time.Time
 	requireNewerTurn        bool
@@ -666,7 +675,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 	}
 	p.retireSupersededLegacyFacts(sessionID, turnsByID, messages, latest)
 	p.aoHighWater = evidence(latest)
-	p.replayIndex = indexNativeHistoryTurns(turns, messages, activities)
+	p.replayIndex = indexNativeHistoryTurnsForHarness(p.harness, turns, messages, activities)
 }
 
 func (p *nativeHistoryCheckpoint) retireSupersededLegacyFacts(sessionID domain.SessionID, turns map[string]*domain.ConversationTurn, messages []domain.ConversationMessage, latest *domain.ConversationTurn) {
@@ -805,7 +814,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 	}
 	index := p.replayIndex
 	if index == nil {
-		index = indexNativeHistoryTurns(existingTurns, existingMessages, existingActivities)
+		index = indexNativeHistoryTurnsForHarness(p.harness, existingTurns, existingMessages, existingActivities)
 	}
 	mappedTurns, _ := index.mapReplay(events)
 	boundaries := make(map[string]nativeHistoryHighWater, len(p.aoHighWaterPeers)+1)
@@ -1024,18 +1033,31 @@ type nativeHistoryTurn struct {
 	text           string
 	messages       map[string]int
 	activities     map[string]int
+	// steers counts the user-message fingerprints of inputs steered into this turn.
+	steers map[string]int
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
 	return string(role) + "\x00" + text
 }
 
+func nativeHistoryFingerprintForHarness(harness domain.AgentHarness, role domain.MessageRole, text string) string {
+	if harness == domain.HarnessHermes {
+		text = strings.TrimSpace(text)
+	}
+	return nativeHistoryMessageFingerprint(role, text)
+}
+
 func nativeHistoryEventMessageFingerprint(event ports.ChatEvent) (string, bool) {
+	return nativeHistoryEventFingerprintForHarness("", event)
+}
+
+func nativeHistoryEventFingerprintForHarness(harness domain.AgentHarness, event ports.ChatEvent) (string, bool) {
 	switch event.Kind {
 	case ports.ChatEventUserMessageCompleted:
-		return nativeHistoryMessageFingerprint(domain.MessageRoleUser, event.Text), true
+		return nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, event.Text), true
 	case ports.ChatEventMessageCompleted:
-		return nativeHistoryMessageFingerprint(domain.MessageRoleAssistant, event.Text), true
+		return nativeHistoryFingerprintForHarness(harness, domain.MessageRoleAssistant, event.Text), true
 	default:
 		return "", false
 	}
@@ -1050,20 +1072,10 @@ func nativeHistoryActivityFingerprint(
 	return string(kind) + "\x00" + string(status) + "\x00" + summary + "\x00" + string(detail)
 }
 
-// mapNativeHistoryTurns identifies which durable AO turn owns each raw replay
-// turn before reconciliation rewrites provider turn ids or drops duplicates.
-func mapNativeHistoryTurns(
-	events []ports.ChatEvent,
-	existingTurns []domain.ConversationTurn,
-	existingMessages []domain.ConversationMessage,
-	existingActivities []domain.ConversationActivity,
-) (map[string]*nativeHistoryTurn, map[string]*nativeHistoryTurn) {
-	return indexNativeHistoryTurns(existingTurns, existingMessages, existingActivities).mapReplay(events)
-}
-
 // The durable snapshot is invariant during history settling. Keep its index
 // separate from per-replay matching so refreshes do not rebuild it.
 type nativeHistoryTurnIndex struct {
+	harness          domain.AgentHarness
 	byProviderTurnID map[string]*nativeHistoryTurn
 	providerItems    map[string]*nativeHistoryTurn
 	ordered          []*nativeHistoryTurn
@@ -1094,6 +1106,15 @@ func indexNativeHistoryTurns(
 	existingMessages []domain.ConversationMessage,
 	existingActivities []domain.ConversationActivity,
 ) *nativeHistoryTurnIndex {
+	return indexNativeHistoryTurnsForHarness("", existingTurns, existingMessages, existingActivities)
+}
+
+func indexNativeHistoryTurnsForHarness(
+	harness domain.AgentHarness,
+	existingTurns []domain.ConversationTurn,
+	existingMessages []domain.ConversationMessage,
+	existingActivities []domain.ConversationActivity,
+) *nativeHistoryTurnIndex {
 	if len(existingTurns) == 0 {
 		return nil
 	}
@@ -1110,10 +1131,11 @@ func indexNativeHistoryTurns(
 			state:          turn.State,
 			messages:       make(map[string]int),
 			activities:     make(map[string]int),
+			steers:         make(map[string]int),
 		}
 		if turn.ProviderInputText != "" {
 			candidate.text = turn.ProviderInputText
-			candidate.messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, turn.ProviderInputText)]++
+			candidate.messages[nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, turn.ProviderInputText)]++
 		}
 		byAOTurnID[turn.ID] = candidate
 		byProviderTurnID[turn.ProviderTurnID] = candidate
@@ -1143,7 +1165,7 @@ func indexNativeHistoryTurns(
 		if candidate == nil {
 			continue
 		}
-		candidate.messages[nativeHistoryMessageFingerprint(message.Role, nativeHistoryMessageText(message))]++
+		candidate.messages[nativeHistoryFingerprintForHarness(harness, message.Role, nativeHistoryMessageText(message))]++
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
 			candidate.text = nativeHistoryMessageText(message)
@@ -1160,16 +1182,19 @@ func indexNativeHistoryTurns(
 			ProviderInputText         string `json:"providerInputText"`
 			ProviderInputStoredOnTurn bool   `json:"providerInputStoredOnTurn"`
 		}
-		if json.Unmarshal(activity.Detail, &steerInput) == nil &&
-			steerInput.ProviderInputText != "" && !steerInput.ProviderInputStoredOnTurn {
-			candidate.messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, steerInput.ProviderInputText)]++
+		if json.Unmarshal(activity.Detail, &steerInput) == nil && steerInput.ProviderInputText != "" {
+			fingerprint := nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, steerInput.ProviderInputText)
+			candidate.steers[fingerprint]++
+			if !steerInput.ProviderInputStoredOnTurn {
+				candidate.messages[fingerprint]++
+			}
 		}
 		candidate.activities[nativeHistoryActivityFingerprint(
 			activity.Kind, activity.Status, activity.Summary, activity.Detail,
 		)]++
 		rememberProviderItem(activity.ProviderItemID, candidate)
 	}
-	return &nativeHistoryTurnIndex{byProviderTurnID: byProviderTurnID, providerItems: providerItems, ordered: ordered}
+	return &nativeHistoryTurnIndex{harness: harness, byProviderTurnID: byProviderTurnID, providerItems: providerItems, ordered: ordered}
 }
 
 func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[string]*nativeHistoryTurn, map[string]*nativeHistoryTurn) {
@@ -1257,7 +1282,13 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		if match == nil && event.Text != "" {
 			for _, candidate := range ordered {
-				if !used[candidate] && candidate.text == event.Text {
+				if used[candidate] || candidate.text == "" {
+					continue
+				}
+				// Hermes strips persisted text. Other providers keep exact
+				// prompt matching so whitespace-distinct turns stay distinct.
+				if candidate.text == event.Text ||
+					(index.harness == domain.HarnessHermes && nativeHistoryTextMatches(candidate.text, event.Text)) {
 					match = candidate
 					break
 				}
@@ -1265,7 +1296,97 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		bind(event.ProviderTurnID, match)
 	}
+	for replayTurnID, candidate := range index.splitTurnOwners(events, mapped) {
+		bind(replayTurnID, candidate)
+	}
 	return mapped, providerItems
+}
+
+// splitTurnOwners finds the durable turn of each replay turn that holds only a
+// user message.
+//
+// ACP history starts a new turn at every user message, and Claude stores each
+// steer as its own user message. A steer taken while Claude waits on the model
+// therefore splits one AO turn into several replay turns: the prompt alone,
+// each steer alone, then the answer. Only the last has an assistant or tool
+// item to match. A user-only turn belongs to the closest matched turn before or
+// after it when that turn's prompt, or a steer it recorded, has the same text.
+// Messages replayed inside matched turns claim their text first, so each
+// recorded prompt or steer absorbs at most one replayed message. Claims stay
+// local because the index is reused across replays.
+func (index *nativeHistoryTurnIndex) splitTurnOwners(
+	events []ports.ChatEvent,
+	mapped map[string]*nativeHistoryTurn,
+) map[string]*nativeHistoryTurn {
+	var order []string
+	userTexts := make(map[string][]string)
+	hasContent := make(map[string]bool)
+	for _, event := range events {
+		replayTurnID := event.ProviderTurnID
+		if replayTurnID == "" {
+			continue
+		}
+		if _, seen := userTexts[replayTurnID]; !seen {
+			order = append(order, replayTurnID)
+			userTexts[replayTurnID] = nil
+		}
+		switch event.Kind {
+		case ports.ChatEventTurnStarted, ports.ChatEventTurnCompleted:
+		case ports.ChatEventUserMessageCompleted:
+			userTexts[replayTurnID] = append(userTexts[replayTurnID], event.Text)
+		default:
+			hasContent[replayTurnID] = true
+		}
+	}
+
+	type claimKey struct {
+		turn        *nativeHistoryTurn
+		fingerprint string
+	}
+	claimed := make(map[claimKey]int)
+	claim := func(candidate *nativeHistoryTurn, text string) bool {
+		key := claimKey{candidate, nativeHistoryFingerprintForHarness(index.harness, domain.MessageRoleUser, text)}
+		available := candidate.steers[key.fingerprint]
+		if candidate.text != "" &&
+			key.fingerprint == nativeHistoryFingerprintForHarness(index.harness, domain.MessageRoleUser, candidate.text) {
+			available++
+		}
+		if claimed[key] >= available {
+			return false
+		}
+		claimed[key]++
+		return true
+	}
+	owners := make([]*nativeHistoryTurn, len(order))
+	for i, replayTurnID := range order {
+		if owners[i] = mapped[replayTurnID]; owners[i] != nil {
+			for _, text := range userTexts[replayTurnID] {
+				claim(owners[i], text)
+			}
+		}
+	}
+	nearest := func(i, step int) *nativeHistoryTurn {
+		for j := i + step; j >= 0 && j < len(owners); j += step {
+			if owners[j] != nil {
+				return owners[j]
+			}
+		}
+		return nil
+	}
+	attached := make(map[string]*nativeHistoryTurn)
+	for i, replayTurnID := range order {
+		if owners[i] != nil || hasContent[replayTurnID] || len(userTexts[replayTurnID]) != 1 {
+			continue
+		}
+		for _, candidate := range []*nativeHistoryTurn{nearest(i, -1), nearest(i, 1)} {
+			if candidate != nil && claim(candidate, userTexts[replayTurnID][0]) {
+				owners[i] = candidate
+				attached[replayTurnID] = candidate
+				break
+			}
+		}
+	}
+	return attached
 }
 
 // reconcileNativeHistory maps a provider replay onto AO's existing durable
@@ -1283,11 +1404,21 @@ func reconcileNativeHistory(
 	existingMessages []domain.ConversationMessage,
 	existingActivities []domain.ConversationActivity,
 ) []ports.ChatEvent {
+	return reconcileNativeHistoryForHarness("", events, existingTurns, existingMessages, existingActivities)
+}
+
+func reconcileNativeHistoryForHarness(
+	harness domain.AgentHarness,
+	events []ports.ChatEvent,
+	existingTurns []domain.ConversationTurn,
+	existingMessages []domain.ConversationMessage,
+	existingActivities []domain.ConversationActivity,
+) []ports.ChatEvent {
 	if len(events) == 0 || len(existingTurns) == 0 {
 		return events
 	}
 
-	mapped, providerItems := mapNativeHistoryTurns(events, existingTurns, existingMessages, existingActivities)
+	mapped, providerItems := indexNativeHistoryTurnsForHarness(harness, existingTurns, existingMessages, existingActivities).mapReplay(events)
 	if len(mapped) == 0 {
 		return events
 	}
@@ -1332,7 +1463,7 @@ func reconcileNativeHistory(
 			// new outer id.
 			matched = true
 		}
-		if fingerprint, ok := nativeHistoryEventMessageFingerprint(event); ok && candidate.messages[fingerprint] > 0 {
+		if fingerprint, ok := nativeHistoryEventFingerprintForHarness(harness, event); ok && candidate.messages[fingerprint] > 0 {
 			candidate.messages[fingerprint]--
 			matched = true
 		}
@@ -1929,6 +2060,7 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
+		captureChatFault(ctx, err, c.harness, "chat_turn", "send")
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {
@@ -2998,6 +3130,7 @@ func (c *Controller) projectUnit(
 	if err != nil && persistent {
 		c.log.Error("persistent chat projection stopped; provider retained for replay",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "stop")
 		c.mu.Lock()
 		c.preserveProviderOnStop = true
 		c.state = ports.ChatControllerStopped
@@ -3014,6 +3147,7 @@ func (c *Controller) projectUnit(
 		// internally consistent and a later provider replay may retry it.
 		c.log.Error("failed to project chat event",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "")
 	} else if projected {
 		c.afterProject(ctx, event, primaryTurn)
 	}
@@ -3055,6 +3189,7 @@ func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project
 		"providerItemAliases":    event.ProviderItemAliases,
 		"clientMessageId":        event.ClientMessageID,
 		"turnState":              event.TurnState,
+		"failureCode":            event.FailureCode,
 		"delta":                  event.Delta,
 		"text":                   event.Text,
 		"activityKind":           event.ActivityKind,
@@ -3155,6 +3290,9 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 
 func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
+	if event.ProviderTurnID != "" {
+		c.turnlessPlanItemID = ""
+	}
 
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:
@@ -3206,8 +3344,8 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			message = event.Err.Error()
 		}
 		state := settledTurnState(event)
-		if err := c.store.SettleTurn(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, now); err != nil {
+		if err := c.store.SettleTurnWithFailureCode(
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, now); err != nil {
 			return err
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
@@ -3348,18 +3486,25 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// which the column cannot. The compaction projection already sets this
 		// precedent, and the two cannot disagree because both are written from one
 		// event.
-		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
+		itemID := c.planItemID(event.ProviderTurnID)
+		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
-				ID:      c.newID(),
-				Kind:    domain.ActivityKindPlan,
-				Status:  planActivityStatus(*event.Plan),
-				Summary: event.Summary,
-				Detail:  planDetail(*event.Plan),
-				// Synthetic, because turn/plan/updated carries no item id: the plan is
-				// not an item. Keyed on the turn so a turn's plan is one row that
-				// updates, and prefixed so it can never collide with a provider id.
-				ProviderItemID: planItemID(event.ProviderTurnID),
-			}, now)
+				ID:             c.newID(),
+				Kind:           domain.ActivityKindPlan,
+				Status:         planActivityStatus(*event.Plan),
+				Summary:        event.Summary,
+				Detail:         planDetail(*event.Plan, now),
+				ProviderItemID: itemID,
+			}, now); err != nil {
+			return err
+		}
+		if !event.Plan.SpansTurns {
+			return nil
+		}
+		// Every earlier turn and run holds a copy of this same list. The daemon sees
+		// the writes in order, so it marks which copy is current on the active path
+		// rather than leaving each client to date the copies.
+		return c.store.ReconcileSpanningPlans(ctx, c.conversation.ID, now)
 
 	case ports.ChatEventModelRerouted:
 		// A correction to a claim AO has already made. The composer names the model it
@@ -3534,6 +3679,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		message := "provider error"
 		if event.Err != nil {
 			message = event.Err.Error()
+			captureChatFault(ctx, event.Err, c.harness, "chat_provider_error", "")
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
 			if err := c.recordAccount(ctx, ports.ChatAccount{
@@ -3569,6 +3715,14 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
+			// A turn after a refused login hints the login is back. Reading the
+			// account again confirms it and clears the sign-in notice now, not
+			// when this turn ends.
+			if c.recheckAccount != nil {
+				if account, err := c.store.ConversationAccount(ctx, c.conversation.ID); err == nil && account != nil && account.ReauthRequiredAt != nil {
+					c.recheckAccount(c.sessionID, c.harness)
+				}
+			}
 		}
 	case ports.ChatEventTurnCompleted:
 		reauthRequired := errors.Is(event.Err, ports.ErrChatAuthRequired)
@@ -3983,15 +4137,23 @@ func (c *Controller) handoffActive() bool {
 	return c.handoff != controllerHandoffNone
 }
 
-// planItemID keys a turn's plan activity. The provider sends no item id with a plan
+// planItemID keys a plan's timeline row. The provider sends no item id with a plan
 // update — a plan is not an item — so the key is synthesized from the turn, which
 // is what makes repeated updates rewrite one row. The prefix keeps it from ever
 // colliding with a provider item id.
-func planItemID(providerTurnID string) string {
-	if providerTurnID == "" {
-		return ""
+//
+// A plan with no turn comes from work the agent does on its own, outside any AO
+// turn. Each run of that work gets one row, so its revisions rewrite it. A run
+// ends when the agent next works on a turn; the provider reports nothing when
+// such work stops, so two runs with no turn between them share a row.
+func (c *Controller) planItemID(providerTurnID string) string {
+	if providerTurnID != "" {
+		return "ao-plan-" + providerTurnID
 	}
-	return "ao-plan-" + providerTurnID
+	if c.turnlessPlanItemID == "" {
+		c.turnlessPlanItemID = "ao-plan-run-" + c.newID()
+	}
+	return c.turnlessPlanItemID
 }
 
 // rerouteItemID keys a reroute notice the same way, for the same reason.
@@ -4020,7 +4182,11 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 // planDetail is the plan's typed payload. The steps go in as structure rather than
 // as rendered text: a client that wants checkboxes needs the per-step status, and a
 // client that wants prose can join them, but the reverse is not recoverable.
-func planDetail(plan domain.ConversationPlan) []byte {
+//
+// A cross-turn list's row also records when it was written. One run's revisions
+// rewrite one row in place, so neither its position nor its updated_at says
+// which copy of the list is newest; this does.
+func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	steps := make([]map[string]any, 0, len(plan.Steps))
 	for _, step := range plan.Steps {
 		steps = append(steps, map[string]any{"text": step.Text, "status": string(step.Status)})
@@ -4028,6 +4194,12 @@ func planDetail(plan domain.ConversationPlan) []byte {
 	detail := map[string]any{"event": "plan", "steps": steps}
 	if plan.Explanation != "" {
 		detail["explanation"] = plan.Explanation
+	}
+	// For a row no turn holds, the row is the only copy a client gets, so every
+	// row of a cross-turn list carries the flag.
+	if plan.SpansTurns {
+		detail["spansTurns"] = true
+		detail["writtenAt"] = writtenAt.UTC()
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {

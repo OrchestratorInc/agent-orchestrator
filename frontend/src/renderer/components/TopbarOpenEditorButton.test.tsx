@@ -81,7 +81,7 @@ describe("TopbarOpenEditorButton", () => {
 
 	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
 	// method 'editorHandoff:open': Error: <reason>", and the topbar used to paint
-	// that whole string into the actions row.
+	// that whole string into the error.
 	it("shows the reason, not Electron's remote-method wrapper, when the open fails", async () => {
 		setState(availableState);
 		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
@@ -91,9 +91,10 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
 
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Session workspace is not available");
-		expect(alert.textContent).not.toContain("Error invoking remote method");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			body: "Session workspace is not available",
+			tone: "error",
+		}));
 	});
 
 
@@ -129,7 +130,7 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
 		await waitFor(() => expect(copy).toHaveBeenCalledWith("sess-1"));
 		expect(openMock).not.toHaveBeenCalled();
-		expect(useUiStore.getState().globalToast?.title).toBe("Session path copied");
+		expect(useUiStore.getState().globalToast?.title).toBe("Copied to clipboard");
 	});
 
 	it("reports copy failures and refreshes workspace availability", async () => {
@@ -164,17 +165,23 @@ describe("TopbarOpenEditorButton", () => {
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "ghostty" }));
 	});
 
-	it("always shows Finder and the original Terminal SVG symbols, even when native images are supplied", async () => {
+	it("shows Finder's real app icon but keeps the Terminal, Cursor and VS Code symbols over native app tiles", async () => {
 		const iconDataUrl = "data:image/png;base64,dGVzdA==";
 		setState({ ...availableState, targets: availableState.targets.map((target) => ({ ...target, iconDataUrl })) });
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
 		const finder = await screen.findByRole("menuitem", { name: "Finder" });
 		const terminal = screen.getByRole("menuitem", { name: "Terminal" });
-		expect(finder.querySelector("svg")).toBeInTheDocument();
-		expect(finder.querySelector("image")).not.toBeInTheDocument();
+		expect(finder.querySelector("image")).toHaveAttribute("href", iconDataUrl);
 		expect(terminal.querySelector("svg.lucide-square-terminal")).toBeInTheDocument();
 		expect(terminal.querySelector("image")).not.toBeInTheDocument();
+		for (const name of ["Cursor", "VS Code"]) {
+			const item = screen.getByRole("menuitem", { name });
+			expect(item.querySelector("image")).not.toBeInTheDocument();
+			expect(item.querySelector("svg path")).toBeInTheDocument();
+		}
+		expect(screen.getByRole("menuitem", { name: "VS Code" }).querySelector("svg")).toHaveStyle({ color: "#1F9CF0" });
+		expect(screen.getByLabelText("Open in Cursor").querySelector("image")).not.toBeInTheDocument();
 	});
 
 	it.each(["wezterm", "kitty"] as const)("keeps a visible SVG fallback when the %s app icon fails to load", async (id) => {
@@ -202,7 +209,7 @@ describe("TopbarOpenEditorButton", () => {
 		// fire pointer events, so the hoverable element has to be the wrapper) —
 		// the actual topbar group is one level up.
 		const group = button.parentElement?.parentElement;
-		expect(group).toHaveClass("gap-0", "rounded-md", "hover:bg-interactive-hover", "data-[state=open]:bg-interactive-hover");
+		expect(group).toHaveClass("gap-0", "rounded-md", "bg-transparent", "group/nav-row");
 		expect(group).toHaveAttribute("data-state", "closed");
 		await userEvent.click(button);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
@@ -216,13 +223,12 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(options);
 
 		expect(group).toHaveAttribute("data-state", "open");
-		expect(group).toHaveClass("data-[state=open]:bg-interactive-hover");
+		expect(group?.querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 	});
 
-	// No supported editor means the control is simply blocked: no long guidance
-	// string in the topbar or the menu, just a disabled button, with the native
-	// fallbacks still reachable from the options menu.
-	it("blocks the editor button without guidance copy and still offers Finder and Terminal", async () => {
+	// No supported editor: the main button opens Finder instead of sitting empty,
+	// with no guidance copy, and the menu still offers every native fallback.
+	it("falls back to Finder when the saved editor is no longer installed", async () => {
 		setState({
 			targets: [
 				{ id: "file-manager", name: "Finder", kind: "file_manager" },
@@ -231,8 +237,13 @@ describe("TopbarOpenEditorButton", () => {
 			preferredEditorId: "cursor",
 			workspaceAvailable: true,
 		});
+		openMock.mockClear();
 		renderButton();
-		expect(await screen.findByRole("button", { name: "No editor installed" })).toBeDisabled();
+		const main = await screen.findByRole("button", { name: "Open in Finder" });
+		expect(main).toBeEnabled();
+		expect(main.querySelector("svg.lucide-code-xml, svg.lucide-code")).not.toBeInTheDocument();
+		await userEvent.click(main);
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual([
@@ -413,6 +424,34 @@ describe("TopbarOpenEditorButton", () => {
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 	});
 
+	// Nothing saved reads as the Cursor default, so this is the fresh-install case
+	// on a Mac with VS Code but no Cursor.
+	it("opens Finder with its real icon until an editor is chosen, then shows the editor", async () => {
+		openMock.mockClear();
+		const iconDataUrl = "data:image/png;base64,ZmluZGVy";
+		setState({
+			...availableState,
+			targets: availableState.targets
+				.filter((target) => target.id !== "cursor")
+				.map((target) => target.kind === "file_manager" ? { ...target, iconDataUrl } : target),
+			preferredEditorId: "cursor",
+		});
+		renderButton();
+		const main = await screen.findByRole("button", { name: "Open in Finder" });
+		expect(main.querySelector("image")).toHaveAttribute("href", iconDataUrl);
+		await userEvent.hover(main);
+		expect((await screen.findAllByText(/workspace in Finder/)).length).toBeGreaterThan(0);
+		await userEvent.click(main);
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
+		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
+		expect(openMock).toHaveBeenLastCalledWith({ sessionId: "sess-1", targetId: "file-manager" });
+
+		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "VS Code" }));
+		expect(await screen.findByRole("button", { name: "Open in VS Code" })).toBeEnabled();
+	});
+
 	it("updates the primary target after a chosen editor succeeds", async () => {
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
@@ -443,7 +482,7 @@ describe("TopbarOpenEditorButton", () => {
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
 	});
 
-	it("falls back to the first available target when no editor is installed", async () => {
+	it("opens Finder from the open-in-editor shortcut when no editor is installed", async () => {
 		openMock.mockClear();
 		setState({
 			targets: [{ id: "file-manager", name: "Finder", kind: "file_manager" }],
@@ -452,7 +491,7 @@ describe("TopbarOpenEditorButton", () => {
 		});
 		renderButton();
 		await waitFor(() => expect(window.ao!.editorHandoff.getState).toHaveBeenCalled());
-		await screen.findByRole("button", { name: "No editor installed" });
+		await screen.findByRole("button", { name: "Open in Finder" });
 
 		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 
@@ -476,6 +515,11 @@ describe("TopbarOpenEditorButton", () => {
 		openMock.mockRejectedValueOnce(new Error("Could not open Cursor. Check that it is installed and try again."));
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Cursor");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Open in Cursor",
+			body: "Could not open Cursor. Check that it is installed and try again.",
+			tone: "error",
+		}));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });

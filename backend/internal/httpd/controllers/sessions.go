@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	maxPromptLen      = 16 << 10
+	maxPromptLen      = 100 << 10
 	maxMessageLen     = 4096
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
@@ -255,6 +255,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
+	r.Delete("/sessions/{sessionId}", c.deleteSession)
 	r.Patch("/sessions/{sessionId}/merge-policy", c.setMergePolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-review", c.setAutoInjectReviewPolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-ci", c.setAutoInjectCIPolicy)
@@ -283,10 +284,11 @@ func (c *SessionsController) Register(r chi.Router) {
 }
 
 // RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree notifications remain active only while a client is
-// actually viewing that session's files.
+// middleware. Worktree and artifact notifications remain active only while a
+// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
+	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
 }
 
 func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +358,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Prompt) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
@@ -588,6 +590,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.URL.Query().Get("source") == "artifact" {
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
+			return
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
@@ -865,6 +871,10 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		// is served verbatim from ArtifactDir: there is no marker to strip
 		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, asset, version)
+			return true
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 		return true
 	}
@@ -1583,8 +1593,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 //   - An explicit workspace-local path (e.g. `index.html`, `./dist/index.html`)
 //     is served through the preview/files route so local files load.
 //   - Absolute paths and file: URLs are accepted only when their fully resolved
-//     target remains inside the fully resolved session workspace. They use the
-//     workspace-confined preview origin rather than an automatable file: URL.
+//     target remains inside the fully resolved session workspace or artifact
+//     directory. They use that root's confined preview origin rather than an
+//     automatable file: URL.
 //   - External http(s) URLs and host:port dev servers are kept verbatim.
 //
 // Every call bumps the session's preview revision, so re-running `ao preview`
@@ -1621,7 +1632,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 			}
 		} else if existing := strings.TrimSpace(sess.Metadata.PreviewURL); existing != "" {
 			var resolveErr error
-			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, existing, false)
+			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, existing, false)
 			if resolveErr != nil {
 				writePreviewResolveError(w, r, resolveErr)
 				return
@@ -1632,7 +1643,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		var resolveErr error
-		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, previewURL, in.RequireWorkspaceFile)
+		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, previewURL, in.RequireWorkspaceFile)
 		if resolveErr != nil {
 			writePreviewResolveError(w, r, resolveErr)
 			return
@@ -2163,6 +2174,28 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, RollbackSessionResponse{OK: true, SessionID: sessionID(r), Deleted: out.Deleted, Killed: out.Killed})
 }
 
+// sessionDeleteService is optional so unrelated controller fakes keep
+// implementing the stable SessionService surface.
+type sessionDeleteService interface {
+	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// deleteSession permanently removes a terminated session's record. The service
+// refuses a live session, and one whose worktree is not cleaned up yet unless
+// the caller asks it to clean it up first.
+func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(sessionDeleteService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+		return
+	}
+	if err := svc.Delete(r.Context(), sessionID(r), r.URL.Query().Get("cleanup") == "true"); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, DeleteSessionResponse{OK: true, SessionID: sessionID(r)})
+}
+
 func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/cleanup")
@@ -2175,7 +2208,7 @@ func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped := make([]CleanupSkippedSession, 0, len(out.Skipped))
 	for _, skip := range out.Skipped {
-		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Reason: skip.Reason})
+		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Code: string(skip.Code), Reason: skip.Reason})
 	}
 	envelope.WriteJSON(w, http.StatusOK, CleanupSessionsResponse{
 		OK: true, Cleaned: out.Cleaned, AlreadyGone: out.AlreadyGone, Skipped: skipped,
@@ -2252,7 +2285,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(in.Brief) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 100 KiB or fewer", nil)
 		return
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(in.Model)) > maxModelLen {
@@ -2290,6 +2323,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
 		Brief:             domain.SanitizeControlChars(in.Brief),
+		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),
@@ -2632,7 +2666,7 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{
@@ -2778,16 +2812,16 @@ func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, ra
 	return resolved, true, err
 }
 
-func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, raw string, requireWorkspaceFile bool) (string, error) {
+func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, artifactDir, raw string, requireWorkspaceFile bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if filePath, isFileURL, err := previewFileURLPath(raw); isFileURL {
 		if err != nil {
 			return "", err
 		}
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, filePath)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, filePath)
 	}
 	if isAbsolutePreviewPath(raw) {
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, raw)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, raw)
 	}
 	if !hasURLScheme(raw) && containsParentPathSegment(raw) {
 		return "", errPreviewFileOutsideWorkspace
@@ -2841,20 +2875,16 @@ func previewFileURLPath(raw string) (string, bool, error) {
 	return filePath, true, nil
 }
 
-func workspaceAbsolutePreviewURL(
+// absolutePreviewURL opens an absolute file path only when its fully resolved
+// target is a file inside the fully resolved session workspace or session
+// artifact directory. Each root keeps its own isolated preview origin.
+func absolutePreviewURL(
 	r *http.Request,
 	id domain.SessionID,
 	workspacePath,
+	artifactDir,
 	filePath string,
 ) (string, error) {
-	workspaceAbs, err := filepath.Abs(workspacePath)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
-	workspaceResolved, err := filepath.EvalSymlinks(workspaceAbs)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
 	fileAbs, err := filepath.Abs(filePath)
 	if err != nil {
 		return "", errPreviewFileNotFound
@@ -2863,20 +2893,50 @@ func workspaceAbsolutePreviewURL(
 	if err != nil {
 		return "", errPreviewFileNotFound
 	}
-	rel, err := filepath.Rel(workspaceResolved, fileResolved)
+	if root, rel, ok := resolvedRootRelative(workspacePath, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewFileURL(r, id, entry.Path)
+	}
+	// Deliverables live in the artifact directory, outside the workspace, and
+	// agents open them by their absolute path.
+	if root, rel, ok := resolvedRootRelative(artifactDir, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewutil.ArtifactFileURL("http://"+r.Host, id, entry.Path)
+	}
+	return "", errPreviewFileOutsideWorkspace
+}
+
+// resolvedRootRelative returns root with its symlinks resolved and target's
+// slash path below it. It reports false for an empty or missing root and for a
+// target that is root itself or outside it.
+func resolvedRootRelative(root, target string) (string, string, bool) {
+	if root == "" {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(rootResolved, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errPreviewFileOutsideWorkspace
+		return "", "", false
 	}
-	entry, ok := previewutil.EntryAtPath(workspaceResolved, filepath.ToSlash(rel))
-	if !ok {
-		return "", errPreviewFileNotFound
-	}
-	return previewFileURL(r, id, entry.Path)
+	return rootResolved, filepath.ToSlash(rel), true
 }
 
 func writePreviewResolveError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errPreviewFileOutsideWorkspace) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace", nil)
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace or artifact directory", nil)
 		return
 	}
 	if errors.Is(err, errPreviewFileNotFound) {

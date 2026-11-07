@@ -19,6 +19,7 @@ import { useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -96,8 +97,7 @@ export function ActivityRun({
 			transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 			className="flex flex-col"
 		>
-			<button
-				type="button"
+			<Pressable
 				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
@@ -143,7 +143,7 @@ export function ActivityRun({
 						open && "rotate-90",
 					)}
 				/>
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{open ? (
@@ -255,8 +255,7 @@ function ActivitySubgroup({
 
 	return (
 		<div className="activity-subgroup">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
@@ -267,7 +266,7 @@ function ActivitySubgroup({
 					</ActivityTransition>
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
-			</button>
+			</Pressable>
 			<AnimatePresence initial={false}>
 				{open ? (
 					<motion.div
@@ -338,18 +337,17 @@ function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean 
 	const open = override ?? (live && running);
 	return (
 		<div className="mb-2 overflow-hidden bg-background/40">
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOverride(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
+				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>
 				{running ? <Loader2 aria-hidden="true" className="size-3 animate-spin" /> : null}
 				<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", open && "rotate-90")} />
-			</button>
+			</Pressable>
 			<AnimatePresence initial={false}>
 				{open ? (
 					<motion.div

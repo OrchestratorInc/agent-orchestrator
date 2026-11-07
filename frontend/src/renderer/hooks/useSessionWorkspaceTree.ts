@@ -1,5 +1,5 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { snapshotQuery, WorkspaceRequestError, retryWorkspaceRead, type FilesSource, isChangedWorkspaceFile, type WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
 
@@ -25,7 +25,7 @@ async function fetchSessionWorkspaceTree(
 			query: source?.kind === "snapshot" ? { path: dir || undefined, ...snapshotQuery(source), filter: filter || undefined } : dir ? { path: dir } : {},
 		},
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw apiErrorException(error, errorMessage);
  if(source?.kind === "snapshot" && !data?.snapshot) throw new WorkspaceRequestError("This host does not support snapshot tree browsing. Update its daemon to browse this revision.","WORKSPACE_SNAPSHOT_UNSUPPORTED",400);
 	return (data ?? { sessionId, path: dir, entries: [], truncated: false }) as WorkspaceTreeResponse;
 }

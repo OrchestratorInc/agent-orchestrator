@@ -23,7 +23,7 @@ Use these files to inspect the approved references. They show current behavior a
 
 | Surface | Primary reference files |
 | --- | --- |
-| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [topbar](frontend/src/renderer/components/ShellTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
+| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [page topbar](frontend/src/renderer/components/PageTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
 | Home landing | [HomePage](frontend/src/renderer/components/HomePage.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [topbar button](frontend/src/renderer/components/TopbarButton.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Shell resize grips | [ResizeHandle](frontend/src/renderer/components/ResizeHandle.tsx), [useResizable](frontend/src/renderer/hooks/useResizable.ts) |
@@ -140,7 +140,7 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 | --- | --- | --- |
 | Working | `--color-status-working` / #60a5fa | active spinner, live activity, progress that is currently observed |
 | Needs human input | `--color-status-needs-you` / #f06445 | blocked, question, actionable interruption |
-| Validating | `--color-status-validating` / #facc15 | checks or verification in progress |
+| Validating | `--color-status-validating` / #e58bb5 | AO is turning the PR: checks, review pass, or fixing feedback. Yellow (#facc15) when the new sidebar design is switched off in Developer mode |
 | Review / caution | `--color-status-in-review` / #f59e0b | review pending, changes requested |
 | Ready / success | `--color-status-ready` / #4ade80 | mergeable, approved, completed actionable success |
 | Merged | `--color-status-merged` / #c084fc | historical terminal completion state |
@@ -229,7 +229,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Board action: 30–36px.
 - Minimum pointer target for an ordinary row: 32px; use 36px when the interaction is high-frequency or imprecise.
 - Default sidebar: 240px; icon rail: 48px; mobile overlay: 288px.
-- Standard topbar row: 36px; Windows shell topbar: 56px.
+- Page and session topbar row: 36px on every platform. Windows adds its own 36px window titlebar above the panel.
 
 ### Radius and borders
 
@@ -252,6 +252,10 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Icon-only buttons require an accessible label and tooltip when their meaning is not universally obvious.
 - Destructive actions require destructive color and confirmation when the operation is difficult to reverse.
 - Disabled states explain why when the missing prerequisite is not obvious.
+- Every action is a `Button` (`components/ui/button.tsx`); never a raw `<button>` outside `components/ui/`. Rows, cards, tabs and disclosure toggles use `Pressable` (`components/ui/pressable.tsx`); a dialog ✕ uses `CloseButton`.
+- Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `footer*` (settings and modal footers), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
+- Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active="true"`, not from swapping variants. Tabs keep `role="tab"` + `aria-selected` and add `data-active` for the look.
+- No press motion: buttons, rows and controls never scale or shift when clicked.
 
 ### Tooltips and iconography
 
@@ -326,8 +330,8 @@ Motion is functional and modest.
 
 ## 11. Platform and responsive behavior
 
-- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. The shell topbar may be hidden when session-local chrome owns orientation.
-- **Windows/Linux:** shell topbar spans above the sidebar; preserve native/window-titlebar accommodations.
+- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. Page and session headers are the drag region; controls inside them opt out.
+- **Windows/Linux:** each page renders its own header inside the center panel; preserve the Windows titlebar and Linux native frame and collapsed-sidebar inset.
 - **Narrow center panels:** compact secondary actions, then inspector content, before hiding the task itself.
 - **Sidebar:** may collapse to its icon rail or an overlay; every icon must remain labeled through tooltip and accessible name.
 - **Inspector:** collapses to zero without reflowing the active terminal/chat into an unusable transient width.
@@ -432,3 +436,5 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-10-14 | Settings cards: no outline, filled background groups them, hairline dividers between items, rows fit their content with 10px vertical padding | The person asked for borders only between items, not around containers. Rows sit 16px in from the card edge and the page title and section headings follow that inset. |
 | 2026-10-15 | New Task is a page, not a modal (cloud projects keep the dialog for now): the session's own chat with no session yet. An empty header-height strip (window drag on macOS) holds the session header's place, the empty chat centers in the window, the agent sits at the top of the model menu, and the project is the only control in a tray hung under the composer. Sending keeps everything in place with no composer shimmer; the composer stays usable for queued follow-ups while the session sets up, and the session header slides into the strip. Welcome sample prompts are a centered row of bordered pill chips with short labels | The modal hid the chat the task becomes, and every handoff moved the composer; the chips are an intentional pill exception, read as suggestions rather than list rows. |
 | 2026-11-01 | Add Project: Local/Cloud is a first step of two tiles, and the sources are a 2×2 grid of the same borderless tiles | Cloud sat in the same list as local sources, mixing "where agents run" with "where the code comes from"; tiles in both steps keep the flow consistent with Home. |
+| 2026-11-04 | One `Button` for every action, `Pressable` for rows/cards/tabs; ghost buttons use the growing hover pill; no press scale anywhere | The person disliked the tap-scale and found ~280 raw buttons and ~200 variant-restyling overrides; the sidebar's hover pill is the ghost interaction they want everywhere. |
+| 2026-11-05 | Every settled chat turn opens with "Worked for <time>": the fold, with a chevron, when the turn has steps; plain text when it went straight to its answer. The time never repeats on the action row. As a turn settles nothing in view jumps: "Worked for" fades into the row reserved under the prompt, the reply slides up into the room its steps left, and the live row fades where it was | The person wanted the time on every reply, and the time moved between the top of some turns and the action row of others; the settle handover dipped the whole chat and glided it back. |

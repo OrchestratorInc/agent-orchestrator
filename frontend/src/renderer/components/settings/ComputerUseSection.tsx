@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -5,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { PRIVACY_PANES, type PrivacyGuideAppearance, type PrivacyPane } from "../../../main/privacy-guide";
 import { useSettings, useUpdateComputerUse } from "../../hooks/useSettings";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import type { Theme } from "../../lib/theme";
 import { useResolvedTheme } from "../../stores/ui-store";
@@ -26,13 +27,13 @@ const RELEASES_URL = "https://cua.ai/docs/how-to-guides/driver/install";
 
 async function fetchStatus(): Promise<ComputerUseStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/computer-use/status");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
 async function fetchInstallJob(): Promise<InstallJob> {
 	const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -108,12 +109,12 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const install = () => run("install", async () => {
 		enableOnInstall.current = !installed;
 		const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
-		if (error || !data) throw new Error(apiErrorMessage(error));
+		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(installJobQueryKey, data);
 	});
 	const startService = () => run("start", async () => {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/daemon/start");
-		if (error || !data) throw new Error(apiErrorMessage(error));
+		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
 	});
 	const showGuide = async (pane: PrivacyPane, permissions: ComputerUseStatus["permissions"]) => {
@@ -142,7 +143,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	};
 	const grant = () => run("grant", async () => {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
-		if (error || !data) throw new Error(apiErrorMessage(error));
+		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
 		// The request lists CuaDriver in System Settings; point the user at it.
 		if (data.permissions) await showGuide(firstMissing(data.permissions), data.permissions);
@@ -264,7 +265,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 
 			{(!installed || manualCommand) && status.isSuccess && !installing ? (
 				<div className="flex px-(--settings-row-inset)">
-					<Button type="button" size="sm" variant="ghost" className="-ml-2.5 text-settings-muted hover:text-settings-label" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
+					<Button type="button" size="sm" variant="quiet" className="-ml-2.5" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
 						<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 					</Button>
 				</div>

@@ -151,6 +151,23 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
+// StartAgentUILoginRequest selects a fixed native login method. The optional
+// credential is passed to stdin and never returned in operation responses.
+type StartAgentUILoginRequest struct {
+	Method string `json:"method"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
+type SubmitAgentUILoginCodeRequest struct {
+	Code string `json:"code"`
+}
+
+// AgentUILoginIDParam scopes an in-memory login operation to one harness.
+type AgentUILoginIDParam struct {
+	OperationID string `path:"operationId"`
+}
+
 // CodexAccountIDParam documents a Codex account route identifier.
 type CodexAccountIDParam struct {
 	AccountID string `path:"accountId" description:"AO Codex account identifier."`
@@ -245,6 +262,8 @@ type SessionIDParam struct {
 type PreviewFileQuery struct {
 	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
 	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+	// Version reads a kept version instead of the live artifact file.
+	ArtifactVersion int64 `query:"artifactVersion,omitempty" description:"With source=artifact, serve this saved version of the file instead of its current content." minimum:"1"`
 }
 
 // PRNumberParam is the associated pull-request number in Files routes.
@@ -552,7 +571,7 @@ type SpawnSessionRequest struct {
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
 	// ApprovalMode overrides the project/default policy for this spawn.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
-	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
+	Prompt       string                `json:"prompt,omitempty" maxLength:"102400"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
 	// selected harness can honor the model before launching.
@@ -1258,11 +1277,24 @@ type RollbackSessionResponse struct {
 	Killed    bool             `json:"killed,omitempty"`
 }
 
+// DeleteSessionQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}.
+type DeleteSessionQuery struct {
+	Cleanup bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+}
+
+// DeleteSessionResponse is the body of DELETE /api/v1/sessions/{sessionId}.
+type DeleteSessionResponse struct {
+	OK        bool             `json:"ok"`
+	SessionID domain.SessionID `json:"sessionId"`
+}
+
 // CleanupSkippedSession is one terminal session whose workspace cleanup
 // preserved rather than reclaimed (a dirty worktree is never force-deleted),
-// with the user-facing reason.
+// with a stable code to branch on and the user-facing reason. The enum mirrors
+// domain.CleanupSkipCodes.
 type CleanupSkippedSession struct {
 	SessionID domain.SessionID `json:"sessionId"`
+	Code      string           `json:"code" enum:"dirty,locked_worktree,missing_repo,archived_project_unresolvable,permission_error,cleanup_script_failed,worktree_busy,in_use_by_live_session,shell_terminal_open,cleanup_running,attachment_preservation_failed,outside_managed_root,teardown_failed"`
 	Reason    string           `json:"reason"`
 }
 
@@ -1303,7 +1335,8 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"16384"`
+	Brief           string              `json:"brief" maxLength:"102400"`
+	Branch          string              `json:"branch,omitempty" maxLength:"255"`
 	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
@@ -2198,6 +2231,8 @@ type CreateAutomationRequest struct {
 	ProjectID   string `json:"projectId"`
 	DisplayName string `json:"displayName"`
 	Prompt      string `json:"prompt"`
+	UseCase     string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string `json:"templateId,omitempty" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string `json:"kind" enum:"worker,orchestrator"`
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
@@ -2213,6 +2248,7 @@ type CreateAutomationRequest struct {
 type UpdateAutomationRequest struct {
 	DisplayName *string `json:"displayName,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
+	UseCase     *string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
 	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness     *string `json:"harness,omitempty"`
 	RRule       *string `json:"rrule,omitempty"`
@@ -2241,6 +2277,8 @@ type AutomationResponse struct {
 	ProjectID   string                        `json:"projectId"`
 	DisplayName string                        `json:"displayName"`
 	Prompt      string                        `json:"prompt"`
+	UseCase     string                        `json:"useCase" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string                        `json:"templateId" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
 	RRule       string                        `json:"rrule"`
@@ -2383,9 +2421,11 @@ type ShellTerminalHandleIDParam struct {
 type OpenShellTerminalRequest struct {
 	ProjectID     string `json:"projectId,omitempty" description:"Project whose root the shell starts in. Omitted opens the shell in the daemon data dir."`
 	SessionID     string `json:"sessionId,omitempty" description:"Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell."`
-	Shell         string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
+	Shell         string `json:"shell,omitempty" description:"Shell to launch: auto (the user's default shell), an executable path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl)."`
 	StartOnAttach bool   `json:"startOnAttach,omitempty" description:"Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid."`
 	Title         string `json:"title,omitempty" description:"Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N)."`
+	Cols          int    `json:"cols,omitempty" description:"Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored)."`
+	Rows          int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // UpdateShellTerminalRequest is the body of PATCH /api/v1/shell-terminals/{handleId}.
@@ -2413,6 +2453,27 @@ type ListShellTerminalsResponse struct {
 // terminal mutations.
 type ShellTerminalEnvelope struct {
 	ShellTerminal ShellTerminalResponse `json:"shellTerminal"`
+}
+
+// TerminalShellResponse is one shell a new terminal can launch. ID is the
+// value to send as a terminal's shell.
+type TerminalShellResponse struct {
+	ID   string `json:"id" description:"Value to send as a terminal's shell: auto, a Windows selector, or the executable path."`
+	Name string `json:"name" description:"Display name, such as zsh or PowerShell."`
+	Path string `json:"path,omitempty" description:"Executable path. Empty when the default shell cannot be resolved."`
+}
+
+// TerminalShellsResponse is the body of GET /api/v1/terminal-shells.
+type TerminalShellsResponse struct {
+	Default TerminalShellResponse   `json:"default" description:"The shell auto resolves to."`
+	Shells  []TerminalShellResponse `json:"shells" description:"Installed shells, one per real binary."`
+}
+
+// TerminalShellCheckResponse reports whether a custom shell path can launch.
+type TerminalShellCheckResponse struct {
+	Executable bool   `json:"executable"`
+	Path       string `json:"path,omitempty" description:"Resolved executable path when executable."`
+	Message    string `json:"message,omitempty" description:"Why the path cannot launch."`
 }
 
 // CueIDParam is the {cueId} path parameter of the /cues/{cueId} routes.
@@ -2588,11 +2649,13 @@ type IdentityResponse struct {
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
-	DistinctID  string `json:"distinctId"`
-	InstallID   string `json:"installId,omitempty"`
-	CloudUserID string `json:"cloudUserId,omitempty"`
-	GitHubLogin string `json:"githubLogin,omitempty"`
-	OptedOut    bool   `json:"optedOut"`
+	DistinctID       string `json:"distinctId"`
+	InstallID        string `json:"installId,omitempty"`
+	CloudUserID      string `json:"cloudUserId,omitempty"`
+	IsSignedIn       *bool  `json:"isSignedIn,omitempty"`
+	GitHubLogin      string `json:"githubLogin,omitempty"`
+	OptedOut         bool   `json:"optedOut"`
+	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.
@@ -3130,6 +3193,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -3169,8 +3233,11 @@ type ConversationPlanResponse struct {
 	Explanation string                         `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStepResponse `json:"steps"`
 	// SpansTurns marks a list the agent keeps across turns. Later turns carry a
-	// copy of the same list, so a client shows it once, on the latest turn.
+	// copy of the same list.
 	SpansTurns bool `json:"spansTurns,omitempty"`
+	// Superseded marks a copy of a list that spans turns which a later copy has
+	// replaced. Only the copy without it is current.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // ConversationPlanStepResponse is one step of a plan.
@@ -3611,17 +3678,17 @@ type SettingsResponse struct {
 	Client string `json:"client"`
 	// LocalEnabled reports whether the local offering is available.
 	LocalEnabled bool `json:"localEnabled"`
-	// CloudOffering is the user's persisted cloud toggle (Settings, Developer
-	// Mode). Distinct from CloudEnabled, which is the effective gate.
-	CloudOffering bool `json:"cloudOffering"`
 	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
-	// CloudEnabled reports whether the cloud offering is effectively available:
-	// the user's toggle (or the env override) plus a configured control plane.
+	// SessionRetentionDays is how long an archived session is kept.
+	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
+	// CloudEnabled reports whether the cloud offering is available: on for
+	// everyone unless AO_CLOUD_OFFERING switches it off, given a configured
+	// control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
 	// CloudControlPlaneURL is the cloud control plane base URL; empty when no
 	// control plane is configured.
@@ -3648,15 +3715,14 @@ type UpdateHarnessDefaultRequest struct {
 	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
 }
 
-// UpdateCloudOfferingRequest flips the user's cloud toggle.
-type UpdateCloudOfferingRequest struct {
-	// Enabled turns the cloud offering on or off for this machine's user.
-	Enabled *bool `json:"enabled"`
-}
-
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
+}
+
+// UpdateSessionRetentionRequest sets how long archived sessions are kept.
+type UpdateSessionRetentionRequest struct {
+	Days *int `json:"days" description:"Days to keep an archived session whose worktree is released; 0 keeps it." minimum:"0" maximum:"3650"`
 }
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.

@@ -59,6 +59,12 @@ func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.
 		label := strings.TrimSpace(item.Label)
 		if label == "" || strings.EqualFold(label, item.ID) {
 			label = strings.ToUpper(match[1][:1]) + match[1][1:]
+			// A configured alias arrives labeled with its own ID. Keep its
+			// context variant ("opus[1m]") apart from the family's plain
+			// model, or the picker lists "Opus 5.5" twice.
+			if window := strings.Trim(match[2], "[]"); window != "" {
+				label += " (" + strings.ToUpper(window) + " context)"
+			}
 		}
 		versionText := formatVersion(version)
 		if base, suffix, found := strings.Cut(label, " ("); found {

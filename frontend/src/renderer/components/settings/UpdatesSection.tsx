@@ -32,9 +32,6 @@ const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
 // serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
 
-/** Row actions are quiet: ghost, muted until hovered. */
-const GHOST_ACTION = "text-settings-muted hover:text-settings-label";
-
 let updateRequestSequence = 0;
 
 function nextUpdateRequestId(prefix = "feature-update"): string {
@@ -273,7 +270,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 							: t("settings.updates.featurePinned", { pr: featurePr })}
 						description={t("settings.updates.featureTracking", { pr: featurePr })}
 					>
-						<Button type="button" variant="ghost" size="sm" className={GHOST_ACTION} onClick={() => void handleReturnToHome()}>
+						<Button type="button" variant="quiet" size="sm" onClick={() => void handleReturnToHome()}>
 							{form.channel === "nightly" ? t("settings.updates.returnToNightly") : t("settings.updates.returnToStable")}
 						</Button>
 					</SettingsRow>
@@ -579,9 +576,8 @@ function UpdateActions({
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
-						variant="ghost"
+						variant="quiet"
 						size="sm"
-						className={GHOST_ACTION}
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>

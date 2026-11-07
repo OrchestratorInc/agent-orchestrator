@@ -1,12 +1,15 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
-import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { globalSettingsItemsFor, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { CloudCpError } from "../lib/cloud-cp";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
 	getMock: vi.fn(),
@@ -112,21 +115,43 @@ vi.mock("./ProjectScriptsSettings", () => ({
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
 // mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
+// Cloud is off unless a test turns it on (then the org can share, as for Teams).
+const teamsGate = vi.hoisted(() => ({ cloudEnabled: false, teams: true, myTeamsAsked: [] as boolean[] }));
 vi.mock("../hooks/useCloudGate", () => ({
-	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
+	useCloudGate: () => ({ cloudEnabled: teamsGate.cloudEnabled, localEnabled: true }),
 }));
 
 // The dialog reads the org's offering to gate the Coder and Upgrade pages.
 // Nothing resolved here (signed out), so neither page is visible.
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false }),
+	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false, ...(teamsGate.cloudEnabled ? { features: ["share"], org: { id: "org-1" } } : {}) }),
+}));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => teamsGate.teams }));
+vi.mock("../hooks/useTeams", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useTeams")>(),
+	useMyTeams: (enabled: boolean) => {
+		teamsGate.myTeamsAsked.push(enabled);
+		return { isPending: false, error: null, data: [] };
+	},
 }));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
 }));
 
 describe("SettingsDialog", () => {
+	let reconcileCallbacks: Array<() => void>;
 	beforeEach(() => {
+		reconcileCallbacks = [];
+		const setTimeout = window.setTimeout.bind(window);
+		vi.spyOn(window, "setTimeout").mockImplementation(((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+			if (delay === 1_500 && typeof handler === "function") {
+				reconcileCallbacks.push(() => handler(...args));
+				const timer = setTimeout(() => undefined, 0);
+				clearTimeout(timer);
+				return timer;
+			}
+			return setTimeout(handler, delay, ...args);
+		}) as typeof window.setTimeout);
 		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
 		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
@@ -139,7 +164,32 @@ describe("SettingsDialog", () => {
 		cloudProjectsState.error = null;
 		cloudProjectsState.refetch.mockReset();
 		localWorkspacesState.ids = [];
+		teamsGate.cloudEnabled = false;
+		teamsGate.teams = true;
+		teamsGate.myTeamsAsked = [];
 	});
+
+	it("lists Teams where the workspace can share, in a build with Teams", async () => {
+		teamsGate.cloudEnabled = true;
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+		expect(within(nav).getByRole("button", { name: "Teams" })).toBeInTheDocument();
+		expect(teamsGate.myTeamsAsked).toContain(true);
+	});
+
+	it("has no Teams page in a build without Teams, and never asks for the person's teams", async () => {
+		teamsGate.cloudEnabled = true;
+		teamsGate.teams = false;
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+		expect(within(nav).queryByRole("button", { name: "Teams" })).toBeNull();
+		expect(teamsGate.myTeamsAsked.length).toBeGreaterThan(0);
+		expect(teamsGate.myTeamsAsked).not.toContain(true);
+	});
+
+	afterEach(() => vi.restoreAllMocks());
 
 	function renderSettingsDialog() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -311,10 +361,9 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		// Scripts are project settings on Cloud projects too; environment and cues stay local.
-		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
-		for (const section of ["Environment", "Cues"]) {
-			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
+		// Scripts, environment and cues are project settings on Cloud projects too.
+		for (const section of ["Scripts", "Environment", "Cues"]) {
+			expect(screen.getByRole("button", { name: section })).toBeInTheDocument();
 		}
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
 	});
@@ -376,10 +425,21 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
+		// The cached account read goes out at once; the slow forced
+		// reconciliation follows once the page's own reads have been sent.
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
-			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+			{ body: { accountIds: [], includeUsage: true } },
 		));
+		expect(postMock).not.toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		);
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		);
 	});
 
 	it("scrolls to and briefly highlights the setting a deep link names", async () => {
@@ -438,13 +498,18 @@ describe("SettingsDialog", () => {
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
 	});
 
-	it("refreshes accounts once when global Settings opens, not when its pages change", async () => {
+	it("refreshes accounts in two phases when global Settings opens, not when its pages change", async () => {
 		useUiStore.getState().openGlobalSettings();
 		renderSettingsDialog();
 
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(reconcileCallbacks).toHaveLength(1);
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(postMock.mock.calls[1][1].body).toMatchObject({ forceAuthentication: true, forceDeviceReconciliation: true });
 		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
-		expect(postMock).toHaveBeenCalledTimes(1);
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(reconcileCallbacks).toHaveLength(1);
 	});
 
 	it("mounts dialog chrome before the selected settings form", async () => {
@@ -519,6 +584,24 @@ describe("SettingsDialog", () => {
 			expect(ids).not.toContain("coder");
 			expect(ids).not.toContain("billing");
 		});
+
+		it("shows Teams only where sharing is on, or for teams the person is in elsewhere", () => {
+			const withTeams = (teams: TeamsPage, cloudEnabled = true) =>
+				visibleGlobalSettings({ cloudEnabled, developerMode: false, diagnostics: false, customCoder: false, selfServeBilling: false, teams }).map((item) => item.id);
+			expect(withTeams("manage")).toContain("teams");
+			expect(withTeams("member")).toContain("teams");
+			expect(withTeams("none")).not.toContain("teams");
+			expect(withTeams("manage", false)).not.toContain("teams");
+
+			const elsewhere = { isPending: false, error: null, data: [{ orgId: "org-acme" }] };
+			const here = { isPending: false, error: null, data: [{ orgId: "org-north" }] };
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: here })).toBe("manage");
+			expect(teamsPageFor({ share: false, orgId: "org-north", mine: elsewhere })).toBe("member");
+			expect(teamsPageFor({ share: false, orgId: "org-north", mine: here })).toBe("none");
+			// Not shown until the person's teams are known, nor by a control plane from before teams.
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: true, error: null } })).toBe("none");
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: false, error: new CloudCpError("404 page not found", { status: 404 }) } })).toBe("none");
+		});
 	});
 
 	it("falls back to General when the Coder page is unavailable", async () => {
@@ -538,7 +621,11 @@ describe("SettingsDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock.mock.calls.map(([path]) => path)).toEqual([
+			"/api/v1/agents/codex/accounts/ensure",
+			"/api/v1/agents/codex/accounts/ensure",
+		]);
 	});
 
 	it("renders inside the page and closes from Escape or Back", async () => {
@@ -550,7 +637,12 @@ describe("SettingsDialog", () => {
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 
 		useUiStore.getState().openGlobalSettings("general");
-		await userEvent.click(await screen.findByRole("button", { name: "Back" }));
+		await screen.findByRole("button", { name: "Back" });
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		// Closing returns to the page immediately, even with section history.
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 

@@ -19,15 +19,19 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     var timer: Timer?
     var displayedStage: UpdateStage?
     var windowPresented = false
-    let title = NSTextField(labelWithString: "")
-    let detail = NSTextField(wrappingLabelWithString: "")
-    let spinner = NSProgressIndicator()
-    let recovery = NSStackView()
+    // Views are created only once AppKit starts, which happens only when a
+    // stage needs the window (see the bottom of this file).
+    lazy var title = NSTextField(labelWithString: "")
+    lazy var detail = NSTextField(wrappingLabelWithString: "")
+    lazy var spinner = NSProgressIndicator()
+    lazy var recovery = NSStackView()
 
     init(attempt: URL, request: UpdateRequest) {
         self.attempt = attempt
         self.request = request
-        self.state = UpdateProgressState(request: request, now: Date().timeIntervalSince1970 * 1000)
+        // A copy started by detachForWindow() keeps the original's stall clock.
+        let since = ProcessInfo.processInfo.environment[detachedSinceKey].flatMap(Double.init)
+        self.state = UpdateProgressState(request: request, now: since ?? Date().timeIntervalSince1970 * 1000)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -36,7 +40,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.setActivationPolicy(.accessory)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 270),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Updating Agent Orchestrator"
+        window.title = "Updating Orchestrator"
         window.isReleasedWhenClosed = false
         window.delegate = self
         title.font = .systemFont(ofSize: 22, weight: .semibold)
@@ -66,15 +70,6 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
             stack.centerYAnchor.constraint(equalTo: window.contentView!.centerYAnchor),
         ])
         refresh()
-        // READY is what the parent waits for before letting Squirrel quit AO.
-        // It is the process handshake (this stdout line), not any visible UI, so
-        // the window can stay hidden here and still hand off safely. On the
-        // healthy close-and-reopen path the window is never presented; it comes
-        // up only on the stall/failure paths (the .recovery/.reopened stages in
-        // refresh) that actually need the user's attention.
-        DispatchQueue.main.async {
-            FileHandle.standardOutput.write(Data("READY\n".utf8))
-        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
@@ -117,13 +112,18 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func refresh() {
+    func currentStage() -> UpdateStage {
         let completion = readJSON(UpdateCompletion.self, at: attempt.appendingPathComponent("complete.json"))
         let failure = readJSON(UpdateFailure.self, at: attempt.appendingPathComponent("error.json"))
         let now = Date().timeIntervalSince1970 * 1000
-        let next = state.stage(now: now,
-                               parentAlive: processAlive(request.parentPID), completion: completion, failure: failure?.message, legacy: legacyEvidence(now: now))
-        if next == .complete || next == .legacyComplete {
+        if failure != nil { state.noteFailure(now: now) }
+        return state.stage(now: now,
+                           parentAlive: processAlive(request.parentPID), completion: completion, failure: failure?.message, legacy: legacyEvidence(now: now))
+    }
+
+    func refresh() {
+        let next = currentStage()
+        if next == .complete || next == .legacyComplete || next == .abandoned {
             cleanup()
             NSApp.terminate(nil)
             return
@@ -163,7 +163,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
             recovery.isHidden = false
             recovery.arrangedSubviews.prefix(2).forEach { $0.isHidden = true }
             spinner.stopAnimation(nil)
-        case .complete, .legacyComplete: break
+        case .complete, .legacyComplete, .abandoned: break
         }
     }
 
@@ -187,6 +187,28 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 }
 
+let detachedSinceKey = "AO_UPDATE_PROGRESS_SINCE"
+
+// Start a copy of this helper and let this process exit, so the copy is
+// orphaned (its parent becomes launchd) before it starts AppKit. macOS files an
+// AppKit process under the app that is its parent, so a window shown while AO
+// is still our parent would be counted as a running AO, and ShipIt cancels the
+// install when AO finally quits. Returns false if the copy could not start.
+func detachForWindow(executable: URL, attempt: URL, since: Double) -> Bool {
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    // AO stopped reading our stdout after READY; the copy must not write to it.
+    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
+    var environment = ProcessInfo.processInfo.environment
+    environment[detachedSinceKey] = String(since)
+    let argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable.path), strdup(attempt.path), nil]
+    let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    defer { (argv + envp).forEach { free($0) } }
+    var pid: pid_t = 0
+    return posix_spawn(&pid, executable.path, &actions, nil, argv, envp) == 0
+}
+
 // Only a copied helper, outside any .app, may run. Refuse an arbitrary cleanup path.
 guard CommandLine.arguments.count == 2 else { exit(2) }
 let attempt = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
@@ -198,5 +220,35 @@ guard attempt == attempt.resolvingSymlinksInPath(),
       executable == attempt.appendingPathComponent("ao-update-progress"),
       let request = readJSON(UpdateRequest.self, at: attempt.appendingPathComponent("request.json")), request.valid else { exit(2) }
 let controller = ProgressController(attempt: attempt, request: request)
+let isDetachedCopy = ProcessInfo.processInfo.environment[detachedSinceKey] != nil
+var detachTried = false
+// READY is the handshake the parent waits for before it lets Squirrel quit AO.
+FileHandle.standardOutput.write(Data("READY\n".utf8))
+// Stay a plain process, not an AppKit app, until a stage needs the window.
+// macOS files an AppKit process whose parent is AO under AO's own bundle
+// identifier (an embedded Info.plist does not change that), and
+// Squirrel's ShipIt cancels the install while any app with that identifier is
+// running ("App Still Running Error"). Starting NSApplication here made this
+// helper cancel the very update it was reporting on (#6911). The window is
+// only needed on the stall and failure paths.
+while true {
+    let next = controller.currentStage()
+    if next == .complete || next == .legacyComplete || next == .abandoned {
+        controller.cleanup()
+        exit(0)
+    }
+    if next.presentsWindow {
+        if getppid() == 1 { break }
+        // AO is still our parent (its quit has stalled for three minutes):
+        // hand the window to an orphaned copy. If that copy can't start, or
+        // this is the copy and its starter hasn't exited yet, stay headless
+        // until launchd adopts us rather than start AppKit as AO's child.
+        if !isDetachedCopy && !detachTried {
+            detachTried = true
+            if detachForWindow(executable: executable, attempt: attempt, since: controller.state.waitingSince) { exit(0) }
+        }
+    }
+    Thread.sleep(forTimeInterval: isDetachedCopy ? 0.05 : 0.5)
+}
 NSApplication.shared.delegate = controller
 NSApplication.shared.run()

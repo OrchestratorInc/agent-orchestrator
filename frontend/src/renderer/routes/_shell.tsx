@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
@@ -15,13 +16,14 @@ import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
+import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
-import { ShellTopbar } from "../components/ShellTopbar";
+import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
@@ -40,6 +42,7 @@ import type { SessionView as LoadedSessionView } from "../components/SessionView
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -64,7 +67,6 @@ import {
 	isLinuxPlatform,
 	isMacPlatform,
 	isWindowsPlatform,
-	usesFramedAppTopbar,
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
@@ -80,6 +82,7 @@ import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset"
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { pageHasTopbar } from "../lib/shell-topbar";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppShortcut } from "../hooks/useAppShortcut";
@@ -243,8 +246,7 @@ const PROVISIONING_TIMEOUT_MS = 120_000;
 const isMac = isMacPlatform();
 const isWindows = isWindowsPlatform();
 const isLinux = isLinuxPlatform();
-const framedAppTopbar = usesFramedAppTopbar();
-const shellTopbarHiddenByPlatform = hidesShellTopbar();
+const macTrafficLightBand = hidesShellTopbar();
 
 /**
  * The shell must observe the complete workspace list for the sidebar, but a
@@ -253,16 +255,18 @@ const shellTopbarHiddenByPlatform = hidesShellTopbar();
  * board own their more granular workspace subscriptions.
  */
 const ShellCenter = memo(function ShellCenter({
-	hideShellTopbar,
 	isSessionRoute,
+	isHomeRoute,
+	isNewChatRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
 	startingSteps,
 	startingCoderWorkspaceUrl,
 }: {
-	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
+	isHomeRoute: boolean;
+	isNewChatRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
@@ -270,34 +274,22 @@ const ShellCenter = memo(function ShellCenter({
 	startingCoderWorkspaceUrl?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	// Linux retains an outer drag strip. macOS uses the shared header itself;
-	// an extra strip there would displace session tabs from the native controls.
-	// Windows already owns a separate WindowTitlebar.
-	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
-	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
-		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
+		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
 	</>;
-	if (hideShellTopbar) {
-		return selfFramedCenterPanel ? selfFramedOutlet : (
-			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				<ShellOutlet startingChat={startingChat} />
-			</CenterPanelShell>
-		);
-	}
-	if (framedAppTopbar) {
-		return (
-			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <ShellTopbar />}
-				<ShellOutlet startingChat={startingChat} />
-			</CenterPanelShell>
-		);
-	}
+	// Pages own their header content; the panel owns the shared workspace controls,
+	// so every page carries the bell except the welcome start page.
+	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+		<CenterPanelShell
+			className={panelClassName}
+			notifications={!isHomeRoute || startingOrchestrator}
+			// The home and new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -354,6 +346,7 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
+	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
@@ -361,26 +354,12 @@ function ShellLayout() {
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
-	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the
-	// sidebar first applies its saved width, so measure the sidebar instead.
+	// sidebar first applies its saved width, so measure the sidebar instead
+	// (see the effect after `isStartupLoading`).
 	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
-	useEffect(() => {
-		if (!isMac || !sidebarHasLayout) return;
-		let observer: ResizeObserver | undefined;
-		const frame = requestAnimationFrame(() => {
-			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
-			if (!el) return;
-			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
-			observer.observe(el);
-		});
-		return () => {
-			cancelAnimationFrame(frame);
-			observer?.disconnect();
-		};
-	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -388,9 +367,11 @@ function ShellLayout() {
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
-	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
+	// Body-level popout portals sit outside #root; they read the platform here.
+	useDocumentFlag("data-shell-windows", isWindows);
+	useDocumentFlag("data-shell-linux", isLinux);
 	const windowZoomFactor = useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
@@ -424,6 +405,7 @@ function ShellLayout() {
 		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const openShellTerminal = useOpenShellTerminal(routeParams.hostId);
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
@@ -548,7 +530,7 @@ function ShellLayout() {
 					const { data, error: apiError } = await apiClient.GET("/api/v1/projects/{id}", {
 						params: { path: { id: scopedProjectId } },
 					});
-					if (apiError) throw new Error(apiErrorMessage(apiError));
+					if (apiError) throw apiErrorException(apiError);
 					if (data?.status !== "ok") throw new Error("Project config unavailable");
 					return data.project as components["schemas"]["Project"];
 				},
@@ -578,7 +560,6 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isTerminalsRoute = Boolean(matchRoute({ to: "/terminals" }));
 	const isSettingsRoute =
 		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
 		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
@@ -589,7 +570,9 @@ function ShellLayout() {
 	// rounded center panel. Settings owns its complete frame and remains
 	// self-framed.
 	const selfFramedCenterPanel = isSettingsRoute;
-	const hideShellTopbar = isHomeRoute || selfFramedCenterPanel || shellTopbarHiddenByPlatform;
+	// macOS, home and settings reserve only the traffic-light band above the sidebar;
+	// other routes reserve a full toolbar row.
+	const trafficLightBand = isHomeRoute || selfFramedCenterPanel || macTrafficLightBand;
 	const restartingProjectIds = useUiStore((state) => state.restartingProjectIds);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const orchestratorReplacementErrors = useUiStore((state) => state.orchestratorReplacementErrors);
@@ -613,15 +596,33 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// The startup loader renders no sidebar, so measure again once the shell
+	// mounts it. Otherwise the strip keeps the 240px default and its fill
+	// paints over the center panel's top-left corner beside a narrower sidebar.
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout || isStartupLoading) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout, isStartupLoading]);
 	// Session shortcuts walk the sidebar's own order (pinned, projects in the
 	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
 	// means the row below the current one on screen.
 	const sidebarSessionOrder = useCallback(() => {
-		const { projectOrder, sessionOrders } = useSidebarOrderStore.getState();
+		const { projectOrder, pinnedProjectIds, sessionOrders } = useSidebarOrderStore.getState();
 		return buildSidebarSessionOrder({
 			workspaces: workspacesRef.current,
 			remoteWorkspaces: remoteWorkspacesRef.current,
 			projectOrder,
+			pinnedProjectIds,
 			sessionOrders,
 		});
 	}, []);
@@ -801,7 +802,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				throw requestError;
 			});
 			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & {
+				const failure = apiErrorException(error) as Error & {
 					code?: string;
 					details?: Record<string, unknown>;
 					requestId?: string;
@@ -898,7 +899,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				throw requestError;
 			});
 			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & {
+				const failure = apiErrorException(error) as Error & {
 					code?: string;
 					details?: Record<string, unknown>;
 					requestId?: string;
@@ -928,7 +929,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			body: { path },
 		});
 		if (error) {
-			const failure = new Error(apiErrorMessage(error)) as Error & { code?: string };
+			const failure = apiErrorException(error) as Error & { code?: string };
 			failure.code = apiErrorCode(error);
 			throw failure;
 		}
@@ -951,7 +952,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				if (!existing.error && existing.data?.status === "ok" && existing.data.project.id === existingProjectId) projectId = existingProjectId;
 			}
 		}
-		if (!projectId) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
+		if (!projectId) throw Object.assign(apiErrorException(error, "Could not add project on this host."), { code: apiErrorCode(error) });
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
@@ -964,7 +965,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			setOrchestratorStartupError(projectId, "Project added, but orchestrator startup timed out. Try starting it again.", hostId);
 		}, PROVISIONING_TIMEOUT_MS);
 		void client.POST("/api/v1/orchestrators", { body: { projectId } }).then(({ data, error }) => {
-			if (error || !data?.orchestrator?.id) throw new Error(apiErrorMessage(error, "Could not start the orchestrator."));
+			if (error || !data?.orchestrator?.id) throw apiErrorException(error, "Could not start the orchestrator.");
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(projectId, false, hostId);
 			setOrchestratorStartupError(projectId, null, hostId);
@@ -979,13 +980,13 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [navigate, queryClient, remoteHosts, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast]);
 	const initializeRemoteProject = useCallback(async (hostId: string, path: string) => {
 		const { error } = await clientForHost(hostId).POST("/api/v1/projects/initialize", { body: { path } });
-		if (error) throw Object.assign(new Error(apiErrorMessage(error)), { code: apiErrorCode(error) });
+		if (error) throw Object.assign(apiErrorException(error), { code: apiErrorCode(error) });
 	}, []);
 
 	const validateImport = useCallback(
 		async (input: { path: string; importKind: "project" | "workspace" }) => {
 			const { data, error } = await apiClient.POST("/api/v1/imports/validate", { body: input });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Import validation returned no result");
 			return data;
 		},
@@ -1049,7 +1050,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				params: { path: { id: projectId } },
 			});
 			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & { code?: string };
+				const failure = apiErrorException(error) as Error & { code?: string };
 				failure.code = apiErrorCode(error);
 				void captureRendererException(failure, {
 					source: "project-remove",
@@ -1077,7 +1078,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		const { error } = await clientForHost(hostId).DELETE("/api/v1/projects/{id}", {
 			params: { path: { id: projectId } },
 		});
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw apiErrorException(error);
 		void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 		if (selectedProject) void navigate({ to: "/" });
 	}, [navigate, queryClient, remoteWorkspaces, routeParams.hostId, routeParams.projectId, routeParams.sessionId]);
@@ -1214,34 +1215,29 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		workspaceStartupState,
 	]);
 
-	// Keep Electron's nativeTheme in step with the shell so the embedded preview
-	// WebContentsView (which follows prefers-color-scheme) flips at the same time.
-	// Send the preference, not the resolved theme, so "system" keeps both surfaces
-	// following the OS instead of freezing matchMedia to a forced value.
-	useEffect(() => {
-		void aoBridge.theme?.set(themePreference);
-	}, [themePreference]);
-
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.
 	useEffect(() => {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// macOS Appearance preference: the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && windowTranslucency;
+
 	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read.
+	// data-theme has been applied before the token is read. A translucent window
+	// paints no background, and the read forces a whole-document style recalc
+	// mid-switch, so it is skipped there.
 	useEffect(() => {
+		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
 			const color = resolveCssColorToHex("--sidebar");
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme]);
-
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
+	}, [resolvedTheme, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1271,6 +1267,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
 	useAppShortcut("next-attention-session", () => navigateSession(1, true));
 	useAppShortcut("history-back", () => {
+		// Settings covers the current route without adding a router history entry.
+		if (settingsPage) {
+			settingsPage.close();
+			return;
+		}
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
@@ -1334,46 +1335,32 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[requestCreateProjectFromPath],
 	);
 
-	// New standalone terminal (⌘T / Ctrl+T), also detected in the main process so it
-	// fires from inside a terminal pane. It raises the same store signal as the
-	// tab-strip + button so the two cannot drift apart.
+	// New session terminal (⌘T / Ctrl+T), also detected in the main process so it
+	// fires from inside a terminal pane. Terminals only live in a session's tab
+	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
 			aoBridge.app.onNewShellTerminalShortcut(() => {
-				// The project board is not a terminal surface — ⌘T here used to yank
-				// users into the standalone /terminals route (#4772). Sessions and the
-				// dedicated terminals view keep the shortcut; explicit UI can still
-				// open shells from the board.
-				if (!routeParams.hostId && (routeParams.sessionId || isTerminalsRoute)) {
-					requestNewShellTerminal();
-				}
+				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
-		[isTerminalsRoute, requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
+		[requestNewShellTerminal, routeParams.sessionId],
 	);
 
 	// The shell layout is the single consumer of that signal, because it is the
-	// only component mounted on EVERY route. Owning it here is what lets the
-	// topbar + button and the keyboard shortcut work from a session or the
-	// standalone terminals view alike — when the session view owned it, both
-	// silently did nothing outside a session, since nothing was listening.
-	//
-	// Where the new shell becomes visible depends on where the user is: inside a
-	// session it joins that pane's tab strip; on /terminals it joins that strip;
-	// explicit board UI can still route here without the keyboard shortcut.
+	// only component mounted on every route. The new shell joins the tab strip
+	// of the session on screen; with no session on screen there is nowhere to
+	// show it, so the request is dropped.
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (routeParams.hostId) return;
+		if (!routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
-			projectId: scopedProjectId,
+			projectId: routeParams.hostId ? routeParams.projectId : scopedProjectId,
 			sessionId: routeParams.sessionId,
 			cloud: scopedSession?.cloud,
 		});
 		if (!shell) return;
 		setActiveShellTerminal(shell.handleId);
-		if (!routeParams.sessionId) {
-			void navigate({ to: "/terminals" });
-		}
 	}, [
 		newShellTerminalNonce,
 		openShellTerminal,
@@ -1381,7 +1368,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		scopedSession?.cloud,
 		routeParams.sessionId,
 		routeParams.hostId,
-		navigate,
+		routeParams.projectId,
 		setActiveShellTerminal,
 	]);
 
@@ -1443,7 +1430,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	if (isStartupLoading) {
 		return (
 			<>
-				<DaemonStartupLoader />
+				<div className="flex h-full min-h-0 flex-col"><PageTopbar /><DaemonStartupLoader /></div>
 				{quitConfirmDialog}
 			</>
 		);
@@ -1456,8 +1443,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
+				<SharedWithYouNotifier />
 				{isDragActive ? (
 					<div
 						aria-hidden="true"
@@ -1507,9 +1495,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on
             macOS/Linux. */}
-				<WindowTitlebar />
-				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !isNewChatRoute && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
+				<WindowTitlebar onBack={settingsPage?.close} />
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1536,7 +1522,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			      below its custom titlebar. */}
 					<Sidebar
 						underTopbar={isMac || isWindows || isLinux}
-						topbarOffset={isWindows ? "titlebar" : hideShellTopbar ? "trafficLights" : "toolbar"}
+						topbarOffset={isWindows ? "titlebar" : trafficLightBand ? "trafficLights" : "toolbar"}
 						onCloneProject={cloneProject}
 						onCreateProject={createProject}
 						onInitializeProject={initializeProjectRepository}
@@ -1562,8 +1548,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						<div className="relative min-h-0 flex-1 overflow-x-hidden" ref={centerPaneRef}>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
-								hideShellTopbar={hideShellTopbar}
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
+								isHomeRoute={isHomeRoute}
+								isNewChatRoute={isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
@@ -1580,10 +1567,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						</main>
 					</div>
 					<DaemonFailureBanner status={daemonStatus} />
-					{/* When ShellTopbar is hidden, keep a macOS window-drag strip over
+					{/* On macOS, keep a window-drag strip over
               the traffic-light band only. The fixed TitlebarNav renders after
               this strip so its no-drag buttons remain clickable. */}
-					{hideShellTopbar && isMac ? (
+					{trafficLightBand && isMac ? (
 						<div
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
@@ -1607,6 +1594,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							<motion.div
 								animate={{ x: sidebarHasLayout ? "0%" : "-100%" }}
 								className="pointer-events-none absolute inset-y-0 left-0 w-(--ao-sidebar-w,var(--size-sidebar-default)) bg-sidebar"
+								// Same measured width as the strip: the fill overflows the strip,
+								// so a var fallback wider than the sidebar would cover the panel.
+								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
 								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
 							/>
@@ -1616,13 +1606,14 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
               once here so the toggle/history buttons never move when the
               sidebar collapses or expands. History arrows stay visible but
               locked on the empty start page. MUST come after the drag strip
-              (ShellTopbar or the welcome substitute) in the DOM: Electron
+              (the page topbars or the welcome substitute) in the DOM: Electron
               builds the window-drag region in document order (drag rects add,
               no-drag rects subtract), so the cluster's no-drag holes only
               survive if they're processed after the drag strips they overlap.
               Rendered first, real clicks get swallowed by window-drag even
               though DOM hit-testing looks correct. */}
 					<TitlebarNav
+						onBack={settingsPage?.close}
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
 						zoomFactor={windowZoomFactor}

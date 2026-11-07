@@ -57,6 +57,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -70,6 +76,200 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Open the fixed native authentication flow for one agent
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations:
+    post:
+      operationId: startAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAgentUILoginRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a fixed native login in the background without exposing a terminal
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}:
+    delete:
+      operationId: cancelAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Cancel a background login and wait for its native process to stop
+      tags:
+      - agents
+    get:
+      operationId: getAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read recognized login prompts and background process state
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/code:
+    post:
+      operationId: submitAgentUILoginCode
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAgentUILoginCodeRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Submit a one-time Claude sign-in code to the existing native login
       tags:
       - agents
   /api/v1/agents/{agent}/chat/prewarm:
@@ -252,6 +452,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -5756,6 +5962,60 @@ paths:
       tags:
       - sessions
   /api/v1/sessions/{sessionId}:
+    delete:
+      operationId: deleteSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: When true, a worktree that is still on disk is cleaned up first,
+          the way session cleanup does it; a dirty or locked worktree is never forced
+          and refuses the delete.
+        in: query
+        name: cleanup
+        schema:
+          description: When true, a worktree that is still on disk is cleaned up first,
+            the way session cleanup does it; a dirty or locked worktree is never forced
+            and refuses the delete.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Permanently delete a terminated session whose workspace is released
+      tags:
+      - sessions
     get:
       operationId: getSession
       parameters:
@@ -6030,6 +6290,45 @@ paths:
                 type: string
           description: Bad Gateway
       summary: Upload a file into the host's agent browser
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-events:
+    get:
+      operationId: streamSessionArtifactChanges
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream changes to the files in a session's artifact directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/artifact-files:
@@ -9932,6 +10231,16 @@ paths:
           description: When true, serve Markdown files as raw source instead of rendering
             them to HTML for Browser preview.
           type: boolean
+      - description: With source=artifact, serve this saved version of the file instead
+          of its current content.
+        in: query
+        name: artifactVersion
+        schema:
+          description: With source=artifact, serve this saved version of the file
+            instead of its current content.
+          format: int64
+          minimum: 1
+          type: integer
       responses:
         "200":
           content:
@@ -12310,43 +12619,6 @@ paths:
       summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
-  /api/v1/settings/cloud-offering:
-    patch:
-      operationId: updateCloudOffering
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ControllersUpdateCloudOfferingRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SettingsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Turn the cloud offering on or off for this machine
-      tags:
-      - settings
   /api/v1/settings/computer-use:
     patch:
       operationId: updateComputerUse
@@ -12477,6 +12749,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Choose the default interface for new sessions
+      tags:
+      - settings
+  /api/v1/settings/session-retention:
+    patch:
+      operationId: updateSessionRetention
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRetentionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
   /api/v1/settings/version-refresh:
@@ -12987,6 +13296,40 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/terminal-shells:
+    get:
+      operationId: listTerminalShells
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellsResponse'
+          description: OK
+      summary: List the shells installed on this machine for new terminals
+      tags:
+      - shellTerminals
+  /api/v1/terminal-shells/check:
+    get:
+      operationId: checkTerminalShell
+      parameters:
+      - description: 'Custom shell: an absolute path, a ~/ path, or a command on PATH.'
+        in: query
+        name: path
+        schema:
+          description: 'Custom shell: an absolute path, a ~/ path, or a command on
+            PATH.'
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellCheckResponse'
+          description: OK
+      summary: Check that a custom shell path is an executable
+      tags:
+      - shellTerminals
   /api/v1/usage/memory/pressure:
     get:
       operationId: getMemoryPressure
@@ -13467,6 +13810,10 @@ components:
           type: string
         logoutCommand:
           type: string
+        methods:
+          items:
+            $ref: '#/components/schemas/AgentLoginMethod'
+          type: array
         reason:
           type: string
       required:
@@ -13686,6 +14033,51 @@ components:
       required:
       - agents
       type: object
+    AgentLoginMethod:
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        secret:
+          type: boolean
+      required:
+      - id
+      - label
+      - secret
+      type: object
+    AgentLoginSnapshot:
+      properties:
+        acceptsCode:
+          type: boolean
+        agentId:
+          type: string
+        deviceCode:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        loginUrl:
+          type: string
+        method:
+          type: string
+        status:
+          enum:
+          - running
+          - succeeded
+          - failed
+          - cancelled
+          - timed_out
+          type: string
+      required:
+      - id
+      - agentId
+      - method
+      - status
+      - expiresAt
+      type: object
     AgentModelInfo:
       properties:
         contextWindow:
@@ -13714,8 +14106,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -14100,16 +14496,38 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
           type: string
         updatedAt:
           format: date-time
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - id
       - projectId
       - displayName
       - prompt
+      - useCase
+      - templateId
       - kind
       - rrule
       - timezone
@@ -14759,12 +15177,29 @@ components:
       type: object
     CleanupSkippedSession:
       properties:
+        code:
+          enum:
+          - dirty
+          - locked_worktree
+          - missing_repo
+          - archived_project_unresolvable
+          - permission_error
+          - cleanup_script_failed
+          - worktree_busy
+          - in_use_by_live_session
+          - shell_terminal_open
+          - cleanup_running
+          - attachment_preservation_failed
+          - outside_managed_root
+          - teardown_failed
+          type: string
         reason:
           type: string
         sessionId:
           type: string
       required:
       - sessionId
+      - code
       - reason
       type: object
     ClearNotificationsResponse:
@@ -15969,6 +16404,8 @@ components:
           - failed
           - not_applicable
           type: string
+        workspaceCleanupReportOnly:
+          type: boolean
       required:
       - id
       - kind
@@ -16013,15 +16450,6 @@ components:
       properties:
         enabled:
           type: boolean
-      required:
-      - enabled
-      type: object
-    ControllersUpdateCloudOfferingRequest:
-      properties:
-        enabled:
-          type:
-          - "null"
-          - boolean
       required:
       - enabled
       type: object
@@ -16493,6 +16921,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
           type: array
+        superseded:
+          type: boolean
       required:
       - steps
       type: object
@@ -16768,6 +17198,10 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failureCode:
+          enum:
+          - provider_key_missing
+          type: string
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -16904,7 +17338,27 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - projectId
@@ -17103,8 +17557,11 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        branch:
+          maxLength: 255
+          type: string
         brief:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         clientRequestId:
           maxLength: 128
@@ -17141,6 +17598,16 @@ components:
       required:
       - ok
       - workerId
+      type: object
+    DeleteSessionResponse:
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     DesktopArtifactLocationResponse:
       properties:
@@ -17953,6 +18420,10 @@ components:
       type: object
     ListArtifactVersionsResponse:
       properties:
+        mediaVersions:
+          description: This daemon serves a version's bytes on the preview route and
+            restores any file type. Absent from an older daemon.
+          type: boolean
         path:
           type: string
         versions:
@@ -18561,17 +19032,25 @@ components:
       type: object
     OpenShellTerminalRequest:
       properties:
+        cols:
+          description: Initial terminal columns. With rows, the shell starts immediately
+            at this grid instead of waiting for the client to attach (startOnAttach
+            is then ignored).
+          type: integer
         projectId:
           description: Project whose root the shell starts in. Omitted opens the shell
             in the daemon data dir.
           type: string
+        rows:
+          description: Initial terminal rows. See cols.
+          type: integer
         sessionId:
           description: Agent session the shell is scoped to, so it appears only in
             that session's tab strip. Omitted makes it a standalone shell.
           type: string
         shell:
-          description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
-            cmd, or a custom executable path. Ignored on macOS and Linux.'
+          description: 'Shell to launch: auto (the user''s default shell), an executable
+            path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl).'
           type: string
         startOnAttach:
           description: Start the shell when the requesting client attaches with its
@@ -20639,8 +21118,6 @@ components:
           type: string
         cloudEnabled:
           type: boolean
-        cloudOffering:
-          type: boolean
         computerUse:
           description: New chat sessions get tools to drive desktop apps through Cua
             Driver (Settings, Computer use agents).
@@ -20656,6 +21133,10 @@ components:
           type: object
         localEnabled:
           type: boolean
+        sessionRetentionDays:
+          description: Days an archived session whose worktree is released is kept
+            before the daemon deletes it permanently; 0 keeps it.
+          type: integer
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -20667,10 +21148,10 @@ components:
       - chatHarnesses
       - client
       - localEnabled
-      - cloudOffering
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
+      - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -21240,7 +21721,7 @@ components:
         projectId:
           type: string
         prompt:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         requestedOutput:
           enum:
@@ -21350,6 +21831,15 @@ components:
           - reinstall
           - update
           type: string
+      type: object
+    StartAgentUILoginRequest:
+      properties:
+        method:
+          type: string
+        secret:
+          type: string
+      required:
+      - method
       type: object
     StartAwakeRequest:
       properties:
@@ -21501,6 +21991,13 @@ components:
       required:
       - outcome
       - duplicate
+      type: object
+    SubmitAgentUILoginCodeRequest:
+      properties:
+        code:
+          type: string
+      required:
+      - code
       type: object
     SubmitReviewInput:
       properties:
@@ -21669,11 +22166,62 @@ components:
           type: string
         installId:
           type: string
+        isSignedIn:
+          type:
+          - "null"
+          - boolean
+        lifetimeSessions:
+          type:
+          - "null"
+          - integer
         optedOut:
           type: boolean
       required:
       - distinctId
       - optedOut
+      type: object
+    TerminalShellCheckResponse:
+      properties:
+        executable:
+          type: boolean
+        message:
+          description: Why the path cannot launch.
+          type: string
+        path:
+          description: Resolved executable path when executable.
+          type: string
+      required:
+      - executable
+      type: object
+    TerminalShellResponse:
+      properties:
+        id:
+          description: 'Value to send as a terminal''s shell: auto, a Windows selector,
+            or the executable path.'
+          type: string
+        name:
+          description: Display name, such as zsh or PowerShell.
+          type: string
+        path:
+          description: Executable path. Empty when the default shell cannot be resolved.
+          type: string
+      required:
+      - id
+      - name
+      type: object
+    TerminalShellsResponse:
+      properties:
+        default:
+          $ref: '#/components/schemas/TerminalShellResponse'
+          description: The shell auto resolves to.
+        shells:
+          description: Installed shells, one per real binary.
+          items:
+            $ref: '#/components/schemas/TerminalShellResponse'
+          type: array
+      required:
+      - default
+      - shells
       type: object
     TrackerIntakeConfig:
       properties:
@@ -21874,6 +22422,21 @@ components:
           type:
           - "null"
           - string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
+          type:
+          - "null"
+          - string
       type: object
     UpdateChatHibernationRequest:
       properties:
@@ -21926,6 +22489,19 @@ components:
           type: string
       required:
       - defaultSessionMode
+      type: object
+    UpdateSessionRetentionRequest:
+      properties:
+        days:
+          description: Days to keep an archived session whose worktree is released;
+            0 keeps it.
+          maximum: 3650
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - days
       type: object
     UpdateShellTerminalRequest:
       properties:

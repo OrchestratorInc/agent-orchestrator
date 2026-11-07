@@ -1,9 +1,9 @@
 import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { CloudCpError, type CloudCpClientEvent } from "../lib/cloud-cp";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { cloudSessionScriptsEnded, groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
 /**
  * A session's `workspace.script.step` events, kept apart from the chat event
@@ -15,7 +15,7 @@ export function cloudScriptStepsQueryKey(orgId: string, sessionId: string) {
 }
 
 /** The chat surface's own event list (CloudSessionChatSurface); read, never fetched, here. */
-function cloudChatEventsQueryKey(orgId: string, sessionId: string) {
+export function cloudChatEventsQueryKey(orgId: string, sessionId: string) {
 	return ["cloud-chat-events", orgId, sessionId] as const;
 }
 
@@ -30,7 +30,7 @@ export function recordCloudScriptStepEvents(queryClient: QueryClient, orgId: str
 }
 
 /** Subscribes to a query's cached data without becoming an observer that could fetch it. */
-function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): T | undefined {
+export function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): T | undefined {
 	const queryClient = useQueryClient();
 	const hash = hashKey(queryKey);
 	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe((event) => {
@@ -38,6 +38,35 @@ function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): 
 	}), [hash, queryClient]);
 	const read = useCallback(() => (enabled ? queryClient.getQueryData<T>(queryKey) : undefined), [enabled, hash, queryClient]); // eslint-disable-line react-hooks/exhaustive-deps
 	return useSyncExternalStore(subscribe, read, read);
+}
+
+/**
+ * The chat surface's events of the session while it is reading them now, so
+ * the step log waits for that read instead of asking again: a session view
+ * mounts its chat and its inspector together, and both used to read the
+ * session's events at once. Undefined when no such read is in flight.
+ */
+async function chatEventsInFlight(queryClient: QueryClient, queryKey: readonly unknown[], signal: AbortSignal): Promise<CloudCpClientEvent[] | undefined> {
+	// Components mounting together start their reads in turn: let the chat's start first.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const cache = queryClient.getQueryCache();
+	const query = cache.find<CloudCpClientEvent[]>({ queryKey, exact: true });
+	if (!query || signal.aborted) return undefined;
+	if (query.state.data !== undefined || query.state.fetchStatus !== "fetching") return query.state.data;
+	return new Promise((resolve) => {
+		const done = (events: CloudCpClientEvent[] | undefined) => {
+			unsubscribe();
+			signal.removeEventListener("abort", stop);
+			resolve(events);
+		};
+		const stop = () => done(undefined);
+		const unsubscribe = cache.subscribe((event) => {
+			if (event.query !== query) return;
+			if (query.state.data !== undefined) done(query.state.data);
+			else if (query.state.fetchStatus !== "fetching") done(undefined);
+		});
+		signal.addEventListener("abort", stop, { once: true });
+	});
 }
 
 /** The event types the step log reads; everything else is skipped server side when the control plane supports it. */
@@ -65,7 +94,7 @@ function cloudSessionDeleting(lifecycle: CloudScriptRunsLifecycle | undefined): 
  * Setup and Cleanup runs for a Cloud session, oldest first.
  *
  * Reads, in order of preference: the chat surface's event list when it is
- * loaded (it already refreshes while the chat is open), then the script-step
+ * loaded or being loaded (it already refreshes while the chat is open), then the script-step
  * cache the startup loader fills from its live stream. Otherwise it reads the
  * session's step events: only those (the `types` filter) where the control
  * plane supports it, every event where it does not, and on a later read only
@@ -99,7 +128,8 @@ export function useCloudScriptRuns(
 		refetchOnWindowFocus: false,
 		queryFn: async ({ signal }) => {
 			const known = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!)) ?? [];
-			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(cloudChatEventsQueryKey(orgId!, sessionId!));
+			const chatKey = cloudChatEventsQueryKey(orgId!, sessionId!);
+			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(chatKey) ?? await chatEventsInFlight(queryClient, chatKey, signal);
 			if (chat) return mergeScriptStepEvents(known, chat);
 			// Every writer of the cache read the session from its start, so
 			// nothing it lacks precedes its newest event.
@@ -139,15 +169,14 @@ export function useCloudScriptRuns(
 	// something can still change.
 	const inProgress = runs.some((run) => run.status === "running");
 	const listen = live || (fetch && !chatEvents && steps.isSuccess && (inProgress || cloudSessionDeleting(lifecycle)));
-	useEffect(() => {
-		if (!listen || !enabled || !ready || !baseUrl) return;
-		const controller = new AbortController();
-		const after = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!))?.at(-1)?.sequence;
-		void subscribeSessionEventsBridged({
-			baseUrl, orgId: orgId!, sessionId: sessionId!, after, signal: controller.signal,
-			onEvent: (event) => recordCloudScriptStepEvents(queryClient, orgId!, sessionId!, [event]),
-		});
-		return () => controller.abort();
-	}, [baseUrl, enabled, listen, orgId, queryClient, ready, sessionId]);
+	useCloudSessionEventListener({
+		baseUrl,
+		orgId,
+		sessionId,
+		enabled: listen && enabled && ready,
+		onEvent: (event) => recordCloudScriptStepEvents(queryClient, orgId!, sessionId!, [event]),
+		// After the newest step held; with none, from the session's start.
+		resumeAfter: () => queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!))?.at(-1)?.sequence ?? 0,
+	});
 	return runs;
 }

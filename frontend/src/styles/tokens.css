@@ -112,7 +112,12 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	--color-status-validating: #facc15;
+	/* Validating is pink with the new sidebar design and yellow without it
+	   (`data-legacy-status-colors`, below). Themes set the two candidates;
+	   only this block and the legacy one pick between them. */
+	--color-status-validating-new: #e58bb5;
+	--color-status-validating-legacy: #facc15;
+	--color-status-validating: var(--color-status-validating-new);
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -283,10 +288,12 @@
 	--size-topbar-primary: 36px;
 	--size-topbar-secondary: 36px;
 	--size-topbar-control: 28px;
+	--gap-topbar-control: var(--space-1);
 	--size-toolbar: var(--size-topbar-primary);
-	/* ShellTopbar (.dashboard-app-header) on Win/Linux — the full-width bar
-	   the sidebar hangs below. Distinct from --size-toolbar (36px) because
-	   the shell header is taller (56px) to accommodate the project crumb. */
+	/* Controls center above the shared header's one-pixel bottom divider. */
+	--size-topbar-content: calc(var(--size-toolbar) - 1px);
+	/* Top offset for the Win/Linux browser and files pop-outs.
+	   Distinct from --size-toolbar (36px). */
 	--size-shell-topbar: 56px;
 	/* Windows custom title bar (.window-titlebar). */
 	--size-window-titlebar: 36px;
@@ -373,6 +380,8 @@
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
 	--size-shell-tab-max: 140px;
+	/* Agent names and their status glyph need more room in Developer Mode. */
+	--size-agent-shell-tab-max: 192px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
@@ -415,6 +424,8 @@
 	--size-textarea-min: 112px;
 	/* Two 24px actions + one 6px gap + 4px right inset + 4px label clearance. */
 	--size-sidebar-project-actions: 58px;
+	/* A pinned row adds a third 24px action and its 2px gap. */
+	--size-sidebar-project-actions-pinned: 84px;
 
 	/* Shared inset-panel geometry (welcome board + settings page) */
 	--size-center-panel-inset: 24px;
@@ -666,12 +677,17 @@
 		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
 }
 
+/* The new sidebar design switched off in Developer mode: the old yellow Validating. */
+:root[data-legacy-status-colors] {
+	--color-status-validating: var(--color-status-validating-legacy);
+}
+
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {
 	color-scheme: light;
 
-	--background: oklch(0.97 0 0);
+	--background: oklch(0.985 0 0);
 	--foreground: oklch(0.18 0 0);
 	--card: oklch(1 0 0);
 	--card-foreground: oklch(0.18 0 0);
@@ -679,16 +695,16 @@
 	--popover-foreground: oklch(0.18 0 0);
 	--primary: oklch(0.24 0 0);
 	--primary-foreground: oklch(0.97 0 0);
-	--secondary: oklch(0.935 0 0);
+	--secondary: oklch(0.955 0 0);
 	--secondary-foreground: oklch(0.18 0 0);
-	--muted: oklch(0.935 0 0);
-	--muted-foreground: oklch(0.5 0 0);
-	--accent: oklch(0.935 0 0);
+	--muted: oklch(0.955 0 0);
+	--muted-foreground: oklch(0.48 0 0);
+	--accent: oklch(0.945 0 0);
 	--accent-foreground: oklch(0.18 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
 	/* Translucent like dark: hairlines and input wells are overlays on whatever
 	 * surface they sit on, so a card edge never reads as an opaque gray stroke. */
-	--border: oklch(0 0 0 / 7%);
+	--border: oklch(0 0 0 / 8%);
 	--input: oklch(0 0 0 / 4%);
 	--ring: oklch(0.64 0 0);
 	--chart-1: oklch(0.72 0 0);
@@ -696,11 +712,11 @@
 	--chart-3: oklch(0.4 0 0);
 	--chart-4: oklch(0.32 0 0);
 	--chart-5: oklch(0.24 0 0);
-	--sidebar: oklch(0.95 0 0);
+	--sidebar: oklch(0.968 0 0);
 	--sidebar-foreground: oklch(0.18 0 0);
 	--sidebar-primary: oklch(0.24 0 0);
 	--sidebar-primary-foreground: oklch(0.97 0 0);
-	--sidebar-accent: oklch(0.935 0 0);
+	--sidebar-accent: oklch(0.94 0 0);
 	--sidebar-accent-foreground: oklch(0.18 0 0);
 	--sidebar-border: var(--border);
 	--sidebar-ring: oklch(0.64 0 0);
@@ -748,7 +764,8 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating: #ca8a04;
+	--color-status-validating-new: #9b4871;
+	--color-status-validating-legacy: #ca8a04;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;

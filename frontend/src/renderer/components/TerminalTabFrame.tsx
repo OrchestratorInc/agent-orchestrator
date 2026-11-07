@@ -1,8 +1,10 @@
 import type { ButtonHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode, Ref } from "react";
 import { cn } from "../lib/utils";
+import { Pressable } from "./ui/pressable";
 
 type TerminalTabFrameProps = {
 	active: boolean;
+	wide?: boolean;
 	icon: ReactNode;
 	label: string;
 	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
@@ -13,6 +15,8 @@ type TerminalTabFrameProps = {
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 	/** Replaces the label while the tab is renamed. */
 	editingContent?: ReactNode;
+	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
+	trailing?: ReactNode;
 };
 
 /** The control in a tab's icon slot, shared so close buttons and menus match. */
@@ -24,6 +28,7 @@ export const terminalTabActionClassName =
 // control that replaces the icon on hover, so they cannot drift apart.
 export function TerminalTabFrame({
 	active,
+	wide = false,
 	icon,
 	label,
 	action,
@@ -31,16 +36,19 @@ export function TerminalTabFrame({
 	buttonRef,
 	buttonProps,
 	editingContent,
+	trailing,
 }: TerminalTabFrameProps) {
 	return (
 		<span
 			className={cn(
-				"group relative inline-flex h-full min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch items-center border-r border-border",
+				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center border-r border-border",
+				wide ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"
 					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
+			data-active={active || undefined}
 			data-terminal-tab-frame
 			onClick={(event) => {
 				if (event.target !== event.currentTarget) return;
@@ -53,21 +61,25 @@ export function TerminalTabFrame({
 					{editingContent}
 				</span>
 			) : (
-				<button
+				<Pressable
 					ref={buttonRef}
-					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-control leading-none in-data-dragging:cursor-grabbing!"
+					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!"
 					{...buttonProps}
 				>
+					{/* The open-menu rule reaches the icon through child combinators. The
+					    group-has-[[data-state=open]] form (`:has([attr]) *`) made Chromium
+					    restyle the whole document on every DOM change in the app. */}
 					<span
 						className={cn(
 							"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0 in-data-dragging:opacity-0"),
+							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
 						)}
 					>
 						{icon}
 					</span>
 					<span className="truncate">{label}</span>
-				</button>
+					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
+				</Pressable>
 			)}
 			{action ? (
 				<span
@@ -77,7 +89,7 @@ export function TerminalTabFrame({
 						// selects the tab (the icon lets it through) instead of closing it.
 						actionPinned
 							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
 					)}
 					data-terminal-tab-action
 				>
