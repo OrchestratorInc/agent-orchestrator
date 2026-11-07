@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -2518,6 +2520,100 @@ func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
 	}
 	if evs, err := s.EventsAfter(ctx, base, 100); err != nil || len(evs) != 0 {
 		t.Fatalf("unchanged checklist events = %+v err=%v, want none", evs, err)
+	}
+}
+
+func TestSessionArtifacts(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() []string {
+		t.Helper()
+		paths, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{sess.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return paths[sess.ID]
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("new session paths = %v, want none", got)
+	}
+	first := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	got, found, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"z.html", "b.md", "z.html"}, first)
+	if err != nil || !found || !slices.Equal(got, []string{"b.md", "z.html"}) {
+		t.Fatalf("add = %v, %v, %v", got, found, err)
+	}
+	// Adding a path again keeps its row, and so its place: oldest first.
+	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, []string{"a.md", "b.md"}, first.Add(time.Minute))
+	if err != nil || !slices.Equal(got, []string{"b.md", "z.html", "a.md"}) {
+		t.Fatalf("add again = %v, %v", got, err)
+	}
+	if err := st.RemoveSessionArtifact(ctx, sess.ID, "z.html"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !slices.Equal(got, []string{"b.md", "a.md"}) {
+		t.Fatalf("after remove = %v", got)
+	}
+	if err := st.ClearSessionArtifacts(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("after clear = %v", got)
+	}
+	if _, found, err := st.AddSessionArtifacts(ctx, "missing", []string{"a.md"}, first); err != nil || found {
+		t.Fatalf("add for an unknown session: found=%v err=%v", found, err)
+	}
+}
+
+func TestSessionArtifactsAreReadPerSessionAndGoWithTheSession(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	one := terminalSession(t, st, "p1", 0)
+	two, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, one.ID, []string{"a.md"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, []string{"b.md"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
+	if err != nil || len(got) != 2 || !slices.Equal(got[one.ID], []string{"a.md"}) || !slices.Equal(got[two.ID], []string{"b.md"}) {
+		t.Fatalf("paths = %v, %v", got, err)
+	}
+	if deleted, err := st.DeleteTerminatedSession(ctx, one.ID); err != nil || !deleted {
+		t.Fatalf("delete session = %v, %v", deleted, err)
+	}
+	got, err = st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("paths after deleting the session = %v, %v", got, err)
+	}
+}
+
+// Registration is one row per path, so nothing bounds how many files a session
+// can register in total.
+func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 3*domain.MaxArtifactRegistrationPaths)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("f%d.md", i)
+	}
+	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, paths, time.Now())
+	if err != nil || len(got) != len(paths) {
+		t.Fatalf("registered %d of %d, %v", len(got), len(paths), err)
 	}
 }
 

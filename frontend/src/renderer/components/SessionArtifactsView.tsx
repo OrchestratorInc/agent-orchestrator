@@ -25,6 +25,7 @@ import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
+import { deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
 import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
@@ -610,12 +611,15 @@ export function SessionArtifactsView({
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
+	// The grid lists deliverables only. `artifacts` stays whole, so a link to any
+	// other file of the session still opens below.
+	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
-		artifacts.filter((artifact) =>
+		listedArtifacts.filter((artifact) =>
 			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
-	), [artifacts, cloud]);
+	), [listedArtifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
@@ -896,7 +900,7 @@ export function SessionArtifactsView({
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
 				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
-					{artifacts.map((artifact) => {
+					{listedArtifacts.map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
 							<ArtifactGalleryCard
@@ -905,7 +909,8 @@ export function SessionArtifactsView({
 								previewLive={livePreviewPaths.has(artifact.path)}
 								context={session.title ?? ""}
 								onPreview={() => openArtifact(artifact)}
-								actions={<ArtifactActionsMenu
+								// File actions would reach only the one file a bundle's row opens.
+								actions={artifact.bundle ? null : <ArtifactActionsMenu
 									artifact={artifact}
 									hostId={hostId}
 									session={session}
