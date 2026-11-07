@@ -5,7 +5,7 @@ import { Stack } from "expo-router";
 import { useMemo, useRef } from "react";
 import { Linking } from "react-native";
 import { LOCAL_NETWORK_HINT } from "./connectionError";
-import { FormFooter, formModifiers, FormPasswordField, FormTextField, FormTextFieldRow, FormToggle, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormTextFieldRow, FormToggle, sectionModifiers } from "./formFields";
 import { Spinner } from "./Spinner";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { useManualConnect, type ManualConnectProps } from "./useManualConnect";
@@ -59,11 +59,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							testID="manual-connect-name"
 						/>
 					</Section>
-					<Section
-						title="Connection"
-						footer={<FormFooter error={Boolean(connectionError)}>{connectionError || form.connectHint}</FormFooter>}
-						modifiers={sectionModifiers(t)}
-					>
+					<FormSection title="Connection" footer={connectionError || form.connectHint} footerError={Boolean(connectionError)} modifiers={sectionModifiers(t)}>
 						{/* The port is a few digits: it shares the host's row, at its end. */}
 						<FormTextFieldRow
 							label="Host"
@@ -98,7 +94,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							testID="manual-connect-password"
 						/>
 						<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />
-					</Section>
+					</FormSection>
 					{props.onScanInstead ? (
 						<Section modifiers={sectionModifiers(t)}>
 							<Button label="Connect with QR code" systemImage="qrcode.viewfinder" onPress={props.onScanInstead} modifiers={busy ? [disabled(true)] : undefined} />
