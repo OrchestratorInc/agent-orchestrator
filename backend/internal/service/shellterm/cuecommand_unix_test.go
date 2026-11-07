@@ -357,13 +357,13 @@ func TestCueCommandCanBeRecalledFromInteractiveHistory(t *testing.T) {
 // TestCueCommandKeepsAOFirstInZsh runs a Cue in a real zsh whose startup files
 // put another ao first on PATH. AO's login-shell wrappers run them from the
 // user's ZDOTDIR and put the daemon's ao back in front, and the shell ends on
-// the user's ZDOTDIR rather than on AO's wrappers.
+// the user's ZDOTDIR rather than on AO's wrappers, even one ~/.zshenv sets.
 func TestCueCommandKeepsAOFirstInZsh(t *testing.T) {
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
 		t.Skip("zsh unavailable")
 	}
-	for _, mode := range []string{"inherited ZDOTDIR", "no ZDOTDIR"} {
+	for _, mode := range []string{"inherited ZDOTDIR", "ZDOTDIR from .zshenv", "no ZDOTDIR"} {
 		t.Run(mode, func(t *testing.T) {
 			home := t.TempDir()
 			pin, stale := filepath.Join(t.TempDir(), "pin"), filepath.Join(t.TempDir(), "stale")
@@ -375,23 +375,29 @@ func TestCueCommandKeepsAOFirstInZsh(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			startupDir, zdotdir, restored := home, "", "unset"
-			if mode == "inherited ZDOTDIR" {
+			zshenv := "typeset -g startup_order=env\n"
+			envDir, startupDir, zdotdir := home, home, ""
+			switch mode {
+			case "inherited ZDOTDIR":
 				startupDir = filepath.Join(home, ".config", "zsh")
-				zdotdir, restored = startupDir, startupDir
-				if err := os.MkdirAll(startupDir, 0o700); err != nil {
-					t.Fatal(err)
-				}
+				envDir, zdotdir = startupDir, startupDir
+			case "ZDOTDIR from .zshenv":
+				// The usual XDG setup: ~/.zshenv moves the rest to ~/.config/zsh.
+				startupDir = filepath.Join(home, ".config", "zsh")
+				zshenv += "export ZDOTDIR=" + shellSingleQuote(startupDir) + "\n"
+			}
+			if err := os.MkdirAll(startupDir, 0o700); err != nil {
+				t.Fatal(err)
 			}
 			t.Setenv("HOME", home)
 			t.Setenv("SHELL", zsh)
 			t.Setenv("ZDOTDIR", zdotdir)
-			for name, content := range map[string]string{
-				".zshenv": "typeset -g startup_order=env\n",
-				".zshrc":  "startup_order+=,rc\n",
+			for file, content := range map[string]string{
+				filepath.Join(envDir, ".zshenv"):    zshenv,
+				filepath.Join(startupDir, ".zshrc"): "startup_order+=,rc\n",
 			} {
 				content += "path=(" + shellSingleQuote(stale) + " $path)\n"
-				if err := os.WriteFile(filepath.Join(startupDir, name), []byte(content), 0o600); err != nil {
+				if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -405,7 +411,9 @@ func TestCueCommandKeepsAOFirstInZsh(t *testing.T) {
 				transcript, _ := rt.GetOutput(ctx, ports.RuntimeHandle{}, 0)
 				t.Fatalf("%v; terminal: %q", err, transcript)
 			}
-			want := filepath.Join(pin, "ao") + "|" + restored + "|env,rc\n"
+			// Without a ZDOTDIR the wrappers resolve the user's to HOME, as in
+			// every other AO terminal.
+			want := filepath.Join(pin, "ao") + "|" + startupDir + "|env,rc\n"
 			var got []byte
 			for ctx.Err() == nil {
 				got, _ = os.ReadFile(filepath.Join(home, "output"))

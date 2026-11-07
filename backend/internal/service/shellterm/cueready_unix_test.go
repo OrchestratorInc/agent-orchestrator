@@ -107,15 +107,17 @@ func TestCueReadinessUsesEffectiveZshEnvironment(t *testing.T) {
 // TestCueReadinessHandsZshBackTheUsersZDOTDIR covers a Cue zsh whose ZDOTDIR
 // holds AO's login-shell wrappers. It sources them, so AO's ao stays first,
 // and then ends on the user's own ZDOTDIR, not AO's: tools like p10k configure
-// write to ${ZDOTDIR:-~}, and AO rewrites its wrappers on the next launch.
+// write to ${ZDOTDIR:-~}, and AO rewrites its wrappers on the next launch. The
+// wrappers track that ZDOTDIR as the user's files run, since ~/.zshenv may set
+// it, so the hand-back reads their value rather than the daemon's.
 func TestCueReadinessHandsZshBackTheUsersZDOTDIR(t *testing.T) {
 	for _, mode := range []string{"user ZDOTDIR", "no ZDOTDIR"} {
 		t.Run(mode, func(t *testing.T) {
 			user := filepath.Join(t.TempDir(), "zsh config")
-			end := "export ZDOTDIR=" + shellSingleQuote(user) + "\n"
 			if mode == "no ZDOTDIR" {
-				user, end = "", "unset ZDOTDIR\n"
+				user = ""
 			}
+			end := "ZDOTDIR=\"$AO_USER_ZDOTDIR\"\n"
 			getenv := func(key string) string {
 				if key == "ZDOTDIR" {
 					return user
