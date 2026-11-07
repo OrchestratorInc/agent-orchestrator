@@ -2680,6 +2680,11 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
+	// it so Stop does not wait for that steer to time out.
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		withdrawer.WithdrawPendingSteers()
+	}
 	// Commit the current batch before Stop settles the turn. The store keeps any
 	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)

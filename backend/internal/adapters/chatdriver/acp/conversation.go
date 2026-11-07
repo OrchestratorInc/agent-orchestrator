@@ -132,7 +132,15 @@ type conversation struct {
 	validateSettings  TurnSettingsValidator
 	extensionFor      ClientExtensionHandler
 	extensionMethods  map[string]string
-	legacyModel       bool
+	// steering is how this agent takes mid-turn guidance. pendingSteers holds
+	// guidance a drain agent has not collected yet; see SteerDrain.
+	steering      steering
+	pendingSteers []*pendingSteer
+	// steerSegment counts steers the running turn has taken. Text the agent
+	// streams without a message id after one goes to a new message, so it
+	// renders after the steer instead of growing the reply above it.
+	steerSegment int
+	legacyModel  bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
@@ -476,6 +484,7 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
 		c.messages = make(map[string]string)
+		c.steerSegment = 0
 		c.thoughts = make(map[string]string)
 		c.nestedMessages = make(map[string]nestedMessageState)
 		c.tools = make(map[string]*toolState)
@@ -772,6 +781,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.turnCancel = cancel
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -1006,6 +1016,7 @@ func (c *conversation) finishPrompt(
 		if c.interrupt == interrupt {
 			c.interrupt = nil
 		}
+		c.releasePendingSteersLocked()
 	}
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -1046,6 +1057,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -1287,6 +1299,7 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.mu.Lock()
 		c.closed = true
 		close(c.closing)
+		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel
