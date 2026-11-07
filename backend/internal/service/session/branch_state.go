@@ -141,13 +141,15 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 	}
 	rec := target.rec
-	fingerprint := local + " " + remote + " " + base
+	// The branch name joins the tips: checking out a new branch at the same
+	// commit moves no tip but changes which branch the facts describe.
+	fingerprint := target.branch + " " + local + " " + remote + " " + base
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
 
 	root := rec.Metadata.WorkspacePath
-	var state domain.SessionBranchState
+	state := domain.SessionBranchState{Branch: target.branch}
 	if base != "" {
 		commits, ok := gitRevListCount(ctx, root, base+".."+local)
 		if !ok {

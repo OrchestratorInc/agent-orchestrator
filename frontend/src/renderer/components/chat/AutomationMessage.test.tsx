@@ -115,11 +115,12 @@ describe("reading AO's automation messages", () => {
 		const pathLike = formatDiffSelectionMessage({ instruction: "File: rename to util.ts", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }] });
 		expect(readAutomation(pathLike)).toMatchObject({ path: "src/app.ts", instruction: "File: rename to util.ts" });
 
-		expect(readAutomation(gitActionMessage("createPR", "main", undefined))).toEqual({ kind: "gitAction", action: "createPR", base: "main" });
-		expect(readAutomation(gitActionMessage("createDraftPR", undefined, undefined))).toEqual({ kind: "gitAction", action: "createDraftPR", base: undefined });
-		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
-		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
-		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("createPR", "main", { kind: "new" }))).toEqual({ kind: "gitAction", action: "createPR", base: "main" });
+		expect(readAutomation(gitActionMessage("createDraftPR", undefined, { kind: "new" }))).toEqual({ kind: "gitAction", action: "createDraftPR", base: undefined });
+		expect(readAutomation(gitActionMessage("commit", "main", { kind: "new" }))).toEqual({ kind: "gitAction", action: "commit" });
+		expect(readAutomation(gitActionMessage("commitPush", "main", { kind: "pr", number: 12 }))).toEqual({ kind: "gitAction", action: "commitPush" });
+		expect(readAutomation(gitActionMessage("commitPush", "main", { kind: "branch", branch: "feat/x" }))).toEqual({ kind: "gitAction", action: "commitPush" });
+		expect(readAutomation(gitActionMessage("push", "main", { kind: "new" }))).toEqual({ kind: "gitAction", action: "push" });
 	});
 
 	it("reads what GitHub reported on the PR", () => {
@@ -221,7 +222,7 @@ describe("drawing AO's automation messages", () => {
 	});
 
 	it("draws a git button and a diff selection as the user's own message, queued until sent", () => {
-		draw(gitActionMessage("createPR", "main", undefined), {}, true);
+		draw(gitActionMessage("createPR", "main", { kind: "new" }), {}, true);
 		const action = screen.getByTestId("your-action");
 		expect(action).toHaveTextContent("Create PR");
 		expect(action).toHaveTextContent("main");
