@@ -4015,6 +4015,63 @@ describe("TaskComposer Cloud orchestrator model", () => {
 	});
 });
 
+describe("TaskComposer local saved choices", () => {
+	const PREFERENCES = "ao.taskComposer.preferences.v1";
+	const savedCodex = () => JSON.parse(window.localStorage.getItem(PREFERENCES) ?? "{}")["proj-1"]?.agents?.codex;
+
+	/** A local Codex project, with the worker effort `projectEffort` names, and one model list for every agent. */
+	function localProject(projectEffort?: string) {
+		h.get.mockImplementation(async (path: string, init?: { params?: { path?: Record<string, string> } }) => path.includes("/models")
+			? { data: { agent: init?.params?.path?.agent ?? "codex", selectionMode: "catalog", allowCustom: true, refreshRecommended: false, models: [
+				{ id: "gpt-a", label: "GPT A", isDefault: true, efforts: ["low", "high"] },
+				{ id: "gpt-b", label: "GPT B", efforts: ["low", "high"] },
+			] } }
+			: { data: { status: "ok", project: { agent: "codex", config: { worker: { agent: "codex", ...(projectEffort ? { agentConfig: { effort: projectEffort } } : {}) } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
+	}
+
+	it("keeps an effort saved before this release over the project's worker effort", async () => {
+		window.localStorage.setItem(PREFERENCES, JSON.stringify({
+			"proj-1": { lastAgent: "codex", agents: { codex: { model: "", mode: "", effort: "low" } } },
+		}));
+		localProject("high");
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		await waitFor(() => expect(effort).toHaveTextContent("Low"));
+		fireEvent.change(task(), { target: { value: "Keep my effort" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything()));
+		expect(delegated()[0]).toEqual(expect.objectContaining({ effort: "low" }));
+		expect(savedCodex()).toEqual({ model: "", mode: "", effort: "low" });
+	});
+
+	it("saves on launch what it always did, the effort shown included", async () => {
+		localProject();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT A"));
+		fireEvent.change(task(), { target: { value: "Untouched" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(delegated()).toHaveLength(1));
+		expect(savedCodex()).toEqual({ model: "", mode: "", effort: "low" });
+	});
+
+	it("keeps the model shown for an agent switched away from and back to, as it always did", async () => {
+		localProject();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT A"));
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "claude-code"));
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
+		fireEvent.change(task(), { target: { value: "Back on Codex" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(delegated()).toHaveLength(1));
+		// The model the switch saved is remembered as a pick, so the launch keeps it.
+		expect(savedCodex()).toEqual(expect.objectContaining({ model: "gpt-a" }));
+	});
+});
+
 describe("useTaskLaunch agent choices", () => {
 	function Choices() {
 		const task = useTaskLaunch({ projectId: "proj-1" });

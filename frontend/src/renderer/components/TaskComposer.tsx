@@ -792,14 +792,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
 				(!catalogUsesModes && !projectModelOrMode)
 			) ? selectedModelOrMode : undefined;
-	// An effort the user chose for this project and agent. One saved before
-	// choices were marked may never have been chosen (a launch saved the level
-	// shown), so it applies only where nothing else names one.
+	// An effort the user chose for this project and agent. A Cloud project's
+	// saved before choices were marked may never have been chosen (a launch
+	// saved the level shown), so it applies only where nothing else names one.
+	// A local project's saved effort is the user's, as it always was.
 	const rememberedEffortIsExplicit = Boolean(
-		rememberedConfigForSelectedAgent?.effortChosen &&
+		rememberedConfigForSelectedAgent &&
+			(rememberedConfigForSelectedAgent.effortChosen || !isCloudProject) &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
-	const unmarkedRememberedEffort = rememberedConfigForSelectedAgent?.effortChosen ? "" : rememberedConfigForSelectedAgent?.effort ?? "";
+	const unmarkedRememberedEffort = isCloudProject && !rememberedConfigForSelectedAgent?.effortChosen
+		? rememberedConfigForSelectedAgent?.effort ?? ""
+		: "";
 	const projectEffortForSelectedAgent = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	// The orchestrator's effort comes with its model, only where Cloud's catalog
 	// lists that level for it: a turn with a level its model lacks is refused.
@@ -1020,12 +1024,21 @@ export function useTaskLaunch({ projectId, hostId }: {
 
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
-	// What the composer remembers for the selected agent: only what the user
-	// chose, now or before. A model or effort shown because nothing was chosen
-	// is not a preference, and remembering it would freeze it over the
-	// project's and the orchestrator's from then on.
-	const chosenPreference = (): TaskComposerAgentPreference => {
+	// What the composer remembers for the selected agent, on a launch or on a
+	// switch to another agent. A Cloud project keeps only what the user chose,
+	// now or before: a model or effort shown because nothing was chosen is not
+	// a preference, and remembering it would freeze it over the project's and
+	// the orchestrator's from then on. A local project saves what it always did.
+	const rememberedPreference = (on: "launch" | "agent-switch"): TaskComposerAgentPreference => {
 		const modelChosen = modelTouched || rememberedModelIsValid || rememberedModeIsValid;
+		if (!isCloudProject) {
+			const keepModel = on === "agent-switch" || modelChosen;
+			return {
+				model: selectedModel && keepModel ? requestedModel ?? "" : "",
+				mode: selectedMode && keepModel ? requestedModel ?? "" : "",
+				...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
+			};
+		}
 		// A level the user picked, as the task sends it; one the task does not
 		// send as picked (its model lacks it, or it is the default) is not kept.
 		const effortChosen = effortTouched
@@ -1128,7 +1141,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			cancelTaskPreparation(submittedPreparation, hostId);
 			cancelTaskPreparation(preparationAfterSubmit, hostId);
 			if (selectedAgent) {
-				const preference = chosenPreference();
+				const preference = rememberedPreference("launch");
 				agentDrafts[selectedAgent] = preference;
 				rememberTaskComposerPreference(preferenceContext, selectedAgent, preference);
 			}
@@ -1201,8 +1214,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setStatus(undefined);
 		setErrorAction(undefined);
 		setBranchOverride("");
-		// Coming back to this agent restores what the user chose with it, nothing else.
-		if (selectedAgent) agentDrafts[selectedAgent] = chosenPreference();
+		if (selectedAgent) agentDrafts[selectedAgent] = rememberedPreference("agent-switch");
 		setAgent(value);
 		setAgentTouched(true);
 		setModel("");
