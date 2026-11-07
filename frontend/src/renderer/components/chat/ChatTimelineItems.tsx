@@ -13,7 +13,7 @@ import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -26,33 +26,82 @@ import {
 	AlertTriangle,
 	Bot,
 	ArrowRight,
+	ArrowRightLeft,
 	Brain,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	CircleCheck,
+	CircleDot,
 	CircleStop,
+	Clock,
+	Copy,
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
 	FileDiff,
+	FilePen,
+	FilePlus,
+	FileSearch,
+	FileText,
+	FlaskConical,
+	FolderOpen,
+	FolderPlus,
 	Gauge,
+	GitBranch,
+	GitCommitHorizontal,
+	GitPullRequest,
+	Globe,
+	Hammer,
 	History,
 	KeyRound,
 	Keyboard,
 	ListChecks,
 	Loader2,
+	Package,
+	Paintbrush,
 	Pencil,
 	Plug,
 	RotateCw,
+	Search,
 	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
 	SquareTerminal,
+	Trash2,
 	Undo2,
 	User,
+	Wrench,
 	X,
 } from "lucide-react";
+
+/** The mark beside a command, tool or file-edit step, by what the step did. */
+const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
+	list: FolderOpen,
+	read: FileText,
+	search: Search,
+	find: FileSearch,
+	git: GitBranch,
+	commit: GitCommitHorizontal,
+	pr: GitPullRequest,
+	issue: CircleDot,
+	web: Globe,
+	"folder-new": FolderPlus,
+	"file-new": FilePlus,
+	write: FilePen,
+	move: ArrowRightLeft,
+	copy: Copy,
+	delete: Trash2,
+	test: FlaskConical,
+	install: Package,
+	build: Hammer,
+	check: CircleCheck,
+	format: Paintbrush,
+	wait: Clock,
+	tool: Wrench,
+	run: SquareTerminal,
+};
 
 /** Fixed icon column, matching the prototype's row anatomy. */
 const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
@@ -88,10 +137,9 @@ import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
-	commandCategory,
-	exploredFileCount,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { activityCommandStep, activityToolStep, fileBasename, thoughtHeadline, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1222,13 +1270,39 @@ export function AssistantMessage({
 }
 
 
-/** What the live row says the agent is doing right now, in the words its own row uses. */
+/**
+ * What the live row says the agent is doing right now, in the words its own row
+ * uses: "Reading" while the step is in progress, and "Read" for the moment a
+ * finished one stays on the row before it moves up.
+ */
 export function liveTaskLabel(activity: ConversationActivity): string {
-	if (activity.activityKind === "reasoning") return "Thinking";
+	if (activity.activityKind === "reasoning") return thoughtHeadline(reasoningText(activity)) ?? "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
-	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
-	return splitSummary(activity).label;
+	if (activity.activityKind === "mcp_tool") {
+		const step = activityToolStep(activity);
+		if (!step) return activity.summary.trim() || "Using a tool";
+		const verb = stepInProgress(activity) ? step.live : step.done;
+		return step.target ? `${verb} ${step.target}` : verb;
+	}
+	const { label, path } = splitSummary(activity);
+	return path ? `${label} ${path}` : label;
 }
+
+/**
+ * A step still under way. Claude Code reports a tool call as pending and then done,
+ * with nothing in between, so a pending step is in progress too: "Reading a.ts",
+ * not "Read a.ts", and "Deleting build" while it waits for approval.
+ */
+export function stepInProgress(activity: ConversationActivity): boolean {
+	return activity.status === "running" || activity.status === "pending";
+}
+
+/**
+ * What the reader chose on the live row for a step, open or closed, by step id.
+ * The step's own row starts from it once the step moves up from the live row, so
+ * output the reader opened to follow stays open where it lands.
+ */
+export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
 
 /**
  * A provider retry, split for display: the attempt count up front and the reason
@@ -1258,18 +1332,34 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, reconnect, children }: {
+export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
 	startedAt?: string;
 	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
 	failed?: boolean;
 	/** What the agent is doing right now, named the way its activity row names it. */
 	task?: string;
+	/**
+	 * The running step `task` names, when this row stands in for its own row. The
+	 * row then opens onto the step's command and output, as that row would.
+	 */
+	step?: ConversationActivity;
 	/** The provider is retrying; the row says so in place of the task. */
 	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
 	const reducedMotion = useReducedMotion();
+	const labelId = useId();
+	// Per step: null until the reader decides, so a step that starts printing opens
+	// itself, as its own row did. The next step starts from its own default.
+	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
+	const stepChoices = useContext(LiveStepChoices);
+	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
+	const stepStreaming = step?.status === "running" && Boolean(step.detail?.output);
+	const stepOpen = expandable && (stepChoice?.id === step?.id ? stepChoice!.open : stepStreaming);
+	// A finished step stays on the row for a moment before it moves up. It says what
+	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
+	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
 	const started = useMemo(() => {
 		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
@@ -1286,38 +1376,92 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
+	const row = (
+		<>
+			<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
+			</span>
+			<span
+				id={labelId}
+				role={failed ? "alert" : "status"}
+				data-testid="live-working-label"
+				className="flex min-w-0 items-center gap-2 text-sm"
+			>
+				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
+				    while the text inside updates in place. */}
+				{label && labelKind ? (
+					<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+						{reconnect && !startupLabel ? (
+							<span className={LIVE_RECONNECT_CHIP}>
+								<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
+								<span className="truncate">{label}</span>
+							</span>
+						) : (
+							<span className={failed ? "text-destructive" : stepSettled ? "text-muted-foreground" : "chat-working-shimmer"}>
+								{label}
+							</span>
+						)}
+					</span>
+				) : null}
+				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's. */}
+				{label && labelKind && !startupLabel ? (
+					<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">
+						·
+					</span>
+				) : null}
+				{startupLabel ? null : (
+					<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
+						{formatDuration(elapsedMs)}
+					</span>
+				)}
+			</span>
+			{expandable ? (
+				<ChevronRight
+					aria-hidden="true"
+					className={cn(
+						"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/live:text-muted-foreground",
+						stepOpen && "rotate-90",
+					)}
+				/>
+			) : null}
+		</>
+	);
 	return (
 		<div className="min-w-0">
-			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
-				<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
-					{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
-				</span>
-				<span
-					role={failed ? "alert" : "status"}
-					data-testid="live-working-label"
-					className="flex min-w-0 items-center gap-2 text-sm"
-				>
-					{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
-					    while the text inside updates in place. */}
-					{label && labelKind ? (
-						<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
-							{reconnect && !startupLabel ? (
-								<span className={LIVE_RECONNECT_CHIP}>
-									<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
-									<span className="truncate">{label}</span>
-								</span>
-							) : (
-								<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
-							)}
-						</span>
-					) : null}
-					{startupLabel ? null : (
-						<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
-							{formatDuration(elapsedMs)}
-						</span>
-					)}
-				</span>
+			{/* The row is the same element whether or not it opens, so the loader's beat,
+			    the label's entrance and the status region are not remounted each time a
+			    step with details takes over from Thinking and hands back. When there is
+			    something to open, the toggle lies over the whole row. */}
+			<div className={cn(rowClass, "group/live relative")}>
+				{row}
+				{expandable && step ? (
+					<Pressable
+						onClick={() => {
+							stepChoices?.set(step.id, !stepOpen);
+							setStepChoice({ id: step.id, open: !stepOpen });
+						}}
+						aria-expanded={stepOpen}
+						aria-labelledby={labelId}
+						className="absolute inset-0"
+						data-testid="live-working-row"
+					/>
+				) : null}
 			</div>
+			<AnimatePresence initial={false}>
+				{stepOpen && step ? (
+					<motion.div
+						key="live-step-detail"
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden rounded-lg"
+					>
+						<LiveStepDetail activity={step} />
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
 					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
@@ -1525,26 +1669,25 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// null means "nobody has decided", which is what lets a running command open
 	// itself and then close again once it settles. Once the user clicks, their
 	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
-	// a finished row open.
-	const [override, setOverride] = useState<boolean | null>(null);
+	// a finished row open. That goes for a choice made on the live row too, which
+	// the row starts from when the step moves up from there.
+	const stepChoices = useContext(LiveStepChoices);
+	const [override, setOverride] = useState<boolean | null>(() => stepChoices?.get(activity.id) ?? null);
+	const toggle = (open: boolean) => {
+		setOverride(open);
+		// Kept current, so a later remount starts from the reader's latest choice.
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, open);
+	};
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
-	const isFileChange = activity.activityKind === "file_change";
-	// A single edit with no patch has nothing to expand into — the header already
-	// named the file. Multi-file edits expand to a list; a lone patch expands to
-	// the diff itself.
-	const hasFileBody =
-		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
-	const hasBody = Boolean(
-		detail?.command ||
-		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
-	);
-	const { label, path } = splitSummary(activity);
-	// Commands and file edits share the explore-style summary line: muted label,
-	// no icon column, always-visible chevron. Everything else keeps the denser
-	// bordered activity row.
+	const hasBody = genericActivityHasBody(activity);
+	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
+	const StepMark = stepIcon[stepIconName ?? "run"];
+	// Commands and file edits share the explore-style summary line: a small mark for
+	// what the step did, muted label, always-visible chevron. Everything else keeps
+	// the denser bordered activity row.
 	const compactSummary =
 		activity.activityKind === "command" || activity.activityKind === "file_change";
 	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
@@ -1574,7 +1717,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 			)}
 		>
 			<Pressable
-				onClick={() => setOverride(!open)}
+				onClick={() => toggle(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
@@ -1588,7 +1731,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				{compactSummary ? null : (
+				{compactSummary ? (
+					<StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+				) : (
 					<Icon
 						aria-hidden="true"
 						className={cn(
@@ -1601,7 +1746,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<span className="shrink-0 text-muted-foreground">
-							{fileChangeVerb(singleEdit.status ?? "modified")}
+							{stepInProgress(activity)
+								? liveFileChangeVerb(singleEdit.status ?? "modified")
+								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
 						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
 						{singleEdit.additions > 0 ? (
@@ -1614,6 +1761,17 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
+					</span>
+				) : compactSummary && path ? (
+					// Verb and target sit as close together as a file edit's verb and name.
+					// The space is not drawn in the flex row, but it keeps the accessible
+					// name "Read README.md" rather than "ReadREADME.md".
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+						<strong className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground">
+							<ActivityTitle text={label} />
+						</strong>
+						{" "}
+						<StepTarget text={path} title={pathTitle} />
 					</span>
 				) : (
 					<strong
@@ -1637,7 +1795,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
 						{noticeDetail}
 					</span>
-				) : path && !singleEdit ? (
+				) : path && !singleEdit && !compactSummary ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}
@@ -1674,45 +1832,119 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						{compactSummary &&
-						activity.activityKind === "command" &&
-						(detail?.command || detail?.output || detail?.terminalInput) ? (
-							<CommandExploreBody activity={activity} />
-						) : (
-							<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-						{/* One file: open straight onto its patch. Listing the same
-						    basename again under "Edited name" is noise. */}
-						{files.length === 1 && fileChangePatch(files[0]) ? (
-							<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
-						) : null}
-						{files.length > 1 ? <FileChangeList files={files} /> : null}
-						{!isFileChange && detail?.command ? (
-							// Said explicitly rather than implied by the label: "Ran command"
-							// alone never tells the reader what ran, and the collapsed row
-							// deliberately keeps only the category.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
-								{detail.command}
-							</pre>
-						) : null}
-						{!isFileChange && (detail?.reason || detail?.text) ? (
-							<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
-								{detail.reason ?? detail.text}
-							</p>
-						) : null}
-						{!isFileChange && detail?.terminalInput ? (
-							<TerminalInput
-								text={detail.terminalInput}
-								truncated={detail.terminalInputTruncated}
-							/>
-						) : null}
-						{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
-							</div>
-						)}
+						<GenericActivityBody activity={activity} />
 					</motion.div>
 				) : null}
 			</AnimatePresence>
 		</div>
 	);
+}
+
+/**
+ * Whether a command or file-edit step has anything to open onto. A single edit
+ * with no patch has nothing: the header already named the file. Multi-file edits
+ * open onto a list, and a lone patch onto the diff itself.
+ */
+function genericActivityHasBody(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	const files = fileChangeFiles(activity);
+	const isFileChange = activity.activityKind === "file_change";
+	const hasFileBody =
+		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
+	return Boolean(
+		detail?.command ||
+		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
+	);
+}
+
+/** What a step's row opens onto: the command and its output, a patch, or a file list. */
+function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
+	const detail = activity.detail;
+	const files = fileChangeFiles(activity);
+	const isFileChange = activity.activityKind === "file_change";
+	if (
+		activity.activityKind === "command" &&
+		(detail?.command || detail?.output || detail?.terminalInput)
+	) {
+		return <CommandExploreBody activity={activity} />;
+	}
+	return (
+		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
+			{/* One file: open straight onto its patch. Listing the same
+			    basename again under "Edited name" is noise. */}
+			{files.length === 1 && fileChangePatch(files[0]) ? (
+				<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
+			) : null}
+			{files.length > 1 ? <FileChangeList files={files} /> : null}
+			{!isFileChange && detail?.command ? (
+				// Said explicitly rather than implied by the label: "Ran command"
+				// alone never tells the reader what ran, and the collapsed row
+				// deliberately keeps only the category.
+				<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+					{detail.command}
+				</pre>
+			) : null}
+			{!isFileChange && (detail?.reason || detail?.text) ? (
+				<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
+					{detail.reason ?? detail.text}
+				</p>
+			) : null}
+			{!isFileChange && detail?.terminalInput ? (
+				<TerminalInput
+					text={detail.terminalInput}
+					truncated={detail.terminalInputTruncated}
+				/>
+			) : null}
+			{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
+		</div>
+	);
+}
+
+/**
+ * The running step the live row names in place of its own row: a command, a file
+ * edit, or a tool call. Other kinds keep their row.
+ */
+export function isLiveStepKind(activity: ConversationActivity): boolean {
+	return (
+		activity.activityKind === "command" ||
+		activity.activityKind === "file_change" ||
+		activity.activityKind === "mcp_tool"
+	);
+}
+
+/** Whether the step on the live row has details to open: command, output, patch, payload or thought. */
+function liveStepHasDetail(activity: ConversationActivity): boolean {
+	if (activity.activityKind === "reasoning") return Boolean(reasoningText(activity));
+	if (activity.activityKind === "mcp_tool") return mcpToolHasBody(activity);
+	return isLiveStepKind(activity) && genericActivityHasBody(activity);
+}
+
+/**
+ * The newest text of each live thought, by id. A turn's group keeps up with its
+ * thought only as far as the headline the live row shows, so a streamed token does
+ * not re-render the whole turn; the thought opened from the live row reads its
+ * full text from here instead.
+ */
+export const LiveThoughtTexts = createContext<Readonly<Record<string, string>>>({});
+
+/** The step's details, opened from the live row: what its own row would open onto, or the whole thought. */
+function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
+	if (activity.activityKind === "reasoning") return <LiveThoughtBody activity={activity} />;
+	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
+}
+
+function LiveThoughtBody({ activity }: { activity: ConversationActivity }) {
+	const text = useContext(LiveThoughtTexts)[activity.id] ?? reasoningText(activity) ?? "";
+	return (
+		<div className="mb-1 border-l-2 border-border-strong py-0.5 pl-3">
+			<ChatMarkdown text={text} streaming={activity.status === "running"} muted />
+		</div>
+	);
+}
+
+/** A thought's text, streamed or settled; see ReasoningBlock. */
+export function reasoningText(activity: ConversationActivity): string | undefined {
+	return activity.detail?.text?.trim() || activity.detail?.reason?.trim() || undefined;
 }
 
 /**
@@ -1906,28 +2138,34 @@ function commandOutputText(raw: unknown): string {
 }
 
 /**
- * Split a summary into a bold action and a muted target, which is how the row
- * scans: what happened, then what it happened to. A command becomes its binary
- * plus its arguments; anything without a natural split keeps its whole label.
+ * Split a summary into an action and a muted target, which is how the row scans:
+ * what happened, then what it happened to ("Read" README.md, "Searched for" TODO).
+ * A step still in progress says it in the present tense ("Reading"). Anything
+ * without a natural split keeps its whole label.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
+	const tense = stepInProgress(activity) ? "live" : "done";
 	if (activity.activityKind === "command") {
-		const rawCommand = activity.detail?.command ?? activity.summary;
-		const category = commandCategory(rawCommand);
-		if (category === "read" || category === "search") {
-			const count = exploredFileCount(rawCommand);
-			if (category === "search") return { label: "Search" };
-			return { label: count && count > 1 ? "Read files" : "Read file" };
-		}
-		return { label: category === "vcs" ? "Checked repository" : "Ran command" };
+		const step = activityCommandStep(activity);
+		return { label: step[tense], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
 	}
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
+		const status = files[0]!.status ?? "modified";
 		// Basename sits in the chip next to the status verb; the full path is the hover.
 		return {
-			label: `${fileChangeVerb(files[0]!.status ?? "modified")} ${fileBasename(files[0]!.path)}`,
+			label: `${tense === "live" ? liveFileChangeVerb(status) : fileChangeVerb(status)} ${fileBasename(files[0]!.path)}`,
+			icon: fileChangeIcon(status),
 		};
 	}
+	// The provider sums up an edit of several files once it is done ("Edited 3 files");
+	// while it is under way, the row says so itself.
+	if (activity.activityKind === "file_change" && files.length > 1 && tense === "live") {
+		const statuses = new Set(files.map((file) => file.status ?? "modified"));
+		const verb = statuses.size === 1 ? liveFileChangeVerb([...statuses][0]!) : "Editing";
+		return { label: `${verb} ${files.length} files`, icon: "write" };
+	}
+	if (activity.activityKind === "file_change") return { label: activity.summary, icon: "write" };
 	return { label: activity.summary };
 }
 
@@ -2184,25 +2422,35 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
-	const [open, setOpen] = useState(false);
+	// A choice made on the live row carries over when the call moves up from there.
+	const stepChoices = useContext(LiveStepChoices);
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const toggle = () => {
+		setOpen(!open);
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, !open);
+	};
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
-	const tool = detail?.toolName ?? activity.summary;
+	// An agent's built-in tool (a read, a web search) is named like a command step;
+	// a call to an MCP server keeps its tool and server name.
+	const step = activityToolStep(activity);
+	const StepMark = step ? stepIcon[step.icon] : undefined;
+	const tool = step ? (stepInProgress(activity) ? step.live : step.done) : detail?.toolName ?? activity.summary;
 	const server = detail?.server ?? detail?.namespace;
-	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
+	const sourceLabel = step
+		? undefined
+		: server
+			? `MCP · ${server}`
+			: detail?.progress
+				? lastLine(detail.progress)
+				: undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
-	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
-			detail?.result !== undefined ||
-			detail?.content !== undefined ||
-			detail?.error ||
-			detail?.progress,
-	);
+	const hasBody = mcpToolHasBody(activity);
 
 	return (
 		<div className="min-w-0 max-w-full">
 			<Pressable
-				onClick={() => setOpen((prev) => !prev)}
+				onClick={toggle}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
@@ -2211,15 +2459,32 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				<strong
-					className={cn(
-						"activity-row-label min-w-0 truncate text-xs font-normal",
-						failed ? "text-destructive" : "text-muted-foreground",
-					)}
-					title={tool}
-				>
-					<span>{tool}</span>
-				</strong>
+				{StepMark ? <StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" /> : null}
+				{step?.target ? (
+					// Laid out like a command step: verb, then what it acted on.
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+						<strong
+							className={cn(
+								"activity-row-label shrink-0 text-xs font-normal",
+								failed ? "text-destructive" : "text-muted-foreground group-hover/activity:text-foreground",
+							)}
+						>
+							{tool}
+						</strong>
+						{" "}
+						<StepTarget text={step.target} title={step.targetTitle} />
+					</span>
+				) : (
+					<strong
+						className={cn(
+							"activity-row-label min-w-0 truncate text-xs font-normal",
+							failed ? "text-destructive" : "text-muted-foreground",
+						)}
+						title={tool}
+					>
+						<span>{tool}</span>
+					</strong>
+				)}
 				{sourceLabel ? (
 					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
 						{sourceLabel}
@@ -2253,33 +2518,52 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<div className="flex flex-col gap-2 pb-2.5">
-					{detail?.error ? (
-						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
-							{detail.error}
-						</p>
-					) : null}
-					{detail?.arguments !== undefined ? (
-						<JsonPayload label="Arguments" value={detail.arguments} />
-					) : null}
-					{detail?.result !== undefined ? (
-						<JsonPayload label="Result" value={detail.result} />
-					) : null}
-					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
-					{detail?.progress ? (
-						<div className="flex flex-col gap-1">
-							<span className="text-caption text-muted-foreground/70">
-								Progress
-							</span>
-							<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
-								{detail.progress}
-							</pre>
-						</div>
-					) : null}
-						</div>
+						<McpToolBody activity={activity} />
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+		</div>
+	);
+}
+
+function mcpToolHasBody(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	return Boolean(
+		detail?.arguments !== undefined ||
+		detail?.result !== undefined ||
+		detail?.content !== undefined ||
+		detail?.error ||
+		detail?.progress,
+	);
+}
+
+/** What a tool call opens onto: its error, arguments, result, content and progress. */
+function McpToolBody({ activity }: { activity: ConversationActivity }) {
+	const detail = activity.detail;
+	return (
+		<div className="flex flex-col gap-2 pb-2.5">
+			{detail?.error ? (
+				<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
+					{detail.error}
+				</p>
+			) : null}
+			{detail?.arguments !== undefined ? (
+				<JsonPayload label="Arguments" value={detail.arguments} />
+			) : null}
+			{detail?.result !== undefined ? (
+				<JsonPayload label="Result" value={detail.result} />
+			) : null}
+			{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+			{detail?.progress ? (
+				<div className="flex flex-col gap-1">
+					<span className="text-caption text-muted-foreground/70">
+						Progress
+					</span>
+					<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
+						{detail.progress}
+					</pre>
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -3340,6 +3624,32 @@ function fileChangeVerb(status: DiffStatus): string {
 	}
 }
 
+function liveFileChangeVerb(status: DiffStatus): string {
+	switch (status) {
+		case "added":
+			return "Creating";
+		case "deleted":
+			return "Deleting";
+		case "renamed":
+			return "Renaming";
+		default:
+			return "Editing";
+	}
+}
+
+function fileChangeIcon(status: DiffStatus): StepIcon {
+	switch (status) {
+		case "added":
+			return "file-new";
+		case "deleted":
+			return "delete";
+		case "renamed":
+			return "move";
+		default:
+			return "write";
+	}
+}
+
 /**
  * What a turn changed on disk.
  *
@@ -3555,14 +3865,26 @@ function FileLocationLabel({
 	);
 }
 
-function fileLocationLabel(path: string, oldPath?: string): string {
-	return oldPath ? `${shortenPaths(oldPath)} → ${shortenPaths(path)}` : shortenPaths(path);
+/**
+ * What a command step acted on, after its verb: a file, a pattern, a PR number.
+ * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
+ */
+function StepTarget({ text, title }: { text: string; title?: string }) {
+	const label = <span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>;
+	// A short target that is shown whole needs no tooltip repeating it.
+	if ((!title || title === text) && text.length <= 48) return label;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{label}</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
+				{shortenPaths(title ?? text)}
+			</TooltipContent>
+		</Tooltip>
+	);
 }
 
-/** Basename only — the row is too narrow for a full path; the tooltip carries that. */
-function fileBasename(path: string): string {
-	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-	return slash >= 0 ? path.slice(slash + 1) : path;
+function fileLocationLabel(path: string, oldPath?: string): string {
+	return oldPath ? `${shortenPaths(oldPath)} → ${shortenPaths(path)}` : shortenPaths(path);
 }
 
 /* -------------------------------------------------------------------------- */

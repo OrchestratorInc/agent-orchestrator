@@ -391,6 +391,8 @@ export interface McpToolDetail {
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
 	arguments?: unknown;
+	/** An ACP tool's raw input, such as a Read's `file_path` or a WebSearch's `query`. */
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;

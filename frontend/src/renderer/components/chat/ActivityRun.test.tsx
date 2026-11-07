@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
+import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRun } from "./ActivityRun";
 
 function tool(
@@ -105,5 +106,49 @@ describe("ActivityRun in a running turn", () => {
 		);
 		expect(screen.getByRole("button", { name: /Subagent 1 step/i })).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Search source files")).toBeInTheDocument();
+	});
+});
+
+describe("ActivityRun command groups", () => {
+	function command(id: string, line: string): ConversationActivity {
+		return { ...tool(id, id, line), activityKind: "command", detail: { command: line } };
+	}
+
+	it("groups a command by the program its row names, past cd and env assignments", () => {
+		render(
+			<TooltipProvider>
+				<ActivityRun activities={[command("activity-1", "cd repo && rg TODO ."), command("activity-2", "FOO=1 cat a.ts")]} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("button", { name: /Explored 2 tool calls/i })).toBeInTheDocument();
+	});
+});
+
+describe("ActivityRun agent built-in tools", () => {
+	function acpTool(id: string, summary: string, providerToolName: string, toolKind: string, input: unknown): ConversationActivity {
+		return {
+			...tool(id, id, summary),
+			detail: { protocol: "acp", providerToolName, toolKind, input } as ConversationActivity["detail"],
+		};
+	}
+
+	it("names Claude Code's reads and web searches by what they did", async () => {
+		const user = userEvent.setup();
+		const { container } = render(
+			<TooltipProvider>
+				<ActivityRun
+					activities={[
+						acpTool("activity-1", "Read README.md (1 - 40)", "Read", "read", { file_path: "/w/README.md", limit: 40 }),
+						acpTool("activity-2", '"latest stable Node.js version"', "WebSearch", "fetch", { query: "latest stable Node.js version" }),
+					]}
+				/>
+			</TooltipProvider>,
+		);
+
+		await user.click(screen.getByRole("button", { name: /Explored 2 tool calls/i }));
+		expect(await screen.findByRole("button", { name: "Read README.md" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Searched the web for latest stable Node.js version" })).toBeInTheDocument();
+		expect(container.querySelector(".lucide-globe")).toHaveClass("size-3");
+		expect(screen.queryByText('"latest stable Node.js version"')).not.toBeInTheDocument();
 	});
 });

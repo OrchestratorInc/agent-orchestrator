@@ -20,7 +20,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -1221,7 +1221,423 @@ describe("ChatWorkspace timeline", () => {
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getAllByText("Ran command")).toHaveLength(2);
+		expect(screen.getByText("Built project")).toBeInTheDocument();
+		expect(screen.getByText("Ran lint")).toBeInTheDocument();
+	});
+
+	it("names the running step once, on the live row under the steps, with the plan under it", async () => {
+		const user = userEvent.setup();
+		const turnId = "live-turn-plan";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{
+				id: turnId, state: "running", requestedAt: at, startedAt: at,
+				plan: { steps: [
+					{ text: "Build the project", status: "in_progress" },
+					{ text: "Run the tests", status: "pending" },
+				] },
+			}],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "status", turnId, sequence: 2, revision: 0,
+					activityKind: "command", status: "completed", summary: "git status",
+					detail: { command: "git status" }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "running", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const done = screen.getByRole("button", { name: /^Checked git status/ });
+		const live = screen.getByTestId("live-working-row");
+		const plan = screen.getByRole("region", { name: "Agent plan" });
+		// The running step is on the live row only, not also as a row of its own.
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Building project$/);
+		// A dot sits between the step and the turn's timer.
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Building project·\d/);
+		expect(screen.getAllByText("Building project")).toHaveLength(1);
+		expect(done.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(live.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		// The live row opens onto the step's command, as its own row would.
+		expect(live).toHaveAttribute("aria-expanded", "false");
+		await user.click(live);
+		expect(live).toHaveAttribute("aria-expanded", "true");
+		expect(await screen.findByText("go build ./...")).toBeInTheDocument();
+	});
+
+	it("says Thinking beside the loader between steps, but not while it waits on the reader or writes its reply", () => {
+		const turnId = "live-turn-thinking";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const read = {
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision: 0,
+			activityKind: "command" as const, status: "completed" as const, summary: "sed -n '1,40p' README.md",
+			detail: { command: "sed -n '1,40p' README.md" }, createdAt: at,
+		};
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 2,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read],
+		};
+
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+
+		// The finished step keeps its row; the loader row names what comes next.
+		expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument();
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·\d/);
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run go build?",
+							detail: { command: "go build ./..." }, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+
+		// Under the reply it is writing, the timer sits alone too.
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "message", id: "reply", turnId, sequence: 3, revision: 0,
+							role: "assistant", origin: "provider", text: "The README covers setup.",
+							streaming: true, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+	});
+
+	it("keeps the live row's label mounted when a step it can open takes over from Thinking", () => {
+		const turnId = "live-turn-stable-row";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const snapshot = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot([])} />);
+		const label = screen.getByTestId("live-working-task");
+		expect(label).toHaveTextContent(/^Thinking$/);
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={snapshot([
+					{
+						kind: "activity", id: "build", turnId, sequence: 2, revision: 0,
+						activityKind: "command", status: "running", summary: "go build ./...",
+						detail: { command: "go build ./..." }, createdAt: at,
+					},
+				])}
+			/>,
+		);
+		// The row now opens onto the command, and its label updated in place rather
+		// than mounting again (and replaying its entrance).
+		expect(screen.getByTestId("live-working-row")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByTestId("live-working-task")).toBe(label);
+		expect(label).toHaveTextContent(/^Building project$/);
+	});
+
+	it("shows each step on the live row first, then moves it up once it has been seen", async () => {
+		const turnId = "live-turn-claude-steps";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Read the README",
+			streaming: false, createdAt: at,
+		};
+		// Claude Code reports a tool call as pending, then done, with nothing between.
+		const read = (status: "pending" | "completed", revision: number) => ({
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision,
+			activityKind: "mcp_tool" as const, status, summary: "Read README.md (1 - 40)",
+			detail: {
+				protocol: "acp", providerToolName: "Read", toolKind: "read",
+				input: { file_path: "/w/README.md", limit: 40 },
+			} as ConversationActivity["detail"],
+			createdAt: at,
+		});
+		const snapshot = (status: "pending" | "completed", revision: number): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: revision + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read(status, revision)],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot("pending", 0)} />);
+		const task = () => screen.getByTestId("live-working-task");
+		const shimmer = () => task().querySelector(".chat-working-shimmer");
+		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(shimmer()).not.toBeNull();
+		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+
+		// Done within a blink, it still stays beside the loader for a moment, saying
+		// what it did, without the shimmer that means it is under way...
+		view.rerender(<ChatWorkspace snapshot={snapshot("completed", 1)} />);
+		expect(task()).toHaveTextContent(/^Read README\.md$/);
+		expect(shimmer()).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+
+		// ...then moves up into the list, and the live row goes back to Thinking.
+		await waitFor(() => expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument(), { timeout: 2_000 });
+		expect(task()).toHaveTextContent(/^Thinking$/);
+	});
+
+	it("names the live row by the agent's newest thought, and opens onto it", async () => {
+		const user = userEvent.setup();
+		const turnId = "live-turn-thought";
+		const at = "2026-08-11T10:01:00Z";
+		const thought = (text: string, status: "running" | "completed") => ({
+			kind: "activity" as const, id: "thought", turnId, sequence: 3, revision: 1,
+			activityKind: "reasoning" as const, status, summary: "Reasoning", detail: { text }, createdAt: at,
+		});
+		const snapshot = (text: string, status: "running" | "completed"): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "status", turnId, sequence: 2, revision: 1,
+					activityKind: "command", status: "completed", summary: "git status",
+					detail: { command: "git status" }, createdAt: at,
+				},
+				thought(text, status),
+			],
+		});
+
+		// Before a sentence of the thought is whole, the row just says Thinking, and
+		// opens onto what the agent has thought so far.
+		const view = render(<ChatWorkspace snapshot={snapshot("The build fails on", "running")} />);
+		const task = () => screen.getByTestId("live-working-task");
+		expect(task()).toHaveTextContent(/^Thinking$/);
+		const row = screen.getByTestId("live-working-row");
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		await user.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on"));
+
+		// The open thought keeps streaming, though its turn only follows the label.
+		view.rerender(<ChatWorkspace snapshot={snapshot("The build fails on a second React co", "running")} />);
+		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on a second React co"));
+		expect(task()).toHaveTextContent(/^Thinking$/);
+
+		// Then it says what the agent is about to do, and keeps saying it once the
+		// thought settles, until the agent writes or starts a step.
+		const text = "Only one React copy exists. I'll rebuild with NODE_ENV=production to match CI.";
+		view.rerender(<ChatWorkspace snapshot={snapshot(text, "completed")} />);
+		expect(task()).toHaveTextContent(/^I'll rebuild with NODE_ENV=production to match CI$/);
+		expect(await screen.findByText(/Only one React copy exists/)).toBeInTheDocument();
+	});
+
+	it("gives the step back its row once it finishes", () => {
+		const turnId = "live-turn-finished-step";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 2, revision: 1,
+					activityKind: "command", status: "completed", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+				{
+					kind: "message", id: "thinking", turnId, sequence: 3, revision: 0,
+					role: "assistant", origin: "provider", text: "The build passes.",
+					streaming: true, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByRole("button", { name: /^Built project/ })).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+	});
+
+	describe("a step's tense and its row", () => {
+		const turnId = "live-turn-step-rows";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Tidy the build",
+			streaming: false, createdAt: at,
+		};
+		const live = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+		const command = (
+			id: string,
+			sequence: number,
+			text: string,
+			status: ConversationActivity["status"],
+			detail: ConversationActivity["detail"] = {},
+		) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "command" as const, status, summary: text,
+			detail: { command: text, ...detail }, createdAt: at,
+		});
+		const read = (id: string, sequence: number, file: string) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "mcp_tool" as const, status: "pending" as const, summary: `Read ${file}`,
+			detail: { protocol: "acp", providerToolName: "Read", toolKind: "read", input: { file_path: file } } as ConversationActivity["detail"],
+			createdAt: at,
+		});
+
+		it("says a pending step is under way, even while it waits for approval", () => {
+			// Claude Code reports a call as pending until it is done. One waiting on the
+			// reader has not deleted anything yet.
+			const view = render(
+				<ChatWorkspace
+					snapshot={live([
+						command("rm", 2, "rm -rf build", "pending"),
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run rm -rf build?",
+							detail: { command: "rm -rf build" }, createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByRole("button", { name: /^Deleting build/ })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^Deleted build/ })).toBeNull();
+
+			// Of two reads at once, the newest is on the live row, and the other's own row
+			// says it is still reading.
+			view.rerender(<ChatWorkspace snapshot={live([read("a", 2, "a.ts"), read("b", 3, "b.ts")])} />);
+			expect(screen.getByRole("button", { name: /^Reading a\.ts/ })).toBeInTheDocument();
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Reading b\.ts$/);
+
+			// An edit of several files says so in its own words while it runs.
+			view.rerender(
+				<ChatWorkspace
+					snapshot={live([
+						{
+							kind: "activity", id: "edit", turnId, sequence: 2, revision: 0,
+							activityKind: "file_change", status: "running", summary: "Edited 2 files",
+							detail: {
+								files: [
+									{ path: "src/a.ts", status: "modified", additions: 1, deletions: 0 },
+									{ path: "src/b.ts", status: "modified", additions: 2, deletions: 1 },
+								],
+							},
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Editing 2 files$/);
+		});
+
+		it("keeps a step the reader opened on the live row open once it moves up", async () => {
+			const user = userEvent.setup();
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			const row = screen.getByTestId("live-working-row");
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+
+			view.rerender(
+				<ChatWorkspace snapshot={live([command("test", 2, "npm test", "completed", { output: "42 passed" })])} />,
+			);
+			// Once its moment on the live row is over, its own row is still open on the output.
+			const landed = await waitFor(() => screen.getByRole("button", { name: /^Ran tests/ }), { timeout: 2_000 });
+			expect(landed).toHaveAttribute("aria-expanded", "true");
+			expect(screen.getByText("42 passed")).toBeInTheDocument();
+		});
+
+		it("moves a step that failed straight to its row", () => {
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Running tests$/);
+
+			view.rerender(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "failed", { exitCode: 1 })])} />);
+			expect(screen.getByRole("button", { name: /^Ran tests/ })).toHaveTextContent("exit 1");
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		});
+
+		it("keeps each step's own row while the live row shows a retry", () => {
+			render(
+				<ChatWorkspace
+					snapshot={live([
+						command("build", 2, "go build ./...", "running"),
+						{
+							kind: "activity", id: "retry", turnId, sequence: 3, revision: 0,
+							activityKind: "system", status: "running", summary: "Reconnecting to Claude, attempt 2 of 10.",
+							detail: { event: "provider.failure", category: "connection", severity: "warning" },
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent("Reconnecting… 2/10");
+			expect(screen.getByRole("button", { name: /^Building project/ })).toBeInTheDocument();
+		});
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {

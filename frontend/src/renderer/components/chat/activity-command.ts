@@ -1,4 +1,5 @@
 import type { ConversationActivity } from "../../types/conversation";
+import { binaryName, commandProgram, READ_PROGRAMS, SEARCH_PROGRAMS } from "./activity-step";
 
 /** The user-facing category of a shell command in the chat timeline. */
 export type CommandCategory = "read" | "search" | "vcs" | "run";
@@ -18,48 +19,19 @@ export function isNonzeroCommandExit(activity: ConversationActivity): boolean {
 	);
 }
 
-const READERS = new Set(["cat", "sed", "nl", "head", "tail", "bat", "less", "more", "wc", "jq"]);
-const SEARCHERS = new Set(["rg", "grep", "find", "fd", "ls", "tree", "glob", "ag"]);
 const VCS = new Set(["git", "gh"]);
 
-/** Classify mechanics by intent so the timeline says what happened, not which binary ran. */
+/**
+ * Classify mechanics by intent so the timeline says what happened, not which binary
+ * ran. The program is the one the row's own label is named by, past `cd dir &&`,
+ * env assignments and wrappers, so the row and its group's header agree.
+ */
 export function commandCategory(text: string): CommandCategory {
-	const binary = firstWord(text);
-	if (READERS.has(binary)) return "read";
-	if (SEARCHERS.has(binary)) return "search";
+	const binary = commandProgram(text) ?? "";
+	if (READ_PROGRAMS.has(binary)) return "read";
+	if (SEARCH_PROGRAMS.has(binary)) return "search";
 	if (VCS.has(binary)) return "vcs";
 	return "run";
-}
-
-/**
- * Count explicit file arguments for reader commands. Search expressions are too
- * ambiguous to count honestly, so those fall back to the unnumbered label.
- */
-export function exploredFileCount(text: string): number | undefined {
-	if (commandCategory(text) !== "read") return undefined;
-
-	const files = new Set<string>();
-	for (const token of text.match(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g) ?? []) {
-		const value = token
-			.replace(/^["']|["']$/g, "")
-			.replace(/[;&|]+$/, "");
-		if (!value || value.startsWith("-") || /[*?{}]/.test(value)) continue;
-		if (["&&", "||", "|", ";"].includes(value)) continue;
-		if (READERS.has(binaryName(value))) continue;
-		if (/^\d+(?:,\d+)?[a-z]*$/i.test(value)) continue;
-		if (/^[a-z]+:\/\//i.test(value)) continue;
-
-		const looksLikeFile =
-			value.startsWith("/") ||
-			value.startsWith("./") ||
-			value.startsWith("../") ||
-			value.startsWith("~/") ||
-			value.includes("/") ||
-			/^[\w@.+-]+\.[A-Za-z][\w-]*$/.test(value);
-		if (looksLikeFile) files.add(value);
-	}
-
-	return files.size > 0 ? files.size : undefined;
 }
 
 /** The command's binary, normalized so `/bin/sed` and `sed` classify alike. */
@@ -76,9 +48,4 @@ function firstWord(text: string): string {
 	const space = trimmed.indexOf(" ");
 	const head = space > 0 ? trimmed.slice(0, space) : trimmed;
 	return binaryName(head);
-}
-
-function binaryName(value: string): string {
-	const slash = value.lastIndexOf("/");
-	return slash >= 0 ? value.slice(slash + 1) : value;
 }
