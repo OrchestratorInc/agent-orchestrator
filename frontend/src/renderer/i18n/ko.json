@@ -3180,6 +3180,7 @@
 	"chat.draft.retryMessage": "안전하게 재시도",
 	"chat.draft.clearMessageFailed": "내용이 수락되었지만 로컬 초안을 지울 수 없습니다. 나가기 전에 다시 지워 보세요. AO는 다시 전송하지 않습니다.",
 	"chat.draft.recordMessageFailed": "수락 결과를 로컬에 기록할 수 없습니다. 동일한 전송 ID로 안전하게 재시도하여 결과를 확인하세요.",
+	"chat.draft.recordMessageSuperseded": "메시지는 전송되었지만 로컬 기록이 이미 교체되었거나 삭제되어 업데이트할 수 없습니다. 다시 보낼 필요가 없습니다.",
 	"chat.draft.abandonFailed": "로컬 기록을 지울 수 없어 복구를 포기할 수 없습니다. 자동으로 다시 전송하지 않습니다.",
 	"chat.draft.abandonedSteer": "복구를 포기했습니다. 이전 내용이 이미 전송되었을 수 있으며, 다시 보내면 중복될 수 있습니다.",
 	"chat.draft.readAttachmentFailed": "저장된 첨부 파일을 읽을 수 없습니다. 초안은 보존되었습니다.",

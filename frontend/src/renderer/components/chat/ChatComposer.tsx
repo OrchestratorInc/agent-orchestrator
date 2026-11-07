@@ -1033,6 +1033,19 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 			if (!accepted.ok) {
 				if (mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
+				if (accepted.reason === "superseded") {
+					// Every caller holds proof that the daemon already has this message, and
+					// a resend would get a new id the daemon can't dedupe. So nothing stays
+					// pinned for retry and the sent text leaves the editor. A surface already
+					// showing the replacement draft has nothing of this delivery to release.
+					if (restoredSessionId.current === draftScopeKey) {
+						applyAcceptedDraftResult({ ok: true, cleared: false, draft: accepted.draft });
+						// A replaced scope refuses every write, including clearing the sent files.
+						setAttachmentDraftPersistenceError(null);
+					}
+					setSteerOutcomeNotice("chat.draft.recordMessageSuperseded");
+					return false;
+				}
 				setDurableDelivery(delivery);
 				setTextDraftPersistenceError(
 					"chat.draft.recordMessageFailed",
@@ -1041,7 +1054,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return clearAcceptedDraft(delivery.revision, mutationToken);
 		},
-		[clearAcceptedDraft, draftScope],
+		[applyAcceptedDraftResult, clearAcceptedDraft, draftScope, draftScopeKey],
 	);
 
 	const abandonUncertainSteer = useCallback(() => {

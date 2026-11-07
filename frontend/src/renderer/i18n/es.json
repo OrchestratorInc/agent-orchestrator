@@ -3233,6 +3233,7 @@
 	"chat.draft.retryMessage": "Reintentar de forma segura",
 	"chat.draft.clearMessageFailed": "El contenido se aceptó, pero no se pudo borrar su borrador local. Reintenta borrarlo antes de salir; AO no lo enviará de nuevo.",
 	"chat.draft.recordMessageFailed": "No se pudo registrar la aceptación localmente. Reintenta con el mismo ID de entrega para confirmarla.",
+	"chat.draft.recordMessageSuperseded": "El mensaje se envió, pero su registro local ya se había reemplazado o borrado, así que no se pudo actualizar. No hace falta reenviarlo.",
 	"chat.draft.abandonFailed": "No se pudo abandonar la recuperación porque no se pudo borrar su registro local. No se reenviará nada automáticamente.",
 	"chat.draft.abandonedSteer": "Se abandonó la recuperación. Es posible que el contenido anterior ya se haya entregado; volver a enviarlo puede duplicarlo.",
 	"chat.draft.readAttachmentFailed": "No se pudo leer el archivo adjunto guardado. Se conservó tu borrador.",

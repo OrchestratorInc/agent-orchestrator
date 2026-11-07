@@ -3170,6 +3170,7 @@
 	"chat.draft.retryMessage": "Retry message safely",
 	"chat.draft.clearMessageFailed": "Message was accepted, but its local draft couldn’t be cleared. Retry clearing before leaving; AO will not send it again.",
 	"chat.draft.recordMessageFailed": "Message acceptance couldn’t be recorded locally. Retry safely to reconcile it with the same delivery ID.",
+	"chat.draft.recordMessageSuperseded": "Message was sent, but its local record had already been replaced or cleared, so it couldn’t be updated. No resend is needed.",
 	"chat.draft.abandonFailed": "Recovery couldn’t be abandoned because its local record could not be cleared. Nothing will be resent automatically.",
 	"chat.draft.abandonedSteer": "Recovery was abandoned. The earlier guidance may already have been delivered; sending this draft now may duplicate it.",
 	"chat.draft.readAttachmentFailed": "The saved attachment could not be read. Your draft was kept.",
