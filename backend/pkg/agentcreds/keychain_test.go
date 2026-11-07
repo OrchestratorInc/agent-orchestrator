@@ -2,6 +2,7 @@ package agentcreds
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -185,5 +186,53 @@ func TestKeychainItemMissingRecognizesARealExitStatus(t *testing.T) {
 	}
 	if keychainItemMissing(nil) {
 		t.Error("no error reported as a missing item")
+	}
+}
+
+// securityHex is how `security -w` prints a value with any byte outside
+// printable ASCII.
+func securityHex(value string) string { return hex.EncodeToString([]byte(value)) + "\n" }
+
+func TestKeychainReadsValueSecurityPrintsAsHex(t *testing.T) {
+	const pretty = "{\n  \"claudeAiOauth\": {\n    \"accessToken\": \"sk-ant-oat01-current\",\n    \"refreshToken\": \"sk-ant-ort01-refresh\"\n  }\n}"
+	for _, tc := range []struct {
+		name, service, stored, secret string
+		kind                          Kind
+	}{
+		{"pretty-printed JSON", "Claude Code-credentials", securityHex(pretty), "sk-ant-oat01-current", KindOAuthToken},
+		{"bare token with a newline", "Claude Code-credentials", securityHex("sk-ant-oat01-bare\n"), "sk-ant-oat01-bare", KindOAuthToken},
+		{"managed key with a newline", "Claude Code", securityHex("sk-ant-api03-managed\n"), "sk-ant-api03-managed", KindAPIKey},
+		{"printable value that looks like hex", "Claude Code-credentials", "61626364\n", "61626364", KindOAuthToken},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, found := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
+				Env: envFrom(map[string]string{"USER": "someone"}), GOOS: "darwin", AllowKeychain: true,
+				Runner: fakeKeychain([3]string{tc.service, "someone", tc.stored}),
+			})
+			if !found || cred.Secret != tc.secret || cred.Kind != tc.kind {
+				t.Fatalf("credential resolved = %v, secret = %q, kind = %q", found, cred.Secret, cred.Kind)
+			}
+		})
+	}
+}
+
+// A value that parses as neither a credential document nor a token must not be
+// sent: it can hold a refresh token.
+func TestKeychainDoesNotSendUnreadableValueAsToken(t *testing.T) {
+	for _, tc := range []struct{ name, stored string }{
+		{"JSON without a token", securityHex("{\n  \"claudeAiOauth\": {\n    \"refreshToken\": \"sk-ant-ort01-refresh\"\n  }\n}")},
+		{"truncated JSON", securityHex("{\n  \"claudeAiOauth\": {\"accessToken\": \"sk-ant-oat01-cut")},
+		{"text with spaces", "not a token\n"},
+		{"binary value", securityHex("\x00\x01sk-ant\xff")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, found := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
+				Env: envFrom(map[string]string{"USER": "someone"}), GOOS: "darwin", AllowKeychain: true,
+				Runner: fakeKeychain([3]string{"Claude Code-credentials", "someone", tc.stored}),
+			})
+			if found {
+				t.Fatalf("resolved %q from an unreadable keychain value", cred.Secret)
+			}
+		})
 	}
 }
