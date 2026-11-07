@@ -128,6 +128,12 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+/** Picks an item from the bell's "More actions" menu. */
+async function clickBellMenu(name: string) {
+	await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 it("combines unread counts while keeping equal notification and session IDs tied to their hosts", async () => {
 	const user = userEvent.setup();
 	render(
@@ -201,7 +207,7 @@ it("clears each connected host when Clear all is clicked", async () => {
 		</QueryClientProvider>,
 	);
 	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
-	await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+	await clickBellMenu("Clear all");
 	await waitFor(() => expect(mocks.clearRemote).toHaveBeenCalledTimes(2));
 	expect(mocks.clearAllLocal).toHaveBeenCalledTimes(1);
 	expect(mocks.clearRemote).toHaveBeenCalledWith("host-a", "/api/v1/notifications");
@@ -287,7 +293,7 @@ it("ignores an older-page response after Clear all", async () => {
 	);
 	await userEvent.click(screen.getByRole("button", { name: "3 unread notifications" }));
 	await userEvent.click(screen.getByRole("button", { name: "Load earlier from Host A" }));
-	await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+	await clickBellMenu("Clear all");
 	await act(async () => resolveOlder(remotePage([{ ...notification("Cleared older A"), id: "older-notification" }])));
 	expect(screen.queryByText("Cleared older A")).not.toBeInTheDocument();
 });

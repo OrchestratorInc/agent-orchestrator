@@ -216,13 +216,26 @@ function swipeRight(element: HTMLElement) {
 	for (const deltaX of [-20, -40, -60]) element.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaMode: WheelEvent.DOM_DELTA_PIXEL }));
 }
 
-/** Opens the bell on the All tab, where every row shows whatever it blocks. */
-async function clickOpen(tab: "Needs you" | "Updates" | "All" | null = "All") {
+/** Opens the bell: one list, what blocks the person first. */
+async function clickOpen() {
 	const trigger = screen.getByRole("button", { name: /unread notifications/ });
 	await userEvent.click(trigger);
-	const panel = await screen.findByRole("dialog", { name: "Notifications" });
-	if (tab) await userEvent.click(within(panel).getByRole("tab", { name: new RegExp(`^${tab}`) }));
+	await screen.findByRole("dialog", { name: "Notifications" });
 	return trigger;
+}
+
+/** Picks an item from the bell's "More actions" menu. */
+async function clickBellMenu(name: string) {
+	await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
+/** Whether an item of the bell's "More actions" menu is disabled; leaves the menu closed. */
+async function bellMenuItemDisabled(name: string) {
+	await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+	const disabled = (await screen.findByRole("menuitem", { name })).getAttribute("aria-disabled") === "true";
+	await userEvent.keyboard("{Escape}");
+	return disabled;
 }
 
 function notificationQueryResult(
@@ -364,7 +377,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 
 		expect(workspaceQueryMock).not.toHaveBeenCalled();
-		await clickOpen(null);
+		await clickOpen();
 		expect(workspaceQueryMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -406,23 +419,24 @@ describe("NotificationCenter", () => {
 		await waitFor(() => expect(trigger).toHaveFocus());
 	});
 
-	it("lists every notification under All, beside Needs you and Updates, with no unread or unresolved tabs", async () => {
+	it("lists every notification in one list, with what needs the person first and no tabs", async () => {
 		renderNotificationCenter();
 		await clickOpen();
 
 		const panel = within(screen.getByRole("dialog", { name: "Notifications" }));
 		expect(panel.getByRole("list")).toHaveClass("board-scrollbar", "overflow-y-auto");
-		expect(panel.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Needs you3", "Updates", "All"]);
-		expect(panel.queryByRole("tab", { name: "Unread" })).not.toBeInTheDocument();
-		expect(panel.queryByText("Unseen")).not.toBeInTheDocument();
-		expect(panel.queryByText("Unresolved")).not.toBeInTheDocument();
+		expect(panel.queryAllByRole("tab")).toHaveLength(0);
+		expect(panel.getByText("Needs you")).toBeInTheDocument();
+		expect(panel.getByText("Updates")).toBeInTheDocument();
 
 		const rows = panel.getAllByRole("listitem");
+		// Unanswered questions first (PR #9's session still waits on one), then
+		// the rest, each newest first.
 		expect(rows.map((row) => row.textContent)).toEqual([
-			expect.stringContaining("Fix checkout totals · PR #67"),
 			expect.stringContaining("Checkout flow needs input"),
 			expect.stringContaining("Docs sweep needs input"),
 			expect.stringContaining("PR #9 merged"),
+			expect.stringContaining("Fix checkout totals · PR #67"),
 		]);
 	});
 
@@ -430,7 +444,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		await clickBellMenu("Clear all");
 
 		expect(clearAllMock).toHaveBeenCalledTimes(1);
 	});
@@ -542,7 +556,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		await clickBellMenu("Clear all");
 
 		expect(await screen.findByText("clear failed")).toBeInTheDocument();
 		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
@@ -719,11 +733,9 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
 
-		// Nothing blocks the person, so the bell opens on Updates.
-		expect(await screen.findByText("No updates yet.")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clear all" })).toBeDisabled();
-		await userEvent.click(screen.getByRole("tab", { name: "All" }));
-		expect(screen.getByText("No notifications yet.")).toBeInTheDocument();
+		expect(await screen.findByText("No notifications yet.")).toBeInTheDocument();
+		expect(screen.queryByText("Needs you")).not.toBeInTheDocument();
+		expect(await bellMenuItemDisabled("Clear all")).toBe(true);
 	});
 
 	it("surfaces a failed refresh over an unrelated cached empty page", async () => {
@@ -751,7 +763,6 @@ describe("NotificationCenter", () => {
 		});
 		renderNotificationCenter(queryClient);
 		await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
-		await userEvent.click(await screen.findByRole("tab", { name: "All" }));
 
 		expect(await screen.findByText("No notifications yet.")).toBeInTheDocument();
 		expect(screen.queryByText("Could not load notifications.")).not.toBeInTheDocument();
@@ -1043,16 +1054,18 @@ describe("NotificationCenter cloud rows", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
+		// The local questions block the person and come first; below them local
+		// and Cloud updates interleave by time.
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
 		expect(rows.map((row) => row.getAttribute("data-notification-source") ?? "local")).toEqual([
 			"local",
-			"cloud",
+			"local",
+			"local",
 			"local",
 			"cloud",
-			"local",
-			"local",
+			"cloud",
 		]);
-		const cloudRow = rows[1];
+		const cloudRow = rows[4];
 		expect(within(cloudRow).getByText("Cloud")).toBeInTheDocument();
 		expect(within(cloudRow).getByText("acme/cloud")).toBeInTheDocument();
 		expect(within(cloudRow).getByText("Cloud checkout")).toBeInTheDocument();
@@ -1092,7 +1105,7 @@ describe("NotificationCenter cloud rows", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		await clickBellMenu("Clear all");
 		expect(clearAllMock).toHaveBeenCalledTimes(1);
 		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
 	});
@@ -1121,7 +1134,7 @@ describe("NotificationCenter cloud rows", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		await clickBellMenu("Clear all");
 		expect(clearAllMock).toHaveBeenCalledTimes(1);
 		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
 	});
@@ -1170,7 +1183,7 @@ describe("NotificationCenter cloud rows", () => {
 
 		expect(screen.getByText("Loading notifications…")).toBeInTheDocument();
 		expect(screen.queryByText("acme/cloud#8 is ready to merge.")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clear all" })).toBeDisabled();
+		expect(await bellMenuItemDisabled("Clear all")).toBe(true);
 	});
 
 	it("keeps a local load failure visible next to cloud rows", async () => {
@@ -1254,24 +1267,20 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 		expect(screen.getByRole("button", { name: "2 unread notifications" })).toBeInTheDocument();
 	});
 
-	it("opens on Needs you with the server's count and moves resolved rows to Updates", async () => {
+	it("lists what needs the person first, then updates, resolved rows included, with no tabs", async () => {
 		renderNotificationCenter();
 		const panel = await openBell();
 
-		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveAttribute("aria-selected", "true");
-		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveTextContent("Needs you2");
-		expect(panel.getAllByRole("listitem").map((row) => row.textContent)).toEqual([expect.stringContaining("Cloud checkout needs approval")]);
-
-		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
+		expect(panel.queryAllByRole("tab")).toHaveLength(0);
+		expect(panel.getByText("Needs you")).toBeInTheDocument();
+		const rows = panel.getAllByRole("listitem").map((row) => row.textContent);
+		expect(rows).toHaveLength(4);
+		expect(rows[0]).toContain("Cloud checkout needs approval");
 		expect(panel.getByText("Handled by Ben Ortiz")).toBeInTheDocument();
 		expect(panel.getByText("No longer needed")).toBeInTheDocument();
-		expect(panel.queryByText("Cloud checkout needs approval")).not.toBeInTheDocument();
-
-		await userEvent.click(panel.getByRole("tab", { name: "All" }));
-		expect(panel.getAllByRole("listitem")).toHaveLength(4);
 	});
 
-	it("keeps why and who whole in a row's footer and leaves out a session name that repeats its project", async () => {
+	it("keeps a row to a title, one line and its project, and leaves out a session name that repeats it", async () => {
 		const orchestrator: CloudCpNotification = {
 			...merged, id: "cn-orch", sessionId: "csess-orch", title: "Orchestrator opened a pull request",
 			reason: "owner", actor: { userId: "u2", name: "Ben Ortiz" },
@@ -1286,17 +1295,18 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 
 		const row = panel.getAllByRole("listitem")[0];
 		expect(within(row).getAllByText("acme/cloud")).toHaveLength(1);
-		expect(within(row).getByText("Owner")).toHaveClass("shrink-0");
-		expect(within(row).getByText("Ben Ortiz")).toHaveClass("shrink-0");
-		expect(within(row).getByText("acme/cloud")).toHaveClass("truncate");
+		expect(within(row).queryByText("Owner")).not.toBeInTheDocument();
+		expect(within(row).queryByText("Cloud")).not.toBeInTheDocument();
+		expect(within(row).getByText("Orchestrator opened a pull request")).toHaveClass("truncate");
 	});
 
-	it("opens on Updates when nothing blocks the person", async () => {
+	it("labels no groups when nothing blocks the person", async () => {
 		cloudNotificationsMock.mockReturnValue(inboxResult([], [merged]));
 		renderNotificationCenter();
 		const panel = await openBell();
 
-		expect(panel.getByRole("tab", { name: /^Updates/ })).toHaveAttribute("aria-selected", "true");
+		expect(panel.queryByText("Needs you")).not.toBeInTheDocument();
+		expect(panel.queryByText("Updates")).not.toBeInTheDocument();
 		expect(panel.getByText("PR #12 merged")).toBeInTheDocument();
 	});
 
@@ -1304,26 +1314,24 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 		renderNotificationCenter();
 		const panel = await openBell();
 
-		await waitFor(() => expect(panel.getAllByRole("listitem")).toHaveLength(1));
+		await waitFor(() => expect(panel.getAllByRole("listitem")).toHaveLength(4));
 		expect(cloudMarkReadMock).not.toHaveBeenCalled();
 		expect(cloudMarkAllReadMock).not.toHaveBeenCalled();
 
-		await userEvent.click(panel.getByRole("button", { name: "Mark all read" }));
+		await clickBellMenu("Mark all read");
 		expect(cloudMarkAllReadMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("says why the person got a row and who caused it", async () => {
+	it("tells assistive technology why the person got a row and who caused it", async () => {
 		renderNotificationCenter();
 		const panel = await openBell();
 		const row = panel.getByText("Cloud checkout needs approval").closest<HTMLElement>("[role=listitem]")!;
-		expect(within(row).getByText("Owner")).toBeInTheDocument();
-		expect(within(row).getByText("Ben Ortiz")).toBeInTheDocument();
+		expect(row.querySelector("[aria-description]")).toHaveAttribute("aria-description", "Owner · Ben Ortiz");
 	});
 
 	it("reads a row when it is clicked, and opens its session", async () => {
 		renderNotificationCenter();
 		const panel = await openBell();
-		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
 
 		await userEvent.click(panel.getByText("Ben merged it."));
 
@@ -1334,7 +1342,6 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 	it("marks a row done, snoozes it, and marks it unread on the server", async () => {
 		renderNotificationCenter();
 		const panel = await openBell();
-		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
 		const mergedRow = panel.getByText("PR #12 merged").closest<HTMLElement>("[role=listitem]")!;
 		const handledRow = panel.getByText("Cloud checkout needed approval").closest<HTMLElement>("[role=listitem]")!;
 
@@ -1357,16 +1364,14 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("answers an approval in place with the chat's choices", async () => {
+	it("answers an approval in place with the chat's two quick choices", async () => {
 		renderNotificationCenter();
 		const panel = await openBell();
 		const row = panel.getByText("Cloud checkout needs approval").closest<HTMLElement>("[role=listitem]")!;
 
 		// The row itself is a button that opens the session; these are the actions in it.
 		const actions = within(row).getAllByRole("button").filter((button) => !button.hasAttribute("role"));
-		expect(actions.map((button) => button.textContent).filter((text) => text)).toEqual([
-			"Deny", "Allow once", "Always allow this command", "Open",
-		]);
+		expect(actions.map((button) => button.textContent).filter((text) => text)).toEqual(["Deny", "Allow once"]);
 		await userEvent.click(within(row).getByRole("button", { name: "Allow once" }));
 
 		expect(decideChatApprovalMock).toHaveBeenCalledWith("org-2", "csess-1", "req-1", "allow");
@@ -1389,24 +1394,26 @@ describe("NotificationCenter on a control plane with team notifications", () => 
 
 	it("clears every loaded cloud row on the server with Clear all", async () => {
 		renderNotificationCenter();
-		const panel = await openBell();
-		await userEvent.click(panel.getByRole("button", { name: "Clear all" }));
+		await openBell();
+		await clickBellMenu("Clear all");
 		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("puts local questions in Needs you beside the cloud's", async () => {
+	it("puts local questions beside the cloud's at the top", async () => {
 		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
 			status === "unread" ? stableUnreadQuery : status === "all" ? stableAllQuery : notificationQueryResult(status));
 		renderNotificationCenter();
 		const panel = await openBell();
 
-		// Three unanswered local questions and the cloud's two blocking rows.
-		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveTextContent("Needs you5");
-		expect(panel.getByText("Checkout flow needs input")).toBeInTheDocument();
+		// The unanswered local questions and the cloud's approval come first.
+		const rows = panel.getAllByRole("listitem").map((row) => row.textContent ?? "");
 		const readyBody = "PR from session Checkout flow is ready to merge. CI passed with no blocking review feedback.";
-		expect(panel.queryByText(readyBody)).not.toBeInTheDocument();
-		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
-		expect(panel.getByText(readyBody)).toBeInTheDocument();
+		const firstUpdate = rows.findIndex((text) => text.includes(readyBody));
+		expect(firstUpdate).toBe(5);
+		expect(rows.slice(0, 5)).toEqual(expect.arrayContaining([
+			expect.stringContaining("Checkout flow needs input"),
+			expect.stringContaining("Cloud checkout needs approval"),
+		]));
 	});
 });
 

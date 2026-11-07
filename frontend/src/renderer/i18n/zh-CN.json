@@ -4028,6 +4028,7 @@
 	"notify.tab.all": "全部",
 	"notify.tab.unreadUpdates": "有未读动态",
 	"notify.markAllRead": "全部标为已读",
+	"notify.moreActions": "More actions",
 	"notify.settings": "通知设置",
 	"notify.emptyNeedsYou": "目前没有需要你处理的事项。",
 	"notify.emptyUpdates": "暂无动态。",

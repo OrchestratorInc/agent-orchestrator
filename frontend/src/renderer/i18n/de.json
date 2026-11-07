@@ -1191,6 +1191,7 @@
 	"notify.loadingUnread": "Ungelesene Benachrichtigungen werden geladen…",
 	"notify.loadingEarlier": "Frühere Benachrichtigungen werden geladen…",
 	"notify.markAllRead": "Alle Benachrichtigungen als gelesen markieren",
+	"notify.moreActions": "More actions",
 	"notify.markAllReadShort": "Alle als gelesen",
 	"notify.markRead": "Als gelesen markieren",
 	"notify.markReadAria": "Benachrichtigung als gelesen markieren",

@@ -1191,6 +1191,7 @@
 	"notify.loadingUnread": "읽지 않은 알림 불러오는 중…",
 	"notify.loadingEarlier": "이전 알림 불러오는 중…",
 	"notify.markAllRead": "모든 알림 읽음으로 표시",
+	"notify.moreActions": "More actions",
 	"notify.markAllReadShort": "모두 읽음",
 	"notify.markRead": "읽음으로 표시",
 	"notify.markReadAria": "알림 읽음으로 표시",

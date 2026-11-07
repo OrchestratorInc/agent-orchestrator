@@ -4027,6 +4027,7 @@
 	"notify.tab.all": "All",
 	"notify.tab.unreadUpdates": "Unread updates",
 	"notify.markAllRead": "Mark all read",
+	"notify.moreActions": "More actions",
 	"notify.settings": "Notification settings",
 	"notify.emptyNeedsYou": "Nothing needs you right now.",
 	"notify.emptyUpdates": "No updates yet.",

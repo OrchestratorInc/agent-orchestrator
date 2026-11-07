@@ -19,6 +19,7 @@ import {
 	GitPullRequestClosed,
 	Hand,
 	LoaderCircle,
+	MoreHorizontal,
 	Mail,
 	MailOpen,
 	MessageSquareDiff,
@@ -26,7 +27,7 @@ import {
 	SlidersHorizontal,
 	X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,
 	useClearNotificationMutation,
@@ -75,7 +76,7 @@ import {
 	type CloudSnoozeChoice,
 } from "../lib/cloud-notifications";
 import { approvalDecisionKind, approvalDecisionLabeler, orderedApprovalDecisions, parseApprovalDecisions, type ApprovalDecisionLabels } from "../lib/approval-decisions";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -373,7 +374,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const [remoteOlderPages, setRemoteOlderPages] = useState<Record<string, NotificationsPage[]>>({});
 	const [remoteLoadingEarlierHost, setRemoteLoadingEarlierHost] = useState<string | null>(null);
 	const [remoteEarlierError, setRemoteEarlierError] = useState<string | null>(null);
-	const [tab, setTab] = useState<NotificationTab>("all");
 	const remoteHistoryGeneration = useRef(0);
 	const remoteFirstPageKeys = useRef(new Map<string, string>());
 	const unreadQuery = useNotificationsQuery("unread");
@@ -388,7 +388,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// on this device, as it always was.
 	const inbox = cloud.mode === "inbox";
 	const { markRead: markCloudRead, markUnread: markCloudUnread, snooze: snoozeCloudRows, markAllRead: markAllCloudRead } = cloud;
-	const cloudTabItems = tab === "needs_you" ? cloud.needsYou : tab === "updates" ? cloud.updates : cloud.all;
+	const cloudTabItems = cloud.all;
 	const markAllRead = useMarkAllNotificationsReadMutation();
 	const clearAll = useClearAllNotificationsMutation();
 	const clearOne = useClearNotificationMutation();
@@ -454,8 +454,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		return keys.size;
 	}, [notifications, remoteItems, unreadQuery.data]);
 	const needsYouTabCount = cloud.needsYouCount + hostNeedsYouCount;
-	const updatesUnread = entries.some((entry) => !hostRowNeedsYou(entry.notification) && entry.notification.status === "unread") ||
-		cloud.updates.some((item) => item.status === "unread");
 	const cloudUnreadIds = useMemo(() => loadedCloudItems.filter((item) => item.status === "unread").map((item) => item.id), [loadedCloudItems]);
 	const confirmedClearSnapshot = isNotificationsCacheFromClear(queryClient);
 	const { openSession } = useNotificationTargetNavigation();
@@ -590,8 +588,6 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		setOpen(nextOpen);
 		if (nextOpen) {
 			captureTopbarAction("notifications");
-			// Opens on what blocks the person when anything does.
-			setTab(needsYouTabCount > 0 ? "needs_you" : "updates");
 			setActionError(null);
 		}
 		if (!nextOpen) {
@@ -825,24 +821,26 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	const localLoading = allQuery.isLoading && localEmpty;
 	const remoteLoadFailed = remoteAll.hosts.some((host) => host.isError);
 	const remoteLoading = remoteAll.hosts.some((host) => host.isLoading);
-	// Local, remote, and Cloud rows interleave by creation time, within the tab.
-	const rows = useMemo(() => {
+	// One list: what blocks the person first, then everything else, each newest
+	// first, with local, remote and Cloud rows interleaved. The groups are only
+	// labelled when something blocks the person.
+	const cloudNeedsYouIds = useMemo(() => new Set(cloud.needsYou.map((item) => item.id)), [cloud.needsYou]);
+	const rowGroups = useMemo(() => {
 		const merged = [
-			...entries
-				.filter((entry) => tab === "all" || (tab === "needs_you") === hostRowNeedsYou(entry.notification))
-				.map((entry) => ({ kind: "host" as const, ...entry })),
+			...entries.map((entry) => ({ kind: "host" as const, ...entry })),
 			...visibleCloudItems.map((item) => ({ kind: "cloud" as const, item })),
-		];
-		return merged.sort((a, b) => Date.parse(b.kind === "cloud" ? b.item.createdAt : b.notification.createdAt) - Date.parse(a.kind === "cloud" ? a.item.createdAt : a.notification.createdAt));
-	}, [entries, tab, visibleCloudItems]);
+		].sort((a, b) => Date.parse(b.kind === "cloud" ? b.item.createdAt : b.notification.createdAt) - Date.parse(a.kind === "cloud" ? a.item.createdAt : a.notification.createdAt));
+		const blocks = (row: (typeof merged)[number]) => row.kind === "cloud" ? cloudNeedsYouIds.has(row.item.id) : hostRowNeedsYou(row.notification);
+		const needsYou = merged.filter(blocks);
+		const rest = merged.filter((row) => !blocks(row));
+		return needsYou.length === 0
+			? [{ key: "all", label: undefined, rows: rest }]
+			: [{ key: "needs_you", label: t("notify.tab.needsYou"), rows: needsYou }, { key: "updates", label: rest.length > 0 ? t("notify.tab.updates") : undefined, rows: rest }];
+	}, [cloudNeedsYouIds, entries, t, visibleCloudItems]);
+	const rows = useMemo(() => rowGroups.flatMap((group) => group.rows), [rowGroups]);
 	const isEmpty = rows.length === 0;
 	const nothingAnywhere = entries.length === 0 && loadedCloudItems.length === 0;
-	const emptyMessage = tab === "needs_you" ? t("notify.emptyNeedsYou") : tab === "updates" ? t("notify.emptyUpdates") : t("notify.emptyAll");
-	const tabs: Array<{ id: NotificationTab; label: string }> = [
-		{ id: "needs_you", label: t("notify.tab.needsYou") },
-		{ id: "updates", label: t("notify.tab.updates") },
-		{ id: "all", label: t("notify.tab.all") },
-	];
+	const emptyMessage = t("notify.emptyAll");
 
 	return (
 		<Popover onOpenChange={setPanelOpen} open={open}>
@@ -878,69 +876,46 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			>
 				<TooltipProvider skipDelayDuration={0}>
 				<div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
-					<div aria-label={t("notify.tabs")} className="flex min-w-0 items-center gap-0.5" role="tablist">
-						{tabs.map((item) => (
-							<Button
-								aria-selected={tab === item.id}
-								data-active={tab === item.id}
-								key={item.id}
-								onClick={() => setTab(item.id)}
-								role="tab"
-								size="xs"
-								type="button"
-								variant="quiet"
-							>
-								{item.label}
-								{item.id === "needs_you" && needsYouTabCount > 0 ? (
-									<span className="font-medium tabular-nums text-status-needs-you">
-										{needsYouTabCount > 99 ? "99+" : needsYouTabCount}
-									</span>
-								) : null}
-								{item.id === "updates" && updatesUnread ? (
-									<span aria-label={t("notify.tab.unreadUpdates")} className="size-1.5 rounded-full bg-accent-strong" role="img" />
-								) : null}
+					<h2 className="truncate pl-1.5 text-control font-medium text-foreground">{t("notify.title")}</h2>
+					{/* Everything but the title lives in one menu, so the header stays quiet. */}
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button aria-label={t("notify.moreActions")} size="icon-sm" type="button" variant="quiet">
+								{markingAllRead || clearingAll ? (
+									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+								) : (
+									<MoreHorizontal className="size-icon-base" aria-hidden="true" />
+								)}
 							</Button>
-						))}
-					</div>
-					<div className="flex shrink-0 items-center gap-0.5">
-						{inbox ? (
-							<>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											aria-label={t("notify.markAllRead")}
-											disabled={markingAllRead || cloudUnreadIds.length === 0}
-											onClick={handleMarkAllRead}
-											size="icon-sm"
-											type="button"
-											variant="quiet"
-										>
-											{markingAllRead ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : <CheckCheck className="size-icon-base" aria-hidden="true" />}
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{t("notify.markAllRead")}</TooltipContent>
-								</Tooltip>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button aria-label={t("notify.settings")} onClick={openNotificationSettings} size="icon-sm" type="button" variant="quiet">
-											<SlidersHorizontal className="size-icon-base" aria-hidden="true" />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{t("notify.settings")}</TooltipContent>
-								</Tooltip>
-							</>
-						) : null}
-						<Button
-							disabled={nothingAnywhere || localLoading || clearingAll || clearAll.isPending}
-							onClick={handleClearAll}
-							size="sm"
-							type="button"
-							variant="quiet"
-						>
-							{clearingAll ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
-							{t("notify.clearAll")}
-						</Button>
-					</div>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							{inbox ? (
+								<DropdownMenuItem
+									disabled={markingAllRead || cloudUnreadIds.length === 0}
+									onSelect={() => void handleMarkAllRead()}
+								>
+									<CheckCheck className="size-icon-sm" aria-hidden="true" />
+									{t("notify.markAllRead")}
+								</DropdownMenuItem>
+							) : null}
+							<DropdownMenuItem
+								disabled={nothingAnywhere || localLoading || clearingAll || clearAll.isPending}
+								onSelect={() => void handleClearAll()}
+							>
+								<X className="size-icon-sm" aria-hidden="true" />
+								{t("notify.clearAll")}
+							</DropdownMenuItem>
+							{inbox ? (
+								<>
+									<DropdownMenuSeparator />
+									<DropdownMenuItem onSelect={openNotificationSettings}>
+										<SlidersHorizontal className="size-icon-sm" aria-hidden="true" />
+										{t("notify.settings")}
+									</DropdownMenuItem>
+								</>
+							) : null}
+						</DropdownMenuContent>
+					</DropdownMenu>
 				</div>
 				<NotificationWorkspaceState>
 					{({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError }) => (
@@ -1015,7 +990,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>
-						{rows.map((row) => {
+						{rowGroups.map((group) => (
+						<Fragment key={group.key}>
+						{group.label ? (
+							<div aria-hidden="true" className="sticky top-0 z-10 bg-popover px-3.5 pb-1 pt-2.5 text-caption font-medium text-muted-foreground">
+								{group.label}
+							</div>
+						) : null}
+						{group.rows.map((row) => {
 							if (row.kind === "cloud") {
 								const cloud = row.item;
 								const cloudSessionId = cloud.sessionId ?? "";
@@ -1084,6 +1066,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								/>
 							);
 						})}
+						</Fragment>
+						))}
 						{allQuery.isFetchNextPageError ? (
 							<div
 								aria-live="polite"
@@ -1342,7 +1326,6 @@ const NotificationItem = memo(function NotificationItem({
 
 const cloudRowKey = (id: string) => `cloud:${id}`;
 
-type NotificationTab = "needs_you" | "updates" | "all";
 
 /** A local or remote-host row that blocks the person: a question not answered yet. */
 function hostRowNeedsYou(notification: NotificationDTO): boolean {
@@ -1444,14 +1427,14 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	};
 	const rowRef = useRef<HTMLDivElement>(null);
 	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
-	// Why you got it and who acted are short and always shown whole; the
-	// project and session names give way when the row is narrow, and an
-	// orchestrator's session name that repeats its project's is left out.
+	// The footer says only where a row comes from. Why you got it and who acted
+	// are in the title or the row's description, so the row stays one glance:
+	// a title, one line of detail, the project. A session name that repeats
+	// its project's (an orchestrator) is left out.
+	const reasonText = reasonKey ? t(reasonKey) : undefined;
 	const metaParts = [
-		reasonKey ? { text: t(reasonKey), fixed: true } : undefined,
-		actor ? { text: actor, fixed: true } : undefined,
 		projectName ? { text: projectName, fixed: false } : undefined,
-		showSessionMeta && sessionName && sessionName !== projectName ? { text: sessionName, fixed: false } : undefined,
+		!inbox && showSessionMeta && sessionName && sessionName !== projectName ? { text: sessionName, fixed: false } : undefined,
 	].filter((part): part is { text: string; fixed: boolean } => Boolean(part));
 	return (
 		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
@@ -1474,6 +1457,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 				tabIndex={canOpenSession ? 0 : undefined}
 				// Row actions set title="" so this native tooltip does not show over them.
 				title={canOpenSession ? t("notify.openSessionTitle") : undefined}
+				aria-description={[reasonText, actor].filter(Boolean).join(" · ") || undefined}
 			>
 				<div
 					className={cn(
@@ -1488,39 +1472,45 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						<span
 							aria-label={notification.title}
 							className={cn(
-								"min-w-0 break-words text-control leading-5",
+								"min-w-0 text-control leading-5",
+								inbox ? "truncate" : "break-words",
 								resolution ? "text-muted-foreground" : "text-foreground",
 								highlighted && !resolution && "font-medium",
 							)}
+							title={inbox ? notification.title : undefined}
 						>
 							{notification.title}
 						</span>
-						<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
-							{t("notify.cloud")}
-						</span>
+						{inbox ? null : (
+							<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
+								{t("notify.cloud")}
+							</span>
+						)}
 					</div>
 					{resolution ? (
-						<p className="mt-1 text-xs leading-relaxed text-passive">{resolution}</p>
+						<p className="mt-0.5 truncate text-xs leading-relaxed text-passive">{resolution}</p>
 					) : notification.body ? (
-						<p className={cn(
-							"mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground",
-							approval.length > 0 && typeof notification.metadata?.summary === "string" && notification.metadata.summary !== "" && "font-mono",
-						)}>
+						<p
+							className={cn(
+								"mt-0.5 text-xs leading-relaxed text-muted-foreground",
+								inbox ? "truncate" : "whitespace-pre-wrap break-words",
+								approval.length > 0 && typeof notification.metadata?.summary === "string" && notification.metadata.summary !== "" && "font-mono",
+							)}
+							title={inbox ? notification.body : undefined}
+						>
 							{notification.body}
 						</p>
 					) : null}
 					{approval.length > 0 && sessionId ? (
 						<CloudApprovalActions
-							canOpen={canOpenSession}
 							decisions={approval}
 							labels={approvalLabels}
 							notification={notification}
 							onDecide={onDecide}
-							onOpen={openRow}
 						/>
 					) : null}
 					{metaParts.length > 0 || (offerRestore && sessionId && projectId) ? (
-						<div className="mt-2 flex min-w-0 flex-col items-start gap-1.5">
+						<div className={cn("flex min-w-0 flex-col items-start gap-1.5", inbox ? "mt-1" : "mt-2")}>
 						{metaParts.length > 0 ? (
 							<p className="flex min-w-0 max-w-full items-center gap-1.5 text-caption leading-4 text-muted-foreground">
 								{metaParts.map((part, index) => (
@@ -1651,23 +1641,26 @@ function CloudTriageActions({ busy, disabled, notification, onDone, onSnooze, on
 }
 
 /**
- * An approval answered in place, with the decisions the agent offered and
- * the words the chat's approval card uses, plus Open. Only whoever is driving
- * the session or owns it may answer; anyone else is told so and the row stays.
+ * Answers an approval from the bell with the two choices the chat card leads
+ * with: deny, or allow once. Anything more (always allow, always deny) is a
+ * decision worth making in the session itself, which the row opens. Only
+ * whoever is driving the session or owns it may answer; anyone else is told so
+ * and the row stays.
  */
-function CloudApprovalActions({ canOpen, decisions, labels, notification, onDecide, onOpen }: {
-	canOpen: boolean;
+function CloudApprovalActions({ decisions, labels, notification, onDecide }: {
 	decisions: ReturnType<typeof parseApprovalDecisions>;
 	labels: ApprovalDecisionLabels;
 	notification: CloudCpNotification;
 	onDecide: (notification: CloudCpNotification, decisionId: string) => Promise<void>;
-	onOpen: () => void;
 }) {
 	const { t } = useTranslation();
 	const [pending, setPending] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const ordered = orderedApprovalDecisions(decisions);
 	const label = approvalDecisionLabeler(ordered, undefined, labels);
+	const pick = (...kinds: string[]) => kinds.map((kind) => ordered.find((decision) => approvalDecisionKind(decision) === kind)).find(Boolean);
+	const quick = [pick("reject_once", "reject_always"), pick("allow_once", "allow_always")].filter((decision): decision is (typeof ordered)[number] => Boolean(decision));
+	const shown = quick.length > 0 ? quick : ordered.slice(0, 2);
 	const decide = (decisionId: string) => {
 		if (pending) return;
 		setPending(decisionId);
@@ -1683,8 +1676,8 @@ function CloudApprovalActions({ canOpen, decisions, labels, notification, onDeci
 	const stop = (event: React.SyntheticEvent) => event.stopPropagation();
 	return (
 		<div className="mt-2 flex flex-col items-start gap-1.5" onClick={stop} onKeyDown={stop}>
-			<div className="flex flex-wrap items-center gap-1.5">
-				{ordered.map((decision) => {
+			<div className="flex items-center gap-1.5">
+				{shown.map((decision) => {
 					const kind = approvalDecisionKind(decision);
 					return (
 						<Button
@@ -1700,9 +1693,6 @@ function CloudApprovalActions({ canOpen, decisions, labels, notification, onDeci
 						</Button>
 					);
 				})}
-				{canOpen ? (
-					<Button onClick={onOpen} size="xs" type="button" variant="quiet">{t("notify.open")}</Button>
-				) : null}
 			</div>
 			{error ? <p aria-live="polite" className="text-caption text-error">{error}</p> : null}
 		</div>

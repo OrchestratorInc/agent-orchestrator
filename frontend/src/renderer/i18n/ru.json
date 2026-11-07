@@ -4215,6 +4215,7 @@
 	"notify.tab.all": "Все",
 	"notify.tab.unreadUpdates": "Непрочитанные обновления",
 	"notify.markAllRead": "Отметить все как прочитанные",
+	"notify.moreActions": "Другие действия",
 	"notify.settings": "Настройки уведомлений",
 	"notify.emptyNeedsYou": "Сейчас ничего не требует вашего действия.",
 	"notify.emptyUpdates": "Обновлений пока нет.",

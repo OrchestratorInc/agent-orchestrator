@@ -1200,6 +1200,7 @@
 	"notify.loadingUnread": "Chargement des notifications non lues…",
 	"notify.loadingEarlier": "Chargement des notifications antérieures…",
 	"notify.markAllRead": "Marquer toutes les notifications comme lues",
+	"notify.moreActions": "More actions",
 	"notify.markAllReadShort": "Tout marquer comme lu",
 	"notify.markRead": "Marquer comme lu",
 	"notify.markReadAria": "Marquer la notification comme lue",
