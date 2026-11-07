@@ -4,7 +4,7 @@ vi.mock("electron", () => ({ ipcMain: { handle: vi.fn(), on: vi.fn() } }));
 const { tokenMock } = vi.hoisted(() => ({ tokenMock: vi.fn() }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: tokenMock }));
 
-import { createCloudCpProxy, MAX_CLOUD_CP_BINARY_BYTES } from "./cloud-cp-proxy";
+import { createCloudCpProxy, MAX_CLOUD_CP_BINARY_BYTES, MAX_STREAMS_PER_WEBCONTENTS } from "./cloud-cp-proxy";
 
 const base = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments?name=a.png", method: "POST" };
 const controlPlaneUrl = async () => "https://cp.example.com";
@@ -139,5 +139,99 @@ describe("cloud control-plane URL pinning", () => {
 		for (const [, init] of fetchImpl.mock.calls) {
 			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-1");
 		}
+	});
+});
+
+// A reload or a navigation loads a new document into the same WebContents (same
+// id): the old page's streams must give their slots back, or the window soon
+// has none left, its session live stream included.
+describe("cloud streams across a page's life", () => {
+	type Listener = (...args: unknown[]) => void;
+	function pageSender(id: number) {
+		const listeners = new Map<string, Listener[]>();
+		const add = (event: string, listener: Listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+		return {
+			id,
+			isDestroyed: () => false,
+			send: vi.fn(),
+			once: vi.fn((event: string, listener: Listener) => add(event, listener)),
+			on: vi.fn((event: string, listener: Listener) => add(event, listener)),
+			fire: (event: string, ...args: unknown[]) => { for (const listener of listeners.get(event) ?? []) listener(...args); },
+		};
+	}
+	// An SSE response that stays open until its request is aborted.
+	const signals: AbortSignal[] = [];
+	const openFetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+		if (init?.signal) signals.push(init.signal);
+		return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200, headers: { "content-type": "text/event-stream" } });
+	});
+	const streamInit = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/events", method: "GET" };
+
+	async function fill(proxy: ReturnType<typeof createCloudCpProxy>, sender: ReturnType<typeof pageSender>) {
+		for (let index = 0; index < MAX_STREAMS_PER_WEBCONTENTS; index++) await proxy.openStream(sender, streamInit);
+		await expect(proxy.openStream(sender, streamInit)).rejects.toThrow(/already has 8 open cloud streams/);
+	}
+
+	beforeEach(() => {
+		signals.length = 0;
+		openFetch.mockClear();
+	});
+
+	it("frees a page's streams when its main frame loads a new document (a reload)", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: openFetch as unknown as typeof fetch });
+		const sender = pageSender(21);
+		await fill(proxy, sender);
+		sender.fire("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+		expect(signals.every((signal) => signal.aborted)).toBe(true);
+		// The old page heard why, in case it is still there.
+		expect(sender.send).toHaveBeenCalledWith(expect.stringContaining(""), { type: "error", message: "The page reloaded." });
+		await expect(proxy.openStream(sender, streamInit)).resolves.toEqual({ streamId: expect.any(String) });
+	});
+
+	it("keeps them through a same-document navigation (the router's hash) and a subframe's", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: openFetch as unknown as typeof fetch });
+		const sender = pageSender(22);
+		await fill(proxy, sender);
+		sender.fire("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+		sender.fire("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+		expect(signals.some((signal) => signal.aborted)).toBe(false);
+		await expect(proxy.openStream(sender, streamInit)).rejects.toThrow(/already has 8 open cloud streams/);
+	});
+
+	it("frees them when the page's renderer dies, and when the WebContents goes away", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: openFetch as unknown as typeof fetch });
+		const crashed = pageSender(23);
+		await fill(proxy, crashed);
+		crashed.fire("render-process-gone", {}, { reason: "crashed" });
+		expect(signals.every((signal) => signal.aborted)).toBe(true);
+		await expect(proxy.openStream(crashed, streamInit)).resolves.toEqual({ streamId: expect.any(String) });
+		const closed = pageSender(24);
+		await proxy.openStream(closed, streamInit);
+		closed.fire("destroyed");
+		expect(signals.at(-1)?.aborted).toBe(true);
+	});
+
+	it("touches no other window's streams", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: openFetch as unknown as typeof fetch });
+		const reloading = pageSender(25);
+		const other = pageSender(26);
+		await proxy.openStream(reloading, streamInit);
+		await proxy.openStream(other, streamInit);
+		reloading.fire("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+		expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+	});
+
+	it("ends a page's uploads when it reloads", async () => {
+		const stalled = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+			init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+		}));
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: stalled as unknown as typeof fetch });
+		const sender = pageSender(27);
+		const upload = proxy.requestBinary({ ...base, body: new Uint8Array([1]), requestId: "up-1" }, sender);
+		await vi.waitFor(() => expect(stalled).toHaveBeenCalled());
+		sender.fire("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+		const response = await upload.catch((error: unknown) => error);
+		expect((stalled.mock.calls[0]![1] as RequestInit).signal?.aborted).toBe(true);
+		expect(response).toBeDefined();
 	});
 });

@@ -101,11 +101,28 @@ export type CloudCpStreamEvent =
  * Structural slice of Electron.WebContents the stream side needs. Kept
  * minimal so tests can drive streams with a plain object.
  */
-export interface CloudCpStreamSender {
-	readonly id: number;
+export interface CloudCpStreamSender extends CloudCpSenderLifecycle {
 	isDestroyed(): boolean;
 	send(channel: string, event: CloudCpStreamEvent): void;
+}
+
+/** A main-frame navigation as Electron reports it to did-start-navigation. */
+export interface CloudCpNavigationDetails {
+	isMainFrame?: boolean;
+	isSameDocument?: boolean;
+}
+
+/**
+ * What a WebContents tells the proxy about its page's life: it goes away
+ * (destroyed), loads a new document (a reload or a navigation, which keeps the
+ * same WebContents and id), or its renderer dies. `on` is optional so tests
+ * can drive the rest with a plain object.
+ */
+export interface CloudCpSenderLifecycle {
+	readonly id: number;
 	once(event: "destroyed", listener: () => void): unknown;
+	on?(event: "did-start-navigation", listener: (details: CloudCpNavigationDetails) => void): unknown;
+	on?(event: "render-process-gone", listener: () => void): unknown;
 }
 
 export interface CloudCpProxy {
@@ -119,10 +136,7 @@ export interface CloudCpProxy {
 }
 
 /** Structural slice of Electron.WebContents the binary side needs. */
-export interface CloudCpBinarySender {
-	readonly id: number;
-	once(event: "destroyed", listener: () => void): unknown;
-}
+export type CloudCpBinarySender = CloudCpSenderLifecycle;
 
 export interface CloudCpProxyOptions {
 	/** The configured control plane, the only server the token is sent to. */
@@ -329,6 +343,10 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 
 	const streams = new Map<string, ActiveStream>();
 	const streamIdsBySender = new Map<number, Set<string>>();
+	// In-flight binary requests by WebContents and request id, so a cancel, the
+	// page going away (preload also cancels on pagehide) or the WebContents
+	// going away ends them instead of leaving an upload running unseen.
+	const binaryRequests = new Map<number, Map<string, AbortController>>();
 
 	function teardown(streamId: string, stream: ActiveStream): void {
 		stream.closed = true;
@@ -342,19 +360,48 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		stream.sender.send(stream.channel, event);
 	}
 
+	// A page's streams and uploads end with the page, not only with its
+	// WebContents: a reload or a navigation loads a new document into the same
+	// WebContents (same id), and its old streams would otherwise hold the
+	// window's slots until MAX_STREAMS_PER_WEBCONTENTS refuses every new one,
+	// the session's live stream included. A renderer crash ends them too. A
+	// same-document navigation (the router's hash changes) is the same page.
+	const watchedSenders = new Set<number>();
+
+	function releaseSender(senderId: number, reason: string): void {
+		for (const streamId of [...(streamIdsBySender.get(senderId) ?? [])]) {
+			const stream = streams.get(streamId);
+			if (stream === undefined) continue;
+			// A page that somehow survives (a navigation that never commits) hears
+			// why its stream ended and reconnects.
+			emit(stream, { type: "error", message: reason });
+			teardown(streamId, stream);
+		}
+		for (const pending of binaryRequests.get(senderId)?.values() ?? []) pending.abort();
+		binaryRequests.get(senderId)?.clear();
+	}
+
+	function watchSender(sender: CloudCpSenderLifecycle): void {
+		if (watchedSenders.has(sender.id)) return;
+		watchedSenders.add(sender.id);
+		sender.once("destroyed", () => {
+			releaseSender(sender.id, "The window closed.");
+			streamIdsBySender.delete(sender.id);
+			binaryRequests.delete(sender.id);
+			watchedSenders.delete(sender.id);
+		});
+		sender.on?.("did-start-navigation", (details) => {
+			if (details?.isMainFrame === true && details.isSameDocument !== true) releaseSender(sender.id, "The page reloaded.");
+		});
+		sender.on?.("render-process-gone", () => releaseSender(sender.id, "The page's renderer stopped."));
+	}
+
 	function trackSender(sender: CloudCpStreamSender): Set<string> {
+		watchSender(sender);
 		let ids = streamIdsBySender.get(sender.id);
 		if (ids === undefined) {
 			ids = new Set();
 			streamIdsBySender.set(sender.id, ids);
-			sender.once("destroyed", () => {
-				const orphaned = streamIdsBySender.get(sender.id);
-				streamIdsBySender.delete(sender.id);
-				for (const streamId of orphaned ?? []) {
-					const stream = streams.get(streamId);
-					if (stream !== undefined) teardown(streamId, stream);
-				}
-			});
 		}
 		return ids;
 	}
@@ -404,21 +451,13 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		return { status: response.status, headers, body: await response.text() };
 	}
 
-	// In-flight binary requests by WebContents and request id, so a cancel
-	// or the WebContents going away (a reload included: preload cancels on
-	// pagehide) ends them instead of leaving an upload running unseen.
-	const binaryRequests = new Map<number, Map<string, AbortController>>();
-
 	function trackBinaryRequest(sender: CloudCpBinarySender | undefined, requestId: string | undefined, controller: AbortController): () => void {
 		if (sender === undefined || requestId === undefined) return () => undefined;
+		watchSender(sender);
 		let requests = binaryRequests.get(sender.id);
 		if (requests === undefined) {
 			requests = new Map();
 			binaryRequests.set(sender.id, requests);
-			sender.once("destroyed", () => {
-				for (const pending of binaryRequests.get(sender.id)?.values() ?? []) pending.abort();
-				binaryRequests.delete(sender.id);
-			});
 		}
 		requests.get(requestId)?.abort();
 		requests.set(requestId, controller);
