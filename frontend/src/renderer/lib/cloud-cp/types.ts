@@ -614,6 +614,14 @@ export interface CloudCpSession {
 	mode: string;
 	/** Coding-agent model the session launched with; empty or absent means the harness default. */
 	model?: string;
+	/**
+	 * The model the session runs now: its owner's Chat pick, else `model`.
+	 * Absent when that is the harness default, and from older control planes
+	 * (read `model` then).
+	 */
+	currentModel?: string;
+	/** The reasoning effort its turns run with now; absent for the model's default. */
+	currentReasoningEffort?: string;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;

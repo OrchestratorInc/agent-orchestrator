@@ -1,8 +1,7 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
 import type { CloudCpSession, CloudCpSessionChatSettings } from "../lib/cloud-cp";
 import { cloudSessionEventsState, subscribeCloudSessionEvents } from "../lib/cloud-cp/session-events-hub";
-import { toAgentProvider } from "../types/workspace";
+import { useCachedQueryData } from "./useCloudScriptRuns";
 import { cloudSessionsQueryKey } from "./useWorkspaceQuery";
 
 /** The model, and effort if known, a Cloud project's live orchestrator runs now. */
@@ -25,50 +24,39 @@ export function liveCloudOrchestrator(sessions: readonly CloudCpSession[] | unde
 	return newest;
 }
 
+/** A model or effort that names one: blank and "default" mean the agent's own. */
+function concrete(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed && trimmed !== "default" ? trimmed : undefined;
+}
+
 /**
- * What the orchestrator runs: the model its Chat is set to, else the model the
- * session started with (the project's orchestrator model, when it named one).
- * An effort set in its Chat comes with it.
+ * What the orchestrator runs now. The control plane reports it on the session
+ * (its owner's Chat pick, else the model it started with); one that predates
+ * `currentModel` reports only the model it started with. While the
+ * orchestrator's Chat is open in this window its live settings are newer and
+ * win: a field set there replaces the session's ("default" being the agent's
+ * own), and a field left unset keeps the session's.
  */
 export function cloudOrchestratorModel(
-	session: Pick<CloudCpSession, "id" | "harness" | "model"> | undefined,
-	chat: Pick<CloudCpSessionChatSettings, "model" | "reasoningEffort"> | undefined,
+	session: Pick<CloudCpSession, "id" | "harness" | "model" | "currentModel" | "currentReasoningEffort"> | undefined,
+	live: Pick<CloudCpSessionChatSettings, "model" | "reasoningEffort"> | undefined,
 ): CloudOrchestratorModel | undefined {
 	if (!session) return undefined;
-	const model = chat?.model?.trim() || session.model?.trim() || "";
+	const sessionModel = session.currentModel !== undefined ? concrete(session.currentModel) : concrete(session.model);
+	const model = live?.model?.trim() ? concrete(live.model) : sessionModel;
 	if (!model) return undefined;
-	const reasoningEffort = chat?.reasoningEffort?.trim();
+	const reasoningEffort = live?.reasoningEffort?.trim() ? concrete(live.reasoningEffort) : concrete(session.currentReasoningEffort);
 	return { sessionId: session.id, harness: session.harness, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 
 /**
- * The orchestrator's Chat settings as this computer saved them: its Chat
- * (CloudSessionChatSurface) writes the owner's picks, and the worker's own model
- * once it reports one, under this key.
- */
-function savedChatSettings(orgId: string, session: Pick<CloudCpSession, "id" | "harness">): Pick<CloudCpSessionChatSettings, "model" | "reasoningEffort"> | undefined {
-	try {
-		const saved: unknown = JSON.parse(window.localStorage.getItem(`cloud-chat-settings:${orgId}:${session.id}:${toAgentProvider(session.harness)}`) ?? "null");
-		if (!saved || typeof saved !== "object") return undefined;
-		const { model, reasoningEffort } = saved as Record<string, unknown>;
-		return {
-			...(typeof model === "string" && model ? { model } : {}),
-			...(typeof reasoningEffort === "string" && reasoningEffort ? { reasoningEffort } : {}),
-		};
-	} catch {
-		return undefined;
-	}
-}
-
-const NO_SESSIONS: CloudCpSession[] | undefined = undefined;
-
-/**
  * The model a Cloud project's live orchestrator runs now, for a task started
  * beside it to default to. It reads only what the app already holds: the
- * session list the sidebar keeps polling, the orchestrator's settings while its
- * Chat is open (its live stream, never opened here), and the settings its Chat
- * saved on this computer. Until the session list has loaded there is none, so
- * the composer keeps its other defaults meanwhile.
+ * session list the sidebar keeps polling, and the orchestrator's live settings
+ * while its Chat is open in this window (that stream is never opened here).
+ * Until the session list has loaded there is none, so the composer keeps its
+ * other defaults meanwhile.
  */
 export function useCloudOrchestratorModel({ baseUrl, orgId, projectId, enabled }: {
 	baseUrl: string;
@@ -76,19 +64,10 @@ export function useCloudOrchestratorModel({ baseUrl, orgId, projectId, enabled }
 	projectId: string | undefined;
 	enabled: boolean;
 }): CloudOrchestratorModel | undefined {
-	const queryClient = useQueryClient();
 	const active = enabled && Boolean(orgId && projectId);
-	const sessionsKey = [...cloudSessionsQueryKey, baseUrl, orgId ?? ""];
-	const subscribeSessions = useCallback(
-		(notify: () => void) => (active ? queryClient.getQueryCache().subscribe(notify) : () => undefined),
-		[active, queryClient],
-	);
-	const sessions = useSyncExternalStore(
-		subscribeSessions,
-		() => (active ? queryClient.getQueryData<CloudCpSession[]>(sessionsKey) : NO_SESSIONS),
-	);
+	// Wakes only for the session list, not for every query the app holds.
+	const sessions = useCachedQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId ?? ""], active);
 	const session = active ? liveCloudOrchestrator(sessions, projectId) : undefined;
-	// The live state of an orchestrator whose Chat is open elsewhere in the app.
 	// A listener that asks for neither events nor live state opens no stream.
 	const target = { baseUrl, orgId: orgId ?? "", sessionId: session?.id ?? "" };
 	const subscribeLive = useCallback(
@@ -102,8 +81,5 @@ export function useCloudOrchestratorModel({ baseUrl, orgId, projectId, enabled }
 		subscribeLive,
 		() => (target.sessionId ? cloudSessionEventsState(target).live?.chatSettings : undefined),
 	);
-	if (!session || !orgId) return undefined;
-	// A model the session shares wins: the owner may have set it on another computer.
-	const chat = liveSettings?.model ? liveSettings : savedChatSettings(orgId, session) ?? liveSettings;
-	return cloudOrchestratorModel(session, chat);
+	return session ? cloudOrchestratorModel(session, liveSettings) : undefined;
 }
