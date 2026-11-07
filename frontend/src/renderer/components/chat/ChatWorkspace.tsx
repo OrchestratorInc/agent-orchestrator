@@ -1,3 +1,6 @@
+import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
+import { excerptSizeError } from "../../../shared/chat-excerpt";
+import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
@@ -57,7 +60,7 @@ import {
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -352,7 +355,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
-	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
@@ -1303,8 +1306,8 @@ function ChatWorkspaceContent({
 		const { composer } = readChatSessionDraft(draftScope);
 		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
 	});
-	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
-	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
 	// This content remounts per session (it is keyed by the draft scope), so a
@@ -2750,10 +2753,10 @@ export function Timeline({
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
-	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
+	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	/** Handles annotations whose source is another conversation. */
-	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
-	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
+	onForeignAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => void;
+	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -2880,7 +2883,7 @@ export function Timeline({
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
 	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
-	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
+	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
@@ -2889,7 +2892,7 @@ export function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => {
+	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => {
 		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
 			// The source lives in another conversation (a side chat quoting the main
 			// chat); its host navigates there instead of searching this transcript.
@@ -2985,7 +2988,7 @@ export function Timeline({
 			setSelectionAction(null);
 			return;
 		}
-		const text = selection.toString().trim();
+		let text = selection.toString();
 		const messageId = source.dataset.chatMessageId;
 		const revision = Number(source.dataset.chatMessageRevision);
 		const role = source.dataset.chatMessageRole;
@@ -2999,6 +3002,12 @@ export function Timeline({
 			return;
 		}
 		const selectedRange = selection.getRangeAt(0).cloneRange();
+		const message = snapshot.items.find(item => item.kind === "message" && item.id === messageId);
+		if (!message || message.kind !== "message") { setSelectionAction(null); return; }
+		let captured;
+		try { captured = captureExcerptSnapshot(annotationBody(source), selectedRange, message.text); }
+		catch { setSelectionAction(null); return; }
+		text = captured.text;
 		const dismissed = dismissedSelection.current;
 		if (dismissed && dismissed.excerpt.messageId === messageId && dismissed.excerpt.revision === revision &&
 			dismissed.excerpt.text === text && selectionRangesEqual(dismissed.range, selectedRange)) return;
@@ -3011,13 +3020,14 @@ export function Timeline({
 				revision,
 				text,
 				role: role as "user" | "assistant",
+				snapshot: captured.snapshot,
 			},
 			range: selectedRange,
 		};
 		setSelectionAction((previous) => previous && previous.excerpt.messageId === messageId &&
 			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
 			? previous : next);
-	}, [excerptsEnabled, snapshot.conversationId]);
+	}, [excerptsEnabled, snapshot]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
@@ -3063,9 +3073,10 @@ export function Timeline({
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
+		const excerpt = captureExcerptTurn(selectionAction.excerpt, snapshot);
 		if (onAddToChat) {
 			// A host with its own composer (a side chat) owns where references go.
-			onAddToChat(selectionAction.excerpt);
+			await onAddToChat(excerpt);
 			setSelectionAction(null);
 			window.getSelection()?.removeAllRanges();
 			return;
@@ -3073,25 +3084,31 @@ export function Timeline({
 		const composer = readChatSessionDraft(draftScope).composer;
 		// A pending delivery is cleared by revision on acceptance. Changing the
 		// draft now would keep the sent text and excerpts for a second send.
-		if (composer.delivery) {
-			setSelectionAction(null);
-			return;
-		}
+		if (composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
 		const current = composer.excerpts ?? [];
 		const duplicate = current.some(
 			(item) =>
 				item.messageId === selectionAction.excerpt.messageId &&
 				item.revision === selectionAction.excerpt.revision &&
-				item.text === selectionAction.excerpt.text,
+				item.text === selectionAction.excerpt.text &&
+				JSON.stringify(item.snapshot?.sourceRange) === JSON.stringify(selectionAction.excerpt.snapshot?.sourceRange) &&
+				JSON.stringify(item.snapshot?.renderedRange) === JSON.stringify(selectionAction.excerpt.snapshot?.renderedRange) &&
+				JSON.stringify(item.snapshot?.diagramRange) === JSON.stringify(selectionAction.excerpt.snapshot?.diagramRange),
 		);
-		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
-  const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
-  const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
+		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) {
+			setDraftPersistenceError("chat.draft.annotationLimit");
+			return;
+		}
+		const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
+		const next = duplicate ? current : [...current, { ...excerpt, order }];
+		const sizeError = excerptSizeError(next);
+		if (sizeError) throw new Error(sizeError);
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		if (!result.ok) throw new Error("chat.draft.excerptSaveFailed");
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
-	}, [draftScope, onAddToChat, selectionAction]);
+	}, [draftScope, onAddToChat, selectionAction, snapshot]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -3620,7 +3637,7 @@ export function Timeline({
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision,
+					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
 				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
@@ -3865,10 +3882,40 @@ export function Timeline({
 		const frame = requestAnimationFrame(() => {
 			window.clearTimeout(annotationHighlightTimer.current);
 			annotationHighlightCleanup.current?.();
-			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision);
+			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision, annotationTarget.snapshot);
 			const scrollerNode = scroller.current;
-			let range = annotationTextRange(annotationBody(source), annotationTarget.text);
-			if (range && scrollerNode) {
+			const diagram = annotationDiagramBlock(source, annotationTarget);
+			let range = annotationReferenceRange(source, annotationTarget);
+			if (diagram && scrollerNode) {
+				const alignDiagram = () => {
+					if (!diagram.isConnected) return;
+					const rect = diagram.getBoundingClientRect();
+					const viewport = scrollerNode.getBoundingClientRect();
+					if (!rect.height || !viewport.height) return;
+					const padding = 12;
+					if (rect.top >= viewport.top + padding && rect.bottom <= viewport.bottom - padding) return;
+					const delta = rect.height > viewport.height - padding * 2
+						? rect.top - viewport.top - padding
+						: rect.top + rect.height / 2 - (viewport.top + viewport.height / 2);
+					scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
+				};
+				alignDiagram();
+				// Mermaid may replace its loading source with a differently sized SVG.
+				// Follow that layout briefly, but stop immediately on user interaction.
+				const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(alignDiagram);
+				observer?.observe(diagram);
+				observer?.observe(source);
+				const stopFollowing = () => observer?.disconnect();
+				const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+				const interactionTarget = scrollerNode.ownerDocument;
+				for (const event of events) interactionTarget.addEventListener(event, stopFollowing, { passive: true });
+				const clearHighlight = annotationHighlightCleanup.current;
+				annotationHighlightCleanup.current = () => {
+					stopFollowing();
+					for (const event of events) interactionTarget.removeEventListener(event, stopFollowing);
+					clearHighlight?.();
+				};
+			} else if (range && scrollerNode) {
 				const rangeRect = range.getBoundingClientRect();
 				const scrollerRect = scrollerNode.getBoundingClientRect();
 				const padding = 12;
@@ -3877,7 +3924,7 @@ export function Timeline({
 					source.scrollIntoView({ behavior: "auto", block: "center" });
 					// Re-read after the source jump; layout may have moved the selected
 					// range before the final centering adjustment.
-					range = annotationTextRange(annotationBody(source), annotationTarget.text);
+					range = annotationReferenceRange(source, annotationTarget);
 					if (range) {
 						const nextRect = range.getBoundingClientRect();
 						const delta = nextRect.top + nextRect.height / 2 - (scrollerRect.top + scrollerRect.height / 2);
@@ -4530,7 +4577,7 @@ export function Timeline({
 		>
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
-				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
+				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
 				ref={scroller}
 				onScroll={onScroll}
@@ -4902,7 +4949,7 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
 }) {
@@ -5298,7 +5345,7 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
 }) {

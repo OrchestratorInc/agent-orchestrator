@@ -1,3 +1,4 @@
+import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
@@ -168,6 +169,7 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+ snapshot?: ChatExcerptSnapshot;
 	fileReference?: ChatFileReference;
 	annotationId?: string;
 	annotationOrder?: number;

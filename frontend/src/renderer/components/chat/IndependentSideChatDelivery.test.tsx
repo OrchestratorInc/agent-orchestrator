@@ -112,7 +112,7 @@ describe("side delivery draft ownership", () => {
 
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();
-		act(() =>
+		await act(async () =>
 			hook.result.current.addReference("side", {
 				id: "chip",
 				conversationId: "main",
@@ -605,7 +605,7 @@ describe("side panel navigation and recovery", () => {
 			.mockReturnValue(new DOMRect(40, 150, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
-		await waitFor(() => expect(text.closest("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		expect(text.closest("[data-chat-message-body]")).not.toHaveClass("chat-annotation-target");
 		expect(scrollTo).not.toHaveBeenCalled();
 		rangeBounds.mockReturnValue(new DOMRect(40, 800, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));

@@ -70,7 +70,7 @@ describe("ChatAnnotationSummary", () => {
 		expect(trigger).toHaveTextContent("2 annotations");
 		fireEvent.click(trigger);
 		const item = screen.getByRole("button", { name: "first selected text" });
-		expect(item.closest("div")).toHaveClass("rounded", "bg-interactive-hover");
+		expect(item.closest("div.relative")).toHaveClass("rounded", "bg-interactive-hover");
 		expect(item.closest("div")).not.toHaveClass("border");
 		fireEvent.click(item);
 		expect(onSelect).toHaveBeenCalledWith({ id: "one", text: "first selected text" });
@@ -100,13 +100,15 @@ describe("ChatAnnotationSummary", () => {
 		expect(onSelect).not.toHaveBeenCalled();
 	});
 
-	it("truncates to one line without showing a full-text tooltip", async () => {
+	it("shows a compact multiline preview with expandable text and no tooltip", async () => {
 		const user = userEvent.setup();
-		const text = "A long annotation excerpt\nwith several lines\nand more context\nthat should remain available in full.";
+		const text = "A long annotation excerpt\nwith several lines\nand more context\nthat should remain available in full.\nline five\nline six\nline seven";
 		render(<ChatAnnotationSummary annotations={[{ id: "one", text }]} />);
 		await user.click(screen.getByRole("button", { name: "1 annotation" }));
 		const item = screen.getByRole("button", { name: /A long annotation excerpt/ });
-		expect(item.querySelector("span")).toHaveClass("truncate");
+		expect(screen.getByText(/A long annotation excerpt/, { selector: "pre" })).toHaveClass("whitespace-pre-wrap", "line-clamp-6");
+		await user.click(screen.getByRole("button", { name: "Show more" }));
+		expect(screen.getByText(text, { selector: "pre", exact: true, normalizer: value => value })).toBeVisible();
 		expect(item).not.toHaveAttribute("title");
 		expect(screen.getByRole("dialog")).toHaveClass("border-(--color-border-overlay)");
 		await user.hover(item);
@@ -129,9 +131,9 @@ describe("ChatAnnotationSummary", () => {
 		rerender(<ChatAnnotationSummary annotations={annotations} onSelect={onSelect} onRemove={onRemove} disabled />);
 		const remove = screen.getByRole("button", { name: "Remove annotation 1" });
 		expect(remove).toBeDisabled();
-		expect(remove).toHaveClass("absolute", "right-1", "top-1/2", "-translate-y-1/2");
+		expect(remove).toHaveClass("absolute", "right-1", "top-1");
 		expect(remove.parentElement).toHaveClass("relative");
-		expect(screen.getByRole("button", { name: "selected text" })).toHaveClass("w-full", "pr-7");
+		expect(screen.getByRole("button", { name: "selected text" }).parentElement).toHaveClass("pr-7");
 		expect(remove.querySelector("svg")).toHaveClass("size-3");
 		expect(screen.getByRole("button", { name: "selected text" })).toBeDisabled();
 		await user.click(remove);
@@ -151,7 +153,7 @@ describe("ChatAnnotationSummary", () => {
 		const trigger = screen.getByRole("button", { name: "2 annotations" });
 		const clear = screen.getByRole("button", { name: "Remove all annotations" });
 		expect(trigger.parentElement).toBe(clear.parentElement);
-		expect(trigger.parentElement).toHaveClass("hover:bg-interactive-active");
+		expect(trigger.parentElement).toHaveClass("has-[>button:first-child:hover]:bg-interactive-active");
 		expect(trigger).toHaveClass("w-full", "pr-7");
 		expect(trigger).not.toHaveClass("hover:bg-interactive-active");
 		await user.click(screen.getByRole("button", { name: "Remove all annotations" }));
@@ -194,12 +196,41 @@ it("renders captured file code as static selectable context alongside navigable 
  const fileReference = captureFileReference({path:"src/retry.ts", side:"file", line:3, endLine:3, lines:[{kind:"context",oldNo:3,newNo:3,text:"await retry();"}]}, "session");
  render(<ChatAnnotationSummary annotations={[{id:"chat", text:"chat selection", order:2}, {id:fileReference.id, text:"file", fileReference, order:1}]} onSelect={onSelect} />);
  fireEvent.click(screen.getByRole("button", {name:"2 annotations"}));
+ expect(screen.getByText("1. retry.ts")).toBeVisible();
+ expect(screen.getByText("2. Selected text:")).toBeVisible();
  fireEvent.click(screen.getByText("await retry();"));
  expect(onSelect).not.toHaveBeenCalled();
  expect(screen.getByText("await retry();").closest("pre")).toHaveClass("select-text");
  expect(screen.queryByRole("button",{name:/retry.ts/})).not.toBeInTheDocument();
  fireEvent.click(screen.getByRole("button", {name:"chat selection"}));
  expect(onSelect).toHaveBeenCalledOnce();
+});
+
+it("keeps raw content and turn context hidden and shows only a diagram badge", async () => {
+ const user = userEvent.setup();
+ render(<ChatAnnotationSummary annotations={[{ id: "diagram", text: "", snapshot: { version: 1, captureMode: "block", rawText: "flowchart LR; A-->B", containsFlowchart: true, badgeOnly: true, sourceTurnId: "t", turn: { id: "t", messages: [{ role: "assistant", text: "hidden turn" }] } } }]} />);
+ await user.click(screen.getByRole("button", { name: "1 annotation" }));
+ const badge = screen.getByText("Flowchart attached", { selector: "span" });
+ expect(badge).toBeVisible();
+ expect(badge.closest("button")).toHaveTextContent("1. Selected text:");
+ expect(screen.queryByText("flowchart LR; A-->B")).not.toBeInTheDocument();
+ expect(screen.queryByText("hidden turn")).not.toBeInTheDocument();
+ expect(screen.queryByText("View selected text")).not.toBeInTheDocument();
+ expect(screen.getByRole("dialog").querySelector("pre")).toBeNull();
+});
+
+it("expands Unicode quotes without navigating and collapses them again", async () => {
+ const user = userEvent.setup();
+ const onSelect = vi.fn();
+ const text = "🙂".repeat(601);
+ render(<ChatAnnotationSummary annotations={[{ id: "unicode", text }]} onSelect={onSelect} />);
+ await user.click(screen.getByRole("button", { name: "1 annotation" }));
+ expect(screen.getByRole("dialog").querySelector("pre")?.textContent).toBe("🙂".repeat(600) + "…");
+ await user.click(screen.getByRole("button", { name: "Show more" }));
+ expect(screen.getByRole("dialog").querySelector("pre")?.textContent).toBe(text);
+ await user.click(screen.getByRole("button", { name: "Show less" }));
+ expect(screen.getByRole("dialog").querySelector("pre")).toHaveClass("line-clamp-6");
+ expect(onSelect).not.toHaveBeenCalled();
 });
 
 it("does not bubble preview clicks to the composer and steal selection focus", async () => {

@@ -979,7 +979,7 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
+		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
 	);
 	return (
 		<div
@@ -1029,6 +1029,7 @@ export function HumanMessage({
 									conversationId: excerpt.sourceConversationId,
 	 messageId: excerpt.sourceMessageId,
 									revision: excerpt.sourceRevision,
+									snapshot: excerpt.snapshot,
 								}))}
 								onSelect={onSelectAnnotation}
 								className="mb-2"
