@@ -275,6 +275,13 @@ const STREAM_FLUSH_MS = 32;
 export const CHAT_EVENTS_SAFETY_POLL_MS = 10_000;
 /** How often they are read while the stream is down or still opening. */
 export const CHAT_EVENTS_FALLBACK_POLL_MS = 1_000;
+/**
+ * How long a closed chat keeps its events: reopened within it, the
+ * conversation shows at once and only what is newer is read. React Query's
+ * default (5 min) made a chat reopened after a short break read its whole
+ * history again behind a blank screen.
+ */
+export const CHAT_EVENTS_CACHE_MS = 60 * 60_000;
 
 /**
  * Feeds a Cloud session's chat events into its cached list as the control
@@ -1226,6 +1233,7 @@ export function CloudSessionChatSurface({
 	const eventsQuery = useQuery({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
 		enabled: Boolean(cloud && ready),
+		gcTime: CHAT_EVENTS_CACHE_MS,
 		// The event stream delivers events as they are committed; the poll only
 		// catches what a dropped or not-yet-open stream missed. An open stream
 		// counts from the moment it opens, so an idle chat slows down at once.
@@ -1643,6 +1651,9 @@ export function CloudSessionChatSurface({
 		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
 			snapshot={snapshot}
+			// Until the first read the chat's history is unknown, not empty: a Cloud
+			// session says nothing of its messages, so it opens as one that has some.
+			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError}
 			localEchos={openingEchos}
 			openingStartedAt={opening?.createdAt}
 			onSessionLinkOpen={openSessionLink}

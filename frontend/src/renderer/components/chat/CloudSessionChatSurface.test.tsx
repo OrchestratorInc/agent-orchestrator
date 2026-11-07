@@ -12,7 +12,7 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -91,6 +91,37 @@ describe("CloudSessionChatSurface", () => {
 		// The composer's agent and model picker reads each agent's list through
 		// this organization's Cloud catalog (AgentSwitchPicker).
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
+	});
+
+	it("holds a chat it hasn't read yet as one with history, and reopens a closed chat from its cache", async () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Why?", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "Because of the cache.", turnId: "turn-1", itemId: "reply" }, createdAt: session.updatedAt },
+		];
+		let answer!: (page: { events: typeof events; hasMore: boolean; nextAfter: number }) => void;
+		cloudMocks.listChatEvents.mockReset().mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>;
+		const view = render(surface);
+		// Unread, the history is unknown rather than empty: no new-chat welcome.
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(true);
+		await act(async () => answer({ events, hasMore: false, nextAfter: 2 }));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(false);
+		view.unmount();
+		// Closed, the chat's events outlive React Query's 5 minute default.
+		expect(queryClient.getQueryCache().find({ queryKey: ["cloud-chat-events", "org-1", session.id] })?.gcTime).toBe(CHAT_EVENTS_CACHE_MS);
+		expect(CHAT_EVENTS_CACHE_MS).toBeGreaterThan(5 * 60_000);
+		// Reopened, it shows the cached conversation from its first frame and reads only what is newer.
+		cloudMocks.chatProps.mockClear();
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 2 });
+		render(surface);
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].snapshot.items).toHaveLength(2);
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(false);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenLastCalledWith("org-1", session.id, { after: 2, limit: 500 }));
 	});
 
 	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
