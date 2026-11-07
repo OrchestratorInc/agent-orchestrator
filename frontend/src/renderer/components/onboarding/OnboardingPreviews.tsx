@@ -70,8 +70,8 @@ const DURATION_NORMAL = 0.15; // --duration-normal
 
 /** The app as it lays out in a 1040x760 window: the same UI at a smaller
  * window size, so the whole window fits the stage at a readable scale. */
-const APP_WIDTH = 1040;
-const APP_HEIGHT = 760;
+export const APP_WIDTH = 1040;
+export const APP_HEIGHT = 760;
 /** --size-sidebar-default; a new install has not resized the sidebar. */
 const SIDEBAR_WIDTH = 240;
 /** Window inset from the stage's left edge. */
@@ -89,12 +89,14 @@ const PHONE_GAP = 32;
 const PHONE_TURN = 40;
 const SLIDE_SPRING = { type: "spring", visualDuration: 0.4, bounce: 0.12 } as const;
 /** Rows and cards settling into place: quick, with the faintest overshoot. */
-const ROW_SPRING = { type: "spring", visualDuration: 0.35, bounce: 0.1 } as const;
+const ROW_SPRING = { type: "spring", visualDuration: 0.5, bounce: 0 } as const;
 /** Pages sliding across the center panel. */
 const PAGE_FADE = { duration: 0.24, ease: EASE_OUT } as const;
 
-/** A plain iPhone body: thin titanium band, black bezel, the display, and the
- * side buttons. No gloss. The screen lays out at the phone's logical width
+/** A plain iPhone body as a line drawing: one stroke for the body, a second
+ * for the display, side buttons as short strokes. No fill, gloss or shadow;
+ * only the display is filled, with the page, so the window behind it does not
+ * show through. The screen lays out at the phone's logical width
  * (393pt) and is scaled as one piece to fill the display, like the window. */
 function PhoneFrame({ height, children }: { height: number; children: ReactNode }) {
 	const width = height * PHONE_WIDTH_PER_HEIGHT;
@@ -104,11 +106,10 @@ function PhoneFrame({ height, children }: { height: number; children: ReactNode 
 	const displayWidth = width - 2 * (band + bezel);
 	const displayHeight = height - 2 * (band + bezel);
 	const screenScale = displayWidth / PHONE_SCREEN_WIDTH;
-	const titanium = "linear-gradient(90deg, #2a2a2c, #4d4d50 6%, #2f2f31 50%, #4d4d50 94%, #2a2a2c)";
 	const button = (side: "left" | "right", top: number, length: number) => (
 		<span
-			className="absolute w-[3px] rounded-[2px]"
-			style={{ [side]: -2.5, top: `${top}%`, height: `${length}%`, background: "linear-gradient(90deg, #232325, #4a4a4d, #232325)" }}
+			className="absolute w-[3px] rounded-[2px] border border-(--schematic-line)"
+			style={{ [side]: -2.5, top: `${top}%`, height: `${length}%` }}
 		/>
 	);
 	return (
@@ -118,11 +119,11 @@ function PhoneFrame({ height, children }: { height: number; children: ReactNode 
 			{button("left", 35, 8)}
 			{button("right", 27, 12)}
 			<div
-				className="relative size-full shadow-[0_0_0_0.5px_rgba(0,0,0,0.9),0_30px_60px_-12px_rgba(0,0,0,0.65)]"
-				style={{ borderRadius: radius, padding: band, background: titanium }}
+				className="relative size-full bg-(--schematic-page) shadow-[inset_0_0_0_1px_var(--schematic-line)]"
+				style={{ borderRadius: radius, padding: band }}
 			>
-				<div className="size-full bg-black shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.08)]" style={{ borderRadius: radius - band, padding: bezel }}>
-					<div className="relative size-full overflow-hidden" style={{ borderRadius: radius - band - bezel }}>
+				<div className="size-full" style={{ borderRadius: radius - band, padding: bezel }}>
+					<div className="relative size-full overflow-hidden shadow-[0_0_0_1px_var(--schematic-line)]" style={{ borderRadius: radius - band - bezel }}>
 						<div
 							className="absolute left-0 top-0 origin-top-left"
 							style={{ width: PHONE_SCREEN_WIDTH, height: displayHeight / screenScale, transform: `scale(${screenScale})` }}
@@ -158,6 +159,37 @@ function layoutRect(box: HTMLElement, element: HTMLElement): AppRect | null {
 	}
 	if (node !== box) return null;
 	return { left, top, width: element.offsetWidth, height: element.offsetHeight };
+}
+
+const DRAWING_EDGE = "linear-gradient(to right, black 93%, rgb(0 0 0 / 0.6) 96.5%, transparent 100%)";
+
+/** Blur steps for DrawingBlur, softest first. Each comes in along a long ramp
+ * overlapping the next, so the blur deepens continuously towards the bottom
+ * edge with no band where a layer starts. */
+const BLUR_STEPS = [1, 2, 4, 8, 16] as const;
+/** The blur only starts this close to the window's bottom edge, so a part of
+ * the drawing that merely sits low (the phone) stays sharp; only what runs
+ * off the edge goes soft. */
+const BLUR_BAND = 96;
+
+/** The drawing goes soft towards the window's bottom edge instead of being
+ * cut: blur only, no fade. */
+function DrawingBlur() {
+	return (
+		<div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0" style={{ height: BLUR_BAND }}>
+			{BLUR_STEPS.map((blur, index) => {
+				const start = (index / BLUR_STEPS.length) * 70;
+				const mask = `linear-gradient(to bottom, transparent ${start}%, black ${start + 30}%)`;
+				return (
+					<div
+						key={blur}
+						className="absolute inset-0"
+						style={{ backdropFilter: `blur(${blur}px)`, WebkitBackdropFilter: `blur(${blur}px)`, maskImage: mask, WebkitMaskImage: mask }}
+					/>
+				);
+			})}
+		</div>
+	);
 }
 
 /** How far the camera may zoom past the fitted window, so text stays crisp. */
@@ -261,10 +293,22 @@ export function PreviewStage({
 		};
 	}
 	return (
-		<div ref={ref} aria-hidden="true" inert className="pointer-events-none relative min-h-0 flex-1 select-none overflow-hidden border-l border-border">
+		// Not clipped: the drawing runs on past the stage, under the copy and off
+		// the window's edges, like a sheet that keeps going.
+		<div ref={ref} aria-hidden="true" inert className="pointer-events-none relative min-h-0 flex-1 select-none">
 			<div data-opaque={opaque} className="onboarding-preview-stage absolute inset-y-0 left-0" style={{ width: size?.width ?? "100%" }}>
 			{size ? (
-				<motion.div className="absolute inset-0" initial={{ x: 0 }} animate={{ x: windowShift }} transition={transition}>
+				// Its own backdrop root (the no-op filter), so the blur below sees only
+				// the drawing, never the wallpaper behind it. A short soft edge at the
+				// stage's right boundary keeps a zoomed drawing from running under the
+				// copy; the rest of the drawing is never faded.
+				<motion.div
+					className="absolute inset-0"
+					style={{ filter: "blur(0px)", maskImage: DRAWING_EDGE, WebkitMaskImage: DRAWING_EDGE }}
+					initial={{ x: 0 }}
+					animate={{ x: windowShift }}
+					transition={transition}
+				>
 					<motion.div
 						ref={boxRef}
 						data-preview-box=""
@@ -276,11 +320,12 @@ export function PreviewStage({
 					>
 						{/* The window's glass, tint and shadow: one persistent plate under
 						    whichever step's contents are showing. */}
-						<div className="onboarding-preview-plate absolute inset-0 rounded-[16px] shadow-[0_22px_70px_4px_rgba(0,0,0,0.56),0_0_0_0.5px_#000]">
+						<div className="onboarding-preview-plate absolute inset-0 rounded-[16px]">
 							{panel ? <div className="onboarding-preview-panel-backing absolute" style={panel} /> : null}
 						</div>
 						{children}
 					</motion.div>
+					<DrawingBlur />
 				</motion.div>
 			) : null}
 			{size && phone != null ? (
@@ -420,8 +465,8 @@ export function PreviewWindow({
 			</div>
 			<TitlebarCluster />
 			<TrafficLights />
-			{/* macOS window edge: a 1px light inner ring inside a hairline. */}
-			<div className="pointer-events-none absolute inset-0 z-titlebar rounded-[16px] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]" />
+			{/* Window edge: the schematic's one line weight. */}
+			<div className="pointer-events-none absolute inset-0 z-titlebar rounded-[16px] shadow-[inset_0_0_0_1px_var(--schematic-line)]" />
 		</div>
 	);
 }
@@ -700,6 +745,13 @@ export type PreviewCard = {
 	branch?: string;
 	/** The worker's open pull request, shown as the card's PR row. */
 	pr?: number;
+	/** The file the agent is in, and its change so far, for the detailed card. */
+	file?: string;
+	diff?: ReadonlyArray<readonly ["+" | "-", string]>;
+	added?: number;
+	removed?: number;
+	/** What the worker is asking you, while it waits on you. */
+	question?: string;
 };
 
 /**
@@ -708,7 +760,7 @@ export type PreviewCard = {
  * into its slot. Positions come from layoutRect, the window's own unscaled
  * coordinates, so the camera's zoom never skews the motion.
  */
-function useCardFlip(rootRef: RefObject<HTMLElement | null>, signature: string, reduceMotion: boolean) {
+export function useCardFlip(rootRef: RefObject<HTMLElement | null>, signature: string, reduceMotion: boolean) {
 	const rects = useRef(new Map<string, AppRect>());
 	useLayoutEffect(() => {
 		const root = rootRef.current;
@@ -743,7 +795,7 @@ function useCardFlip(rootRef: RefObject<HTMLElement | null>, signature: string, 
 }
 
 /** A card crossing the board: a touch slower than a row, settling softly. */
-const CARD_SPRING = { type: "spring", visualDuration: 0.6, bounce: 0.12 } as const;
+const CARD_SPRING = { type: "spring", visualDuration: 0.8, bounce: 0 } as const;
 
 /** The board page as SessionsBoard.tsx renders it: the page topbar (Board,
  * Task, Orchestrator) over the real SessionsBoardGridView with all four lanes,

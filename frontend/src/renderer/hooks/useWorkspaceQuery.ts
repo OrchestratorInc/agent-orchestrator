@@ -9,6 +9,7 @@ import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSha
 import { useCloudCp } from "./useCloudCp";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
+import { withDevFakeProject } from "../lib/dev-fake-project";
 import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
@@ -272,7 +273,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 				? (window as unknown as { __aoFakeAgent?: FakeAgentSeam }).__aoFakeAgent
 				: undefined;
 		const snapshot = fake ? fake.snapshot() : mockWorkspaces;
-		return applyOptimisticSessionKills(snapshot) ?? snapshot;
+		return withDevFakeProject(applyOptimisticSessionKills(snapshot) ?? snapshot);
 	}
 	if (!hasTrustedApiBaseUrl()) {
 		throw new DaemonNotReadyError();
@@ -313,7 +314,8 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	const workspaces =
 		standalone.sessions.length > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects;
 	// Pending optimistic kills must survive CDC/refetch while the daemon kill is in flight.
-	return applyOptimisticSessionKills(workspaces) ?? workspaces;
+	// Dev builds may add the guided tour's pretend project (dev-fake-project).
+	return withDevFakeProject(applyOptimisticSessionKills(workspaces) ?? workspaces);
 }
 
 async function fetchRemoteProjects(hostId: string) {

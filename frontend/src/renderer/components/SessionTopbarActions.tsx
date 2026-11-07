@@ -216,7 +216,8 @@ export function SessionTopbarActions({
 			{!isOrchestrator && supportsProjectActions ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<span className="inline-flex" style={noDragStyle}>
+						{/* The guided tour lights this on a session's page too (GuidedTour). */}
+						<span className="inline-flex" style={noDragStyle} data-tour="orchestrator-header">
 							<TopbarButton
 								aria-label={t("shell.openOrchestrator")}
 								className="topbar-control--labeled"
