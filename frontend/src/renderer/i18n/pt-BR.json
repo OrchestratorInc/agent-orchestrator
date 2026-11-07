@@ -4167,5 +4167,9 @@
 	"teams.accessVia": "{{access}} · por {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} compartilhou {{thing}} com {{team}}",
 	"teams.sharedToastWithYou": "{{name}} compartilhou {{thing}} com você",
-	"teams.open": "Abrir"
+	"teams.open": "Abrir",
+	"chat.reminders.label": "Acompanhamentos agendados",
+	"chat.reminders.cancel": "Cancelar acompanhamento",
+	"chat.reminders.cancelFailed": "Não foi possível cancelar o acompanhamento.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

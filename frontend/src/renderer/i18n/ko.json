@@ -4085,5 +4085,9 @@
 	"teams.accessVia": "{{access}} · {{team}} 통해",
 	"teams.sharedToastViaTeam": "{{name}}님이 {{thing}}을(를) {{team}}과(와) 공유했습니다",
 	"teams.sharedToastWithYou": "{{name}}님이 {{thing}}을(를) 나와 공유했습니다",
-	"teams.open": "열기"
+	"teams.open": "열기",
+	"chat.reminders.label": "예약된 후속 작업",
+	"chat.reminders.cancel": "후속 작업 취소",
+	"chat.reminders.cancelFailed": "후속 작업을 취소할 수 없습니다.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

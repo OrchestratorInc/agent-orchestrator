@@ -841,6 +841,22 @@ type SessionNumFloor struct {
 	MaxNum   int64
 }
 
+type SessionReminder struct {
+	ID           domain.ReminderID
+	SessionID    domain.SessionID
+	ProjectID    domain.ProjectID
+	Name         string
+	Message      string
+	DueAt        time.Time
+	CreatedBy    domain.ReminderCreator
+	Status       domain.ReminderStatus
+	StatusReason string
+	Attempts     int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	ResolvedAt   sql.NullTime
+}
+
 type SessionTelemetry struct {
 	SessionID         string
 	CreatedBy         string

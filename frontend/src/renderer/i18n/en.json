@@ -4066,5 +4066,9 @@
 	"teams.accessVia": "{{access}} · via {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} shared {{thing}} with {{team}}",
 	"teams.sharedToastWithYou": "{{name}} shared {{thing}} with you",
-	"teams.open": "Open"
+	"teams.open": "Open",
+	"chat.reminders.label": "Scheduled follow-ups",
+	"chat.reminders.cancel": "Cancel follow-up",
+	"chat.reminders.cancelFailed": "Could not cancel the follow-up.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

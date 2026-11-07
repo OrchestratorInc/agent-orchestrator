@@ -170,6 +170,7 @@ import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
+import { SessionReminders } from "./SessionReminders";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
@@ -1989,6 +1990,7 @@ function ChatWorkspaceContent({
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
+								{conversationEmpty || activeRemoteHostId ? null : <SessionReminders sessionId={snapshot.sessionId} />}
 								{limitedTurn?.usageLimit && retryControl ? (
 									<UsageLimitNotice
 										key={limitedTurn.id}

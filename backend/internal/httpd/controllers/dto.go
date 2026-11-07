@@ -78,6 +78,54 @@ type ListReportsQuery struct {
 	ProjectID string `query:"projectId" required:"true" description:"Stable project identifier."`
 }
 
+// CreateReminderRequest schedules one follow-up into an existing session. Like
+// reports, SessionID is attribution on the unauthenticated loopback API, not
+// proof of authorship.
+type CreateReminderRequest struct {
+	SessionID string    `json:"sessionId" minLength:"1"`
+	Message   string    `json:"message" minLength:"1" maxLength:"4000"`
+	Name      string    `json:"name,omitempty" maxLength:"120"`
+	DueAt     time.Time `json:"dueAt" description:"When to deliver the follow-up (RFC 3339), at least 1 minute and at most 30 days ahead."`
+	CreatedBy string    `json:"createdBy,omitempty" enum:"agent,user" description:"Who scheduled it. Defaults to agent."`
+}
+
+// ReminderResponse is one scheduled follow-up.
+type ReminderResponse struct {
+	ID           string     `json:"id"`
+	SessionID    string     `json:"sessionId"`
+	ProjectID    string     `json:"projectId"`
+	Name         string     `json:"name,omitempty"`
+	Message      string     `json:"message"`
+	DueAt        time.Time  `json:"dueAt"`
+	CreatedBy    string     `json:"createdBy" enum:"agent,user"`
+	Status       string     `json:"status" enum:"pending,delivered,cancelled,dropped"`
+	StatusReason string     `json:"statusReason,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	ResolvedAt   *time.Time `json:"resolvedAt,omitempty"`
+}
+
+// ReminderEnvelope wraps one reminder.
+type ReminderEnvelope struct {
+	Reminder ReminderResponse `json:"reminder"`
+}
+
+// ListRemindersResponse contains a session's pending reminders, soonest first.
+type ListRemindersResponse struct {
+	Reminders []ReminderResponse `json:"reminders"`
+}
+
+// ListRemindersQuery selects a session's pending reminders.
+type ListRemindersQuery struct {
+	SessionID string `query:"sessionId" required:"true" description:"Session whose pending reminders to list."`
+}
+
+// CancelReminderParams identifies the reminder to cancel and, optionally, the
+// session it must belong to.
+type CancelReminderParams struct {
+	ReminderID string `path:"reminderId" description:"Reminder identifier."`
+	SessionID  string `query:"sessionId" description:"When set, only cancel the reminder if it belongs to this session."`
+}
+
 // HTTP response envelopes for the projects surface — the SINGLE definition of
 // each wire shape. The handlers encode these (envelope.WriteJSON), and
 // apispec.Build reflects these same types into openapi.yaml, so the served
