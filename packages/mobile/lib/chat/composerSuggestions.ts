@@ -28,9 +28,9 @@ export function rankComposerCatalog(catalog: ComposerPickerCatalog, query: strin
 /**
  * Match the desktop composer's text contract exactly.
  *
- * A skill is a slash command and therefore only starts at the beginning of the
- * message (ignoring leading whitespace). A file may be mentioned after any
- * whitespace boundary. Email addresses, URLs and ordinary paths remain text.
+ * Both a slash skill and an @ file open at the start of the message or after any
+ * whitespace, so either can be added after existing text. Email addresses, URLs
+ * and ordinary paths remain text.
  */
 export function findComposerSuggestion(text: string, cursor = text.length): ComposerSuggestion | undefined {
 	const caret = Math.max(0, Math.min(cursor, text.length));
@@ -42,10 +42,12 @@ export function findComposerSuggestion(text: string, cursor = text.length): Comp
 		// Slashes inside an @ path and @ signs inside an ordinary token are not
 		// triggers. Keep scanning toward the token boundary for the real sigil.
 		if (preceding !== undefined && !/\s/.test(preceding)) continue;
-		if (char === "/" && text.slice(0, index).trim() !== "") return undefined;
+		const query = text.slice(index + 1, caret);
+		// Skill names have no slash, so `/etc/hosts` is a path, not a command.
+		if (char === "/" && query.includes("/")) return undefined;
 		return {
 			kind: char === "/" ? "skills" : "files",
-			query: text.slice(index + 1, caret),
+			query,
 			start: index,
 			end: caret,
 		};
