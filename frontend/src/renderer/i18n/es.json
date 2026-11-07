@@ -3787,6 +3787,8 @@
 	"sessionImport.messages_other": "{{count}} mensajes",
 	"sessionImport.alreadyImported": "Ya en AO",
 	"sessionImport.allInAO": "Todos los chats de aquí ya están en AO.",
+	"sessionImport.toImport": "Por importar",
+	"sessionImport.noneInAO": "Ningún chat de esta lista está en AO todavía.",
 	"sessionImport.failed": "La importación falló. Inténtalo de nuevo.",
 	"sessionImport.selectAll_many": "Seleccionar todas · {{count}} conversaciones",
 	"sessionImport.result_many": "{{count}} conversaciones importadas.",

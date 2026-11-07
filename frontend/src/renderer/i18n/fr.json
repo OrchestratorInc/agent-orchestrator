@@ -3787,6 +3787,8 @@
 	"sessionImport.messages_other": "{{count}} messages",
 	"sessionImport.alreadyImported": "Déjà dans AO",
 	"sessionImport.allInAO": "Toutes les discussions ici sont déjà dans AO.",
+	"sessionImport.toImport": "À importer",
+	"sessionImport.noneInAO": "Aucune discussion de cette liste n’est encore dans AO.",
 	"sessionImport.failed": "L’importation a échoué. Réessayez.",
 	"sessionImport.selectAll_many": "Tout sélectionner · {{count}} conversations",
 	"sessionImport.result_many": "{{count}} conversations importées.",

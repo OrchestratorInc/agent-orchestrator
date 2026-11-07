@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
 import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
@@ -12,7 +12,7 @@ import { useUiStore } from "../../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
-import { Pressable } from "../../ui/pressable";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { SettingsSearch } from "../SettingsSearch";
 import type { components } from "../../../../api/schema";
@@ -22,6 +22,9 @@ type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
 export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "aider", "devin", "cline", "cursor", "grok", "opencode", "opencode-v2"]);
+
+/** The list's two tabs: chats to import, and chats already in AO. */
+type ImportView = "new" | "inAO";
 
 const folderFilter = "folder:";
 /** The most chats one import request takes. */
@@ -46,7 +49,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	// Choices made on the last list (a selection or an import) survive the next scan.
 	const keepChoicesRef = useRef(false);
 	const [error, setError] = useState<string>();
-	const [showInAO, setShowInAO] = useState(false);
+	const [view, setView] = useState<ImportView>("new");
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const navigateToSession = useNavigateToSession();
@@ -111,8 +114,8 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						: c.projectId === project)) &&
 			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
-	// Chats already in AO before this list was read sit in their own collapsed
-	// section; chats imported from this list stay in place until the next scan.
+	// Chats already in AO before this list was read have their own tab; chats
+	// imported from this list stay in place until the next scan.
 	const inAO = visible.filter((c) => c.sessionId);
 	const listed = visible.filter((c) => !c.sessionId);
 	const importedIds = new Set(results.filter((r) => r.status !== "failed").map((r) => r.id));
@@ -247,70 +250,80 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 			</div>
-			<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
+			<Tabs
+				value={view}
+				onValueChange={(value) => setView(value as ImportView)}
+				className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border"
+			>
 				{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
-				<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
-					<Checkbox
-						aria-label={t("sessionImport.selectAllAria")}
-						checked={
-							eligible.length > 0 && eligible.every((c) => selected.has(c.id))
-						}
-						onCheckedChange={(checked) =>
-							toggle(
-								eligible.map((c) => c.id),
-								checked === true,
-							)
-						}
-						disabled={importing || !eligible.length}
-					/>
-					{t("sessionImport.selectAll", { count: eligible.length })}
-				</label>
-				<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-					{listed.map((c) => (
-						<ImportRow
+				<div className="flex shrink-0 border-b border-border px-2 py-2">
+					<TabsList>
+						<TabsTrigger value="new" className="text-xs">
+							{t("sessionImport.toImport")} · {listed.length}
+						</TabsTrigger>
+						<TabsTrigger value="inAO" className="text-xs">
+							{t("sessionImport.alreadyImported")} · {inAO.length}
+						</TabsTrigger>
+					</TabsList>
+				</div>
+				<TabsContent value="new" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
+					<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
+						<Checkbox
+							aria-label={t("sessionImport.selectAllAria")}
+							checked={
+								eligible.length > 0 && eligible.every((c) => selected.has(c.id))
+							}
+							onCheckedChange={(checked) =>
+								toggle(
+									eligible.map((c) => c.id),
+									checked === true,
+								)
+							}
+							disabled={importing || !eligible.length}
+						/>
+						{t("sessionImport.selectAll", { count: eligible.length })}
+					</label>
+					<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+						{listed.map((c) => (
+							<ImportRow
+								key={c.id}
+								candidate={c}
+								projectName={projectName(c)}
+								selected={selected.has(c.id)}
+								disabled={importing}
+								result={results.find((r) => r.id === c.id)}
+								onSelect={(checked) => toggle([c.id], checked)}
+								onOpen={(sessionId) => openSession(c, sessionId)}
+							/>
+						))}
+						{!preview.isFetching && !listed.length ? (
+							<p className="p-6 text-sm text-muted-foreground">
+								{inAO.length
+									? t("sessionImport.allInAO")
+									: needle
+										? t("sessionImport.noMatches", { query: query.trim() })
+										: t("sessionImport.empty")}
+							</p>
+						) : null}
+					</div>
+				</TabsContent>
+				<TabsContent
+					value="inAO"
+					className="settings-thin-scrollbar min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain data-[state=inactive]:hidden"
+				>
+					{inAO.map((c) => (
+						<InAORow
 							key={c.id}
 							candidate={c}
 							projectName={projectName(c)}
-							selected={selected.has(c.id)}
-							disabled={importing}
-							result={results.find((r) => r.id === c.id)}
-							onSelect={(checked) => toggle([c.id], checked)}
-							onOpen={(sessionId) => openSession(c, sessionId)}
+							onOpen={() => openSession(c, c.sessionId as string)}
 						/>
 					))}
-					{!preview.isFetching && !listed.length ? (
-						<p className="p-6 text-sm text-muted-foreground">
-							{inAO.length
-								? t("sessionImport.allInAO")
-								: needle
-									? t("sessionImport.noMatches", { query: query.trim() })
-									: t("sessionImport.empty")}
-						</p>
+					{!preview.isFetching && !inAO.length ? (
+						<p className="p-6 text-sm text-muted-foreground">{t("sessionImport.noneInAO")}</p>
 					) : null}
-					{inAO.length ? (
-						<div className="border-t border-border">
-							<Pressable
-								className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
-								aria-expanded={showInAO}
-								onClick={() => setShowInAO((open) => !open)}
-							>
-								<ChevronDown className={`size-4 shrink-0 transition-transform ${showInAO ? "" : "-rotate-90"}`} aria-hidden="true" />
-								{t("sessionImport.alreadyImported")} · {inAO.length}
-							</Pressable>
-							{showInAO
-								? inAO.map((c) => (
-										<InAORow
-											key={c.id}
-											candidate={c}
-											projectName={projectName(c)}
-											onOpen={() => openSession(c, c.sessionId as string)}
-										/>
-									))
-								: null}
-						</div>
-					) : null}
-				</div>
-			</div>
+				</TabsContent>
+			</Tabs>
 			<div className="flex shrink-0 flex-col gap-3">
 				{newFolders.length ? (
 					<p className="text-xs text-muted-foreground">
@@ -456,7 +469,7 @@ function ImportRow({
 function InAORow({ candidate: c, projectName, onOpen }: { candidate: Candidate; projectName: string; onOpen: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<div className="flex items-center gap-3 border-t border-border py-2 pr-3 pl-9">
+		<div className="flex items-center gap-3 border-b border-border px-3 py-2 last:border-0">
 			<span className="min-w-0 flex-1 text-muted-foreground">
 				<span className="block truncate text-sm">{c.title}</span>
 				<span className="block truncate text-xs">

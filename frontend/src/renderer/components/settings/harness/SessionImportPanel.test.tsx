@@ -187,7 +187,7 @@ it("imports only selected Copilot chats through the existing import flow", async
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["copilot-chat"] } });
 });
 
-it("keeps chats already in AO in a collapsed section that opens them instead of importing", async () => {
+it("shows chats already in AO on their own tab, opened instead of imported", async () => {
 	api.GET.mockResolvedValue({
 		data: {
 			candidates: [
@@ -198,11 +198,11 @@ it("keeps chats already in AO in a collapsed section that opens them instead of 
 	});
 	renderPanel();
 	await screen.findByRole("checkbox", { name: "Import New chat" });
+	expect(screen.getByRole("tab", { name: "To import · 1" })).toHaveAttribute("aria-selected", "true");
 	expect(screen.getByText("Select all shown · 1 conversation")).toBeInTheDocument();
 	expect(screen.queryByText("Imported chat")).not.toBeInTheDocument();
-	const section = screen.getByRole("button", { name: "Already in AO · 1" });
-	expect(section).toHaveAttribute("aria-expanded", "false");
-	fireEvent.click(section);
+	const user = userEvent.setup();
+	await user.click(screen.getByRole("tab", { name: "Already in AO · 1" }));
 	expect(screen.getByText("Imported chat")).toBeInTheDocument();
 	expect(screen.queryByRole("checkbox", { name: "Import Imported chat" })).not.toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Open" }));
