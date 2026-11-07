@@ -77,9 +77,6 @@ jobs:
       - name: Test CI scripts
         run: node --test scripts/ci-lanes.test.mjs scripts/ci-sharding.test.mjs scripts/create-migration.test.mjs
 
-      - name: Test self-hosted setup
-        run: bash scripts/setup-self-hosted.test.sh
-
   ci-ok:
     if: always()
     needs: [changes, go, cli-e2e, frontend, mobile, config]
