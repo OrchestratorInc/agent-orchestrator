@@ -24,7 +24,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 		<Host style={{ flex: 1 }} colorScheme={scheme}>
 			<Form modifiers={formModifiers(t)}>
 				<Section
-					footer={editor.accountManaged && failure ? <FormFooter error>{failure.message}</FormFooter> : undefined}
+					footer={editor.accountManaged ? <FormFooter error>{failure?.message}</FormFooter> : undefined}
 					modifiers={sectionModifiers(t)}
 				>
 					<FormTextField
@@ -47,7 +47,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 				) : (
 					<Section
 						title="Connection"
-						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : undefined}
+						footer={<FormFooter error>{connectionError}</FormFooter>}
 						modifiers={sectionModifiers(t)}
 					>
 						<FormTextField

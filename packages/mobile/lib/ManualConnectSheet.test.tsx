@@ -169,7 +169,8 @@ describe("ManualConnectSheet on iOS", () => {
 		// A footer isn't read out as it appears, so VoiceOver is told.
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("manual-connect-password", "right");
-		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
+		// Cleared but still mounted (see the footer test below).
+		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer.props).toMatchObject({ error: false, children: undefined });
 	});
 
 	it("enables Connect once the form has a name and a host, saying what it waits for", async () => {
@@ -183,7 +184,33 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(hint()).toMatchObject({ children: "Add a name to connect." });
 		await type("manual-connect-name", "Office PC");
 		expect(confirm().props.disabled).toBe(false);
-		expect(hint()).toBeUndefined();
+		expect(hint().children).toBeUndefined();
+	});
+
+	// @expo/ui's Section is a different SwiftUI view with and without a footer, so
+	// adding or removing one rebuilds the section's fields and the focused field
+	// loses focus: the keyboard closed after the first character of a host. The
+	// footer stays mounted and only its text changes.
+	it("keeps the connection footer mounted while the hint, the port error and a failure come and go", async () => {
+		fixtures.ping.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(401));
+		render();
+		const footer = () => renderer!.root.findAllByType("Section" as never)[1].props.footer;
+		const steps: Array<[string, () => Promise<void>]> = [
+			["name", () => type("manual-connect-name", "Office PC")],
+			["first host character", () => type("manual-connect-host", "1")],
+			["host cleared", () => type("manual-connect-host", "")],
+			["host", () => type("manual-connect-host", "192.168.1.30")],
+			["port invalid", () => type("manual-connect-port", "0")],
+			["port valid", () => type("manual-connect-port", "3011")],
+			["password", () => type("manual-connect-password", "wrong")],
+			["failed connect", () => act(async () => confirm().props.onPress())],
+			["password fixed", () => type("manual-connect-password", "right")],
+		];
+		expect(footer()).toBeDefined();
+		for (const [step, run] of steps) {
+			await run();
+			expect(footer(), step).toBeDefined();
+		}
 	});
 
 	it("reveals the password in place and hides it again", () => {
