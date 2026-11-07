@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -318,6 +319,9 @@ export function useBrowserView({
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
+	const automaticBrowser = useAutomaticBrowserStore((state) => state.mode);
+	const automaticBrowserLoaded = useAutomaticBrowserStore((state) => state.loaded);
+	useEffect(() => { void useAutomaticBrowserStore.getState().load(); }, []);
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
 	const [viewId, setViewId] = useState("");
@@ -1241,7 +1245,7 @@ export function useBrowserView({
 		// During a session switch React still renders once with the prior
 		// viewId state, while the cleanup has already cleared viewIdRef. Do not
 		// consume the new session's preview revision against that stale view.
-		if (!viewId || viewIdRef.current !== viewId || terminated) return;
+		if (!automaticBrowserLoaded || !viewId || viewIdRef.current !== viewId || terminated) return;
 		const target = previewUrl?.trim() ?? "";
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
@@ -1256,18 +1260,20 @@ export function useBrowserView({
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
 			let cancelled = false;
+			const mode = automaticBrowser;
+			if (mode === "blocked") return undefined;
 			const resolved = origin
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : showPreview(url);
+				return cancelled ? undefined : mode === "external" ? aoBridge.app.openExternal(url) : showPreview(url);
 			}).catch((error) => console.warn("Unable to open browser preview", error));
 			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
+	}, [automaticBrowser, automaticBrowserLoaded, clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;

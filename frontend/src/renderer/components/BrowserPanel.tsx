@@ -80,6 +80,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
@@ -480,6 +481,10 @@ export function BrowserPanelView({
 	const customWidthInputRef = useRef<HTMLInputElement>(null);
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const automaticBrowser = useAutomaticBrowserStore((state) => state.mode);
+	const setAutomaticBrowser = useAutomaticBrowserStore((state) => state.setMode);
+	const automaticBrowserSaving = useAutomaticBrowserStore((state) => state.saving);
+	const automaticBrowserError = useAutomaticBrowserStore((state) => state.error);
 	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
 	const [profilesLoading, setProfilesLoading] = useState(false);
@@ -1619,6 +1624,13 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
+								<div className="px-2 py-1.5 text-caption text-passive">{t("settings.automaticBrowser")}</div>
+								{(["internal", "external", "blocked"] as const).map((mode) => <DropdownMenuItem key={mode} disabled={automaticBrowserSaving} className="gap-2" onSelect={() => void setAutomaticBrowser(mode)}>
+									<span className="flex size-4 shrink-0 items-center justify-center">{automaticBrowser === mode ? <Check aria-hidden="true" className="text-accent" /> : null}</span>
+									{t(`settings.automaticBrowser.${mode}`)}
+								</DropdownMenuItem>)}
+								{automaticBrowserError && <div role="alert" className="px-2 py-1 text-caption text-error">{t("settings.automaticBrowser.saveFailed")}</div>}
+								<div className="my-1 h-px bg-border" role="separator" />
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {

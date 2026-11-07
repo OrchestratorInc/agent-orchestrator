@@ -36,6 +36,7 @@ describe("BrowserProfilesSection", () => {
 		window.ao!.browserProfiles = bridge;
 
 		render(<BrowserProfilesSection />);
+		expect(screen.getByRole("button", { name: "Automatic browser opening" })).toBeInTheDocument();
 		expect(await screen.findByText("Work")).toBeInTheDocument();
 		expect(bridge.list).toHaveBeenCalledOnce();
 
