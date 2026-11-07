@@ -386,13 +386,39 @@ func (s *Store) commitSessionControllerEpoch(
 			}
 		}
 		if released != 1 {
-			return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
+			degraded, err := degradedFreshTerminalAdmitted(ctx, q, id)
+			if err != nil {
+				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
+			}
+			if !degraded {
+				return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit controller epoch transaction for %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// degradedFreshTerminalAdmitted reports that the session's active transition
+// was admitted as a degraded Chat -> TUI switch with no resumable native
+// conversation. That switch promises a fresh terminal with the Chat archived,
+// so a conversation with history is expected: it keeps its rows and provider
+// binding. Every other fresh terminal still needs the empty-Chat proof, because
+// there a touched conversation means work would be discarded.
+func degradedFreshTerminalAdmitted(ctx context.Context, q *gen.Queries, id domain.SessionID) (bool, error) {
+	row, err := q.GetActiveSessionInterfaceTransition(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read active interface transition: %w", err)
+	}
+	active := transitionRowToDomain(row)
+	return active.SourceMode == domain.SessionModeChat && active.TargetMode == domain.SessionModeTUI &&
+		active.NativeConversationID == "" &&
+		active.DegradedKind == domain.SessionInterfaceTransitionDegradedIdentityReset, nil
 }
 
 // ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
