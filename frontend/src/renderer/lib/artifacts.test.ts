@@ -50,6 +50,7 @@ describe("groupArtifactsByProject", () => {
 			sessionId: "ao-1",
 			sessionTitle: "Session ao-1",
 			projectId: "ao",
+			workspaceId: "ws",
 			kind: "html",
 			previewUrl: "http://preview/flow.html",
 		});

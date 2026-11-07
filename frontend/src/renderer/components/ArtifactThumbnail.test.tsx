@@ -32,6 +32,7 @@ function artifact(path: string, kind: ArtifactRow["kind"] = "file"): ArtifactRow
 		kind,
 		updatedAt: VERSION,
 		sessionId: "session-1",
+		workspaceId: "ws",
 		sessionTitle: "Cloud output",
 		cloud: { orgId: "org-1" },
 	};

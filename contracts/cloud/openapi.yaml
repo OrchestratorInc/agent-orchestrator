@@ -157,7 +157,8 @@ paths:
         presign them with presignArtifactShareParts, PUT each, then
         finalizeArtifactShare. There is no file size limit. Nothing reaches
         storage when the upload is refused: 415
-        artifact_share_type_unsupported for video, 409
+        artifact_share_type_unsupported for a video browsers cannot play
+        (.avi, .mkv), 409
         artifact_share_limit_reached for a new or restored document over the
         free plan's link limit, 409 artifact_share_name_changed for an update
         with another name. Paid plans have no link limit.
@@ -1528,7 +1529,8 @@ paths:
         member of the organization or the session holds no file at path; 409
         artifact_share_source_changed when the session's file is no longer
         the sha256 the caller was shown (inspect it again); 415
-        artifact_share_type_unsupported for a video.
+        artifact_share_type_unsupported for a video browsers cannot play
+        (.avi, .mkv).
 
         Only a person publishes: the route accepts only a signed-in account
         session, the bearer token of every user route. Worker, sandbox and

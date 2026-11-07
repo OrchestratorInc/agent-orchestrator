@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import type { ArtifactRow } from "../lib/artifacts";
+import { ShareArtifactButton, ShareArtifactRowButton } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.baseUrl } }) }));
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status, session: null }) }));
 vi.mock("../stores/ui-store", () => ({
 	useUiStore: (select: (state: { openGlobalSettings: typeof mocks.openSettings }) => unknown) => select({ openGlobalSettings: mocks.openSettings }),
@@ -45,6 +47,38 @@ beforeEach(() => {
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
 	vi.restoreAllMocks();
+});
+
+describe("ShareArtifactRowButton", () => {
+	const row: ArtifactRow = {
+		path: "docs/report.html", name: "report.html", kind: "html", updatedAt: "2026-11-01T00:00:00Z",
+		sessionId: "sess-1", sessionTitle: "Report", workspaceId: "__standalone__",
+	};
+	const cloud = { orgId: "org-1", createdByUserId: "me-1" };
+	const showRow = (shown: ArtifactRow) => render(<TooltipProvider><ShareArtifactRowButton iconOnly row={shown} /></TooltipProvider>);
+
+	it("names a Scratchpad file's document as Share in its session does", async () => {
+		const { inspectSpy } = stub(inspection, links);
+		showRow(row);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: report.html" }));
+		await waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "sess-1", path: "docs/report.html", projectId: "__standalone__" })));
+	});
+
+	it("names a cloud file by its organization", async () => {
+		const { inspectSpy } = stub(inspection, links);
+		showRow({ ...row, cloud });
+		await userEvent.click(await screen.findByRole("button", { name: "Share: report.html" }));
+		await waitFor(() => expect(inspectSpy).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", orgId: "org-1", projectId: "" })));
+	});
+
+	it.each([
+		["another member's", { ...cloud, createdByUserId: "someone-else" }],
+		["a shared session's", { ...cloud, shared: true }],
+	])("offers nothing for %s file", async (_name, session) => {
+		showRow({ ...row, cloud: session as ArtifactRow["cloud"] });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("button", { name: "Share: report.html" })).toBeNull();
+	});
 });
 
 describe("ShareArtifactButton", () => {
@@ -318,9 +352,32 @@ describe("ShareArtifactButton", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy());
 	});
 
-	it("disables Share for a video", async () => {
+	it("disables Share for a video no browser plays", async () => {
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mkv" }} name="clip.mkv" /></TooltipProvider>);
+		expect(await screen.findByRole("button", { name: "Share: clip.mkv" })).toBeDisabled();
+	});
+
+	it("publishes a video", async () => {
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "cancelled" });
 		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
-		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
+		await userEvent.click(await screen.findByRole("button", { name: "Share: clip.mp4" }));
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeEnabled();
+	});
+
+	it("shows the control plane's own reason when it refuses a file", async () => {
+		// An older control plane refuses every video, including one that plays.
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "unsupported", message: "Sharing videos is coming soon." });
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: clip.mp4" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("Sharing videos is coming soon.")).toBeTruthy();
+	});
+
+	it("says a compressed file's contents are not checked", async () => {
+		stub({ ...inspection, name: "repo.zip" }, links, { status: "cancelled" });
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "repo.zip" }} name="repo.zip" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: repo.zip" }));
+		expect(await screen.findByText(/compressed files/)).toBeTruthy();
 	});
 
 });

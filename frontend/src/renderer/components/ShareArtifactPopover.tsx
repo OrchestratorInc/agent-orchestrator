@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Globe, Share } from "lucide-react";
 import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useSettings } from "../hooks/useSettings";
+import type { ArtifactRow } from "../lib/artifacts";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
 import { cn } from "../lib/utils";
@@ -14,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 type Phase =
 	| { kind: "loading" }
 	| { kind: "signin" }
-	| { kind: "unsupported" }
+	| { kind: "unsupported"; message?: string }
 	| { kind: "notOwner" }
 	| { kind: "limit"; limit: number }
 	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean; unpublished?: boolean }
@@ -32,8 +34,10 @@ interface OutdatedShare {
 	changed?: boolean;
 }
 
-/** Videos are not shared yet: there is no partial-file serving for them. */
-const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
+/** Video formats no browser plays: a link has no download, so it could not show them. */
+const UNPLAYABLE_VIDEO_FILE = /\.(avi|mkv)$/i;
+/** Compressed files, whose contents the credentials check cannot read. */
+const ARCHIVE_FILE = /\.(zip|tar|tgz|gz|bz2|xz|7z|rar|docx|xlsx|pptx)$/i;
 const COPIED_MS = 2_000;
 
 /**
@@ -108,47 +112,79 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
  * The Share button beside an open local artifact's other actions. It opens a
  * popover anchored to it: publish the file as a public link, or, once it is
  * published, copy the link, unpublish it, or republish a file that changed
- * since. For a video the button is disabled and says why.
+ * since. For a video no browser plays the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const available = useShareAvailable();
-	const video = VIDEO_FILE.test(file.path);
+	const unplayable = UNPLAYABLE_VIDEO_FILE.test(file.path);
 	const button = (
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
-			disabled={video}
-			size="sm"
+			disabled={unplayable}
+			size={iconOnly ? "icon-sm" : "sm"}
 			type="button"
 			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{t("artifacts.share.menu")}
+			{iconOnly ? null : t("artifacts.share.menu")}
 		</Button>
 	);
 	// Not offered where the control plane does not serve share links.
 	if (!available) return null;
-	if (video) {
+	if (unplayable) {
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex" tabIndex={0}>{button}</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("artifacts.share.videoSoon")}</TooltipContent>
+				<TooltipContent side="bottom">{t("artifacts.share.videoUnplayable")}</TooltipContent>
 			</Tooltip>
 		);
 	}
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{button}</PopoverTrigger>
+			{iconOnly ? (
+				// The popover's trigger is the outer one, so the button's data-state
+				// says whether the popover is open, not whether the tooltip is.
+				<Tooltip>
+					<PopoverTrigger asChild>
+						<TooltipTrigger asChild>{button}</TooltipTrigger>
+					</PopoverTrigger>
+					<TooltipContent side="bottom">{t("artifacts.share.menu")}</TooltipContent>
+				</Tooltip>
+			) : (
+				<PopoverTrigger asChild>{button}</PopoverTrigger>
+			)}
 			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+/**
+ * Share for a file listed on the Artifacts page. It names the same document as
+ * Share in the session, whichever of the two publishes first, so a file never
+ * gets a second link. Only the person who started a cloud session shares its
+ * files.
+ */
+export function ShareArtifactRowButton({ row, className, iconOnly }: { row: ArtifactRow; className?: string; iconOnly?: boolean }) {
+	const cloudUserId = useCloudMeUserId(Boolean(row.cloud));
+	if (row.cloud && (row.cloud.shared || !cloudUserId || row.cloud.createdByUserId !== cloudUserId)) return null;
+	return (
+		<ShareArtifactButton
+			className={className}
+			file={row.cloud
+				? { source: "cloud", orgId: row.cloud.orgId, sessionId: row.sessionId, path: row.path, projectId: "" }
+				: { sessionId: row.sessionId, path: row.path, projectId: row.workspaceId }}
+			iconOnly={iconOnly}
+			name={row.name}
+		/>
 	);
 }
 
@@ -184,7 +220,7 @@ function SharePanel({
 				if (share) return setPhase({ kind: "published", share, outdated: { inspection: result.inspection, links, changed: true } });
 				return setPhase({ kind: "publish", inspection: result.inspection, links, changed: true });
 			case "unsupported":
-				return setPhase({ kind: "unsupported" });
+				return setPhase({ kind: "unsupported", message: result.message });
 			case "not_owner":
 				return setPhase({ kind: "notOwner" });
 			case "signed_out":
@@ -318,7 +354,7 @@ function SharePanel({
 				</>
 			);
 		case "unsupported":
-			return <>{title}{status(t("artifacts.share.videoSoon"))}</>;
+			return <>{title}{status(phase.message ?? t("artifacts.share.videoUnplayable"))}</>;
 		case "notOwner":
 			return <>{title}{status(t("artifacts.share.notOwner"))}</>;
 		case "limit":
@@ -341,6 +377,7 @@ function SharePanel({
 					{title}
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") }), "alert") : null}
+					{ARCHIVE_FILE.test(file.path) ? status(t("artifacts.share.reviewArchive")) : null}
 					{footer(
 						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
 						<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>,
