@@ -349,7 +349,7 @@ function HomePageContent() {
 						)}
 					</section>
 
-					<SessionImportOffer />
+					{workspaceQuery.isSuccess && recentProjects.length === 0 ? <SessionImportOffer /> : null}
 				</div>
 
 				<CreateProjectFlow

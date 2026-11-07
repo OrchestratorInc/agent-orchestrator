@@ -176,7 +176,9 @@ import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ProjectImportOffer } from "../ProjectImportOffer";
+import { useImportedAgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -852,6 +854,7 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+	const importBlock = useImportedAgentBlock(session, activeRemoteHostId).block;
  const fileNavigationGeneration=useRef(0);
  useEffect(()=>{fileNavigationGeneration.current++;return ()=>{fileNavigationGeneration.current++}},[snapshot.sessionId,activeRemoteHostId,workspaceActiveTabKey]);
 	const remoteCreateMux = useMemo(
@@ -1996,7 +1999,7 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
-								<ControllerBanner
+								{importBlock && session ? null : <ControllerBanner
 									controller={snapshot.controller}
 									provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 									quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2013,7 +2016,7 @@ function ChatWorkspaceContent({
 									onOpenShell={onOpenShell}
 									openingShell={openingShell}
 									shellError={shellError}
-								/>
+								/>}
 								<WelcomePromptSuggestions
 									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
@@ -2036,7 +2039,9 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									{session?.mode === "tui" && session.needsResume ? (
+									{importBlock && session ? (
+										<ImportedAgentBlocked agent={session.provider} block={importBlock} />
+									) : session?.mode === "tui" && session.needsResume ? (
 										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
 									) : <ChatComposer
 										notice={composerNotice}
@@ -2157,6 +2162,7 @@ function ChatWorkspaceContent({
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
+								{conversationEmpty && sessionRole === "orchestrator" && session ? <ProjectImportOffer className="mt-2" projectId={session.workspaceId} /> : null}
 								{draftNotice}
 							</div>
 						</div>

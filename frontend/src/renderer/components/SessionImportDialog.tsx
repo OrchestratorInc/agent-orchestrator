@@ -1,0 +1,369 @@
+import { useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronRight, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
+import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { agentLabel } from "../lib/agent-options";
+import { formatTimeCompact } from "../lib/format-time";
+import {
+	agentBlock,
+	folderName,
+	importChats,
+	projectChats,
+	sessionImportPreviewQuery,
+	type AgentBlock,
+	type ImportCandidate,
+	type ImportResult,
+} from "../lib/session-import";
+import { cn } from "../lib/utils";
+import { useSessionImportStore } from "../stores/session-import-store";
+import { useUiStore } from "../stores/ui-store";
+import { AgentAvatar } from "./AgentAvatar";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+	settingsDialogBodyClass,
+	settingsDialogContentClass,
+	settingsDialogFooterClass,
+	settingsDialogHeaderClass,
+} from "./ui/dialog";
+import { Pressable } from "./ui/pressable";
+
+type Folder = {
+	key: string;
+	name: string;
+	path: string;
+	folder?: string;
+	chats: ImportCandidate[];
+	agents: string[];
+	lastActivity: string;
+	suggested: boolean;
+};
+
+const SUGGESTED_FOLDER_CHATS = 3;
+const MAX_FOLDER_LOGOS = 3;
+
+export function SessionImportDialog() {
+	const dialog = useSessionImportStore((state) => state.dialog);
+	const closeDialog = useSessionImportStore((state) => state.closeDialog);
+	if (!dialog) return null;
+	return (
+		<Dialog open onOpenChange={(open) => !open && closeDialog()}>
+			<DialogContent
+				className={settingsDialogContentClass}
+				data-testid="session-import-dialog"
+				{...(dialog.kind === "project" ? { "aria-describedby": undefined } : {})}
+			>
+				{dialog.kind === "project" ? <ProjectChats projectId={dialog.projectId} onClose={closeDialog} /> : <Folders onClose={closeDialog} />}
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+function useImportRun(onDone: (results: ImportResult[]) => void) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [importing, setImporting] = useState(false);
+	const [error, setError] = useState<string>();
+	const run = async (ids: string[], folders?: string[]) => {
+		setImporting(true);
+		setError(undefined);
+		try {
+			const results = await importChats(queryClient, ids, folders);
+			const failed = results.filter((result) => result.status === "failed").length;
+			if (failed) setError(t("sessionImport.resultFailed", { count: failed }));
+			onDone(results);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("sessionImport.failed"));
+		} finally {
+			setImporting(false);
+		}
+	};
+	return { importing, error, run };
+}
+
+function useAgentBlocks() {
+	const readiness = useAgentReadinessQuery();
+	return (harness: string) => agentBlock(readiness.data?.agents.find((agent) => agent.id === harness));
+}
+
+function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+	const { t } = useTranslation();
+	const workspaces = useQuery(workspaceQueryOptions);
+	const name = workspaces.data?.find((workspace) => workspace.id === projectId)?.name ?? projectId;
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
+	const blockOf = useAgentBlocks();
+	const recordImport = useSessionImportStore((state) => state.recordImport);
+	const [unchecked, setUnchecked] = useState(new Set<string>());
+	const chats = projectChats(preview.data?.candidates, projectId);
+	const selected = chats.filter((chat) => !unchecked.has(chat.id));
+	const { importing, error, run } = useImportRun((results) => {
+		const created = results.filter((result) => result.status === "created").length;
+		if (created) recordImport(projectId, created);
+		if (!results.some((result) => result.status === "failed")) onClose();
+	});
+	return (
+		<>
+			<div className={settingsDialogHeaderClass}>
+				<DialogTitle>{t("sessionImport.projectDialogTitle", { project: name })}</DialogTitle>
+			</div>
+			<div className={settingsDialogBodyClass}>
+				<PreviewState pending={preview.isPending} error={preview.error} empty={!chats.length} emptyText={t("sessionImport.projectEmpty")}>
+					<div className="overflow-hidden rounded-md border border-border">
+						{chats.map((chat) => (
+							<ChatRow
+								key={chat.id}
+								chat={chat}
+								block={blockOf(chat.harness)}
+								checked={!unchecked.has(chat.id)}
+								disabled={importing}
+								onCheckedChange={(checked) =>
+									setUnchecked((current) => {
+										const next = new Set(current);
+										if (checked) next.delete(chat.id);
+										else next.add(chat.id);
+										return next;
+									})
+								}
+							/>
+						))}
+					</div>
+				</PreviewState>
+				{error ? (
+					<p role="alert" className="text-sm text-destructive">
+						{error}
+					</p>
+				) : null}
+			</div>
+			<div className={settingsDialogFooterClass}>
+				<Button variant="footer" onClick={onClose}>
+					{t("sessionImport.cancel")}
+				</Button>
+				<Button variant="footer-primary" disabled={importing || !selected.length} onClick={() => void run(selected.map((chat) => chat.id))}>
+					{importing ? t("sessionImport.importing") : t("sessionImport.importChats", { count: selected.length })}
+				</Button>
+			</div>
+		</>
+	);
+}
+
+function Folders({ onClose }: { onClose: () => void }) {
+	const { t } = useTranslation();
+	const workspaces = useQuery(workspaceQueryOptions);
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
+	const blockOf = useAgentBlocks();
+	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const [picked, setPicked] = useState<Set<string>>();
+	const [showOther, setShowOther] = useState(false);
+	const byKey = new Map<string, Folder>();
+	for (const chat of preview.data?.candidates ?? []) {
+		const key = chat.projectId ?? chat.folder;
+		if (!key || chat.sessionId) continue;
+		const project = chat.projectId ? workspaces.data?.find((workspace) => workspace.id === chat.projectId) : undefined;
+		const folder = byKey.get(key) ?? {
+			key,
+			name: project?.name ?? folderName(chat.folder ?? key),
+			path: project?.path ?? chat.folder ?? key,
+			folder: chat.projectId ? undefined : chat.folder,
+			chats: [],
+			agents: [],
+			lastActivity: chat.lastActivity,
+			suggested: false,
+		};
+		folder.chats.push(chat);
+		if (!folder.agents.includes(chat.harness)) folder.agents.push(chat.harness);
+		if (chat.lastActivity > folder.lastActivity) folder.lastActivity = chat.lastActivity;
+		byKey.set(key, folder);
+	}
+	const folders = [...byKey.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+	for (const folder of folders) {
+		folder.suggested = folder.chats.filter((chat) => chat.suggested && !blockOf(chat.harness)).length >= SUGGESTED_FOLDER_CHATS;
+	}
+	const suggested = folders.filter((folder) => folder.suggested);
+	const other = folders.filter((folder) => !folder.suggested);
+	const selected = picked ?? new Set(suggested.map((folder) => folder.key));
+	const chosen = folders.filter((folder) => selected.has(folder.key));
+	const toggle = (key: string, checked: boolean) =>
+		setPicked((current) => {
+			const next = new Set(current ?? selected);
+			if (checked) next.add(key);
+			else next.delete(key);
+			return next;
+		});
+	const { importing, error, run } = useImportRun((results) => {
+		const created = results.filter((result) => result.status === "created").length;
+		if (created) {
+			closeSessionImportOffer();
+			showGlobalToast(t("sessionImport.foldersImported", { count: created }), undefined, "success");
+		}
+		if (!results.some((result) => result.status === "failed")) onClose();
+	});
+	const otherOpen = showOther || !suggested.length;
+	const row = (folder: Folder) => (
+		<FolderRow key={folder.key} folder={folder} checked={selected.has(folder.key)} disabled={importing} onCheckedChange={(checked) => toggle(folder.key, checked)} />
+	);
+	return (
+		<>
+			<div className={settingsDialogHeaderClass}>
+				<DialogTitle>{t("sessionImport.foldersTitle")}</DialogTitle>
+				<DialogDescription>{t("sessionImport.foldersDescription")}</DialogDescription>
+			</div>
+			<div className={settingsDialogBodyClass}>
+				<PreviewState pending={preview.isPending} error={preview.error} empty={!folders.length} emptyText={t("sessionImport.foldersEmpty")}>
+					<div className="flex flex-col gap-3">
+						{suggested.length ? <div className="overflow-hidden rounded-md border border-border">{suggested.map(row)}</div> : null}
+						{other.length ? (
+							<div className="flex flex-col gap-2">
+								{suggested.length ? (
+									<Pressable
+										aria-expanded={otherOpen}
+										className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+										onClick={() => setShowOther(!showOther)}
+									>
+										<ChevronRight aria-hidden="true" className={cn("size-3.5 transition-transform", otherOpen && "rotate-90")} />
+										{t("sessionImport.otherFolders", { count: other.length })}
+									</Pressable>
+								) : null}
+								{otherOpen ? <div className="overflow-hidden rounded-md border border-border">{other.map(row)}</div> : null}
+							</div>
+						) : null}
+					</div>
+				</PreviewState>
+				{error ? (
+					<p role="alert" className="text-sm text-destructive">
+						{error}
+					</p>
+				) : null}
+			</div>
+			<div className={settingsDialogFooterClass}>
+				<Button variant="footer" onClick={onClose}>
+					{t("sessionImport.cancel")}
+				</Button>
+				<Button
+					variant="footer-primary"
+					disabled={importing || !chosen.length}
+					onClick={() =>
+						void run(
+							chosen.flatMap((folder) => folder.chats.map((chat) => chat.id)),
+							chosen.flatMap((folder) => (folder.folder ? [folder.folder] : [])),
+						)
+					}
+				>
+					{importing ? t("sessionImport.importing") : t("sessionImport.importFolders", { count: chosen.length })}
+				</Button>
+			</div>
+		</>
+	);
+}
+
+function PreviewState({ pending, error, empty, emptyText, children }: { pending: boolean; error: Error | null; empty: boolean; emptyText: string; children: ReactNode }) {
+	const { t } = useTranslation();
+	if (pending) {
+		return (
+			<p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+				<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+				{t("sessionImport.reading")}
+			</p>
+		);
+	}
+	if (error) {
+		return (
+			<p role="alert" className="text-sm text-destructive">
+				{error.message}
+			</p>
+		);
+	}
+	if (empty) return <p className="text-sm text-muted-foreground">{emptyText}</p>;
+	return children;
+}
+
+function When({ at }: { at: string }) {
+	const { i18n } = useTranslation();
+	return (
+		<time dateTime={at} title={new Date(at).toLocaleString(i18n.resolvedLanguage)}>
+			{formatTimeCompact(at, { longUnits: true })}
+		</time>
+	);
+}
+
+function ChatRow({
+	chat,
+	block,
+	checked,
+	disabled,
+	onCheckedChange,
+}: {
+	chat: ImportCandidate;
+	block?: AgentBlock;
+	checked: boolean;
+	disabled: boolean;
+	onCheckedChange: (checked: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	return (
+		<label className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 last:border-0">
+			<Checkbox
+				aria-label={t("sessionImport.selectConversation", { title: chat.title })}
+				checked={checked}
+				disabled={disabled}
+				onCheckedChange={(next) => onCheckedChange(next === true)}
+			/>
+			<AgentAvatar className="size-4 shrink-0" decorative provider={chat.harness} />
+			<span className="min-w-0 flex-1">
+				<span className="block truncate text-sm">{chat.title}</span>
+				<span className="block truncate text-xs text-muted-foreground">
+					{agentLabel(chat.harness)} · {t("sessionImport.messages", { count: chat.messageCount })} · <When at={chat.lastActivity} />
+					{block ? <span className="text-warning"> · {t(block === "signed_out" ? "sessionImport.agentSignedOut" : "sessionImport.agentMissing")}</span> : null}
+				</span>
+			</span>
+		</label>
+	);
+}
+
+function FolderRow({
+	folder,
+	checked,
+	disabled,
+	onCheckedChange,
+}: {
+	folder: Folder;
+	checked: boolean;
+	disabled: boolean;
+	onCheckedChange: (checked: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	return (
+		<label className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 last:border-0">
+			<Checkbox
+				aria-label={t("sessionImport.selectFolder", { name: folder.name })}
+				checked={checked}
+				disabled={disabled}
+				onCheckedChange={(next) => onCheckedChange(next === true)}
+			/>
+			<span className="min-w-0 flex-1">
+				<span className="block truncate text-sm font-medium">{folder.name}</span>
+				<span className="block truncate text-xs text-muted-foreground" title={folder.path}>
+					{folder.path}
+				</span>
+			</span>
+			<span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+				<span className="flex items-center gap-0.5" role="img" aria-label={folder.agents.map(agentLabel).join(", ")}>
+					{folder.agents.slice(0, MAX_FOLDER_LOGOS).map((agent) => (
+						<AgentAvatar key={agent} className="size-3.5" decorative provider={agent} />
+					))}
+					{folder.agents.length > MAX_FOLDER_LOGOS ? (
+						<span className="pl-0.5 tabular-nums">{t("sessionImport.offerMore", { count: folder.agents.length - MAX_FOLDER_LOGOS })}</span>
+					) : null}
+				</span>
+				<span className="tabular-nums">{t("sessionImport.chats", { count: folder.chats.length })}</span>
+				<When at={folder.lastActivity} />
+			</span>
+		</label>
+	);
+}

@@ -4,32 +4,20 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
-import { apiClient, apiErrorCode } from "../../../lib/api-client";
-import { apiErrorException } from "../../../lib/api-error-exception";
-import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
+import { workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../../../lib/format-time";
 import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
+import { folderName, importableProject, importChats, MAX_IMPORT, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
 import { useUiStore } from "../../../stores/ui-store";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { SettingsSearch } from "../SettingsSearch";
-import type { components } from "../../../../api/schema";
-
-type Candidate = components["schemas"]["SessionImportCandidate"];
-type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
 export { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
 
 const folderFilter = "folder:";
-/** The most chats one import request takes. */
-const MAX_IMPORT = 500;
-
-function folderName(path: string): string {
-	return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
-}
 
 /** One agent's chats on this computer, from the daemon's validated preview. A
  * chat from a Git folder that is not a project yet adds that folder as a
@@ -55,24 +43,11 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const projects = useMemo(
 		() =>
 			(workspaces.data ?? [])
-				.filter((w) => !w.hostId && w.kind !== CLOUD_PROJECT_KIND && w.id !== STANDALONE_WORKSPACE_ID)
+				.filter(importableProject)
 				.map((w) => ({ id: w.id, name: w.name })),
 		[workspaces.data],
 	);
-	const preview = useQuery({
-		queryKey: ["session-import-preview"],
-		retry: false,
-		staleTime: 0,
-		refetchOnWindowFocus: false,
-		refetchOnReconnect: false,
-		queryFn: async ({ signal }) => {
-			const response = await apiClient.GET("/api/v1/session-import", {
-				signal,
-			});
-			if (response.error) throw apiErrorException(response.error);
-			return response.data;
-		},
-	});
+	const preview = useQuery(sessionImportPreviewQuery);
 	useEffect(() => {
 		if (!preview.data || importingRef.current) return;
 		const list = preview.data.candidates;
@@ -119,15 +94,12 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		closeSettings();
 		navigateToSession(c.projectId, sessionId);
 	};
-	// The most recent chat this import created.
-	let firstCreated: { candidate: Candidate; sessionId: string } | undefined;
-	for (const r of results) {
-		if (r.status !== "created" || !r.sessionId) continue;
-		const c = candidates.find((item) => item.id === r.id);
-		if (c && (!firstCreated || c.lastActivity.localeCompare(firstCreated.candidate.lastActivity) > 0)) {
-			firstCreated = { candidate: c, sessionId: r.sessionId };
-		}
-	}
+	const created = results.flatMap((r) => {
+		const c = r.status === "created" && r.sessionId ? candidates.find((item) => item.id === r.id) : undefined;
+		return c && r.sessionId ? [{ candidate: c, sessionId: r.sessionId }] : [];
+	});
+	const createdProjects = new Set(created.map((x) => x.candidate.projectId));
+	const onlyProject = createdProjects.size === 1 ? [...createdProjects][0] : undefined;
 	const toggle = (ids: string[], checked: boolean) => {
 		keepChoicesRef.current = true;
 		setSelected((current) => {
@@ -146,38 +118,16 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		setError(undefined);
 		const ids = selectedVisible.map((c) => c.id);
 		try {
-			// A chat imports into its folder's project: add new folders, then scan again.
-			for (const path of newFolders) {
-				const added = await apiClient.POST("/api/v1/projects", { body: { path } });
-				if (added.error && apiErrorCode(added.error) !== "PATH_ALREADY_REGISTERED") {
-					throw apiErrorException(added.error);
-				}
-			}
-			if (newFolders.length) {
-				setProject("all");
-				const rescan = await preview.refetch();
-				if (rescan.error) throw rescan.error;
-			}
-			const response = await apiClient.POST("/api/v1/session-import", {
-				body: { ids },
-			});
-			if (response.error) throw apiErrorException(response.error);
-			setResults(response.data.results);
-			setSelected(
-				new Set(
-					response.data.results
-						.filter((r) => r.status === "failed")
-						.map((r) => r.id),
-				),
-			);
-			if (response.data.results.some((r) => r.status === "created")) closeSessionImportOffer();
+			if (newFolders.length) setProject("all");
+			const imported = await importChats(queryClient, ids, newFolders);
+			setResults(imported);
+			setSelected(new Set(imported.filter((r) => r.status === "failed").map((r) => r.id)));
+			if (imported.some((r) => r.status === "created")) closeSessionImportOffer();
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : t("sessionImport.failed"),
 			);
 		} finally {
-			// A request that fails partway may still have created sessions.
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			importingRef.current = false;
 			setImporting(false);
 		}
@@ -293,24 +243,21 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						<p role="status" className="text-sm">
 							{summarize(results)}
 						</p>
-						{firstCreated ? (
-							<>
-								<Button size="sm" variant="secondary" onClick={() => openSession(firstCreated.candidate, firstCreated.sessionId)}>
-									{t("sessionImport.openChat")}
-								</Button>
-								{firstCreated.candidate.projectId ? (
-									<Button
-										size="sm"
-										variant="ghost"
-										onClick={() => {
-											closeSettings();
-											void navigate(projectNavigateTarget(firstCreated.candidate.projectId as string));
-										}}
-									>
-										{t("sessionImport.showProject")}
-									</Button>
-								) : null}
-							</>
+						{created.length === 1 ? (
+							<Button size="sm" variant="secondary" onClick={() => openSession(created[0].candidate, created[0].sessionId)}>
+								{t("sessionImport.openChat")}
+							</Button>
+						) : onlyProject ? (
+							<Button
+								size="sm"
+								variant="secondary"
+								onClick={() => {
+									closeSettings();
+									void navigate(projectNavigateTarget(onlyProject));
+								}}
+							>
+								{t("sessionImport.showProject")}
+							</Button>
 						) : null}
 					</div>
 				) : null}

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { SessionImportOffer } from "./SessionImportOffer";
 
@@ -25,23 +25,15 @@ function renderOffer(...agents: ReturnType<typeof agent>[]) {
 beforeEach(() => {
 	window.localStorage.clear();
 	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false });
+	useSessionImportStore.setState({ dialog: null });
 });
 
-it("offers a direct button when only one importable agent is configured", () => {
-	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("amp", true, "authorized"));
-	expect(screen.queryByRole("button", { name: /Import chats/ })).not.toBeInTheDocument();
-	fireEvent.click(screen.getByRole("button", { name: "Import Claude Code chats" }));
-	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", harnessTab: "import" });
-});
-
-it("groups several agents under one menu, each opening that agent's Import tab", async () => {
-	renderOffer(agent("claude-code", true, "authorized"), agent("pi", true, "authorized"), agent("codex", true, "unauthorized"));
-	expect(screen.queryByRole("button", { name: /Claude Code chats/ })).not.toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Import chats" }));
-	const menu = await screen.findByRole("menu");
-	expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "Pi"]);
-	await userEvent.click(within(menu).getByRole("menuitem", { name: "Pi" }));
-	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "pi", harnessTab: "import" });
+it("opens the folder picker for every configured agent at once", () => {
+	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "authorized"), agent("amp", true, "authorized"));
+	expect(screen.getByRole("img", { name: "Claude Code, Codex" })).toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Choose folders" }));
+	expect(useSessionImportStore.getState().dialog).toEqual({ kind: "folders" });
+	expect(useUiStore.getState().settingsModal).toBeNull();
 });
 
 it("shows only logos for harnesses with import enabled", () => {
@@ -67,14 +59,5 @@ it("stays hidden once dismissed", () => {
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 	unmount();
 	renderOffer(agent("codex", true, "authorized"));
-	expect(screen.queryByRole("button", { name: "Import Codex chats" })).not.toBeInTheDocument();
-});
-
-it("opens Copilot's import tab only when Copilot is installed and signed in", () => {
-	const view = renderOffer(agent("copilot", true, "unauthorized"));
-	expect(screen.queryByRole("button", { name: "Import GitHub Copilot chats" })).not.toBeInTheDocument();
-	view.unmount();
-	renderOffer(agent("copilot", true, "authorized"));
-	fireEvent.click(screen.getByRole("button", { name: "Import GitHub Copilot chats" }));
-	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "copilot", harnessTab: "import" });
+	expect(screen.queryByRole("button", { name: "Choose folders" })).not.toBeInTheDocument();
 });

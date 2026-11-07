@@ -92,6 +92,7 @@ import {
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
+import { useImportedAgentBlock } from "../lib/session-import";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -596,6 +597,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
+	const importBlock = useImportedAgentBlock(session, hostId);
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
@@ -615,7 +617,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
+		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
 	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
@@ -627,12 +629,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			openedSession.current.checked = true;
 			return;
 		}
-		if (!canResume) return;
+		if (!canResume || importBlock.block || importBlock.checking) return;
 		// One attempt per route opening; a failed resume or a later agent exit
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);

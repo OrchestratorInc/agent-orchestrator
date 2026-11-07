@@ -51,6 +51,8 @@ function renderPanel(harness: AgentId = "claude-code") {
 }
 beforeEach(() => {
 	vi.clearAllMocks();
+	api.GET.mockReset();
+	api.POST.mockReset();
 	window.localStorage.clear();
 	useUiStore.setState({ sessionImportOfferClosed: false });
 	api.GET.mockResolvedValue({
@@ -118,6 +120,43 @@ it("opens an imported chat from the result line and from its row", async () => {
 	expect(openSession).toHaveBeenLastCalledWith(undefined, "standalone-1");
 	fireEvent.click(screen.getByRole("button", { name: "Open" }));
 	expect(openSession).toHaveBeenCalledTimes(2);
+});
+
+it("offers no single chat after a bulk import, and the project only when there is one", async () => {
+	api.GET.mockResolvedValue({
+		data: {
+			candidates: [
+				{ ...chat, id: "a", title: "Fix parser", projectId: "project", harness: "claude-code" },
+				{ ...chat, id: "b", title: "Add tests", projectId: "project", harness: "claude-code" },
+				{ ...chat, id: "c", title: "Loose notes", harness: "claude-code" },
+			],
+		},
+	});
+	api.POST.mockResolvedValueOnce({ data: { results: [{ id: "a", status: "created", sessionId: "project-1" }, { id: "b", status: "created", sessionId: "project-2" }] } });
+	renderPanel();
+	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Loose notes" }));
+	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
+	expect(await screen.findByText("2 conversations imported.")).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Open chat" })).not.toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Show project" })).toBeInTheDocument();
+	await waitFor(() => expect(screen.getByRole("checkbox", { name: "Import Loose notes" })).toBeEnabled());
+
+	api.POST.mockResolvedValueOnce({ data: { results: [{ id: "c", status: "created", sessionId: "standalone-1" }] } });
+	fireEvent.click(screen.getByRole("checkbox", { name: "Import Loose notes" }));
+	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
+	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Open chat" })).toBeInTheDocument();
+});
+
+it("offers neither a chat nor a project after a bulk import across projects", async () => {
+	api.POST.mockResolvedValueOnce({ data: { results: [{ id: "recent", status: "created", sessionId: "project-1" }, { id: "older", status: "created", sessionId: "standalone-1" }] } });
+	renderPanel();
+	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Old discussion" }));
+	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
+	expect(await screen.findByText("2 conversations imported.")).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Open chat" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Show project" })).not.toBeInTheDocument();
+	expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(2);
 });
 
 it("gates importable harnesses to the ones with a verified resume path", () => {
