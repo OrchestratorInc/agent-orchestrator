@@ -234,8 +234,12 @@ func (f *fakeConversationService) Compact(context.Context, domain.SessionID) (po
 
 // History operations belong to a sibling slice; stubbed so this fake satisfies the
 // controller's interface without pretending to implement them.
-func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string) (int, error) {
+func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string, bool) (int, error) {
 	return 0, nil
+}
+
+func (f *fakeConversationService) RollbackPreview(context.Context, domain.SessionID, string) (chatsvc.RollbackPreview, error) {
+	return chatsvc.RollbackPreview{}, nil
 }
 
 func (f *fakeConversationService) RetryTurn(context.Context, domain.SessionID, string) (domain.ConversationTurn, error) {

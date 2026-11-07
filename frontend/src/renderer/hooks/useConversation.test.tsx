@@ -1011,6 +1011,31 @@ describe("conversation branching commands", () => {
 		).toBe(false);
 	});
 
+	it("asks the daemon to restore files only when the confirmation listed them", async () => {
+		postMock.mockResolvedValue({ data: { turnsDiscarded: 1 }, error: undefined });
+		getMock.mockResolvedValueOnce({ data: { filesRestorable: true, files: [], totalFiles: 0, commitsSince: 0 }, error: undefined });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await act(async () => {
+			await expect(result.current.previewRollback("turn-2")).resolves.toMatchObject({ filesRestorable: true });
+			await result.current.rollback("turn-2", true);
+			await result.current.rollback("turn-3", false);
+		});
+
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } } },
+		);
+		expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } }, body: { restoreFiles: true } },
+		);
+		expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-3" } }, body: { restoreFiles: false } },
+		);
+	});
+
 	it("returns a typed non-acceptance for a durably rejected inline edit", async () => {
 		apiErrorCodeMock.mockReturnValue("CHAT_EDIT_REJECTED");
 		apiErrorMessageMock.mockReturnValue("provider rejected edited prompt");

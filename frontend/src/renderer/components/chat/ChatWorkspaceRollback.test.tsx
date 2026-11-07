@@ -13,7 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
+import type { components } from "../../../api/schema";
 import { renderChat as render } from "../../test/render-chat";
+
+type RollbackPreview = components["schemas"]["RollbackPreviewResponse"];
 
 /** A conversation with nothing in flight, which is when an undo is offered. */
 function idleSnapshot(): ConversationSnapshot {
@@ -41,8 +44,83 @@ describe("ChatWorkspace rollback", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
 
 		// The first settled turn in the fixture is turn-1; the daemon must be given
-		// AO's own turn id, which is what the snapshot exposes.
-		expect(onRollback).toHaveBeenCalledWith("turn-1");
+		// AO's own turn id, which is what the snapshot exposes. Without a preview the
+		// dialog promised only the conversation, so files are not restored.
+		expect(onRollback).toHaveBeenCalledWith("turn-1", false);
+	});
+
+	it("lists the files it will restore before offering the button, then restores them", async () => {
+		const onRollback = vi.fn();
+		let answer: (preview: RollbackPreview) => void = () => {};
+		const onPreviewRollback = vi.fn(() => new Promise<RollbackPreview>((resolve) => { answer = resolve; }));
+		render(<ChatWorkspace snapshot={idleSnapshot()} onRollback={onRollback} onPreviewRollback={onPreviewRollback} />);
+
+		await userEvent.click(screen.getAllByRole("button", { name: "Roll back to here" })[0]!);
+		const dialog = screen.getByRole("dialog");
+		expect(onPreviewRollback).toHaveBeenCalledWith("turn-1");
+		expect(dialog.textContent).toContain("Checking which files this would restore");
+		expect(within(dialog).getByRole("button", { name: "Roll back" })).toBeDisabled();
+
+		answer({
+			filesRestorable: true,
+			files: [
+				{ path: "src/auth/session.ts", change: "reverted" },
+				{ path: "src/auth/refresh.ts", change: "removed" },
+				{ path: "docs/auth.md", change: "restored" },
+			],
+			totalFiles: 4,
+			commitsSince: 1,
+		});
+		const list = await within(dialog).findByRole("list", { name: "Files that will change" });
+		expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+			"src/auth/session.tsReverted",
+			"src/auth/refresh.tsDeleted",
+			"docs/auth.mdRestored",
+		]);
+		expect(dialog.textContent).toContain("the worktree goes back to how it was before it");
+		expect(dialog.textContent).toContain("4 files will change");
+		expect(dialog.textContent).toContain("and 1 more");
+		expect(dialog.textContent).toContain("1 commit made since then stays on the branch");
+		expect(dialog.textContent).not.toContain("left exactly as they are");
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
+		expect(onRollback).toHaveBeenCalledWith("turn-1", true);
+	});
+
+	it("says why files stay as they are when they cannot be restored", async () => {
+		const onRollback = vi.fn();
+		const onPreviewRollback = vi.fn(async (): Promise<RollbackPreview> => ({
+			filesRestorable: false,
+			reason: "the workspace is not a git repository",
+			files: [],
+			totalFiles: 0,
+			commitsSince: 0,
+		}));
+		render(<ChatWorkspace snapshot={idleSnapshot()} onRollback={onRollback} onPreviewRollback={onPreviewRollback} />);
+
+		await userEvent.click(screen.getAllByRole("button", { name: "Roll back to here" })[0]!);
+		const dialog = screen.getByRole("dialog");
+		await within(dialog).findByText(/Files can't be restored: the workspace is not a git repository\./);
+		expect(dialog.textContent).toContain("left exactly as they are");
+		expect(within(dialog).queryByRole("list")).toBeNull();
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
+		expect(onRollback).toHaveBeenCalledWith("turn-1", false);
+	});
+
+	// An older daemon has no preview route; the dialog must then promise only what
+	// that daemon does.
+	it("falls back to a conversation-only rollback when the preview fails", async () => {
+		const onRollback = vi.fn();
+		const onPreviewRollback = vi.fn(() => Promise.reject(new Error("Method Not Allowed")));
+		render(<ChatWorkspace snapshot={idleSnapshot()} onRollback={onRollback} onPreviewRollback={onPreviewRollback} />);
+
+		await userEvent.click(screen.getAllByRole("button", { name: "Roll back to here" })[0]!);
+		const dialog = screen.getByRole("dialog");
+		await within(dialog).findByText(/left exactly as they are/);
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
+		expect(onRollback).toHaveBeenCalledWith("turn-1", false);
 	});
 
 	it("says the agent forgets, and that the worktree does not change", async () => {
