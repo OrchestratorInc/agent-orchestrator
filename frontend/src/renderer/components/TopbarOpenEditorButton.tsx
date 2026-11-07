@@ -50,10 +50,14 @@ export function TopbarOpenEditorButton({
 	const targets = state?.targets ?? [];
 	const editors = targets.filter((target) => target.kind === "editor");
 	const preferred = editors.find((target) => target.id === state?.preferredEditorId);
+	// With no installed editor chosen, the main button opens the workspace in the
+	// platform file manager (Finder, File Explorer, xdg-open) instead of sitting empty.
+	const fileManager = targets.find((target) => target.kind === "file_manager");
+	const mainTarget = preferred ?? fileManager;
 	const openInTargets = targets.filter((target) => target.kind === "file_manager" || target.kind === "terminal");
 	const workspaceAvailable = state?.workspaceAvailable === true;
 	const busy = stateQuery.isPending || open.isPending || copyPending;
-	const mainDisabled = busy || !workspaceAvailable || !preferred;
+	const mainDisabled = busy || !workspaceAvailable || !mainTarget;
 	const menuDisabled = busy || !workspaceAvailable || targets.length === 0;
 
 	const copyPath = async () => {
@@ -76,12 +80,12 @@ export function TopbarOpenEditorButton({
 			showGlobalToast(t("editor.openInTarget", { name: target?.name ?? "" }), error instanceof Error ? error.message : undefined, "error");
 		});
 	};
-	// ⌘O opens the workspace in the preferred editor, or in the first available
-	// target (file manager, terminal) when no editor is installed.
+	// Without an explicit target, main opens the preferred editor.
+	const launchMain = () => (preferred ? launch() : mainTarget && launch(mainTarget.id));
+	// ⌘O does what the main button does.
 	useSessionShortcut("open-in-editor", () => {
 		if (busy || !workspaceAvailable) return;
-		if (preferred) launch();
-		else if (targets[0]) launch(targets[0].id);
+		launchMain();
 	});
 	const waitingLabel = stateQuery.isPending
 		? t("editor.preparingWorkspace")
@@ -89,12 +93,9 @@ export function TopbarOpenEditorButton({
 	const workspaceError = !waitingLabel && !workspaceAvailable
 		? state?.unavailableReason ?? t("editor.workspaceUnavailable")
 		: null;
-	const noEditorInstalled = !stateQuery.isPending && workspaceAvailable && editors.length === 0;
 	const mainTitle = waitingLabel
 		?? (workspaceError
-			?? (preferred
-				? t("editor.openWorkspaceInTitle", { name: preferred.name })
-				: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditorTitle"))));
+			?? (mainTarget ? t("editor.openWorkspaceInTitle", { name: mainTarget.name }) : t("editor.chooseEditorTitle")));
 
 	return (
 		<div
@@ -109,19 +110,17 @@ export function TopbarOpenEditorButton({
 						<TopbarButton
 							aria-label={waitingLabel
 								?? (workspaceError
-									?? (preferred
-										? t("editor.openInAria", { name: preferred.name })
-										: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
+									?? (mainTarget ? t("editor.openInAria", { name: mainTarget.name }) : t("editor.chooseEditor")))}
 							className="bg-transparent hover:bg-transparent"
 							highlight={false}
 							disabled={mainDisabled}
 							onClick={() => {
 								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
-								launch();
+								launchMain();
 							}}
 							variant="icon"
 						>
-							<OpenTargetIcon target={preferred} className="size-icon-md" />
+							<OpenTargetIcon target={mainTarget} className="size-icon-md" />
 						</TopbarButton>
 					</span>
 				</TooltipTrigger>

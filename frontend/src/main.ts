@@ -22,6 +22,8 @@ import {
 	Notification as ElectronNotification,
 	powerMonitor,
 	protocol,
+	safeStorage,
+	screen,
 	shell,
 	session,
 	WebContentsView,
@@ -104,6 +106,7 @@ import {
 	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
+	SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
@@ -158,11 +161,15 @@ import {
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
+	protectedStorageAvailable,
+	readAuthStore,
 } from "./main/cloud-auth";
+import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { ShareLinkRecords } from "./main/cloud-share-links";
+import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
@@ -228,6 +235,8 @@ import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-au
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
+import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
+import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
 	dockBounceType,
 	shouldReplaceBounce,
@@ -242,6 +251,10 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
+import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
+
+// Every ipcMain.handle registered from here on reports unexpected throws.
+installIpcErrorCapture(ipcMain);
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -476,6 +489,8 @@ let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
 let terminalFontSizeFocused = false;
+// An artifact viewer that can zoom is under the pointer or holds focus.
+let artifactZoomEngaged = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -533,22 +548,29 @@ let rendererWindowBackground: string | null = null;
 // macOS window transparency: the shell paints translucent surfaces and the
 // native vibrancy material underneath blurs the desktop.
 let windowTranslucent = false;
+// What each window last received, so theme changes and resizes skip identical
+// native calls. A new window (a Dock reopen) starts with no entry.
+const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
 
-function syncNativeWindowBackground(): void {
+/**
+ * Keep vibrancy and the native background in sync after window/renderer
+ * lifecycle changes, as well as theme updates. `force` re-applies both even
+ * when unchanged: lifecycle events and each new shell document's translucency
+ * request use it to recover native state that drifted.
+ */
+function syncNativeWindowBackground(force = false): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
-	// Keep vibrancy and the native background in sync after window/renderer
-	// lifecycle changes, as well as theme updates.
-	if (process.platform === "darwin") {
-		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	const vibrancy = process.platform === "darwin" && windowTranslucent ? "under-window" : null;
+	const color = windowTranslucent
+		? "#00000000"
+		: rendererWindowBackground ??
+			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT);
+	const applied = appliedNativeBackground.get(mainWindow);
+	if (process.platform === "darwin" && (force || applied?.vibrancy !== vibrancy)) {
+		mainWindow.setVibrancy(vibrancy);
 	}
-	if (windowTranslucent) {
-		mainWindow.setBackgroundColor("#00000000");
-		return;
-	}
-	mainWindow.setBackgroundColor(
-		rendererWindowBackground ??
-			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
-	);
+	if (force || applied?.color !== color) mainWindow.setBackgroundColor(color);
+	appliedNativeBackground.set(mainWindow, { vibrancy, color });
 }
 
 function resolvedDaemonDataDir(): string {
@@ -574,7 +596,7 @@ function persistTerminalThemeHint(scheme: "light" | "dark"): void {
 	}
 }
 
-nativeTheme.on("updated", syncNativeWindowBackground);
+nativeTheme.on("updated", () => syncNativeWindowBackground());
 
 // The packaged renderer is served from a custom standard scheme, not file://.
 // A file:// page has the opaque "null" origin, which the daemon must never
@@ -641,6 +663,10 @@ function annotatePreloadPath(): string {
 	return path.join(__dirname, "annotate-preload.js");
 }
 
+function privacyGuidePreloadPath(): string {
+	return path.join(__dirname, "privacy-guide-preload.js");
+}
+
 // Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
 // Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
 // the orange "DEV" variant so they are recognisable and never impersonate the
@@ -690,6 +716,11 @@ function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void
 	const fallback = setTimeout(show, WINDOW_SHOW_FALLBACK_MS);
 	contents.once("did-finish-load", show);
 	contents.once("did-fail-load", show);
+	// -3 (ERR_ABORTED) is a navigation replaced by another, not a failure.
+	contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
+		if (isMainFrame && errorCode !== -3) captureMainError({ category: "window", reason: "did_fail_load", detail: `code:${errorCode}` });
+	});
+	contents.on("unresponsive", () => captureMainError({ category: "window", reason: "unresponsive" }));
 }
 
 function focusMainWindow(): void {
@@ -734,6 +765,7 @@ app.once("will-quit", () => {
 });
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	reportDaemonFailure(daemonStatus, nextStatus);
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	if (nextStatus.state !== "ready") {
@@ -917,7 +949,7 @@ async function createWindowInternal(): Promise<void> {
 		hasLivePageBelow: () => browserViewHost?.hasVisiblePanel() ?? false,
 	});
 	windowComposition = composition;
-	syncNativeWindowBackground();
+	syncNativeWindowBackground(true);
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
@@ -1084,6 +1116,7 @@ async function createWindowInternal(): Promise<void> {
 		},
 		() => terminalFocused,
 		() => terminalFontSizeFocused,
+		() => artifactZoomEngaged,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -1168,24 +1201,26 @@ async function createWindowInternal(): Promise<void> {
 		});
 	}
 
-	const syncWindowChrome = () => {
+	// Resizes fire per frame, so they only push what changed; show, restore,
+	// reload and zoom re-apply the native background in full.
+	const syncWindowChrome = (force = true) => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
-		syncNativeWindowBackground();
+		syncNativeWindowBackground(force);
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
-	mainWindow.on("resize", syncWindowChrome);
-	mainWindow.on("show", syncWindowChrome);
-	mainWindow.on("restore", syncWindowChrome);
-	shellWebContents.on("did-finish-load", syncWindowChrome);
+	mainWindow.on("resize", () => syncWindowChrome(false));
+	mainWindow.on("show", () => syncWindowChrome());
+	mainWindow.on("restore", () => syncWindowChrome());
+	shellWebContents.on("did-finish-load", () => syncWindowChrome());
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
 	// Native fullscreen removes the traffic-light horizontal reserve, while
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
-		syncNativeWindowBackground();
+		syncNativeWindowBackground(true);
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -1208,10 +1243,12 @@ async function createWindowInternal(): Promise<void> {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
+		artifactZoomEngaged = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
+		artifactZoomEngaged = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -1349,6 +1386,29 @@ function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string>
 	return fetchDesktopSessionPath(sessionId, "artifacts", "artifactDir", "This session has no artifacts folder yet.");
 }
 
+// A file's own OS handler may not be a browser (a PNG opens in Preview), so on
+// macOS and Windows the default https handler opens it; elsewhere, or when that
+// handler is unknown or fails to launch (a moved app, a stale handler), the
+// file's handler does.
+async function openFileInDefaultBrowser(filePath: string): Promise<void> {
+	if (process.platform === "darwin" || process.platform === "win32") {
+		const browser = await app.getApplicationInfoForProtocol("https://").catch(() => undefined);
+		if (browser?.path) {
+			try {
+				if (process.platform === "darwin") {
+					await launchCommand("open", ["-a", browser.path, filePath], path.dirname(filePath));
+				} else {
+					await launchCommand(browser.path, [pathToFileURL(filePath).toString()], path.dirname(filePath));
+				}
+				return;
+			} catch (error) {
+				console.warn("AO: unable to launch the default browser; opening with the file's handler", error);
+			}
+		}
+	}
+	await shell.openExternal(pathToFileURL(filePath).toString());
+}
+
 const editorHandoff = createEditorHandoff({
 	platform: process.platform,
 	env: process.env,
@@ -1368,6 +1428,7 @@ const editorHandoff = createEditorHandoff({
 		if (!(await stat(filePath).catch(() => undefined))) throw new Error(`${filePath} does not exist`);
 		shell.showItemInFolder(filePath);
 	},
+	openInBrowser: (filePath) => openFileInDefaultBrowser(filePath),
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
 	discoverTerminalApps: discoverMacTerminalApps,
@@ -2046,10 +2107,14 @@ async function repairDevAcpRuntime(): Promise<void> {
 		});
 		child.once("error", (err) => {
 			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			captureMainError({ category: "acp_runtime", reason: "rebuild", error: err });
 			resolve();
 		});
 		child.once("exit", (code) => {
-			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			if (code !== 0) {
+				console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+				captureMainError({ category: "acp_runtime", reason: "rebuild", ...(typeof code === "number" ? { detail: `code:${code}` } : {}) });
+			}
 			resolve();
 		});
 	});
@@ -2833,6 +2898,10 @@ ipcMain.handle("editorHandoff:openArtifacts", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.openArtifacts(input && typeof input === "object" ? input : { sessionId: "", targetId: "file-manager" });
 });
+ipcMain.handle("editorHandoff:openArtifactInBrowser", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.openArtifactInBrowser(input && typeof input === "object" ? input : { sessionId: "", path: "" });
+});
 ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
@@ -2866,6 +2935,93 @@ ipcMain.handle("app:openChromeExtensions", () =>
 	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
 );
 
+// Docks under System Settings while Cua Driver's permissions are missing. It is
+// a non-activating, always-on-top panel so System Settings keeps focus; its only
+// script is a preload that turns a drag of the CuaDriver tile into a native file
+// drag, and its links are intercepted here.
+let privacyGuideContents: WebContents | undefined;
+let privacyGuideIcon: Electron.NativeImage | undefined;
+const privacyGuide = new PrivacyGuide({
+	createWindow: () => {
+		const window = new BrowserWindow({
+			width: 600,
+			height: PRIVACY_GUIDE_HEIGHT,
+			type: process.platform === "darwin" ? "panel" : undefined,
+			show: false,
+			frame: false,
+			transparent: true,
+			resizable: false,
+			movable: false,
+			minimizable: false,
+			maximizable: false,
+			fullscreenable: false,
+			skipTaskbar: true,
+			alwaysOnTop: true,
+			hasShadow: true,
+			webPreferences: { preload: privacyGuidePreloadPath(), sandbox: true, contextIsolation: true, nodeIntegration: false },
+		});
+		window.setAlwaysOnTop(true, "floating");
+		window.setVisibleOnAllWorkspaces(true);
+		window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+		privacyGuideContents = window.webContents;
+		return {
+			loadURL: (url) => window.loadURL(url),
+			setBounds: (bounds) => window.setBounds(bounds),
+			showInactive: () => window.showInactive(),
+			hide: () => window.hide(),
+			isVisible: () => window.isVisible(),
+			isFocused: () => window.isFocused(),
+			close: () => window.close(),
+			isDestroyed: () => window.isDestroyed(),
+			onNavigate: (handler) => window.webContents.on("will-navigate", (event, url) => {
+				event.preventDefault();
+				handler(url);
+			}),
+			onClosed: (handler) => window.on("closed", () => {
+				if (privacyGuideContents === window.webContents) privacyGuideContents = undefined;
+				handler();
+			}),
+		};
+	},
+	openExternal: (url) => openAllowedAppExternalURL(url, shell),
+	// Quick Look renders the app's real icon at a crisp size; getFileIcon only
+	// offers a 32px generic placeholder for it on macOS.
+	readIcon: async (appPath) => {
+		const icon = await nativeImage.createThumbnailFromPath(appPath, { width: 128, height: 128 }).catch(() => undefined);
+		const image = icon && !icon.isEmpty() ? icon : await app.getFileIcon(appPath, { size: "normal" });
+		privacyGuideIcon = image.resize({ width: 64, height: 64 });
+		return image.toDataURL();
+	},
+	watchSettings: watchSettingsWindow,
+	workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
+	fallbackBounds: () => {
+		const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+		const width = Math.min(600, workArea.width - 32);
+		return { x: workArea.x + Math.round((workArea.width - width) / 2), y: workArea.y + workArea.height - PRIVACY_GUIDE_HEIGHT - 24, width, height: PRIVACY_GUIDE_HEIGHT };
+	},
+	ownPid: process.pid,
+});
+// Dropping CuaDriver.app on a System Settings privacy list adds it there.
+ipcMain.on("privacyGuide:startDrag", (event) => {
+	if (!privacyGuideContents || event.sender !== privacyGuideContents || !privacyGuideIcon || privacyGuideIcon.isEmpty()) return;
+	event.sender.startDrag({ file: CUA_DRIVER_APP_PATH, icon: privacyGuideIcon });
+});
+ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	if (process.platform !== "darwin") return;
+	const request = coercePrivacyGuideRequest(input);
+	if (!request) throw new Error("Invalid privacy guide request.");
+	await privacyGuide.show(request);
+});
+ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+});
+ipcMain.handle("app:closePrivacyGuide", (event) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	privacyGuide.close();
+});
+
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
 	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
@@ -2898,7 +3054,7 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	syncNativeWindowBackground();
+	syncNativeWindowBackground(true);
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
@@ -2946,6 +3102,11 @@ ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSi
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
 	terminalFontSizeFocused = focused && handlesFontSize === true;
+});
+
+ipcMain.on(SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, (event, engaged: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof engaged !== "boolean") return;
+	artifactZoomEngaged = engaged;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {
@@ -3131,7 +3292,7 @@ registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
 	requireAccount: async () => {
-		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
+		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to AO Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
@@ -3312,6 +3473,7 @@ registerChatImageIpc({
 });
 registerCloudArtifactIpc({
 	ipcMain,
+	openInBrowser: (target) => openFileInDefaultBrowser(target),
 	openInFileManager: async (target, isFile) => {
 		if (isFile) shell.showItemInFolder(target);
 		else {
@@ -3335,6 +3497,14 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
+// Session and project share links this device made, so Copy link works again
+// later; only the signed-in account's, which the file names.
+const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
+	available: protectedStorageAvailable,
+	encrypt: (text) => safeStorage.encryptString(text),
+	decrypt: (value) => safeStorage.decryptString(value),
+}, async () => (await readAuthStore(cloudDataDir())).session?.user.id);
+registerSessionShareUrlsIpc(ipcMain, sessionShareUrls);
 registerAgentLoginIpc({
 	ipcMain,
 	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
@@ -3657,7 +3827,32 @@ const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
 const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
-function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
+// A sign-in completed through the website's return page also hands over that
+// visit's id (see CloudSignInContext). It waits here until the renderer takes
+// it, once: on the notification below, or when it mounts. A sign-in link that
+// starts the app arrives before any window listens (macOS sends open-url
+// before ready, and elsewhere the window may still be loading), and a context
+// sent then would be lost. A sign-out drops it.
+const pendingCloudSignIn = createPendingCloudSignIn();
+
+ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
+
+// The account this run last told the renderer about, to notice another one signing in.
+let notifiedCloudUserId: string | undefined;
+
+function notifyRenderersOfCloudSession(
+	account: import("./shared/cloud-account").CloudAccount | null,
+	signIn?: import("./shared/cloud-account").CloudSignInContext,
+): void {
+	pendingCloudSignIn.note(account, signIn);
+	// Share URLs belong to the account that made them: they go when it signs
+	// out or someone else signs in. The first notice of a run has no account
+	// to compare with; the store itself never shows another account's (its
+	// file names the owner), so one who signed in since the last run never sees them.
+	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
+		void sessionShareUrls.clear().catch(() => undefined);
+	}
+	notifiedCloudUserId = account?.user.id;
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
@@ -3725,9 +3920,9 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		return;
 	}
 	try {
-		const session = await handleCloudDeepLink(url, cloudDataDir());
-		if (!session) return;
-		notifyRenderersOfCloudSession(session);
+		const result = await handleCloudDeepLink(url, cloudDataDir());
+		if (!result) return;
+		notifyRenderersOfCloudSession(result.account, result.signIn);
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);
@@ -3880,6 +4075,9 @@ app.whenReady().then(async () => {
 	telemetryPolicyController = policyController;
 	try { await policyController.initialize(); }
 	catch (error) { console.error("telemetry policy bootstrap failed; reporting remains disabled:", error); }
+	// Handled main failures (including any held from before this point) go
+	// through the same consent check as renderer captures.
+	setMainErrorSink((capture) => { policyController.captureMain(capture); });
 	setInterval(() => { if (telemetryPolicyRetryable(policyController.snapshot())) void policyController.retryPendingCleanup(); }, 1_000).unref();
 	// Capture install provenance BEFORE relocation. moveToApplicationsFolder()
 	// relaunches from /Applications WITHOUT forwarding our --installed-via arg, and

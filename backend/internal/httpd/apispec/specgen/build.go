@@ -336,6 +336,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers (wire envelopes)
 	"ControllersListProjectsResponse":                     "ListProjectsResponse",
 	"ControllersProjectResponse":                          "ProjectResponse",
+	"ControllersClonePrepareStreamEvent":                  "ClonePrepareStreamEvent",
 	"ControllersAgentIDParam":                             "AgentIDParam",
 	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
 	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
@@ -576,6 +577,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateShellTerminalRequest":            "UpdateShellTerminalRequest",
 	"ControllersShellTerminalResponse":                 "ShellTerminalResponse",
 	"ControllersListShellTerminalsResponse":            "ListShellTerminalsResponse",
+	"ControllersTerminalShellResponse":                 "TerminalShellResponse",
+	"ControllersTerminalShellsResponse":                "TerminalShellsResponse",
+	"ControllersTerminalShellCheckResponse":            "TerminalShellCheckResponse",
 	"ControllersShellTerminalEnvelope":                 "ShellTerminalEnvelope",
 	"ControllersOpenCodexAccountLoginTerminalResponse": "OpenCodexAccountLoginTerminalResponse",
 	"ControllersCodexAccountLoginTerminalResponse":     "CodexAccountLoginTerminalResponse",
@@ -651,6 +655,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectCloneInput":                 "CloneProjectInput",
 	"ProjectClonePreparationResult":     "ClonePreparationResult",
 	"ProjectCloneDestination":           "CloneDestination",
+	"ProjectCloneProgress":              "CloneProgress",
 	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
 	"ProjectInitializeRepositoryResult": "InitializeRepositoryResult",
 	"ProjectRemoveResult":               "RemoveProjectResult",
@@ -1081,6 +1086,10 @@ func browserOperations() []operation {
 			},
 		},
 	}
+}
+
+type terminalShellCheckQuery struct {
+	Path string `query:"path" description:"Custom shell: an absolute path, a ~/ path, or a command on PATH."`
 }
 
 type renderSourceQuery struct {
@@ -1825,6 +1834,21 @@ func shellTerminalOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/terminal-shells", id: "listTerminalShells", tag: "shellTerminals",
+			summary: "List the shells installed on this machine for new terminals",
+			resps: []respUnit{
+				{http.StatusOK, controllers.TerminalShellsResponse{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/terminal-shells/check", id: "checkTerminalShell", tag: "shellTerminals",
+			summary:    "Check that a custom shell path is an executable",
+			pathParams: []any{terminalShellCheckQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.TerminalShellCheckResponse{}},
 			},
 		},
 		{
@@ -2820,6 +2844,17 @@ func projectOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/projects/clone/prepare/stream", id: "prepareCloneProjectStream", tag: "projects",
+			summary: "Clone a project without registering it, streaming each git step as a server-sent event",
+			reqBody: projectsvc.CloneInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ClonePrepareStreamEvent{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/projects/clone/cleanup", id: "cleanupPreparedClone", tag: "projects",

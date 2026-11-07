@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	maxPromptLen      = 16 << 10
+	maxPromptLen      = 100 << 10
 	maxMessageLen     = 4096
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
@@ -358,7 +358,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Prompt) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
@@ -590,6 +590,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.URL.Query().Get("source") == "artifact" {
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
+			return
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
@@ -867,6 +871,10 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		// is served verbatim from ArtifactDir: there is no marker to strip
 		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, asset, version)
+			return true
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 		return true
 	}
@@ -2277,7 +2285,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(in.Brief) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 100 KiB or fewer", nil)
 		return
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(in.Model)) > maxModelLen {

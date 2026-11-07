@@ -1,12 +1,16 @@
-import { memo } from "react";
+import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
+import * as Clipboard from "expo-clipboard";
+import { useRouter } from "expo-router";
+import { memo, useRef } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
-import { useRouter } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
+import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent } from "react-native";
+import { sessionTitle, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
+import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
-import { LongPressMenu, type LongPressMenuAction } from "./long-press-menu";
 import { openGitHub } from "./openGitHub";
+import { prCardMenuIcons } from "./pr-card-menu-icons";
+import { usePressFeedback } from "./pressFeedback";
 import type { Theme } from "./theme";
 import {
 	prBlockerLine,
@@ -19,41 +23,56 @@ import {
 	type PRLifecycle,
 } from "./prView";
 import { reviewRouteForPR, workerRouteForSession } from "./reviewView";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
+import { useMenuRowWidth } from "./useMenuRowWidth";
 import { iconSize, space, type } from "./tokens";
 
-type PRCardAction = "worker" | "pr" | "github";
+type PRCardAction = "openWorker" | "openInGitHub" | "copyLink";
 
-// A tap opens the PR page; the long-press skips it for the worker or GitHub.
-// iOS menus take SF Symbols only, and none matches the Feather pull-request
-// glyph; two joined points is the nearest to its two-circle shape.
-const PR_CARD_ACTIONS: readonly LongPressMenuAction<PRCardAction>[] = [
-	{ id: "worker", title: "Open worker", icon: "message-square", systemImage: "bubble.left" },
-	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "point.topleft.down.to.point.bottomright.curvepath" },
-	{ id: "github", title: "Open on GitHub", icon: "external-link", systemImage: "arrow.up.right.square" },
-];
+const ACTION_TITLES: Record<PRCardAction, string> = {
+	openWorker: "Open worker",
+	openInGitHub: "Open in GitHub",
+	copyLink: "Copy link",
+};
 
-/** A pull-request row with the same hierarchy and density as WorkerListRow. */
+/**
+ * A pull-request row with the same hierarchy as WorkerListRow: an eyebrow, the
+ * title, then metadata, none of it smaller than footnote.
+ *
+ * A tap opens the review; the long press reaches the worker too. Everything else about the pull request is in the
+ * row's long-press menu — a SwiftUI context menu on iOS, a Material dropdown on
+ * Android — and in its accessibility actions, so a screen reader reaches the
+ * same choices from the one row.
+ */
 export const PRCard = memo(function PRCard({
 	pr,
 	session,
 	summary,
 	hostId,
 	hostName,
+	onLinkCopied,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
 	summary?: SessionPRSummary;
 	hostId: string;
 	hostName?: string;
+	/** Called once the pull request's link is on the clipboard. */
+	onLinkCopied?: () => void;
 }) {
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const openPage = useOpenPage();
 	const router = useRouter();
+	const menu = useRef<MenuComponentRef>(null);
+	const menuWidth = useMenuRowWidth();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
-	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
+	// The repository's own name, without its owner: the line ends in an
+	// ellipsis if it still runs long, rather than losing its middle.
+	const project = (summary?.repo || session.projectId || "Standalone").split("/").pop() || "Standalone";
 	const projectLabel = hostName ? `${hostName} · ${project}` : project;
 	const branches = summary
 		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
@@ -61,33 +80,38 @@ export const PRCard = memo(function PRCard({
 	const diff = summary && (summary.changedFiles > 0 || summary.additions > 0 || summary.deletions > 0)
 		? `${summary.changedFiles} ${summary.changedFiles === 1 ? "file" : "files"}  +${summary.additions} −${summary.deletions}`
 		: "";
-	const detail = [`#${pr.number}`, branches, diff].filter(Boolean).join("  ·  ");
+	const detail = [`#${pr.number}`, branches, diff].filter(Boolean).join(" · ");
 	const atoms = summary ? prStatusAtoms(summary) : [prSummaryLine(pr)];
 	const status = atoms[0] ?? { text: state.label, tone: "passive" as const };
 	const blockers = summary ? prBlockerLine(summary) : null;
+	const link = summary?.htmlUrl || summary?.url || pr.url;
 
-	const githubUrl = summary?.htmlUrl || summary?.url || pr.url;
-	const openPR = () => openPage(reviewRouteForPR(session.id, pr, hostId));
-	// The menu gives the haptic for its own items.
-	const runAction = (action: PRCardAction) => {
-		if (action === "worker") router.push(workerRouteForSession(session, hostId));
-		else if (action === "pr") openPR();
-		else void openGitHub(githubUrl);
+	const run = (action: string) => {
+		if (action === "openWorker") router.push(workerRouteForSession(session, hostId));
+		if (action === "openInGitHub") void openGitHub(link);
+		if (action === "copyLink") {
+			void Clipboard.setStringAsync(link);
+			haptics.success();
+			onLinkCopied?.();
+		}
 	};
+	const actions: readonly PRCardAction[] = link ? ["openWorker", "openInGitHub", "copyLink"] : ["openWorker"];
+	const menuActions: MenuAction[] = actions.map((id) => ({ id, title: ACTION_TITLES[id], image: prCardMenuIcons[id], imageColor: t.textSecondary }));
 
-	return (
-		<LongPressMenu
-			actions={PR_CARD_ACTIONS}
-			onAction={runAction}
-			onPress={() => {
-				haptics.tap();
-				openPR();
-			}}
+	const row = (
+		<Pressable
+			accessibilityRole="button"
 			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
-			accessibilityHint="Long press to open the worker or GitHub."
-			style={styles.row}
-			pressedStyle={styles.rowPressed}
-			testID="pr-card"
+			accessibilityActions={actions.map((name) => ({ name, label: ACTION_TITLES[name] }))}
+			onAccessibilityAction={(event: AccessibilityActionEvent) => run(event.nativeEvent.actionName)}
+			android_ripple={feedback.android_ripple}
+			onPress={() => {
+				openPage(reviewRouteForPR(session.id, pr, hostId));
+			}}
+			// The row claims the touch, so on Android its long press opens the
+			// menu itself; iOS's context menu takes the gesture natively.
+			onLongPress={Platform.OS === "android" ? () => menu.current?.show() : undefined}
+			style={({ pressed }) => [styles.row, menuWidth.style, pressed && feedback.pressed]}
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
@@ -95,50 +119,49 @@ export const PRCard = memo(function PRCard({
 				<Text style={[styles.status, { color: toneColor(t, status.tone) }]} numberOfLines={1}>{status.text}</Text>
 			</View>
 
-			<View style={styles.titleRow}>
-				<View style={styles.copy}>
-					<Text style={styles.title} numberOfLines={1}>{title}</Text>
-					<Text style={styles.details} numberOfLines={1}>{detail}</Text>
-				</View>
-				<Pressable
-					accessibilityRole="link"
-					accessibilityLabel={`Open pull request ${pr.number} in GitHub`}
-					hitSlop={8}
-					onPress={(event) => {
-						event.stopPropagation();
-						haptics.tap();
-						void openGitHub(githubUrl);
-					}}
-					style={({ pressed }) => [styles.external, pressed && styles.externalPressed]}
-				>
-					<Feather name="external-link" size={iconSize.sm} color={t.textTertiary} />
-				</Pressable>
+			<View style={styles.copy}>
+				<Text style={styles.title} numberOfLines={1}>{title}</Text>
+				<Text style={styles.details} numberOfLines={1}>{detail}</Text>
 			</View>
 
 			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
-		</LongPressMenu>
+		</Pressable>
+	);
+
+	return (
+		<View onLayout={menuWidth.onLayout}>
+			<MenuView
+				ref={menu}
+				colorScheme={scheme}
+				actions={menuActions}
+				shouldOpenOnLongPress
+				onPressAction={(event: NativeActionEvent) => run(event.nativeEvent.event)}
+				testID="pr-card-menu"
+			>
+				{row}
+			</MenuView>
+		</View>
 	);
 });
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		// Opaque, so the row iOS lifts out for its context menu is not see-through.
 		row: {
 			minHeight: 76,
+			justifyContent: "center",
 			paddingHorizontal: space.lg,
 			paddingVertical: space.sm,
 			gap: space.hair,
-			borderBottomWidth: StyleSheet.hairlineWidth,
-			borderBottomColor: t.borderSubtle,
+			backgroundColor: t.bgBase,
 		},
-		rowPressed: { backgroundColor: t.bgSubtle },
+		// Inset to the text, as a worker row's is.
+		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		status: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		titleRow: { flexDirection: "row", alignItems: "center", minHeight: 40 },
-		copy: { flex: 1, gap: space.hair },
-		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
-		external: { width: 36, height: 36, marginRight: -8, alignItems: "center", justifyContent: "center", borderRadius: 12, borderCurve: "continuous"},
-		externalPressed: { backgroundColor: t.bgElevated },
-		blockers: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair, marginLeft: space.xl },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		status: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		copy: { gap: space.hair },
+		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 	});

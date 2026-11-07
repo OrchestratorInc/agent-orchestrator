@@ -964,7 +964,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(onSessionRenamed).not.toHaveBeenCalled();
 	});
@@ -2180,6 +2180,61 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it("offers Restore, not Resume, on a terminated session", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={restore}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		// Archiving is a normal end, not a failure.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Session terminated")).toBeInTheDocument();
+		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
+		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		// A shell here would open in the project root once the worktree is gone.
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Restore session" }));
+		expect(restore).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the composer locked while a terminated session restores", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={vi.fn()}
+				resumingAgent
+			/>,
+		);
+
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		// A message sent now would reach a session the daemon still calls terminated.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("does not wait for a reconnect on a terminated session", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
 	});
 
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
@@ -5535,6 +5590,16 @@ describe("ChatWorkspace shell tabs", () => {
 		);
 		act(() => [...previousTabListeners][0]?.());
 		expect(onSelectChat).toHaveBeenCalledOnce();
+	});
+
+	it("leaves tab shortcuts to the owning strip when the chat header is hidden", () => {
+		const view = render(<ChatWorkspace hideHeader snapshot={idleSnapshot()} />);
+		expect(previousTabListeners.size).toBe(0);
+		expect(nextTabListeners.size).toBe(0);
+		expect(closeShellTerminalListeners.size).toBe(0);
+		expect(closeShellTerminalShortcutStates).toEqual([]);
+		view.unmount();
+		expect(closeShellTerminalShortcutStates).toEqual([]);
 	});
 
 	it("enables the close-shell shortcut and closes the active shell tab", () => {

@@ -29,6 +29,32 @@ func TestACPRelayCapturesIndependentForkForReconnect(t *testing.T) {
 	}
 }
 
+func TestACPRelayRetainsAvailableCommandsForReconnect(t *testing.T) {
+	relay := newTestACPRelay(t)
+	provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":{"sessionId":"live"}}`+"\n"), 1, true)
+
+	update := func(session, name string) {
+		frame := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"` + session +
+			`","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"` + name + `","description":"d"}]}}}` + "\n"
+		if forwarded, retained := relayProviderFrame(t, relay, []byte(frame), 1, true); retained || len(forwarded) == 0 {
+			t.Fatalf("catalog update was not forwarded: retained=%v frame=%q", retained, forwarded)
+		}
+	}
+	update("live", "review")
+	update("live", "compact")
+	if got := string(relay.snapshot().AvailableCommands); got != `[{"name":"compact","description":"d"}]` {
+		t.Fatalf("retained catalog = %s", got)
+	}
+
+	// A catalog for a session the host no longer owns must not be handed to the
+	// controller that reattaches to the live one.
+	update("other", "stale")
+	if got := relay.snapshot().AvailableCommands; len(got) != 0 {
+		t.Fatalf("foreign catalog leaked into snapshot: %s", got)
+	}
+}
+
 func TestACPRelayReclaimsPromptAcrossAttachment(t *testing.T) {
 	relay := newTestACPRelay(t)
 

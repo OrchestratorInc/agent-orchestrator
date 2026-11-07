@@ -314,9 +314,9 @@ export function shouldHandleAppShortcutInBrowserContext(
   chord: ShortcutChord,
   isMac: boolean,
 ): boolean {
-  if (id === "new-shell-terminal" || id === "close-shell-terminal")
+  if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
-  // Dictation types into the chat composer, never a page; ⌘D belongs to the page.
+  // Dictation types into the chat composer, never a page.
   if (id === "dictate") return false;
   return (
     browserShortcutAction(

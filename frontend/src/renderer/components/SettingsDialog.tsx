@@ -14,8 +14,6 @@ import { SHARE_FEATURE } from "../lib/cloud-offering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useSectionHistory } from "../hooks/useSectionHistory";
 import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation";
-import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
-import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
@@ -38,6 +36,7 @@ import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -55,15 +54,10 @@ function useTeamsPage(enabled: boolean, share: boolean, orgId: string | undefine
 	return enabled ? teamsPageFor({ share, orgId, mine }) : "none";
 }
 
-// How long global Settings waits after opening before forcing the Codex account
-// reconciliation, so its multi-second request does not queue the page's reads.
-const codexReconcileDelayMs = 1_500;
-
 function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
-	const developerMode = useUiStore((state) => state.developerMode);
 	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
@@ -98,7 +92,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, diagnostics, customCoder, selfServeBilling, teams });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -169,7 +163,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -218,12 +212,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams }).id;
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).id;
 			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
 			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
 			globalRequestRef.current = { modal: settingsModal, section };
 		}
-	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
+	}, [cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
@@ -250,26 +244,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		}
 		if (globalSettingsWasOpen.current) return;
 		globalSettingsWasOpen.current = true;
-		// Warm account management as soon as global Settings opens, regardless of
-		// which page is selected. By the time the user visits Accounts, external
-		// login/logout changes and saved-account observations are already current.
-		// The cached read answers at once; the forced reconciliation takes
-		// seconds and holds one of the renderer's few daemon connections, so it
-		// starts once the page's own reads have gone out.
-		void ensureCodexAccounts([], { includeUsage: true })
-			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
-			.catch(() => undefined);
-		window.setTimeout(() => {
-			void ensureCodexAccounts([], {
-				includeUsage: true,
-				forceAuthentication: true,
-				forceDeviceReconciliation: true,
-			})
-				.then((next) => writeCodexAccounts(queryClient, next, "replace"))
-				.catch(() => undefined);
-		}, codexReconcileDelayMs);
-		// Same for Mobile: its pairing state and Keep awake are known before the
-		// page is first drawn, so nothing pops in or flips after it opens.
+		// Warm Mobile as soon as global Settings opens: its pairing state and Keep
+		// awake are known before the page is first drawn, so nothing pops in or
+		// flips after it opens.
 		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
@@ -468,6 +445,7 @@ export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
+	useEdgeFade(scrollerRef, "y", [page?.active]);
 	if (!page) return null;
 	const layer = page.active;
 	return (
@@ -488,7 +466,7 @@ export function SettingsPane() {
 				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar edge-fade [--edge-fade-end-size:0px] relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>

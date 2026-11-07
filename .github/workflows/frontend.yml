@@ -352,7 +352,7 @@ jobs:
 
   # Keep the existing check name as the gate for the split frontend jobs.
   test:
-    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
+    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
     needs: [policy, checks, typecheck, vitest, mac-update-helper, mac-dmg-layout]
     runs-on: ubuntu-latest
     timeout-minutes: 5

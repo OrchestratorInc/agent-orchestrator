@@ -1375,6 +1375,48 @@ func TestProbeRechecksCachedUnauthorizedAuthentication(t *testing.T) {
 	}
 }
 
+// cachingAuthAgent answers auth checks from a cache only an invalidation clears,
+// as the Claude adapter does with its CLI report.
+type cachingAuthAgent struct {
+	mutableAuthAgent
+	cached *ports.AgentAuthStatus
+}
+
+func (a *cachingAuthAgent) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	if a.cached == nil {
+		status, err := a.mutableAuthAgent.AuthStatus(ctx)
+		if err != nil {
+			return status, err
+		}
+		a.cached = &status
+	}
+	return *a.cached, nil
+}
+
+func (a *cachingAuthAgent) InvalidateAuthCache() { a.cached = nil }
+
+func TestProbeDropsTheAdaptersCachedAuthentication(t *testing.T) {
+	status := ports.AgentAuthStatusUnauthorized
+	agent := &cachingAuthAgent{mutableAuthAgent: mutableAuthAgent{status: &status}}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{{
+		Harness:  domain.AgentHarness("claude-code"),
+		Manifest: adapters.Manifest{ID: "claude-code", Name: "Claude Code"},
+		Agent:    agent,
+	}})
+	if _, err := svc.EnsureAgentReadiness(context.Background(), "claude-code", domain.AgentReadinessPurposeLaunch); err != nil {
+		t.Fatalf("EnsureAgentReadiness: %v", err)
+	}
+
+	status = ports.AgentAuthStatusConfigured
+	got, err := svc.Probe(context.Background(), "claude-code")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got.Agent.AuthStatus != ports.AgentAuthStatusConfigured {
+		t.Fatalf("Probe authStatus = %q, want the login made since the cached answer", got.Agent.AuthStatus)
+	}
+}
+
 func TestProbeReportsUnsupportedAndMissingAgent(t *testing.T) {
 	svc := NewWithAgents([]agentregistry.HarnessAgent{
 		harnessAgent("missing", "Missing", ports.ErrAgentBinaryNotFound),

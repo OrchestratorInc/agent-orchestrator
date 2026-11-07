@@ -6,7 +6,6 @@ import type {
 	ConversationPlan,
 	ConversationTurn,
 } from "./types";
-import { stagedAttachmentParts } from "./messageAttachments";
 
 export type ConversationGroup = {
 	key: string;
@@ -18,22 +17,14 @@ export type ConversationGroup = {
 	plan?: ConversationPlan;
 };
 
-export type ConversationMarker = {
-	key: string;
-	sequence: number;
-	title: string;
-	detail?: string;
-	state?: ConversationTurn["state"];
-};
-
 export type ActivityNode = {
 	activity: ConversationActivity;
 	children: ActivityNode[];
 };
 
 export type ConversationTimelineRenderPlan =
-	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
+	| { kind: "empty"; groups: [] }
+	| { kind: "list"; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
@@ -204,45 +195,18 @@ export function startupPlacement(groups: ReadonlyArray<Pick<ConversationGroup, "
 	return openingTurnId && groups.some((group) => group.turnId === openingTurnId) ? "turn" : "standalone";
 }
 
-/** Latest-first data lets an inverted virtualized list paint the live edge first. */
-export function latestFirstConversationGroups(
-	snapshot: ConversationSnapshot,
-	items = readableConversationItems(snapshot),
-): ConversationGroup[] {
-	return groupConversationByTurn(snapshot, items).reverse();
-}
-
+/**
+ * The conversation in reading order, oldest first, on both platforms. The list
+ * is never inverted: Android's text-selection toolbar needs untransformed
+ * screen coordinates, and iOS 26's navigation bar blurs the list's top edge,
+ * which an inverted list turns into its composer end.
+ */
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
-	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	// Android's native text-selection toolbar needs untransformed screen
-	// coordinates. FlatList's inverted transform detaches it from selected text.
-	const inverted = platform !== "android";
-	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
-	return groups.length === 0
-		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted, groups };
-}
-
-export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
-	return groupConversationByTurn(snapshot).map((group) => {
-		const human = group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human");
-		const assistant = [...group.items].reverse().find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim());
-		const activity = group.items.find((item): item is ConversationActivity => item.kind === "activity");
-		const title = previewText(human?.kind === "message" ? humanMessageTitle(human.text) : activity?.summary || "Conversation update", 120);
-		const detailSource = assistant?.kind === "message" ? assistant.text : activity?.detail?.text || activity?.summary;
-		const detail = detailSource ? previewText(String(detailSource), 240) : undefined;
-		return { key: group.key, sequence: group.anchor, title, detail: detail && detail !== title ? detail : undefined, state: group.turn?.state };
-	});
-}
-
-/** A marker names what the human wrote, not the staged-path list AO appended. */
-function humanMessageTitle(text: string): string {
-	const { body, attachments } = stagedAttachmentParts(text);
-	if (attachments.length === 0) return text;
-	return body.trim() || (attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`);
+	const groups = groupConversationByTurn(snapshot, items);
+	return groups.length === 0 ? { kind: "empty", groups: [] } : { kind: "list", groups };
 }
 
 /**
@@ -387,14 +351,4 @@ function activityCycle(node: ActivityNode, parent: ActivityNode, byProvider: Map
 		current = parentId ? byProvider.get(parentId) : undefined;
 	}
 	return false;
-}
-
-function previewText(value: string, limit: number): string {
-	const plain = value
-		.replace(/```[\s\S]*?```/g, " code sample ")
-		.replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-		.replace(/[*_`#>~]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	return plain.length > limit ? `${plain.slice(0, limit - 1).trimEnd()}…` : plain;
 }
