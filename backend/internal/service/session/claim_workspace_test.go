@@ -29,11 +29,11 @@ func TestClaimPRWorkspaceRepositories(t *testing.T) {
 			{"first child", "https://github.com/acme/api/pull/7", "acme/api", nil},
 			{"second child", "https://github.com/acme/web/pull/7", "acme/web", nil},
 			{"nested GitLab child", "https://gitlab.example.com:8443/group/sub/api/-/merge_requests/7", "group/sub/api", nil},
-			{"unregistered repo", "https://github.com/other/api/pull/7", "", ErrProjectMismatch},
-			{"different host", "https://gitlab.other.com:8443/group/sub/api/-/merge_requests/7", "", ErrProjectMismatch},
-			{"different port", "https://gitlab.example.com/group/sub/api/-/merge_requests/7", "", ErrProjectMismatch},
-			{"different namespace", "https://gitlab.example.com:8443/other/sub/api/-/merge_requests/7", "", ErrProjectMismatch},
-			{"different provider", "https://gitlab.com/acme/api/-/merge_requests/7", "", ErrProjectMismatch},
+			{"external: unregistered repo", "https://github.com/other/api/pull/7", "other/api", nil},
+			{"external: different host", "https://gitlab.other.com:8443/group/sub/api/-/merge_requests/7", "group/sub/api", nil},
+			{"external: different port", "https://gitlab.example.com/group/sub/api/-/merge_requests/7", "group/sub/api", nil},
+			{"external: different namespace", "https://gitlab.example.com:8443/other/sub/api/-/merge_requests/7", "other/sub/api", nil},
+			{"external: different provider", "https://gitlab.com/acme/api/-/merge_requests/7", "acme/api", nil},
 			{"invalid PR URL", "https://github.com/acme/api/-/merge_requests/7", "", ErrInvalidPRRef},
 		} {
 			t.Run(root+"/"+tc.name, func(t *testing.T) {
@@ -82,8 +82,8 @@ func TestClaimPRWorkspaceBoundaries(t *testing.T) {
 		{name: "rootless number is not guessed", kind: domain.ProjectKindWorkspace, ref: "7", wantErr: ErrInvalidPRRef},
 		{name: "invalid root does not mask child", kind: domain.ProjectKindWorkspace, origin: "/local/root", ref: "https://github.com/acme/api/pull/7", wantLookup: true},
 		{name: "lookup failure", kind: domain.ProjectKindWorkspace, ref: "https://github.com/acme/api/pull/7", lookupErr: lookupErr, wantErr: lookupErr, wantLookup: true},
-		{name: "single repo ignores children", kind: domain.ProjectKindSingleRepo, origin: "https://github.com/acme/parent", ref: "https://github.com/acme/api/pull/7", wantErr: ErrProjectMismatch},
-		{name: "default kind ignores children", origin: "https://github.com/acme/parent", ref: "https://github.com/acme/api/pull/7", wantErr: ErrProjectMismatch},
+		{name: "single repo claims children as external", kind: domain.ProjectKindSingleRepo, origin: "https://github.com/acme/parent", ref: "https://github.com/acme/api/pull/7"},
+		{name: "default kind claims children as external", origin: "https://github.com/acme/parent", ref: "https://github.com/acme/api/pull/7"},
 		{name: "scratch rejects child", kind: domain.ProjectKindScratch, ref: "https://github.com/acme/api/pull/7", wantErr: ErrSessionNotClaimable},
 		{name: "scratch rejects root", kind: domain.ProjectKindScratch, origin: "https://github.com/acme/parent", ref: "7", wantErr: ErrSessionNotClaimable},
 	} {

@@ -34,15 +34,15 @@ func TestClaimPRExplicitCanonicalRepository(t *testing.T) {
 		{"origin remains trusted", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com/alice/repo/pull/7", "alice/repo", "https://github.com/alice/repo/pull/7", nil},
 		{"gitlab nested upstream URL", "git@gitlab.com:alice/team/repo.git", "https://gitlab.com/group/subgroup/repo.git", "https://gitlab.com/group/subgroup/repo/-/merge_requests/7", "group/subgroup/repo", "https://gitlab.com/group/subgroup/repo/-/merge_requests/7", nil},
 		{"gitlab nested upstream number", "https://gitlab.example.com/alice/repo", "https://gitlab.example.com/group/subgroup/repo", "#7", "group/subgroup/repo", "https://gitlab.example.com/group/subgroup/repo/-/merge_requests/7", nil},
-		{"unconfigured upstream", "https://github.com/alice/repo", "", "https://github.com/acme/repo/pull/7", "", "", ErrProjectMismatch},
-		{"unrelated remote", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com/other/repo/pull/7", "", "", ErrProjectMismatch},
-		{"cross host", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.example.com/group/sub/repo/-/merge_requests/7", "", "", ErrProjectMismatch},
-		{"cross provider", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://gitlab.com/acme/repo/-/merge_requests/7", "", "", ErrProjectMismatch},
-		{"full namespace", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.com/other/sub/repo/-/merge_requests/7", "", "", ErrProjectMismatch},
-		{"nested prefix", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.com/sub/repo/-/merge_requests/7", "", "", ErrProjectMismatch},
+		{"external: unconfigured upstream", "https://github.com/alice/repo", "", "https://github.com/acme/repo/pull/7", "acme/repo", "https://github.com/acme/repo/pull/7", nil},
+		{"external: unrelated repository", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com/other/repo/pull/7", "other/repo", "https://github.com/other/repo/pull/7", nil},
+		{"external: cross host keeps its host", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.example.com/group/sub/repo/-/merge_requests/7", "group/sub/repo", "https://gitlab.example.com/group/sub/repo/-/merge_requests/7", nil},
+		{"external: cross provider keeps its provider", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://gitlab.com/acme/repo/-/merge_requests/7", "acme/repo", "https://gitlab.com/acme/repo/-/merge_requests/7", nil},
+		{"external: full namespace", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.com/other/sub/repo/-/merge_requests/7", "other/sub/repo", "https://gitlab.com/other/sub/repo/-/merge_requests/7", nil},
+		{"external: nested prefix", "https://gitlab.com/alice/repo", "https://gitlab.com/group/sub/repo", "https://gitlab.com/sub/repo/-/merge_requests/7", "sub/repo", "https://gitlab.com/sub/repo/-/merge_requests/7", nil},
 		{"wrong provider route", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com/acme/repo/-/merge_requests/7", "", "", ErrInvalidPRRef},
-		{"port authority cannot collapse", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com:8443/acme/repo/pull/7", "", "", ErrProjectMismatch},
-		{"no identity", "", "", "https://github.com/acme/repo/pull/7", "", "", ErrProjectMismatch},
+		{"external: port authority cannot collapse", "https://github.com/alice/repo", "https://github.com/acme/repo", "https://github.com:8443/acme/repo/pull/7", "acme/repo", "https://github.com:8443/acme/repo/pull/7", nil},
+		{"external: project without identity", "", "", "https://github.com/acme/repo/pull/7", "acme/repo", "https://github.com/acme/repo/pull/7", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()

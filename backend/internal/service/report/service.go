@@ -33,6 +33,12 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
+// PRTracker attributes a PR the worker reported as created to its session.
+// It is best effort: the report is already persisted, so it never fails it.
+type PRTracker interface {
+	TrackReportedPR(ctx context.Context, id domain.SessionID, url string)
+}
+
 // Service validates and creates durable worker reports.
 type Service struct {
 	store     Store
@@ -40,15 +46,17 @@ type Service struct {
 	newID     func() string
 	onCreated func(domain.ReportRecord)
 	artifacts ArtifactRecorder
+	prs       PRTracker
 }
 
-// Deps configures a Service. Artifacts is optional.
+// Deps configures a Service. Artifacts and PRs are optional.
 type Deps struct {
 	Store     Store
 	Now       func() time.Time
 	NewID     func() string
 	OnCreated func(domain.ReportRecord)
 	Artifacts ArtifactRecorder
+	PRs       PRTracker
 }
 
 // New constructs a report Service.
@@ -59,7 +67,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts, prs: d.PRs}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -146,6 +154,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 		for _, output := range created.Outputs {
 			if output.Kind == domain.ReportOutputArtifact {
 				s.artifacts.RecordReportedArtifact(ctx, created.SessionID, output.Reference)
+			}
+		}
+	}
+	if s.prs != nil {
+		for _, output := range created.Outputs {
+			if output.Kind == domain.ReportOutputPRCreated {
+				s.prs.TrackReportedPR(ctx, created.SessionID, output.Reference)
 			}
 		}
 	}

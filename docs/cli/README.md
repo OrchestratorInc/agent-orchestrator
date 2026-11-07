@@ -328,7 +328,11 @@ authority from `gitlab.example.com`.
 
 Both `ao session claim-pr 42` and `ao spawn --claim-pr 42` resolve numbers against
 canonical when configured, otherwise origin. A full PR/MR URL may name either
-identity. Unrelated repositories and different hosts/providers remain rejected.
+identity. A full URL for any other repository the provider can fetch, such as
+`ao session claim-pr mer-3 https://github.com/my-org/releases/pull/50`, is claimed
+as an external-repository PR: the inspector marks it "External repository", and
+AO polls its state at the stale-PR cadence (every 5 minutes, or sooner when its
+commit checks change). Numbers never resolve outside the project.
 Removing `canonicalRepoURL` restores origin-only claims. This does not unlink PRs
 already claimed or move existing worktrees. Repository identity is read at claim
 time, so existing sessions need no restart or duplicate project.

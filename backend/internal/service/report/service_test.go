@@ -134,3 +134,34 @@ func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
 		t.Fatalf("unknown session: err = %v, recorded %q", err, calls)
 	}
 }
+
+type prCalls []string
+
+func (p *prCalls) TrackReportedPR(_ context.Context, id domain.SessionID, url string) {
+	*p = append(*p, string(id)+" "+url)
+}
+
+func TestCreateTracksEachCreatedPRAfterTheReportIsStored(t *testing.T) {
+	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-7", ProjectID: "ao", Kind: domain.KindWorker}}
+	var calls prCalls
+	if _, err := New(Deps{Store: st, PRs: &calls}).Create(context.Background(), CreateInput{
+		SessionID: "ao-7", State: domain.ReportCheckpoint, Note: "opened release PR",
+		Outputs: []domain.ReportOutput{
+			{Kind: domain.ReportOutputPRCreated, Reference: "https://github.com/OrchestratorInc/ao-releases/pull/50"},
+			{Kind: domain.ReportOutputPRReviewed, Reference: "https://github.com/o/r/pull/2"},
+			{Kind: domain.ReportOutputArtifact, Reference: "report.html"},
+		},
+	}); err != nil || st.created.ID == "" {
+		t.Fatalf("report: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "ao-7 https://github.com/OrchestratorInc/ao-releases/pull/50" {
+		t.Fatalf("tracked = %q, want only the created PR", calls)
+	}
+
+	calls = nil
+	if _, err := New(Deps{Store: &fakeStore{}, PRs: &calls}).Create(context.Background(), CreateInput{
+		SessionID: "ao-7", Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputPRCreated, Reference: "https://github.com/o/r/pull/1"}},
+	}); err == nil || len(calls) != 0 {
+		t.Fatalf("unknown session: err = %v, tracked %q", err, calls)
+	}
+}
