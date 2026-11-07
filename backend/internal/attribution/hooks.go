@@ -52,7 +52,7 @@ var installMu sync.Mutex
 func InstallHooks(dir string) error {
 	installMu.Lock()
 	defer installMu.Unlock()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("attribution: create hooks dir: %w", err)
 	}
 	for _, name := range HookNames {
@@ -68,7 +68,8 @@ func InstallHooks(dir string) error {
 		}
 		_, writeErr := tmp.Write(hookScript)
 		closeErr := tmp.Close()
-		if err := errors.Join(writeErr, closeErr, os.Chmod(tmp.Name(), 0o755)); err != nil {
+		if err := errors.Join(writeErr, closeErr, os.Chmod(tmp.Name(), 0o700)); err != nil { //nolint:gosec // executable git hook
+
 			_ = os.Remove(tmp.Name())
 			return fmt.Errorf("attribution: write %s hook: %w", name, err)
 		}

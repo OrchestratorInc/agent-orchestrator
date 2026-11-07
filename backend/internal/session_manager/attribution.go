@@ -77,7 +77,11 @@ func sessionGitWorktrees(root string) []string {
 	const maxDepth = 4
 	var out []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() || path == root {
+		if err != nil {
+			// An unreadable directory holds no worktree we can configure.
+			return filepath.SkipDir
+		}
+		if !d.IsDir() || path == root {
 			return nil
 		}
 		rel, relErr := filepath.Rel(root, path)
