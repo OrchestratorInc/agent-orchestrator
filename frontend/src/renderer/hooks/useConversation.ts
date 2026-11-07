@@ -1860,6 +1860,13 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		capabilities: wire.capabilities?.length ? wire.capabilities : undefined,
 		activeBranchId: wire.activeBranchId || undefined,
 		branchedFromEarlierMessage: wire.branchedFromEarlierMessage ?? undefined,
+		batchedDeliveries: wire.batchedDeliveries?.length
+			? wire.batchedDeliveries.map((delivery) => ({
+					turnId: delivery.turnId,
+					deliveredWithTurnId: delivery.deliveredWithTurnId,
+					steerActivityId: delivery.steerActivityId || undefined,
+				}))
+			: undefined,
 		branchMaterialization: wire.branchMaterialization
 			? {
 					strategy: wire.branchMaterialization.strategy,

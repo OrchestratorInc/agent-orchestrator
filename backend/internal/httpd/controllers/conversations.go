@@ -1365,6 +1365,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		ConversationID:                   s.Conversation.ID,
 		ActiveBranchID:                   s.Conversation.ActiveBranchID,
 		BranchedFromEarlierMessage:       s.BranchedFromEarlierMessage,
+		BatchedDeliveries:                s.BatchedDeliveries,
 		SessionID:                        string(s.SessionID),
 		Harness:                          string(s.Harness),
 		Mode:                             string(s.Mode),

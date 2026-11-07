@@ -17062,6 +17062,10 @@ components:
           items:
             $ref: '#/components/schemas/ConversationActivityResponse'
           type: array
+        batchedDeliveries:
+          items:
+            $ref: '#/components/schemas/DomainConversationBatchedDelivery'
+          type: array
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
@@ -17700,6 +17704,18 @@ components:
       required:
       - state
       - lastActivityAt
+      type: object
+    DomainConversationBatchedDelivery:
+      properties:
+        deliveredWithTurnId:
+          type: string
+        steerActivityId:
+          type: string
+        turnId:
+          type: string
+      required:
+      - turnId
+      - deliveredWithTurnId
       type: object
     DomainReviewerConfig:
       properties:

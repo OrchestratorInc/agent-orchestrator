@@ -124,6 +124,8 @@ async function recordFrames(page: Page) {
 		};
 		requestAnimationFrame(tick);
 	});
+	// At least one frame from before the change, or a busy runner can settle the turn before the first sample.
+	await page.waitForFunction(() => (window as unknown as { __settleFrames: Frame[] }).__settleFrames.length > 0);
 	return async () => {
 		await page.evaluate(() => {
 			(window as unknown as { __settleStop: boolean }).__settleStop = true;
