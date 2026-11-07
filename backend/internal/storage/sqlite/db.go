@@ -134,9 +134,11 @@ func Open(dataDir string) (*Store, error) {
 	if err := checkLegacyDatabasePath(dataDir); err != nil {
 		return nil, err
 	}
+	_, statErr := os.Stat(filepath.Join(dataDir, "ao.db"))
+	newDatabase := errors.Is(statErr, os.ErrNotExist)
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -147,7 +149,7 @@ func Open(dataDir string) (*Store, error) {
 		return nil, err
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
@@ -155,7 +157,13 @@ func Open(dataDir string) (*Store, error) {
 	readDB.SetMaxOpenConns(maxReaders)
 	readDB.SetMaxIdleConns(maxReaders)
 
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	store := sqlitestore.NewStore(writeDB, readDB)
+	// Fresh databases contain only UTC SQL defaults. Existing ones may have
+	// been touched by an older writer, regardless of their repair marker.
+	if !newDatabase {
+		store.StartTimestampRepair(func(ctx context.Context) error { return repairTimestamps(ctx, writeDB) })
+	}
+	return store, nil
 }
 
 // OpenReadOnly opens an existing SQLite database under dataDir without creating
@@ -163,7 +171,7 @@ func Open(dataDir string) (*Store, error) {
 func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	dsn := databaseURI(dataDir) + readOnlyPragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
@@ -174,7 +182,7 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite read-only reader: %w", err)
@@ -259,7 +267,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -282,7 +290,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 		)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
