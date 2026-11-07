@@ -40,6 +40,14 @@ import type {
 	CloudCpNotificationStateChange,
 	CloudCpFollowLevel,
 	CloudCpSessionFollower,
+	CloudCpMentionCandidates,
+	CloudCpMentionCandidatesQuery,
+	CloudCpPostAsideRequest,
+	CloudCpPostAsideResponse,
+	CloudCpAsideSuggestion,
+	CloudCpAsideSuggestionsResponse,
+	CloudCpFeedQuery,
+	CloudCpFeedResponse,
 	CloudCpOrgCoderConfigResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
@@ -565,6 +573,22 @@ export interface CloudCpClient {
 	setSessionFollow(orgId: string, sessionId: string, level: CloudCpFollowLevel, options?: CloudCpRequestOptions): Promise<CloudCpSessionFollower>;
 	/** Who is notified about a session, the creator included. */
 	listSessionFollowers(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ items: CloudCpSessionFollower[] }>;
+
+	// Asides, mentions and the team feed (hand-written ahead of the contract).
+	/** People and teams the composer's @ menu offers for a session; names only. */
+	listMentionCandidates(orgId: string, sessionId: string, query?: CloudCpMentionCandidatesQuery, options?: CloudCpRequestOptions): Promise<CloudCpMentionCandidates>;
+	/** Posts a note the agent never sees. Needs no composer lease; viewers may post one. */
+	postAside(orgId: string, sessionId: string, body: CloudCpPostAsideRequest, options?: CloudCpMutationOptions): Promise<CloudCpPostAsideResponse>;
+	/** Puts an aside forward for whoever drives the session to send to the agent. */
+	suggestAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<{ suggestion: CloudCpAsideSuggestion }>;
+	/** The session's pending aside suggestions, oldest first. */
+	listAsideSuggestions(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpAsideSuggestionsResponse>;
+	/** Drops a pending suggestion; the control plane tells the person who made it. */
+	dismissAsideSuggestion(orgId: string, sessionId: string, suggestionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** The sessions the caller may open now, newest activity first, with what changed since their last visit. */
+	getMyFeed(query?: CloudCpFeedQuery, options?: CloudCpRequestOptions): Promise<CloudCpFeedResponse>;
+	/** Records the caller's visit to the feed, so "While you were away" counts from now. */
+	markFeedSeen(options?: CloudCpRequestOptions): Promise<void>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -1230,6 +1254,23 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		getSessionFollow: (orgId, sessionId, o) => requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/follow`, { signal: o?.signal }),
 		setSessionFollow: (orgId, sessionId, level, o) => requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/follow`, { body: { level }, signal: o?.signal }),
 		listSessionFollowers: (orgId, sessionId, o) => requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/followers`, { signal: o?.signal }),
+		listMentionCandidates: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/mention-candidates`, { query: { q: query?.q, limit: query?.limit }, signal: o?.signal }),
+		postAside: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		suggestAside: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/suggest`, { signal: o?.signal }),
+		listAsideSuggestions: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/suggestions`, { signal: o?.signal }),
+		dismissAsideSuggestion: (orgId, sessionId, suggestionId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/suggestions/${seg(suggestionId)}/dismiss`, { signal: o?.signal }),
+		getMyFeed: (query, o) =>
+			requestJson("GET", "/me/feed", { query: { scope: query?.scope, cursor: query?.cursor, limit: query?.limit }, signal: o?.signal }),
+		markFeedSeen: (o) => requestVoid("POST", "/me/feed/seen", { signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

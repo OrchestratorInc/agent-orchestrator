@@ -613,3 +613,73 @@ describe("Cloud control-plane team notifications", () => {
 		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session%201/followers");
 	});
 });
+
+describe("Cloud control-plane asides, mentions and the team feed", () => {
+	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+	const client = (answer: () => Response = () => json({ people: [], teams: [], items: [], page: { hasMore: false }, event: {}, suggestion: {} })) => {
+		const fetchImpl = vi.fn().mockImplementation(async () => answer());
+		return { fetchImpl, client: createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl }) };
+	};
+	const call = (fetchImpl: ReturnType<typeof vi.fn>, index: number) => fetchImpl.mock.calls[index] as [string, RequestInit];
+
+	it("asks a session for the people and teams the @ menu offers", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.listMentionCandidates("org", "session 1", { q: "ch", limit: 20 });
+		await cp.listMentionCandidates("org", "session 1");
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session%201/mention-candidates?q=ch&limit=20");
+		expect(call(fetchImpl, 0)[1]).toMatchObject({ method: "GET" });
+		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session%201/mention-candidates");
+	});
+
+	it("posts an aside with its mentions and a stable idempotency key", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.postAside("org", "session", { text: "Looks right", mentions: [{ kind: "person", userId: "u-2" }] }, { idempotencyKey: "aside-1" });
+		const [url, init] = call(fetchImpl, 0);
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/asides");
+		expect(init.method).toBe("POST");
+		expect(JSON.parse(init.body as string)).toEqual({ text: "Looks right", mentions: [{ kind: "person", userId: "u-2" }] });
+		expect(new Headers(init.headers).get("Idempotency-Key")).toBe("aside-1");
+		// Without a key one is made, so a retry by the transport never posts twice.
+		await cp.postAside("org", "session", { text: "Again" });
+		expect(new Headers(call(fetchImpl, 1)[1].headers).get("Idempotency-Key")).toBeTruthy();
+	});
+
+	it("suggests, lists and dismisses aside suggestions on the session's routes", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.suggestAside("org", "session", "aside 1");
+		await cp.listAsideSuggestions("org", "session");
+		const answers = [json({}), new Response(null, { status: 204 })];
+		fetchImpl.mockImplementation(async () => answers.shift() ?? new Response(null, { status: 204 }));
+		await expect(cp.dismissAsideSuggestion("org", "session", "sg-1")).resolves.toBeUndefined();
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/asides/aside%201/suggest");
+		expect(call(fetchImpl, 0)[1].method).toBe("POST");
+		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions");
+		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session/suggestions/sg-1/dismiss");
+		expect(call(fetchImpl, 2)[1].method).toBe("POST");
+	});
+
+	it("reads the caller's feed by scope and page, and records a visit", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.getMyFeed({ scope: "following", cursor: "c1", limit: 30 });
+		await cp.getMyFeed();
+		fetchImpl.mockImplementation(async () => new Response(null, { status: 204 }));
+		await expect(cp.markFeedSeen()).resolves.toBeUndefined();
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed?scope=following&cursor=c1&limit=30");
+		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed");
+		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/feed/seen");
+		expect(call(fetchImpl, 2)[1].method).toBe("POST");
+	});
+
+	it("sends a message's mentions and the suggestion it sends beside its text", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.sendSessionMessage("org", "session", { text: "@Platform heads up", mentions: [{ kind: "team", teamId: "t-1" }], suggestionId: "sg-1" }, { idempotencyKey: "m-1" });
+		expect(JSON.parse(call(fetchImpl, 0)[1].body as string)).toEqual({ text: "@Platform heads up", mentions: [{ kind: "team", teamId: "t-1" }], suggestionId: "sg-1" });
+	});
+
+	it("shares a session with a workspace member by user id", async () => {
+		const { fetchImpl, client: cp } = client(() => json({ entries: [] }));
+		await cp.createShareGrants("org", "project", { sessionId: "session", subjects: [{ userId: "u-9" }], role: "viewer", modeCap: "read-only" });
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/projects/project/shares/direct");
+		expect(JSON.parse(call(fetchImpl, 0)[1].body as string)).toEqual({ sessionId: "session", subjects: [{ userId: "u-9" }], role: "viewer", modeCap: "read-only" });
+	});
+});
