@@ -120,11 +120,11 @@ func TestWaitForStoppedWaitsAfterRunFileRemovedUntilProcessExits(t *testing.T) {
 	}
 }
 
-// TestWaitForStoppedReportsStoppedWhenRunFileGoneButProcessLingers covers
-// issue #2214: once the daemon has removed its run-file (its liveness marker)
-// the stop is committed, so if the process is still draining background workers
-// past the timeout, waitForStopped must report stopped rather than erroring.
-func TestWaitForStoppedReportsStoppedWhenRunFileGoneButProcessLingers(t *testing.T) {
+// TestWaitForStoppedFailsWhenRunFileGoneButProcessLingers prevents ao stop
+// from reporting success merely because the daemon removed running.json. A
+// daemon that remains alive after the requested stop timeout is an actionable
+// failed stop: it can become an orphan after its desktop parent exits.
+func TestWaitForStoppedFailsWhenRunFileGoneButProcessLingers(t *testing.T) {
 	dir := t.TempDir()
 	runFile := filepath.Join(dir, "running.json") // never written: run-file already gone
 
@@ -136,11 +136,11 @@ func TestWaitForStoppedReportsStoppedWhenRunFileGoneButProcessLingers(t *testing
 		Sleep:        func(d time.Duration) { now = now.Add(d) },
 	}.withDefaults()}
 
-	st, err := c.waitForStopped(context.Background(), stoppedPID, runFile, dir, time.Second)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := c.waitForStopped(context.Background(), stoppedPID, runFile, dir, time.Second)
+	if err == nil {
+		t.Fatal("waitForStopped returned success while the daemon process remained alive")
 	}
-	if st.State != stateStopped {
-		t.Fatalf("state = %q, want stopped", st.State)
+	if got, want := err.Error(), "daemon pid 1111 removed run-file but did not exit within 1s"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
