@@ -1,4 +1,4 @@
-import { Button, Divider, HStack, LabeledContent, SecureField, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, LabeledContent, SecureField, Section, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
 import {
 	accessibilityLabel,
 	autocorrectionDisabled,
@@ -20,7 +20,7 @@ import {
 	tint,
 	type ModifierConfig,
 } from "@expo/ui/swift-ui/modifiers";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 import type { Theme } from "./theme";
 import { useTheme } from "./ThemeProvider";
@@ -45,16 +45,32 @@ export function sectionModifiers(t: Theme): ModifierConfig[] {
 	return [listRowBackground(t.bgElevated)];
 }
 
-/** A section footer: the system's footnote styling, or the error colour for a problem with the section's fields. */
 /**
- * A section footer. A section with text fields keeps one mounted and only changes
- * its text (none when there is nothing to say): @expo/ui builds a different
- * SwiftUI Section with and without a footer, so adding or removing it rebuilds
- * the fields, and the focused field loses focus and the keyboard.
+ * A section footer: the system's footnote styling (secondary), or the error
+ * colour for a problem with the section's fields. A hint and an error draw with
+ * the same modifier, so switching between them changes only its style. With
+ * nothing to say it draws nothing: no empty row, and nothing for VoiceOver.
  */
 export function FormFooter({ children, error = false }: { children?: string; error?: boolean }) {
 	const t = useTheme();
-	return <Text modifiers={error ? [foregroundStyle(t.red)] : undefined}>{children ?? ""}</Text>;
+	if (!children) return null;
+	return <Text modifiers={[foregroundStyle(error ? t.red : { type: "hierarchical", style: "secondary" })]}>{children}</Text>;
+}
+
+/**
+ * A form section whose footer is always mounted: use it for a section with text
+ * fields whose footer can change. @expo/ui builds a different SwiftUI Section
+ * with and without a footer, so adding or removing one rebuilds the section's
+ * fields, and the field being typed in loses focus and the keyboard. Here the
+ * footer slot is always there and only what it holds changes; @expo/ui keeps
+ * the same Section for an empty slot.
+ */
+export function FormSection({ title, footer, footerError = false, modifiers, children }: { title?: string; footer?: string; footerError?: boolean; modifiers?: ModifierConfig[]; children: ReactNode }) {
+	return (
+		<Section title={title} footer={<FormFooter error={footerError}>{footer}</FormFooter>} modifiers={modifiers}>
+			{children}
+		</Section>
+	);
 }
 
 function inputModifiers(t: Theme, props: FormTextFieldProps, contentType?: Parameters<typeof textContentType>[0]): ModifierConfig[] {

@@ -82,6 +82,12 @@ describe("the iOS machine editor", () => {
 		expect(footers()[1].props.children).toBeUndefined();
 	});
 
+	it("keeps the name footer mounted for a machine that isn't account-managed too", () => {
+		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor()} />); });
+		expect(footers()[0]).toBeDefined();
+		expect(footers()[0].props.children).toBeUndefined();
+	});
+
 	it("keeps an account machine's name footer mounted as a save failure comes and goes", () => {
 		const failure: MachineEditor["failure"] = { message: "Couldn't save the name. Try again.", field: "host" };
 		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor({ accountManaged: true })} />); });
