@@ -263,6 +263,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator,
 	startingSteps,
 	startingCoderWorkspaceUrl,
+	startingHarness,
 }: {
 	isSessionRoute: boolean;
 	isHomeRoute: boolean;
@@ -272,9 +273,10 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator: boolean;
 	startingSteps?: WorkspaceSession["provisionSteps"];
 	startingCoderWorkspaceUrl?: string;
+	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
+	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
@@ -1556,6 +1558,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
+								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
 							/>
 							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
 								canGoBack: !isHomeRoute && router.history.canGoBack(),
