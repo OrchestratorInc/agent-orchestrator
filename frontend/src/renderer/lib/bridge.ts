@@ -100,17 +100,17 @@ export const aoBridge: AoBridge =
 		cloudShare: {
 			available: async () => false,
 			inspect: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			list: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			publish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
 			unpublish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			onProgress: () => () => undefined,
 		},

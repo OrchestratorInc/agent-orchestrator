@@ -319,7 +319,7 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 	}
 	return fmt.Sprintf(`## Orchestrator Worker Role
 
-You are a worker for an Agent Orchestrator session.
+You are a worker for an Orchestrator-managed session.
 
 Your job is to complete the assigned task in this workspace. For implementation, inspect the relevant code and tests before editing, keep changes scoped to the task, verify the behavior you touched, and report blockers clearly. For review-only work, inspect the target PR and submit only the requested provider review.
 

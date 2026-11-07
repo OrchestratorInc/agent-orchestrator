@@ -288,7 +288,7 @@ func defaultJITRepairRoot() (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve AO data dir: %w", err)
+		return "", fmt.Errorf("resolve Orchestrator data dir: %w", err)
 	}
 	return filepath.Join(home, ".ao", "data", "acp-runtime", "node-jit"), nil
 }

@@ -40,7 +40,7 @@ configuration.
 ## Artifact files
 
 Deliverables in this session's artifact directory live outside the workspace.
-Open one by its absolute path; AO serves it from the artifact directory's own
+Open one by its absolute path; Orchestrator serves it from the artifact directory's own
 confined preview origin:
 
 ```bash

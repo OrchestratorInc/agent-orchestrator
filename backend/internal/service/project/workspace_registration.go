@@ -267,7 +267,7 @@ func adoptWorkspaceParent(ctx context.Context, parent string, repos []domain.Wor
 		if err := guardNoGitlinks(ctx, parent); err != nil {
 			return err
 		}
-		if _, err := gitOutput(ctx, parent, "commit", "-m", "chore: configure AO workspace ignores", "--", ".gitignore"); err != nil {
+		if _, err := gitOutput(ctx, parent, "commit", "-m", "chore: configure Orchestrator workspace ignores", "--", ".gitignore"); err != nil {
 			return apierr.Invalid("WORKSPACE_PARENT_COMMIT_FAILED", "Failed to commit workspace parent .gitignore", map[string]any{"error": err.Error()})
 		}
 	}

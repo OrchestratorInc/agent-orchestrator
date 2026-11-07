@@ -106,7 +106,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	}
 	cloudBase := strings.TrimRight(settings.CloudControlPlaneURL, "/")
 	if cloudBase == "" {
-		return errors.New("this machine's Orchestrator has no Orchestrator Cloud configured")
+		return errors.New("no Orchestrator Cloud connection is configured on this machine")
 	}
 
 	// Nothing on this machine changes until the sign-in succeeds, so a

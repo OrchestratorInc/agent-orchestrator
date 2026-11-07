@@ -7327,7 +7327,7 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	env[EnvSupervisedProcess] = "1"
 	executable, err := m.executable()
 	if err != nil {
-		return nil, fmt.Errorf("resolve AO executable: %w", err)
+		return nil, fmt.Errorf("resolve ao executable: %w", err)
 	}
 	wrapped := make([]string, 0, 8+len(argv))
 	wrapped = append(wrapped, executable, "agent-process", "supervise", "--session", string(id), "--launch", launchID, "--")

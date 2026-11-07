@@ -173,7 +173,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 
 func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
 	if probe.Service != daemonmeta.ServiceName {
-		return fmt.Errorf("%s: response is not from Orchestrator daemon", path)
+		return fmt.Errorf("%s: response is not from the Orchestrator daemon", path)
 	}
 	if probe.PID != wantPID {
 		return fmt.Errorf("%s: daemon pid %d does not match run-file pid %d", path, probe.PID, wantPID)
