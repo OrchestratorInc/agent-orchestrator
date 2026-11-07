@@ -616,8 +616,8 @@ export interface CloudCpSession {
 	model?: string;
 	/**
 	 * The model the session runs now: its owner's Chat pick, else `model`.
-	 * Absent when that is the harness default, and from older control planes
-	 * (read `model` then).
+	 * The control plane always sends it, "" for the harness default; only an
+	 * older one leaves it out (read `model` then).
 	 */
 	currentModel?: string;
 	/** The reasoning effort its turns run with now; absent for the model's default. */

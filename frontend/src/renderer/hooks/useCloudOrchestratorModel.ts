@@ -31,22 +31,29 @@ function concrete(value: string | undefined): string | undefined {
 }
 
 /**
- * What the orchestrator runs now. The control plane reports it on the session
- * (its owner's Chat pick, else the model it started with); one that predates
- * `currentModel` reports only the model it started with. While the
- * orchestrator's Chat is open in this window its live settings are newer and
- * win: a field set there replaces the session's ("default" being the agent's
- * own), and a field left unset keeps the session's.
+ * What the orchestrator runs now. The control plane always reports it on the
+ * session as `currentModel` (its owner's Chat pick, else the model it started
+ * with; "" for the agent's own default). Only one that predates the field
+ * leaves it out, and then the model the session started with stands in.
+ * While the orchestrator's Chat is open in this window its live settings are
+ * newer and win: a field set there replaces the session's ("default" being
+ * the agent's own), and a field left unset keeps the session's. An effort
+ * stays with the model it was chosen for, so a live model other than the
+ * session's takes none of the session's effort.
  */
 export function cloudOrchestratorModel(
 	session: Pick<CloudCpSession, "id" | "harness" | "model" | "currentModel" | "currentReasoningEffort"> | undefined,
 	live: Pick<CloudCpSessionChatSettings, "model" | "reasoningEffort"> | undefined,
 ): CloudOrchestratorModel | undefined {
 	if (!session) return undefined;
-	const sessionModel = session.currentModel !== undefined ? concrete(session.currentModel) : concrete(session.model);
+	const sessionModel = Object.prototype.hasOwnProperty.call(session, "currentModel")
+		? concrete(session.currentModel)
+		: concrete(session.model);
 	const model = live?.model?.trim() ? concrete(live.model) : sessionModel;
 	if (!model) return undefined;
-	const reasoningEffort = live?.reasoningEffort?.trim() ? concrete(live.reasoningEffort) : concrete(session.currentReasoningEffort);
+	const reasoningEffort = live?.reasoningEffort?.trim()
+		? concrete(live.reasoningEffort)
+		: model === sessionModel ? concrete(session.currentReasoningEffort) : undefined;
 	return { sessionId: session.id, harness: session.harness, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 

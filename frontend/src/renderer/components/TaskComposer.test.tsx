@@ -3731,8 +3731,11 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		for (const leave of liveCleanups.splice(0)) leave();
 	});
 
+	/** A field given as undefined is left out, as a control plane that predates it leaves it out. */
 	function orchestratorSession(overrides: Record<string, unknown> = {}) {
-		return { id: "orch-1", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-opus-test", currentModel: "claude-opus-test", status: "working", isTerminated: false, createdAt: "2026-11-01T00:00:00Z", ...overrides };
+		const session: Record<string, unknown> = { id: "orch-1", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-opus-test", currentModel: "claude-opus-test", status: "working", isTerminated: false, createdAt: "2026-11-01T00:00:00Z", ...overrides };
+		for (const key of Object.keys(session)) if (session[key] === undefined) delete session[key];
+		return session;
 	}
 
 	/** The project's sessions as the sidebar's poll left them: its running orchestrator, and any others. */
@@ -3808,6 +3811,25 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
 		expect(await startWithDefaults()).toMatchObject({ model: "claude-opus-test" });
+	});
+
+	it("keeps the usual defaults beside an orchestrator that runs its agent's default model", async () => {
+		const queryClient = cloudFixture("claude-code");
+		// It started on a model no catalog lists and runs the agent's default now (""):
+		// that model is not followed, and the newest worker's model is the last used.
+		seedSessions(queryClient, { model: "claude-retired-test", currentModel: "" }, [
+			{ id: "worker-1", projectId: "cloud-1", kind: "worker", harness: "claude-code", model: "claude-haiku-test", status: "working", isTerminated: false, createdAt: "2026-10-30T00:00:00Z" },
+		]);
+		h.cloudListUserAgentModels.mockResolvedValue(catalog());
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Haiku"));
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+		expect(screen.queryByText("Same as orchestrator")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /claude-retired-test/ })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(await startWithDefaults()).toMatchObject({ model: "claude-haiku-test" });
 	});
 
 	it("follows the orchestrator's open Chat, whose Default names no model", async () => {

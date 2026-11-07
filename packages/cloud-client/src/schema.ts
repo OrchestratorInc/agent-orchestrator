@@ -3860,7 +3860,7 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launched with; empty means the harness default. */
             model?: string;
-            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. Omitted when that is the harness default. Absent from older control planes; read `model` then. */
+            /** @description Coding-agent model the session runs now: its owner's Chat pick, else the model it launched with. The control plane always sends it; an empty string means the harness default. Absent only from older control planes, which predate it; read `model` then. */
             currentModel?: string;
             /**
              * @description Reasoning effort the session's turns run with now: its owner's Chat pick, else the effort it launched with. Omitted when that is the model's default.

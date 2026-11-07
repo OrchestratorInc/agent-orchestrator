@@ -47,8 +47,15 @@ describe("cloudOrchestratorModel", () => {
 			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "sonnet", reasoningEffort: "high" });
 	});
 
+	it("reads an empty currentModel as the agent's default, without falling back to the model the session started with", () => {
+		expect(cloudOrchestratorModel(session({ model: "opus", currentModel: "" }), undefined)).toBeUndefined();
+		expect(cloudOrchestratorModel(session({ model: "opus", currentModel: "", currentReasoningEffort: "high" }), { reasoningEffort: "low" })).toBeUndefined();
+	});
+
 	it("falls back to the model the session started with on a control plane that predates currentModel", () => {
-		expect(cloudOrchestratorModel(session({}), undefined)).toEqual({ sessionId: "orch-1", harness: "claude-code", model: "opus" });
+		const older = session({});
+		expect(Object.prototype.hasOwnProperty.call(older, "currentModel")).toBe(false);
+		expect(cloudOrchestratorModel(older, undefined)).toEqual({ sessionId: "orch-1", harness: "claude-code", model: "opus" });
 		// The agent's own default names no model.
 		expect(cloudOrchestratorModel(session({ model: "default" }), undefined)).toBeUndefined();
 		expect(cloudOrchestratorModel(session({ model: "" }), {})).toBeUndefined();
@@ -61,10 +68,18 @@ describe("cloudOrchestratorModel", () => {
 		// A pick of only an effort keeps the model the session runs now.
 		expect(cloudOrchestratorModel(orchestrator, { reasoningEffort: "low" }))
 			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "sonnet", reasoningEffort: "low" });
-		expect(cloudOrchestratorModel(orchestrator, { model: "haiku" }))
-			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku", reasoningEffort: "high" });
+		expect(cloudOrchestratorModel(orchestrator, { model: "sonnet" }))
+			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "sonnet", reasoningEffort: "high" });
 		expect(cloudOrchestratorModel(orchestrator, {}))
 			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "sonnet", reasoningEffort: "high" });
+	});
+
+	it("keeps an effort with the model it was chosen for: a live model other than the session's takes none of its effort", () => {
+		const orchestrator = session({ currentModel: "sonnet", currentReasoningEffort: "high" });
+		expect(cloudOrchestratorModel(orchestrator, { model: "haiku" }))
+			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku" });
+		expect(cloudOrchestratorModel(orchestrator, { model: "haiku", reasoningEffort: "low" }))
+			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku", reasoningEffort: "low" });
 	});
 
 	it("reads a live \"default\" as the agent's own: no model, or no effort", () => {
