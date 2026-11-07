@@ -326,3 +326,34 @@ func TestConfigCatalogDiscoveryAndFingerprint(t *testing.T) {
 		t.Fatalf("fingerprint did not change after config edit: %q", before)
 	}
 }
+
+func TestDiscoverStakpakCatalogOffersTheActiveProfileModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("STAKPAK_PROFILE", "")
+	dir := filepath.Join(home, ".stakpak")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "[profiles.all]\nmodel = \"anthropic/claude-haiku-4-5\"\n\n[profiles.default]\nprovider = \"local\"\nmodel = \"zai/glm-5.1\"\n\n[profiles.default.providers.zai]\ntype = \"custom\"\napi_key = \"secret\"\n\n[profiles.other]\nmodel = \"openai/gpt-5.5\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := discoverConfigCatalog("stakpak", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "zai/glm-5.1" || catalog.Models[0].Provider != "zai" || !catalog.Models[0].IsDefault {
+		t.Fatalf("models = %+v, want the default profile's zai/glm-5.1", catalog.Models)
+	}
+	if catalog.SelectionMode != ports.ModelSelectionCatalog || catalog.CustomModelEntry != ports.CustomModelEntryDirect {
+		t.Fatalf("catalog = %+v, want a catalog that keeps free-form entry", catalog)
+	}
+
+	t.Setenv("STAKPAK_PROFILE", "other")
+	catalog, err = discoverConfigCatalog("stakpak", "", nil)
+	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "openai/gpt-5.5" {
+		t.Fatalf("other profile catalog = %+v, %v", catalog.Models, err)
+	}
+}

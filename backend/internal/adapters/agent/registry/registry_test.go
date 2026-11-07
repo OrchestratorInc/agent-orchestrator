@@ -344,3 +344,20 @@ func TestMemcodeAdapterIsSelectable(t *testing.T) {
 		t.Fatal("missing TUI agent")
 	}
 }
+
+func TestStakpakAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("stakpak")
+	if !ok || !domain.HarnessStakpak.IsKnown() {
+		t.Fatal("Stakpak is not selectable")
+	}
+	if adapter.Manifest().Name != "Stakpak" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+}

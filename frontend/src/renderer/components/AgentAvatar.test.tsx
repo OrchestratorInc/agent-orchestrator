@@ -66,4 +66,8 @@ describe("AgentAvatar", () => {
 		render(<AgentAvatar provider="hermes" />);
 		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
 	});
+	it("renders the official Stakpak icon", () => {
+		render(<AgentAvatar provider="stakpak" />);
+		expect(screen.getByRole("img", { name: "stakpak" })).toHaveAttribute("src", expect.stringContaining("stakpak.png"));
+	});
 });
