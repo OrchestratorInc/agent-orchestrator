@@ -785,11 +785,11 @@ func TestListKeepsLastUsageWhenProbeFailsForSameLogin(t *testing.T) {
 	if err != nil || len(before) != 1 || before[0].Limits == nil {
 		t.Fatalf("initial reading: %+v, %v", before, err)
 	}
-	claude.limitsErr = errors.New("usage unavailable")
+	claude.limitsErr = fmt.Errorf("provider %w", domain.ErrUsageUnavailable)
 	for _, email := range []string{"a@example.com", "a@example.com", "b@example.com"} {
 		claude.signedInAs[""] = email
 		views, err := svc.List(ctx, true)
-		if err != nil || len(views) != 1 || views[0].LimitsErr != "usage unavailable" {
+		if err != nil || len(views) != 1 || views[0].LimitsErr != "provider usage is temporarily unavailable" {
 			t.Fatalf("failed probe: %+v, %v", views, err)
 		}
 		want := before[0].Limits
@@ -802,27 +802,46 @@ func TestListKeepsLastUsageWhenProbeFailsForSameLogin(t *testing.T) {
 	}
 }
 
-func TestLoginIsConfirmedWhileOnlyTheUsageReadIsUnavailable(t *testing.T) {
+func TestListDoesNotKeepUsageAfterAnotherLimitsFailure(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 42}},
+	}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if views, err := svc.List(ctx, true); err != nil || views[0].Limits == nil {
+		t.Fatalf("initial reading: %+v, %v", views, err)
+	}
+	claude.limitsErr = errors.New("claude get_usage: boom")
+	views, err := svc.List(ctx, true)
+	if err != nil || views[0].Limits != nil || views[0].LimitsErr != "claude get_usage: boom" {
+		t.Fatalf("only an unavailable usage read keeps the last reading: %+v, %v", views, err)
+	}
+}
+
+func TestOnlyARealUsageReadingConfirmsTheLogin(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
 	confirmed := 0
 	svc.SetLoginConfirmed(func(domain.AgentAccount, time.Time) { confirmed++ })
-	for _, tc := range []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"usage rate limited", fmt.Errorf("Claude %w", domain.ErrUsageUnavailable), 1},
-		{"another limits failure", errors.New("claude get_usage: boom"), 0},
-	} {
-		confirmed, claude.limitsErr = 0, tc.err
-		if _, err := svc.List(ctx, true); err != nil {
-			t.Fatal(err)
+	read := func(err error) int {
+		confirmed, claude.limitsErr = 0, err
+		if _, listErr := svc.List(ctx, true); listErr != nil {
+			t.Fatal(listErr)
 		}
-		if confirmed != tc.want {
-			t.Fatalf("%s: confirmed %d times, want %d", tc.name, confirmed, tc.want)
-		}
+		return confirmed
+	}
+	if n := read(nil); n != 1 {
+		t.Fatalf("a real reading confirmed %d times, want 1", n)
+	}
+	// A usage read the provider could not answer shows nothing about the login,
+	// even though an earlier reading is kept for display.
+	if n := read(fmt.Errorf("Claude %w", domain.ErrUsageUnavailable)); n != 0 {
+		t.Fatalf("an unavailable usage read confirmed %d times, want 0", n)
+	}
+	if n := read(errors.New("claude get_usage: boom")); n != 0 {
+		t.Fatalf("a failed usage read confirmed %d times, want 0", n)
 	}
 }
 

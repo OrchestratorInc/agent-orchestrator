@@ -234,8 +234,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
-	// Keep the last reading and its original timestamp only for the same login.
-	if err == nil && identity.SignedIn && !r.mismatch && r.limitsErr != "" && identity.Email != "" {
+	// When only the usage read was unavailable, keep the last reading and its
+	// original timestamp, and only for the same login.
+	if err == nil && identity.SignedIn && !r.mismatch && r.usageUnavailable && identity.Email != "" {
 		if prev := s.readings[account.ID]; prev != nil && prev.identity.SignedIn &&
 			strings.EqualFold(prev.identity.Email, identity.Email) {
 			r.limits = prev.limits
@@ -245,9 +246,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
-	// that has them shows the login worked when the reading began. A usage
-	// endpoint that is only rate limited does not undo a sign-in that was seen.
-	if confirmed != nil && err == nil && r.identity.SignedIn && (r.limits != nil && r.limitsErr == "" || r.usageUnavailable) {
+	// that has them shows the login worked when the reading began. A kept
+	// reading from an earlier read (limitsErr set) shows nothing about this one.
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limitsErr == "" && r.limits != nil {
 		confirmed(account, r.at)
 	}
 	return r
