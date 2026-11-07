@@ -2137,10 +2137,15 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND batched_input = 1
   AND promoted_to_turn_id IS NOT NULL;
 
--- Steers that carried queued turns, with the detail naming those turns.
+-- Steers that carried queued turns, with the detail naming those turns. A steer
+-- is a system row; other rows may have no detail at all, so the JSON is only
+-- read once json_valid says it parses (WHERE terms have no evaluation order).
 -- name: ListConversationBatchSteers :many
 SELECT id, detail_json
 FROM conversation_activities
 WHERE conversation_id = sqlc.arg(conversation_id)
-  AND json_extract(detail_json, '$.event') = 'steer'
-  AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array';
+  AND kind = 'system'
+  AND CASE WHEN json_valid(detail_json)
+      THEN json_extract(detail_json, '$.event') = 'steer'
+       AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array'
+      ELSE 0 END;
