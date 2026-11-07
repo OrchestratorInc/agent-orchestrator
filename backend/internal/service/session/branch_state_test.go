@@ -67,16 +67,16 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 
 	// Tracking origin/main is not a push: the branch itself is not on the remote.
 	runGit(t, repo, "branch", "--set-upstream-to", "origin/main")
-	reconcile(domain.SessionBranchState{Commits: 2, Unpushed: 2})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 2, Unpushed: 2})
 
 	runGit(t, repo, "push", "-u", "origin", "feat/x")
-	reconcile(domain.SessionBranchState{Commits: 2, RemoteBranch: "origin/feat/x", Unpushed: 0})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 2, RemoteBranch: "origin/feat/x", Unpushed: 0})
 
 	commitFile(t, repo, "c.go")
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
 
 	writes := st.writes
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 3, RemoteBranch: "origin/feat/x", Unpushed: 1})
 	if st.writes != writes {
 		t.Fatalf("unchanged facts were rewritten (%d writes, want %d)", st.writes, writes)
 	}
@@ -94,13 +94,21 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	st.sessions["s1"] = domain.SessionRecord{ID: "s1", Metadata: domain.SessionMetadata{
 		Branch: "ao/s1/root", WorkspacePath: worktree, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	if err := (&Service{store: st}).ReconcileBranchStates(context.Background()); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	svc := &Service{store: st}
+	reconcile := func(want domain.SessionBranchState) {
+		t.Helper()
+		if err := svc.ReconcileBranchStates(context.Background()); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if got := st.sessions["s1"].BranchState; got == nil || *got != want {
+			t.Fatalf("branch state = %+v, want %+v", got, want)
+		}
 	}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1}
-	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
-		t.Fatalf("branch state = %+v, want %+v", got, want)
-	}
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/feature", Commits: 1, Unpushed: 1})
+
+	// A stacked branch at the same commit moves no tip but is a new checkout.
+	runGit(t, worktree, "checkout", "-b", "ao/s1/stacked")
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/stacked", Commits: 1, Unpushed: 1})
 }
 
 func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
@@ -142,7 +150,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 	if got := pass(); got != 2 {
 		t.Fatalf("pass after one commit ran %d git processes, want 2", got)
 	}
-	want := domain.SessionBranchState{Commits: 2, Unpushed: 2}
+	want := domain.SessionBranchState{Branch: "ao/s1", Commits: 2, Unpushed: 2}
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("s1 branch state = %+v, want %+v", got, want)
 	}

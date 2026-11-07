@@ -242,7 +242,7 @@ func TestSessionList_EnrichesPRColumnsAndKeepsFallbackFacts(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"sessions":[
 				{"id":"demo-1","projectId":"demo","kind":"worker","branch":"feat/INT-1327","activity":{"state":"working","lastActivityAt":"2026-06-02T12:00:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"working","prs":[{"number":3,"ci":"passing","review":"approved"}]},
-				{"id":"demo-2","projectId":"demo","kind":"worker","branch":"feat/INT-1328","activity":{"state":"idle","lastActivityAt":"2026-06-02T11:55:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"idle","prs":[{"number":2,"ci":"failing","review":"changes_requested"}]}
+				{"id":"demo-2","projectId":"demo","kind":"worker","branch":"feat/INT-1328","branchState":{"branch":"feat/INT-1328-stacked","commits":1,"unpushed":0,"remoteBranch":"origin/feat/INT-1328-stacked"},"activity":{"state":"idle","lastActivityAt":"2026-06-02T11:55:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"idle","prs":[{"number":2,"ci":"failing","review":"changes_requested"}]}
 			]}`)
 		case "/api/v1/sessions/demo-1/pr":
 			detailsMu.Lock()
@@ -270,7 +270,7 @@ func TestSessionList_EnrichesPRColumnsAndKeepsFallbackFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session ls failed: %v\nstderr=%s", err, errOut)
 	}
-	for _, want := range []string{"SESSION", "ROLE", "BRANCH", "THREADS", "demo-1", "worker", "feat/INT-1327", "#3", "passing", "approved", "2", "working", "5m ago", "demo-2", "#2", "failing", "changes_requested"} {
+	for _, want := range []string{"SESSION", "ROLE", "BRANCH", "THREADS", "demo-1", "worker", "feat/INT-1327", "#3", "passing", "approved", "2", "working", "5m ago", "demo-2", "feat/INT-1328-stacked", "#2", "failing", "changes_requested"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
@@ -1160,5 +1160,16 @@ func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
 				t.Fatalf("%s request deadline in %s, want no client timeout", tc.call, time.Until(deadline).Round(time.Minute))
 			}
 		})
+	}
+}
+
+func TestFormatBranchStatePrefersTheCheckedOutBranch(t *testing.T) {
+	sess := sessionDTO{Branch: "ao/s1/root", BranchState: &branchStateDTO{Branch: "ao/s1/feature", Commits: 2, RemoteBranch: "origin/ao/s1/feature"}}
+	if got, want := formatBranchState(sess), "ao/s1/feature (2 commits, pushed to origin/ao/s1/feature)"; got != want {
+		t.Fatalf("formatBranchState = %q, want %q", got, want)
+	}
+	sess.BranchState.Branch = "" // detached HEAD or not yet observed
+	if got := formatBranchState(sess); !strings.HasPrefix(got, "ao/s1/root ") {
+		t.Fatalf("formatBranchState = %q, want the recorded branch", got)
 	}
 }
