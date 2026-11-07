@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "Weiter"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "Nein"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "Keine Überschriften"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "Terminals"
 
+msgid "Thanks for letting us know."
+msgstr "Danke für deine Rückmeldung."
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "Danke. Schreib uns im gerade geöffneten GitHub-Issue, was wir korrigieren sollen."
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "Die gesuchte Seite wurde möglicherweise entfernt, umbenannt oder ist vorübergehend nicht verfügbar."
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Orchestrator verwenden"
 
+msgid "Was this page helpful?"
+msgstr "War diese Seite hilfreich?"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "Arbeitsbereiche"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "Ja"

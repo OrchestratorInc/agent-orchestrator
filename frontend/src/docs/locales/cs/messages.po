@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "Další"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "Ne"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "Žádné nadpisy"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "Terminály"
 
+msgid "Thanks for letting us know."
+msgstr "Děkujeme za zpětnou vazbu."
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "Děkujeme. V právě otevřeném issue na GitHubu nám napište, co opravit."
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "Hledaná stránka mohla být odstraněna, přejmenována nebo je dočasně nedostupná."
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Používání Orchestratoru"
 
+msgid "Was this page helpful?"
+msgstr "Pomohla vám tato stránka?"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "Pracovní prostory"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "Ano"

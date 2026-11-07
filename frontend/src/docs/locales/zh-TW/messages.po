@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "下一頁"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "否"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "沒有標題"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "終端機"
 
+msgid "Thanks for letting us know."
+msgstr "感謝你的回饋。"
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "謝謝。請在剛開啟的 GitHub Issue 中告訴我們需要修正什麼。"
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "您要找的頁面可能已被移除、已更名，或暫時無法使用。"
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "使用 Orchestrator"
 
+msgid "Was this page helpful?"
+msgstr "這個頁面對你有幫助嗎？"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "工作區"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "是"

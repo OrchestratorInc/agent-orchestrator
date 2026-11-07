@@ -104,6 +104,10 @@ msgctxt "pagination"
 msgid "Next"
 msgstr "Tiếp theo"
 
+msgctxt "was this page helpful"
+msgid "No"
+msgstr "Không"
+
 msgctxt "table of contents"
 msgid "No headings"
 msgstr "Không có tiêu đề"
@@ -177,6 +181,12 @@ msgctxt "sidebar section"
 msgid "Terminals"
 msgstr "Terminal"
 
+msgid "Thanks for letting us know."
+msgstr "Cảm ơn bạn đã cho chúng tôi biết."
+
+msgid "Thanks. Tell us what to fix in the GitHub issue that just opened."
+msgstr "Cảm ơn bạn. Hãy cho chúng tôi biết cần sửa gì trong issue GitHub vừa mở."
+
 msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
 msgstr "Trang bạn đang tìm có thể đã bị xóa, đổi tên hoặc tạm thời không khả dụng."
 
@@ -198,6 +208,13 @@ msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Sử dụng Orchestrator"
 
+msgid "Was this page helpful?"
+msgstr "Trang này có hữu ích không?"
+
 msgctxt "sidebar section"
 msgid "Workspaces"
 msgstr "Không gian làm việc"
+
+msgctxt "was this page helpful"
+msgid "Yes"
+msgstr "Có"

@@ -4,7 +4,7 @@ import { msg } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react";
 import { buttonVariants } from "fumadocs-ui/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/ui/popover";
-import { Check, ChevronDown, Copy, ExternalLink, MessageSquareWarning, SquarePen } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, MessageSquareWarning, SquarePen, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { COMPANY } from "@/lib/constants";
 
@@ -82,23 +82,59 @@ export function PageActions({ markdownPath }: { markdownPath: string }) {
 }
 
 /**
- * Reports a problem with the article as a prefilled GitHub issue, or opens
- * its source for editing. It sits at the end, where readers finish.
+ * Asks whether the page helped. "No" opens the same prefilled issue as
+ * "Suggest a change"; "Yes" only says thanks. Nothing is stored or sent, so
+ * it needs no cookies, and "No" still works as a plain link without scripts.
+ */
+export function PageHelpful({ issueUrl }: { issueUrl: string }) {
+  const { i18n } = useLingui();
+  const [answer, setAnswer] = useState<"yes" | "no" | null>(null);
+  return (
+    <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+      {answer === null ? (
+        <>
+          <p className="my-0 text-sm font-medium text-fd-foreground">{i18n._(msg`Was this page helpful?`)}</p>
+          <button type="button" className={BUTTON} onClick={() => setAnswer("yes")}>
+            <ThumbsUp />
+            {i18n._(msg({ message: "Yes", context: "was this page helpful" }))}
+          </button>
+          <a href={issueUrl} target="_blank" rel="noreferrer noopener" className={BUTTON} onClick={() => setAnswer("no")}>
+            <ThumbsDown />
+            {i18n._(msg({ message: "No", context: "was this page helpful" }))}
+          </a>
+        </>
+      ) : (
+        <p role="status" className="my-0 text-sm text-fd-muted-foreground">
+          {answer === "yes"
+            ? i18n._(msg`Thanks for letting us know.`)
+            : i18n._(msg`Thanks. Tell us what to fix in the GitHub issue that just opened.`)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The end of the article, where readers finish: whether the page helped,
+ * then a prefilled GitHub issue about a problem, or the source for editing.
  */
 export function PageFeedback({ issueUrl, sourceUrl }: { issueUrl: string; sourceUrl: string }) {
   const { i18n } = useLingui();
   return (
-    <section className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-fd-card px-4 py-3">
-      <p className="my-0 text-sm text-fd-muted-foreground">{i18n._(msg`Something wrong or missing on this page?`)}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <a href={issueUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
-          <MessageSquareWarning />
-          {i18n._(msg`Suggest a change`)}
-        </a>
-        <a href={sourceUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
-          <SquarePen />
-          {i18n._(msg`Edit this page`)}
-        </a>
+    <section className="mt-6 flex flex-col gap-3 rounded-xl border bg-fd-card px-4 py-3">
+      <PageHelpful issueUrl={issueUrl} />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
+        <p className="my-0 text-sm text-fd-muted-foreground">{i18n._(msg`Something wrong or missing on this page?`)}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <a href={issueUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
+            <MessageSquareWarning />
+            {i18n._(msg`Suggest a change`)}
+          </a>
+          <a href={sourceUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
+            <SquarePen />
+            {i18n._(msg`Edit this page`)}
+          </a>
+        </div>
       </div>
     </section>
   );
