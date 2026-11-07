@@ -29,19 +29,19 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
   >
     <svg
       aria-hidden="true"
-      class="lucide lucide-check size-3.5 shrink-0 text-success"
+      class="icon icon-check size-3.5 shrink-0 text-success"
       fill="none"
       height="24"
       stroke="currentColor"
       stroke-linecap="round"
       stroke-linejoin="round"
-      stroke-width="2"
+      stroke-width="1.5"
       viewBox="0 0 24 24"
       width="24"
       xmlns="http://www.w3.org/2000/svg"
     >
       <path
-        d="M20 6 9 17l-5-5"
+        d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7"
       />
     </svg>
     <span
@@ -66,13 +66,13 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
     </span>
     <svg
       aria-hidden="true"
-      class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground rotate-90"
+      class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground rotate-90"
       fill="none"
       height="24"
       stroke="currentColor"
       stroke-linecap="round"
       stroke-linejoin="round"
-      stroke-width="2"
+      stroke-width="1.5"
       viewBox="0 0 24 24"
       width="24"
       xmlns="http://www.w3.org/2000/svg"
@@ -99,19 +99,19 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-check size-3.5 shrink-0 text-success"
+          class="icon icon-check size-3.5 shrink-0 text-success"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M20 6 9 17l-5-5"
+            d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7"
           />
         </svg>
         <span
@@ -132,13 +132,13 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -162,19 +162,19 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-check size-3.5 shrink-0 text-success"
+          class="icon icon-check size-3.5 shrink-0 text-success"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M20 6 9 17l-5-5"
+            d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7"
           />
         </svg>
         <span
@@ -195,13 +195,13 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -245,22 +245,19 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
   >
     <svg
       aria-hidden="true"
-      class="lucide lucide-x size-3.5 shrink-0 text-error"
+      class="icon icon-x size-3.5 shrink-0 text-error"
       fill="none"
       height="24"
       stroke="currentColor"
       stroke-linecap="round"
       stroke-linejoin="round"
-      stroke-width="2"
+      stroke-width="1.5"
       viewBox="0 0 24 24"
       width="24"
       xmlns="http://www.w3.org/2000/svg"
     >
       <path
-        d="M18 6 6 18"
-      />
-      <path
-        d="m6 6 12 12"
+        d="M18 6 6 18M6 6l12 12"
       />
     </svg>
     <span
@@ -285,13 +282,13 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
     </span>
     <svg
       aria-hidden="true"
-      class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground rotate-90"
+      class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground rotate-90"
       fill="none"
       height="24"
       stroke="currentColor"
       stroke-linecap="round"
       stroke-linejoin="round"
-      stroke-width="2"
+      stroke-width="1.5"
       viewBox="0 0 24 24"
       width="24"
       xmlns="http://www.w3.org/2000/svg"
@@ -318,19 +315,19 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-check size-3.5 shrink-0 text-success"
+          class="icon icon-check size-3.5 shrink-0 text-success"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M20 6 9 17l-5-5"
+            d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7"
           />
         </svg>
         <span
@@ -351,13 +348,13 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -381,22 +378,19 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-x size-3.5 shrink-0 text-error"
+          class="icon icon-x size-3.5 shrink-0 text-error"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M18 6 6 18"
-          />
-          <path
-            d="m6 6 12 12"
+            d="M18 6 6 18M6 6l12 12"
           />
         </svg>
         <span
@@ -417,13 +411,13 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground rotate-90"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground rotate-90"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -457,27 +451,19 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3.5"
+              class="icon icon-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"
               stroke-linecap="round"
               stroke-linejoin="round"
-              stroke-width="2"
+              stroke-width="1.5"
               viewBox="0 0 24 24"
               width="24"
               xmlns="http://www.w3.org/2000/svg"
             >
-              <rect
-                height="14"
-                rx="2"
-                ry="2"
-                width="14"
-                x="8"
-                y="8"
-              />
               <path
-                d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+                d="M20.829 12.861c.171-.413.171-.938.171-1.986s0-1.573-.171-1.986a2.25 2.25 0 0 0-1.218-1.218c-.413-.171-.938-.171-1.986-.171H11.1c-1.26 0-1.89 0-2.371.245a2.25 2.25 0 0 0-.984.984C7.5 9.209 7.5 9.839 7.5 11.1v6.525c0 1.048 0 1.573.171 1.986.229.551.667.99 1.218 1.218.413.171.938.171 1.986.171s1.573 0 1.986-.171m7.968-7.968a2.25 2.25 0 0 1-1.218 1.218c-.413.171-.938.171-1.986.171s-1.573 0-1.986.171a2.25 2.25 0 0 0-1.218 1.218c-.171.413-.171.938-.171 1.986s0 1.573-.171 1.986a2.25 2.25 0 0 1-1.218 1.218m7.968-7.968a11.68 11.68 0 0 1-7.75 7.9l-.218.068M16.5 7.5v-.9c0-1.26 0-1.89-.245-2.371a2.25 2.25 0 0 0-.983-.984C14.79 3 14.16 3 12.9 3H6.6c-1.26 0-1.89 0-2.371.245a2.25 2.25 0 0 0-.984.984C3 4.709 3 5.339 3 6.6v6.3c0 1.26 0 1.89.245 2.371.216.424.56.768.984.984.48.245 1.111.245 2.372.245H7.5"
               />
             </svg>
           </button>
@@ -520,21 +506,19 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
     >
       <svg
         aria-hidden="true"
-        class="lucide lucide-circle size-3 shrink-0 text-passive"
+        class="icon icon-circle size-3 shrink-0 text-passive"
         fill="none"
         height="24"
         stroke="currentColor"
         stroke-linecap="round"
         stroke-linejoin="round"
-        stroke-width="2"
+        stroke-width="1.5"
         viewBox="0 0 24 24"
         width="24"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <circle
-          cx="12"
-          cy="12"
-          r="10"
+        <path
+          d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
         />
       </svg>
       <span
@@ -589,19 +573,19 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
   >
     <svg
       aria-hidden="true"
-      class="lucide lucide-loader-circle size-3.5 shrink-0 animate-spin text-status-working"
+      class="icon icon-loader-circle size-3.5 shrink-0 animate-spin text-status-working"
       fill="none"
       height="24"
       stroke="currentColor"
       stroke-linecap="round"
       stroke-linejoin="round"
-      stroke-width="2"
+      stroke-width="1.5"
       viewBox="0 0 24 24"
       width="24"
       xmlns="http://www.w3.org/2000/svg"
     >
       <path
-        d="M21 12a9 9 0 1 1-6.219-8.56"
+        d="M12 3v3m6.366-.366-2.12 2.12M21 12h-3m.366 6.366-2.12-2.12M12 21v-3m-6.366.366 2.12-2.12M3 12h3m-.366-6.366 2.12 2.12"
       />
     </svg>
     <span
@@ -642,19 +626,19 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-check size-3.5 shrink-0 text-success"
+          class="icon icon-check size-3.5 shrink-0 text-success"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M20 6 9 17l-5-5"
+            d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7"
           />
         </svg>
         <span
@@ -675,13 +659,13 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -705,19 +689,19 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       >
         <svg
           aria-hidden="true"
-          class="lucide lucide-loader-circle size-3.5 shrink-0 animate-spin text-status-working"
+          class="icon icon-loader-circle size-3.5 shrink-0 animate-spin text-status-working"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
         >
           <path
-            d="M21 12a9 9 0 1 1-6.219-8.56"
+            d="M12 3v3m6.366-.366-2.12 2.12M21 12h-3m.366 6.366-2.12-2.12M12 21v-3m-6.366.366 2.12-2.12M3 12h3m-.366-6.366 2.12 2.12"
           />
         </svg>
         <span
@@ -744,13 +728,13 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
         </span>
         <svg
           aria-hidden="true"
-          class="lucide lucide-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground rotate-90"
+          class="icon icon-chevron-right size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground rotate-90"
           fill="none"
           height="24"
           stroke="currentColor"
           stroke-linecap="round"
           stroke-linejoin="round"
-          stroke-width="2"
+          stroke-width="1.5"
           viewBox="0 0 24 24"
           width="24"
           xmlns="http://www.w3.org/2000/svg"
@@ -785,27 +769,19 @@ Pulling cache
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3.5"
+              class="icon icon-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"
               stroke-linecap="round"
               stroke-linejoin="round"
-              stroke-width="2"
+              stroke-width="1.5"
               viewBox="0 0 24 24"
               width="24"
               xmlns="http://www.w3.org/2000/svg"
             >
-              <rect
-                height="14"
-                rx="2"
-                ry="2"
-                width="14"
-                x="8"
-                y="8"
-              />
               <path
-                d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
+                d="M20.829 12.861c.171-.413.171-.938.171-1.986s0-1.573-.171-1.986a2.25 2.25 0 0 0-1.218-1.218c-.413-.171-.938-.171-1.986-.171H11.1c-1.26 0-1.89 0-2.371.245a2.25 2.25 0 0 0-.984.984C7.5 9.209 7.5 9.839 7.5 11.1v6.525c0 1.048 0 1.573.171 1.986.229.551.667.99 1.218 1.218.413.171.938.171 1.986.171s1.573 0 1.986-.171m7.968-7.968a2.25 2.25 0 0 1-1.218 1.218c-.413.171-.938.171-1.986.171s-1.573 0-1.986.171a2.25 2.25 0 0 0-1.218 1.218c-.171.413-.171.938-.171 1.986s0 1.573-.171 1.986a2.25 2.25 0 0 1-1.218 1.218m7.968-7.968a11.68 11.68 0 0 1-7.75 7.9l-.218.068M16.5 7.5v-.9c0-1.26 0-1.89-.245-2.371a2.25 2.25 0 0 0-.983-.984C14.79 3 14.16 3 12.9 3H6.6c-1.26 0-1.89 0-2.371.245a2.25 2.25 0 0 0-.984.984C3 4.709 3 5.339 3 6.6v6.3c0 1.26 0 1.89.245 2.371.216.424.56.768.984.984.48.245 1.111.245 2.372.245H7.5"
               />
             </svg>
           </button>
@@ -819,21 +795,19 @@ Pulling cache
     >
       <svg
         aria-hidden="true"
-        class="lucide lucide-circle size-3 shrink-0 text-passive"
+        class="icon icon-circle size-3 shrink-0 text-passive"
         fill="none"
         height="24"
         stroke="currentColor"
         stroke-linecap="round"
         stroke-linejoin="round"
-        stroke-width="2"
+        stroke-width="1.5"
         viewBox="0 0 24 24"
         width="24"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <circle
-          cx="12"
-          cy="12"
-          r="10"
+        <path
+          d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"
         />
       </svg>
       <span
