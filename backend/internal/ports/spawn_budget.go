@@ -15,7 +15,7 @@ type spawnRequestBudget struct {
 }
 
 // WithSpawnRequestBudget marks ctx as a REST request that may run the
-// project's Setup (a spawn, an orchestrator start, a restore). The request is
+// project's Setup (spawn, orchestrator start, restore, or resume). The request is
 // held to base until the operation knows its project; extend then moves the
 // request's deadline to that many from now, so a Setup step longer than one
 // request is not cut short while a slow request body still is.
