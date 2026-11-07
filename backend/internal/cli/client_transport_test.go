@@ -3,12 +3,16 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 )
 
 // transportServer returns an httptest server that always answers with the
@@ -242,6 +246,78 @@ func TestReviewSubmitRejectsEmptyResult(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("body %q: err = %q, want %q", tt.body, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTransportReachesDaemonWhosePIDIsHidden covers a CLI call from inside a
+// sandbox with its own PID namespace (Codex's Linux sandbox): the daemon's PID
+// is invisible there, so only a healthz probe naming the run-file PID may stand
+// in for the PID check. Anything else on the port is still a stale run-file.
+func TestTransportReachesDaemonWhosePIDIsHidden(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cases := []struct {
+		name      string
+		health    func() string
+		wantStale bool
+	}{
+		{
+			name: "healthz names the run-file daemon",
+			health: func() string {
+				return fmt.Sprintf(`{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+			},
+		},
+		{
+			name: "healthz names another pid",
+			health: func() string {
+				return fmt.Sprintf(`{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid()+1)
+			},
+			wantStale: true,
+		},
+		{
+			name:      "port answers but is not the AO daemon",
+			health:    func() string { return `{"status":"ok"}` },
+			wantStale: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			apiCalled := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/healthz" {
+					_, _ = io.WriteString(w, tc.health())
+					return
+				}
+				apiCalled = true
+				_, _ = io.WriteString(w, `{}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			c := &commandContext{deps: Deps{
+				HTTPClient:   &http.Client{},
+				ProcessAlive: func(int) bool { return false },
+			}}
+
+			err := c.postJSON(ctx, "sessions/ao-1/activity", struct{}{}, nil)
+			if tc.wantStale {
+				if !errors.Is(err, errDaemonNotRunning) || !strings.Contains(err.Error(), "stale run-file") {
+					t.Fatalf("err = %v, want stale run-file", err)
+				}
+				if apiCalled {
+					t.Fatal("API route was called on a port the CLI could not verify")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("postJSON: %v", err)
+			}
+			if !apiCalled {
+				t.Fatal("API route was not called")
 			}
 		})
 	}

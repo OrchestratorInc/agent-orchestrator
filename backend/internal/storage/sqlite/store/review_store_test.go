@@ -811,7 +811,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			if missing.Status != want {
 				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
 			}
-			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
+			if want == domain.ReviewRunFailed && missing.Body != domain.ReviewRunUnsubmittedBody {
 				t.Fatalf("failure explanation = %q", missing.Body)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
