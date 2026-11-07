@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -830,11 +831,14 @@ func TestKillReq(t *testing.T) {
 		t.Fatal("expected pty.Close() to be called on kill")
 	}
 
-	// Listener should be closed: new dial must fail.
-	conn, err := net.DialTimeout("tcp", f.addr, 200*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
-		t.Fatal("expected listener to be closed after kill, but Dial succeeded")
+	// The host's listener must be closed. Ask the listener itself: dialing its
+	// old port is racy, because once the port is freed another process (or a
+	// TCP self-connect on the ephemeral port) can accept that dial.
+	if conn, err := f.ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("expected listener to be closed after kill, Accept returned %v", err)
 	}
 
 	c.close()
