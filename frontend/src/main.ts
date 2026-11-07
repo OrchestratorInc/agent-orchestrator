@@ -192,6 +192,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { configureBrowserWebAuthn, createWebAuthnAccountChooser } from "./main/browser-webauthn";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
@@ -1129,6 +1130,10 @@ async function createWindowInternal(): Promise<void> {
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
+		}),
+		webAuthnAccountChooser: createWebAuthnAccountChooser({
+			showMessageBox: (options) =>
+				mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		prepareBrowserPartition: (partition) =>
@@ -3918,6 +3923,8 @@ async function writeAppStateOnLaunch(): Promise<void> {
 
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
+	// Before any window exists, so a Browser tab's first passkey request can use Touch ID.
+	configureBrowserWebAuthn({ app, platform: process.platform, resourcesPath: process.resourcesPath });
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	if (app.isPackaged) {
