@@ -1555,6 +1555,47 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("opens a long prompt folded behind Show more when the navigated text is below its fold", async () => {
+		// A search result, the find bar or an annotation landing on a word the fold
+		// clips must open the message, not center text nobody can see.
+		const text = "A long prompt about the renderer.\nIts closing line names the zephyr fallback.";
+		const snapshot = {
+			...chatFixtureSettled,
+			items: chatFixtureSettled.items.map((item) => item.id === "m-1" ? { ...item, text } : item),
+		} as ConversationSnapshot;
+		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
+		// jsdom has no layout: only the long prompt's content is tall enough to fold.
+		const tall = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+			const prompt = this.classList.contains("flow-root") && this.querySelector("[data-chat-message-body]")?.textContent?.includes("zephyr");
+			return prompt ? 900 : offsetHeight.call(this);
+		});
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+		const rangeGeometry = vi.spyOn(Range.prototype, "getBoundingClientRect");
+		try {
+			const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+			const log = screen.getByRole("log", { name: "Conversation" });
+			const source = log.querySelector<HTMLElement>('[data-chat-message-id="m-1"]')!;
+			const clip = source.querySelector<HTMLElement>(".chat-human-fold")!;
+			expect(clip).toHaveAttribute("data-folded");
+			geometry.mockImplementation(function (this: HTMLElement) {
+				if (this === log) return new DOMRect(0, 0, 600, 500);
+				if (this === clip) return new DOMRect(0, 100, 400, 220);
+				return bounds.call(this);
+			});
+			// "zephyr" is on the last line, below the 220px fold.
+			rangeGeometry.mockReturnValue(new DOMRect(40, 380, 60, 20));
+			rerender(<ChatWorkspace snapshot={snapshot} annotationNavigationRequest={{ id: "search:1", text: "zephyr", messageId: "m-1" }} />);
+			await waitFor(() => expect(clip).not.toHaveAttribute("data-folded"));
+			expect(within(source).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+			await waitFor(() => expect(source.querySelector("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		} finally {
+			tall.mockRestore();
+			geometry.mockRestore();
+			rangeGeometry.mockRestore();
+		}
+	});
+
 	it("applies a navigation request once, so another session's chat never replays it", () => {
 		type Request = { id: string; text: string; messageId?: string };
 		// A surface that stays mounted across sessions, as the Cloud one does,
