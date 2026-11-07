@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -14,6 +15,10 @@ const (
 	AgentAccountProviderClaude AgentAccountProvider = "claude"
 	AgentAccountProviderCodex  AgentAccountProvider = "codex"
 )
+
+// ErrUsageUnavailable marks a limits read that the provider could not answer
+// even though the login itself is fine, such as a rate-limited usage endpoint.
+var ErrUsageUnavailable = errors.New("usage is temporarily unavailable")
 
 // AgentAccountProviders lists every provider in display order.
 var AgentAccountProviders = []AgentAccountProvider{AgentAccountProviderClaude, AgentAccountProviderCodex}

@@ -71,7 +71,9 @@ type reading struct {
 	mismatch  bool
 	limits    *domain.AgentAccountLimits
 	limitsErr string
-	at        time.Time
+	// usageUnavailable: the login works, but the provider could not report usage.
+	usageUnavailable bool
+	at               time.Time
 }
 
 // knownUnusable reports a reading that shows the folder cannot launch as its
@@ -220,6 +222,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			r.usageUnavailable = errors.Is(limitsErr, domain.ErrUsageUnavailable)
 		} else {
 			r.limits = &limits
 		}
@@ -231,12 +234,20 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
+	// Keep the last reading and its original timestamp only for the same login.
+	if err == nil && identity.SignedIn && !r.mismatch && r.limitsErr != "" && identity.Email != "" {
+		if prev := s.readings[account.ID]; prev != nil && prev.identity.SignedIn &&
+			strings.EqualFold(prev.identity.Email, identity.Email) {
+			r.limits = prev.limits
+		}
+	}
 	s.readings[account.ID] = r
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
-	// that has them shows the login worked when the reading began.
-	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+	// that has them shows the login worked when the reading began. A usage
+	// endpoint that is only rate limited does not undo a sign-in that was seen.
+	if confirmed != nil && err == nil && r.identity.SignedIn && (r.limits != nil && r.limitsErr == "" || r.usageUnavailable) {
 		confirmed(account, r.at)
 	}
 	return r

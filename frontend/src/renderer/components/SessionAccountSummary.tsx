@@ -85,6 +85,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 			</div>
 		</div>
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
+		{account?.problem ? <p className="mt-2 text-xs text-warning" role="status">{account.problem}</p> : null}
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open
 			title={t("settings.agentAccounts.stopAndMoveTitle")}
