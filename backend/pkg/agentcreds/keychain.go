@@ -1,8 +1,10 @@
 package agentcreds
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/user"
@@ -99,10 +101,13 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	// could prompt again or return the stale item.
 	lookup := func(service string) ([]byte, error) {
 		out, err := runner(probeCtx, "security", "find-generic-password", "-s", service, "-a", account, "-w")
-		if probeCtx.Err() != nil || !keychainItemMissing(err) {
+		if probeCtx.Err() == nil && keychainItemMissing(err) {
+			out, err = runner(probeCtx, "security", "find-generic-password", "-s", service, "-w")
+		}
+		if err != nil {
 			return out, err
 		}
-		return runner(probeCtx, "security", "find-generic-password", "-s", service, "-w")
+		return securityPasswordText(out), nil
 	}
 
 	// Try the older "Claude Code-credentials" service first. It stores a JSON
@@ -116,7 +121,7 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 			return stored, true
 		}
 		// Older entries store the bare token rather than a JSON document.
-		if raw := strings.TrimSpace(string(out)); raw != "" && !strings.HasPrefix(raw, "{") {
+		if raw := strings.TrimSpace(string(out)); bareToken(raw) {
 			return storedOAuth{token: raw, kind: KindOAuthToken}, true
 		}
 	}
@@ -132,13 +137,49 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	if apiKeyErr != nil {
 		return storedOAuth{}, false
 	}
-	if raw := strings.TrimSpace(string(apiKeyOut)); raw != "" && !strings.HasPrefix(raw, "{") {
+	if raw := strings.TrimSpace(string(apiKeyOut)); bareToken(raw) {
 		return storedOAuth{token: raw, kind: kindForToken(raw)}, true
 	}
 	if stored, ok := oauthTokenFromCredentialsJSON(apiKeyOut); ok {
 		return stored, true
 	}
 	return storedOAuth{}, false
+}
+
+// securityPasswordText undoes how `security -w` prints a value with any byte
+// outside printable ASCII, such as the newlines in pretty-printed JSON: as one
+// hex string. Read as is, that string fails to parse and would be sent whole as
+// a bare token. Output that decodes only to printable ASCII is returned as is,
+// because `security` prints such a value unchanged.
+func securityPasswordText(out []byte) []byte {
+	encoded := bytes.TrimSpace(out)
+	if len(encoded) == 0 || len(encoded)%2 != 0 {
+		return out
+	}
+	decoded := make([]byte, hex.DecodedLen(len(encoded)))
+	if _, err := hex.Decode(decoded, encoded); err != nil {
+		return out
+	}
+	for _, b := range decoded {
+		if b < 0x20 || b > 0x7e {
+			return decoded
+		}
+	}
+	return out
+}
+
+// bareToken reports whether a stored value can be a token by itself rather
+// than an unparsed document: non-empty printable ASCII with no spaces.
+func bareToken(value string) bool {
+	if value == "" || strings.HasPrefix(value, "{") {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] <= 0x20 || value[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // kindForToken selects the auth header from the token prefix. Claude Code
