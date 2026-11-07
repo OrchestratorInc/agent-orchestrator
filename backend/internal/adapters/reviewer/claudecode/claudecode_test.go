@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -150,6 +152,147 @@ func TestReviewCommandEmitsPersistedNativeSessionID(t *testing.T) {
 	}
 	if emittedID == workeragent.SessionUUID(spec.AgentSessionID) {
 		t.Fatalf("emitted session id was derived twice: %q", emittedID)
+	}
+}
+
+// TestReviewCommandStartsNewConversationWhenReviewerIDIsTaken covers a fresh
+// launch on a reviewer whose deterministic Claude conversation already exists
+// (#6642): a config override relaunches the reviewer without its saved id, and
+// Claude refuses `--session-id` for an id that already has a transcript. The
+// launch must pin a new id, derived from the launch so it is stable for that
+// launch, and report it so it is persisted for later resumes.
+func TestReviewCommandStartsNewConversationWhenReviewerIDIsTaken(t *testing.T) {
+	reviewerConversation := workeragent.SessionUUID("review-w1")
+	agent := &captureHistoryAgent{existing: map[string]bool{reviewerConversation: true}}
+	r := &Reviewer{agent: agent}
+	inv := ports.ReviewInvocation{ReviewerID: "review-w1", LaunchID: "launch-2", WorkspacePath: "/ws/w1"}
+
+	spec, err := r.ReviewCommand(context.Background(), inv)
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	if spec.AgentSessionID == reviewerConversation {
+		t.Fatalf("fresh launch reused existing conversation %q", reviewerConversation)
+	}
+	if agent.got.NativeSessionID != spec.AgentSessionID {
+		t.Fatalf("launched native id = %q, persisted id = %q", agent.got.NativeSessionID, spec.AgentSessionID)
+	}
+	if !isUUIDForTest(spec.AgentSessionID) {
+		t.Fatalf("fresh native id %q is not a UUID", spec.AgentSessionID)
+	}
+	if len(agent.probed) != 1 || agent.probed[0] != reviewerConversation {
+		t.Fatalf("probed ids = %#v, want only %q", agent.probed, reviewerConversation)
+	}
+
+	again, err := r.ReviewCommand(context.Background(), inv)
+	if err != nil {
+		t.Fatalf("ReviewCommand again: %v", err)
+	}
+	if again.AgentSessionID != spec.AgentSessionID {
+		t.Fatalf("same launch produced ids %q and %q, want deterministic", spec.AgentSessionID, again.AgentSessionID)
+	}
+	inv.LaunchID = "launch-3"
+	next, err := r.ReviewCommand(context.Background(), inv)
+	if err != nil {
+		t.Fatalf("ReviewCommand next launch: %v", err)
+	}
+	if next.AgentSessionID == spec.AgentSessionID || next.AgentSessionID == reviewerConversation {
+		t.Fatalf("next launch id = %q, want distinct from %q and %q", next.AgentSessionID, spec.AgentSessionID, reviewerConversation)
+	}
+}
+
+func TestReviewCommandKeepsReviewerConversationForFirstLaunch(t *testing.T) {
+	reviewerConversation := workeragent.SessionUUID("review-w1")
+	agent := &captureHistoryAgent{existing: map[string]bool{}}
+	r := &Reviewer{agent: agent}
+
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1", LaunchID: "launch-1"})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	if spec.AgentSessionID != reviewerConversation || agent.got.NativeSessionID != reviewerConversation {
+		t.Fatalf("first launch id = %q (launched %q), want %q", spec.AgentSessionID, agent.got.NativeSessionID, reviewerConversation)
+	}
+}
+
+// TestReviewCommandWithoutLaunchSkipsHistoryProbe keeps preflight, which builds
+// the command without a launch, from scanning Claude's transcripts.
+func TestReviewCommandWithoutLaunchSkipsHistoryProbe(t *testing.T) {
+	agent := &captureHistoryAgent{existing: map[string]bool{workeragent.SessionUUID("review-w1"): true}}
+	r := &Reviewer{agent: agent}
+
+	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1"})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	if len(agent.probed) != 0 {
+		t.Fatalf("probed ids = %#v, want none without a launch", agent.probed)
+	}
+	if spec.AgentSessionID != workeragent.SessionUUID("review-w1") {
+		t.Fatalf("agent session id = %q", spec.AgentSessionID)
+	}
+}
+
+func TestReviewRestoreCommandResumesFreshLaunchConversation(t *testing.T) {
+	agent := &captureHistoryAgent{existing: map[string]bool{workeragent.SessionUUID("review-w1"): true}}
+	r := &Reviewer{agent: agent}
+	launched, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1", LaunchID: "launch-2"})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	agent.existing[launched.AgentSessionID] = true
+
+	got, ok, err := r.ReviewRestoreCommand(context.Background(), ports.ReviewInvocation{
+		ReviewerID:     "review-w1",
+		LaunchID:       "launch-3",
+		AgentSessionID: launched.AgentSessionID,
+	})
+	if err != nil || !ok {
+		t.Fatalf("ReviewRestoreCommand = (ok=%v, err=%v), want resume", ok, err)
+	}
+	if strings.Join(got.Argv, " ") != "claude --resume "+launched.AgentSessionID || got.AgentSessionID != launched.AgentSessionID {
+		t.Fatalf("restore = %+v, want resume of %q", got, launched.AgentSessionID)
+	}
+}
+
+// TestReviewCommandEmitsFreshSessionIDWhenTranscriptExists drives the real
+// Claude Code adapter: with the reviewer's transcript on disk, the emitted
+// --session-id must be a new id rather than the one Claude reports in use.
+func TestReviewCommandEmitsFreshSessionIDWhenTranscriptExists(t *testing.T) {
+	binDir := t.TempDir()
+	binaryName := "claude"
+	if runtime.GOOS == "windows" {
+		binaryName = "claude.exe"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, binaryName), []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	reviewerConversation := workeragent.SessionUUID("review-w1")
+	projectDir := filepath.Join(configDir, "projects", "-ws-w1")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, reviewerConversation+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := New().ReviewCommand(context.Background(), ports.ReviewInvocation{
+		ReviewerID: "review-w1",
+		LaunchID:   "launch-2",
+		Prompt:     "review it",
+	})
+	if err != nil {
+		t.Fatalf("ReviewCommand: %v", err)
+	}
+	emittedID := flagValue(spec.Argv, "--session-id")
+	if emittedID == "" || emittedID == reviewerConversation {
+		t.Fatalf("emitted --session-id = %q, want a new id (argv %#v)", emittedID, spec.Argv)
+	}
+	if emittedID != spec.AgentSessionID {
+		t.Fatalf("emitted session id = %q, persisted session id = %q", emittedID, spec.AgentSessionID)
 	}
 }
 
@@ -552,4 +695,9 @@ func flagValue(argv []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+func isUUIDForTest(value string) bool {
+	_, err := uuid.Parse(value)
+	return err == nil
 }

@@ -91,6 +91,10 @@ type ReviewInvocation struct {
 	// RunID is the review_run this pass completes; the reviewer passes it to
 	// `ao review submit`.
 	RunID string
+	// LaunchID identifies this reviewer process launch. It is unique per
+	// launch, so adapters can derive a native id for a fresh conversation when
+	// the stable reviewer id already names one.
+	LaunchID string
 	// WorkerSessionID is the worker whose PR is under review.
 	WorkerSessionID domain.SessionID
 	// AgentSessionID is the reviewer's native agent conversation id, used only
