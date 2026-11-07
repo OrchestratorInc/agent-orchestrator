@@ -2577,6 +2577,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Writes an aside: a note in the session's timeline that the agent never sees. Anyone who may open the session may write one, a viewer too, and it needs no composer lease. It is a chat.aside event everyone watching the session receives. The author follows the session; each person it mentions who may open the session is notified (kind mentioned) and follows it. A retry with the same Idempotency-Key returns the same aside. */
+        post: operations["createSessionAside"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/mention-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What the @ menu offers in the session, by name only, never an email address. People in the session (there now or following, who may open it) come first, at most five. A member of the session's workspace also gets the other people the workspace knows and its teams; a guest gets only the people in the session. */
+        get: operations["listMentionCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The session's pending suggestions, oldest first. The driver's composer shows the first. */
+        get: operations["listSessionSuggestions"];
+        put?: never;
+        /** @description Suggests an aside to whoever drives the session, as its text or the text given. Anyone who may open the session may suggest, a viewer too. An aside has one pending suggestion: suggesting it again returns that one (200). A chat.suggestion_created event tells the session. */
+        post: operations["createSessionSuggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions/{suggestionId}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sends a pending suggestion to the agent as the caller's own message, with its text or the edited text given. Only the driver may: someone who may write to the agent and holds the composer lease (composerEpoch), or finds it free with nobody waiting, exactly as for any message (409 COMPOSER_LOCKED otherwise). A retry with the same Idempotency-Key returns the same message; a suggestion already sent or dismissed is 409 suggestion_resolved. */
+        post: operations["sendSessionSuggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions/{suggestionId}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Dismisses a pending suggestion. Its maker may withdraw it; anyone else must be the driver, as for sending, and keeps the lease. Its maker is notified (kind suggestion_dismissed) when someone else dismisses it. Dismissing a dismissed suggestion changes nothing. */
+        post: operations["dismissSessionSuggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The sessions the caller may open now, across workspaces (the rule /me/notifications follows), newest activity first, each with one status and one line. team lists them all, mine the ones the caller created or prompted, following the ones that notify them. The first page also says what changed since the caller last caught up (away). */
+        get: operations["getMyFeed"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/feed/seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records that the caller caught up on the feed, now or at seenAt (never later than now); "While you were away" counts from there. A visit never moves back. */
+        post: operations["markMyFeedSeen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/hosts": {
         parameters: {
             query?: never;
@@ -2803,6 +2923,176 @@ export interface components {
             level: "" | "needs_you" | "participating" | "all" | "muted";
             reasons: ("creator" | "prompted" | "asided" | "mentioned" | "handoff" | "reviewer" | "manual")[];
             manual: boolean;
+        };
+        /** @description A person or team named beside a message's or an aside's text. A person is notified; a team's members are, as they are when it is sent. The agent never receives mentions. name is the person's or team's name when it was sent, recorded on the event; a client sends no name. */
+        Mention: {
+            /** @enum {string} */
+            kind: "person" | "team";
+            /**
+             * Format: uuid
+             * @description Set for a person.
+             */
+            userId?: string;
+            /**
+             * Format: uuid
+             * @description Set for a team.
+             */
+            teamId?: string;
+            readonly name?: string;
+        };
+        AsideInput: {
+            text: string;
+            mentions?: components["schemas"]["Mention"][];
+        };
+        /** @description An aside, which everyone in the session sees and the agent never does. */
+        AsideEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.aside";
+            payload: {
+                /** Format: uuid */
+                asideId: string;
+                text: string;
+                /** Format: uuid */
+                authorUserId: string;
+                /** @description The author's display name when they wrote it. Never an email address. */
+                authorName: string;
+                mentions: components["schemas"]["Mention"][];
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        Suggestion: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            sessionId: string;
+            /**
+             * @description Where the suggestion came from.
+             * @enum {string}
+             */
+            kind: "aside";
+            /** Format: uuid */
+            asideId?: string;
+            text: string;
+            suggestedBy: components["schemas"]["NotificationPerson"];
+            author: components["schemas"]["NotificationPerson"];
+            /** @enum {string} */
+            status: "pending" | "sent" | "dismissed";
+            resolvedBy?: components["schemas"]["NotificationPerson"];
+            /** Format: date-time */
+            resolvedAt?: string;
+            /**
+             * Format: int64
+             * @description The chat.user_message the suggestion became, once sent.
+             */
+            sentEventSequence?: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        SuggestionEnvelope: {
+            suggestion: components["schemas"]["Suggestion"];
+        };
+        /** @description A suggestion made (chat.suggestion_created), or sent or dismissed (chat.suggestion_resolved). The agent never sees it. */
+        SuggestionEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @enum {string} */
+            type: "chat.suggestion_created" | "chat.suggestion_resolved";
+            payload: components["schemas"]["Suggestion"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MentionCandidates: {
+            people: {
+                /** Format: uuid */
+                userId: string;
+                name: string;
+                /** @description There now or following the session. */
+                inSession: boolean;
+                /** @description A mention reaches them; when false, sharing the session first would. */
+                canOpen: boolean;
+            }[];
+            teams: {
+                /** Format: uuid */
+                teamId: string;
+                name: string;
+                /** @description Everyone in the team, invitations not yet accepted included. */
+                memberCount: number;
+                /** @description How many of them a mention would not reach (they can't open the session, or have no account yet). */
+                membersWithoutAccess: number;
+                /** @description Names of some of them, people the workspace already knows. */
+                namesWithoutAccess: string[];
+            }[];
+        };
+        FeedItem: {
+            /** Format: uuid */
+            orgId: string;
+            orgName: string;
+            /** Format: uuid */
+            projectId: string;
+            projectName: string;
+            /** Format: uuid */
+            sessionId: string;
+            title: string;
+            owner: components["schemas"]["NotificationPerson"];
+            /**
+             * @description needs: an approval waits or the agent waits for an answer; working: the agent is busy; failed: its latest turn failed or it couldn't start; review, ready, merged: from its pull requests; else idle.
+             * @enum {string}
+             */
+            status: "needs" | "working" | "review" | "ready" | "merged" | "failed" | "idle";
+            /** @description One short sentence about the latest state. */
+            line: string;
+            /** @description Others in the session (there now, then followers), never its owner or the caller. */
+            people: components["schemas"]["NotificationPerson"][];
+            following: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Set for a session an orchestrator spawned. */
+            worker?: {
+                index: number;
+                of: number;
+                orchestratorTitle: string;
+            };
+        };
+        /** @description What changed since the caller last caught up (POST /me/feed/seen), at most 7 days back. */
+        FeedAway: {
+            /** Format: date-time */
+            since: string;
+            /** @description Needs-you notifications raised since then that still need the caller. */
+            needsYou: number;
+            prsMerged: {
+                number: number;
+                url: string;
+                /** Format: uuid */
+                sessionId: string;
+                /** Format: uuid */
+                orgId: string;
+            }[];
+            failed: {
+                /** Format: uuid */
+                sessionId: string;
+                /** Format: uuid */
+                orgId: string;
+                title: string;
+            }[];
+            /** @description Sessions others started. */
+            started: {
+                count: number;
+                names: string[];
+            };
+        };
+        FeedPage: {
+            items: components["schemas"]["FeedItem"][];
+            page: components["schemas"]["PageInfo"];
+            away?: components["schemas"]["FeedAway"];
         };
         NotificationPreferenceInput: {
             kind: string;
@@ -3953,6 +4243,8 @@ export interface components {
             } & {
                 [key: string]: unknown;
             })[];
+            /** @description People and teams the message notifies (only them, never the session's other followers). Recorded, with their names, on the chat.user_message event only; the agent receives `text`. A guest may name only people in the session. */
+            mentions?: components["schemas"]["Mention"][];
         };
         MessageAttachment: {
             /** Format: uuid */
@@ -4001,6 +4293,16 @@ export interface components {
              * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
              */
             composerEpoch?: number;
+        };
+        SteerTurnInput: {
+            text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
+            /** @description People and teams the guidance notifies, as on a message. Recorded, with their names, on the chat.turn_steer_requested event only; the agent receives `text`. */
+            mentions?: components["schemas"]["Mention"][];
         };
         WorkerWorkspaceListPayload: {
             path: string;
@@ -5056,6 +5358,13 @@ export interface components {
                 authorName?: string;
                 /** @description The files the message carries. */
                 attachments?: components["schemas"]["MessageAttachment"][];
+                /** @description The people and teams the message named, with their names when it was sent. */
+                mentions?: components["schemas"]["Mention"][];
+                /**
+                 * Format: uuid
+                 * @description The suggestion the message sent, when it sent one.
+                 */
+                suggestionId?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -5153,6 +5462,8 @@ export interface components {
                 turnId: string;
                 text: string;
                 clientMessageId: string;
+                /** @description On the steer's request event, the people and teams it named, with their names when it was sent. */
+                mentions?: components["schemas"]["Mention"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -5168,7 +5479,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AsideEvent"] | components["schemas"]["SuggestionEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -5382,6 +5693,7 @@ export interface components {
         RemoteHostId: string;
         OrgId: string;
         ProjectId: string;
+        SuggestionId: string;
         SessionId: string;
         /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
         WorkspaceRepository: string;
@@ -7973,7 +8285,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SendMessageInput"];
+                "application/json": components["schemas"]["SteerTurnInput"];
             };
         };
         responses: {
@@ -9710,6 +10022,278 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["SessionFollower"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSessionAside: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AsideInput"];
+            };
+        };
+        responses: {
+            /** @description The aside, as its chat.aside event. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["AsideEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMentionCandidates: {
+        parameters: {
+            query?: {
+                /** @description Part of a name to match, case insensitively. Empty lists everyone. */
+                q?: string;
+                /** @description How many of the workspace's other people, and how many teams, at most. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The candidates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MentionCandidates"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionSuggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending suggestions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Suggestion"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSessionSuggestion: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    asideId: string;
+                    /** @description The suggestion in other words than the aside's. */
+                    text?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The aside already waits as this suggestion. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionEnvelope"];
+                };
+            };
+            /** @description The suggestion was made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendSessionSuggestion: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                suggestionId: components["parameters"]["SuggestionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    text?: string;
+                    /** Format: int64 */
+                    composerEpoch?: number;
+                    model?: string;
+                    /** @enum {string} */
+                    reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+                    mode?: components["schemas"]["SessionMode"];
+                    /** @enum {string} */
+                    approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+                };
+            };
+        };
+        responses: {
+            /** @description The message was sent and the suggestion is sent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEvent"];
+                        suggestion: components["schemas"]["Suggestion"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    dismissSessionSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                suggestionId: components["parameters"]["SuggestionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: int64 */
+                    composerEpoch?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The dismissed suggestion. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getMyFeed: {
+        parameters: {
+            query?: {
+                scope?: "team" | "mine" | "following";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the feed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markMyFeedSeen: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: date-time */
+                    seenAt?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description When the caller last caught up. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        seenAt: string;
                     };
                 };
             };

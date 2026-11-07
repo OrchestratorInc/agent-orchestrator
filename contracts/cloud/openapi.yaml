@@ -2214,7 +2214,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SendMessageInput"
+              $ref: "#/components/schemas/SteerTurnInput"
       responses:
         "202":
           description: Guidance for the active turn accepted.
@@ -4020,6 +4020,311 @@ paths:
                       $ref: "#/components/schemas/SessionFollower"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides:
+    post:
+      operationId: createSessionAside
+      tags: [Sessions]
+      description: >-
+        Writes an aside: a note in the session's timeline that the agent never
+        sees. Anyone who may open the session may write one, a viewer too, and
+        it needs no composer lease. It is a chat.aside event everyone watching
+        the session receives. The author follows the session; each person it
+        mentions who may open the session is notified (kind mentioned) and
+        follows it. A retry with the same Idempotency-Key returns the same
+        aside.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsideInput"
+      responses:
+        "201":
+          description: The aside, as its chat.aside event.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/AsideEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/mention-candidates:
+    get:
+      operationId: listMentionCandidates
+      tags: [Sessions]
+      description: >-
+        What the @ menu offers in the session, by name only, never an email
+        address. People in the session (there now or following, who may open
+        it) come first, at most five. A member of the session's workspace also
+        gets the other people the workspace knows and its teams; a guest gets
+        only the people in the session.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+        - name: q
+          in: query
+          description: Part of a name to match, case insensitively. Empty lists everyone.
+          schema:
+            type: string
+            maxLength: 100
+        - name: limit
+          in: query
+          description: How many of the workspace's other people, and how many teams, at most.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        "200":
+          description: The candidates.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MentionCandidates"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions:
+    get:
+      operationId: listSessionSuggestions
+      tags: [Sessions]
+      description: The session's pending suggestions, oldest first. The driver's composer shows the first.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Pending suggestions.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Suggestion"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createSessionSuggestion
+      tags: [Sessions]
+      description: >-
+        Suggests an aside to whoever drives the session, as its text or the
+        text given. Anyone who may open the session may suggest, a viewer too.
+        An aside has one pending suggestion: suggesting it again returns that
+        one (200). A chat.suggestion_created event tells the session.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [asideId]
+              properties:
+                asideId:
+                  type: string
+                  format: uuid
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                  description: The suggestion in other words than the aside's.
+      responses:
+        "201":
+          description: The suggestion was made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestionEnvelope"
+        "200":
+          description: The aside already waits as this suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestionEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions/{suggestionId}/send:
+    post:
+      operationId: sendSessionSuggestion
+      tags: [Sessions]
+      description: >-
+        Sends a pending suggestion to the agent as the caller's own message,
+        with its text or the edited text given. Only the driver may: someone who
+        may write to the agent and holds the composer lease (composerEpoch), or
+        finds it free with nobody waiting, exactly as for any message (409
+        COMPOSER_LOCKED otherwise). A retry with the same Idempotency-Key
+        returns the same message; a suggestion already sent or dismissed is 409
+        suggestion_resolved.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/SuggestionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                composerEpoch:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                model:
+                  type: string
+                  pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+                reasoningEffort:
+                  type: string
+                  enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+                mode:
+                  $ref: "#/components/schemas/SessionMode"
+                approvalMode:
+                  type: string
+                  enum: [default, accept-edits, auto, bypass-permissions]
+      responses:
+        "202":
+          description: The message was sent and the suggestion is sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event, suggestion]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/UserMessageEvent"
+                  suggestion:
+                    $ref: "#/components/schemas/Suggestion"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/suggestions/{suggestionId}/dismiss:
+    post:
+      operationId: dismissSessionSuggestion
+      tags: [Sessions]
+      description: >-
+        Dismisses a pending suggestion. Its maker may withdraw it; anyone else
+        must be the driver, as for sending, and keeps the lease. Its maker is
+        notified (kind suggestion_dismissed) when someone else dismisses it.
+        Dismissing a dismissed suggestion changes nothing.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/SuggestionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                composerEpoch:
+                  type: integer
+                  format: int64
+                  minimum: 0
+      responses:
+        "200":
+          description: The dismissed suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestionEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/feed:
+    get:
+      operationId: getMyFeed
+      tags: [Events]
+      description: >-
+        The sessions the caller may open now, across workspaces (the rule
+        /me/notifications follows), newest activity first, each with one
+        status and one line. team lists them all, mine the ones the caller
+        created or prompted, following the ones that notify them. The first
+        page also says what changed since the caller last caught up (away).
+      parameters:
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [team, mine, following]
+            default: team
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: A page of the feed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/feed/seen:
+    post:
+      operationId: markMyFeedSeen
+      tags: [Events]
+      description: >-
+        Records that the caller caught up on the feed, now or at seenAt (never
+        later than now); "While you were away" counts from there. A visit never
+        moves back.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                seenAt:
+                  type: string
+                  format: date-time
+      responses:
+        "200":
+          description: When the caller last caught up.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [seenAt]
+                properties:
+                  seenAt:
+                    type: string
+                    format: date-time
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/hosts:
     get:
       operationId: listRemoteHosts
@@ -4251,6 +4556,13 @@ components:
         format: uuid
     ProjectId:
       name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SuggestionId:
+      name: suggestionId
       in: path
       required: true
       schema:
@@ -4653,6 +4965,333 @@ components:
             enum: [creator, prompted, asided, mentioned, handoff, reviewer, manual]
         manual:
           type: boolean
+    Mention:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      description: >-
+        A person or team named beside a message's or an aside's text. A person
+        is notified; a team's members are, as they are when it is sent. The
+        agent never receives mentions. name is the person's or team's name
+        when it was sent, recorded on the event; a client sends no name.
+      properties:
+        kind:
+          type: string
+          enum: [person, team]
+        userId:
+          type: string
+          format: uuid
+          description: Set for a person.
+        teamId:
+          type: string
+          format: uuid
+          description: Set for a team.
+        name:
+          type: string
+          readOnly: true
+    AsideInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        mentions:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/Mention"
+    AsideEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: An aside, which everyone in the session sees and the agent never does.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, text, authorUserId, authorName, mentions]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            authorUserId:
+              type: string
+              format: uuid
+            authorName:
+              type: string
+              description: The author's display name when they wrote it. Never an email address.
+            mentions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Mention"
+        createdAt:
+          type: string
+          format: date-time
+    Suggestion:
+      type: object
+      additionalProperties: false
+      required: [id, orgId, sessionId, kind, text, suggestedBy, author, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [aside]
+          description: Where the suggestion came from.
+        asideId:
+          type: string
+          format: uuid
+        text:
+          type: string
+        suggestedBy:
+          $ref: "#/components/schemas/NotificationPerson"
+        author:
+          $ref: "#/components/schemas/NotificationPerson"
+        status:
+          type: string
+          enum: [pending, sent, dismissed]
+        resolvedBy:
+          $ref: "#/components/schemas/NotificationPerson"
+        resolvedAt:
+          type: string
+          format: date-time
+        sentEventSequence:
+          type: integer
+          format: int64
+          description: The chat.user_message the suggestion became, once sent.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    SuggestionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [suggestion]
+      properties:
+        suggestion:
+          $ref: "#/components/schemas/Suggestion"
+    SuggestionEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A suggestion made (chat.suggestion_created), or sent or dismissed (chat.suggestion_resolved). The agent never sees it.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          type: string
+          enum: [chat.suggestion_created, chat.suggestion_resolved]
+        payload:
+          $ref: "#/components/schemas/Suggestion"
+        createdAt:
+          type: string
+          format: date-time
+    MentionCandidates:
+      type: object
+      additionalProperties: false
+      required: [people, teams]
+      properties:
+        people:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [userId, name, inSession, canOpen]
+            properties:
+              userId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              inSession:
+                type: boolean
+                description: There now or following the session.
+              canOpen:
+                type: boolean
+                description: A mention reaches them; when false, sharing the session first would.
+        teams:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [teamId, name, memberCount, membersWithoutAccess, namesWithoutAccess]
+            properties:
+              teamId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              memberCount:
+                type: integer
+                minimum: 0
+                description: Everyone in the team, invitations not yet accepted included.
+              membersWithoutAccess:
+                type: integer
+                minimum: 0
+                description: How many of them a mention would not reach (they can't open the session, or have no account yet).
+              namesWithoutAccess:
+                type: array
+                maxItems: 5
+                description: Names of some of them, people the workspace already knows.
+                items:
+                  type: string
+    FeedItem:
+      type: object
+      additionalProperties: false
+      required: [orgId, orgName, projectId, projectName, sessionId, title, owner, status, line, people, following, updatedAt]
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        orgName:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        projectName:
+          type: string
+        sessionId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        owner:
+          $ref: "#/components/schemas/NotificationPerson"
+        status:
+          type: string
+          enum: [needs, working, review, ready, merged, failed, idle]
+          description: >-
+            needs: an approval waits or the agent waits for an answer; working:
+            the agent is busy; failed: its latest turn failed or it couldn't
+            start; review, ready, merged: from its pull requests; else idle.
+        line:
+          type: string
+          description: One short sentence about the latest state.
+        people:
+          type: array
+          maxItems: 5
+          description: Others in the session (there now, then followers), never its owner or the caller.
+          items:
+            $ref: "#/components/schemas/NotificationPerson"
+        following:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+        worker:
+          type: object
+          additionalProperties: false
+          required: [index, of, orchestratorTitle]
+          description: Set for a session an orchestrator spawned.
+          properties:
+            index:
+              type: integer
+              minimum: 1
+            of:
+              type: integer
+              minimum: 1
+            orchestratorTitle:
+              type: string
+    FeedAway:
+      type: object
+      additionalProperties: false
+      required: [since, needsYou, prsMerged, failed, started]
+      description: What changed since the caller last caught up (POST /me/feed/seen), at most 7 days back.
+      properties:
+        since:
+          type: string
+          format: date-time
+        needsYou:
+          type: integer
+          minimum: 0
+          description: Needs-you notifications raised since then that still need the caller.
+        prsMerged:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [number, url, sessionId, orgId]
+            properties:
+              number:
+                type: integer
+              url:
+                type: string
+              sessionId:
+                type: string
+                format: uuid
+              orgId:
+                type: string
+                format: uuid
+        failed:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [sessionId, orgId, title]
+            properties:
+              sessionId:
+                type: string
+                format: uuid
+              orgId:
+                type: string
+                format: uuid
+              title:
+                type: string
+        started:
+          type: object
+          additionalProperties: false
+          required: [count, names]
+          description: Sessions others started.
+          properties:
+            count:
+              type: integer
+              minimum: 0
+            names:
+              type: array
+              maxItems: 5
+              items:
+                type: string
+    FeedPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeedItem"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+        away:
+          $ref: "#/components/schemas/FeedAway"
     NotificationPreferenceInput:
       type: object
       additionalProperties: false
@@ -7076,6 +7715,12 @@ components:
               type:
                 type: string
                 minLength: 1
+        mentions:
+          type: array
+          maxItems: 20
+          description: People and teams the message notifies (only them, never the session's other followers). Recorded, with their names, on the chat.user_message event only; the agent receives `text`. A guest may name only people in the session.
+          items:
+            $ref: "#/components/schemas/Mention"
     MessageAttachment:
       type: object
       additionalProperties: false
@@ -7192,6 +7837,26 @@ components:
           format: int64
           minimum: 0
           description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+    SteerTurnInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        composerEpoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+        mentions:
+          type: array
+          maxItems: 20
+          description: People and teams the guidance notifies, as on a message. Recorded, with their names, on the chat.turn_steer_requested event only; the agent receives `text`.
+          items:
+            $ref: "#/components/schemas/Mention"
     WorkerWorkspaceListPayload:
       type: object
       additionalProperties: false
@@ -9387,6 +10052,15 @@ components:
               description: The files the message carries.
               items:
                 $ref: "#/components/schemas/MessageAttachment"
+            mentions:
+              type: array
+              description: The people and teams the message named, with their names when it was sent.
+              items:
+                $ref: "#/components/schemas/Mention"
+            suggestionId:
+              type: string
+              format: uuid
+              description: The suggestion the message sent, when it sent one.
         createdAt:
           type: string
           format: date-time
@@ -9571,6 +10245,11 @@ components:
               type: string
             clientMessageId:
               type: string
+            mentions:
+              type: array
+              description: On the steer's request event, the people and teams it named, with their names when it was sent.
+              items:
+                $ref: "#/components/schemas/Mention"
         createdAt:
           type: string
           format: date-time
@@ -9610,6 +10289,8 @@ components:
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
+        - $ref: "#/components/schemas/AsideEvent"
+        - $ref: "#/components/schemas/SuggestionEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
