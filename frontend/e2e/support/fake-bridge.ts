@@ -104,7 +104,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onShortcut: unsubscribe,
 					onScrollPhase: unsubscribe,
 					showPrivacyGuide: async () => undefined,
-					updatePrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {
@@ -1013,7 +1013,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onShortcut: unsubscribe,
 					onScrollPhase: unsubscribe,
 					showPrivacyGuide: async () => undefined,
-					updatePrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {

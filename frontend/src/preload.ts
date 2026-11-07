@@ -194,7 +194,7 @@ const api = {
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
 		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
-		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<void>,
+		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
 		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,

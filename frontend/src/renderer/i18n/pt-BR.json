@@ -2516,6 +2516,8 @@
 	"settings.computerUse.openPermissions": "Abrir nos Ajustes do Sistema",
 	"settings.computerUse.guide.drag": "Arraste o CuaDriver para a lista acima",
 	"settings.computerUse.guide.hint": "Já está na lista? Ative a chave dele.",
+	"settings.computerUse.guide.allowed": "O CuaDriver tem permissão aqui",
+	"settings.computerUse.guide.allowedHint": "Desative a chave dele para revogar o acesso.",
 	"settings.computerUse.guide.close": "Fechar",
 	"settings.computerUse.agentAccess": "Permitir que agentes usem este computador",
 	"settings.computerUse.agentAccessDescription": "Novas sessões de chat recebem ferramentas para ler a tela e operar apps de desktop. O resultado de cada ação inclui uma captura da janela.",

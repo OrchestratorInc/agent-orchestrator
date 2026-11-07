@@ -3,10 +3,12 @@ import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "lucide-react"
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
-import { PRIVACY_PANES, type PrivacyPane } from "../../../main/privacy-guide";
+import { PRIVACY_PANES, type PrivacyGuideAppearance, type PrivacyPane } from "../../../main/privacy-guide";
 import { useSettings, useUpdateComputerUse } from "../../hooks/useSettings";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import type { Theme } from "../../lib/theme";
+import { useResolvedTheme } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import type { InstallJob } from "./installState";
@@ -43,9 +45,23 @@ async function fetchInstallJob(): Promise<InstallJob> {
 export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const theme = useResolvedTheme();
 	// Set while the floating guide beside System Settings is up; it follows the
-	// grants until nothing is left to switch on.
+	// grants until the guide closes (everything granted, its X, or System
+	// Settings quitting).
 	const [guiding, setGuiding] = useState(false);
+	// The guide is driven from here alone: leaving this page takes it down, so
+	// it never sits beside System Settings with grants nobody updates.
+	const mounted = useRef(true);
+	const guideOpened = useRef(false);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+			if (guideOpened.current) void aoBridge.app.closePrivacyGuide();
+			guideOpened.current = false;
+		};
+	}, []);
 	const status = useQuery({
 		queryKey: computerUseStatusQueryKey,
 		queryFn: fetchStatus,
@@ -102,18 +118,27 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	});
 	const showGuide = async (pane: PrivacyPane, permissions: ComputerUseStatus["permissions"]) => {
 		if (!permissions) return;
-		setGuiding(true);
+		guideOpened.current = true;
 		await aoBridge.app.showPrivacyGuide({
 			pane,
 			granted: grantedMap(permissions),
+			appearance: guideAppearance(theme),
 			text: {
 				drag: t("settings.computerUse.guide.drag"),
 				hint: t("settings.computerUse.guide.hint"),
+				allowed: t("settings.computerUse.guide.allowed"),
+				allowedHint: t("settings.computerUse.guide.allowedHint"),
 				labels: { accessibility: t("settings.computerUse.accessibility"), screenRecording: t("settings.computerUse.screenRecording") },
 				granted: t("settings.computerUse.permission.granted"),
 				close: t("settings.computerUse.guide.close"),
 			},
 		});
+		// Left the page while it opened: the unmount close may have run first.
+		if (!mounted.current) {
+			void aoBridge.app.closePrivacyGuide();
+			return;
+		}
+		setGuiding(true);
 	};
 	const grant = () => run("grant", async () => {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
@@ -140,12 +165,21 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 
 	const accessibilityState = permissions?.accessibility;
 	const screenRecordingState = permissions?.screenRecording;
+	// Every poll reports in, so a guide closed from its own side (X, System
+	// Settings quitting) ends the polling at the next one.
+	const statusUpdatedAt = status.dataUpdatedAt;
 	useEffect(() => {
 		if (!guiding || !accessibilityState || !screenRecordingState) return;
+		let current = true;
 		const granted = { accessibility: accessibilityState === "granted", screenRecording: screenRecordingState === "granted" };
-		void aoBridge.app.updatePrivacyGuide(granted);
-		if (granted.accessibility && granted.screenRecording) setGuiding(false);
-	}, [guiding, accessibilityState, screenRecordingState]);
+		void aoBridge.app.updatePrivacyGuide(granted).then((open) => {
+			if (current && !open) {
+				guideOpened.current = false;
+				setGuiding(false);
+			}
+		}, () => undefined);
+		return () => { current = false; };
+	}, [guiding, accessibilityState, screenRecordingState, statusUpdatedAt]);
 
 	const driverAction = installing ? (
 		<span role="status" className="inline-flex items-center gap-1.5 text-xs text-settings-muted">
@@ -281,6 +315,19 @@ function PermissionsGear({ busy, disabled, onClick }: { busy: boolean; disabled:
 			{busy ? <LoaderCircle className="absolute inset-0 m-auto size-6 animate-spin text-settings-muted" strokeWidth={1.5} aria-hidden="true" /> : null}
 		</Button>
 	);
+}
+
+/**
+ * AO's resolved light/dark mode and popover tokens, so the strip matches the
+ * app (theme catalog included) instead of the OS appearance.
+ */
+function guideAppearance(scheme: Theme): PrivacyGuideAppearance {
+	const style = getComputedStyle(document.documentElement);
+	const token = (name: string) => style.getPropertyValue(name).trim() || undefined;
+	return {
+		scheme,
+		colors: { bg: token("--popover"), fg: token("--popover-foreground"), muted: token("--muted-foreground"), border: token("--border") },
+	};
 }
 
 function allGranted(...states: PermissionState[]): boolean {

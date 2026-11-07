@@ -15,9 +15,12 @@ import type { SettingsWindowSnapshot } from "./settings-window-watch";
 const request: PrivacyGuideRequest = {
 	pane: "accessibility",
 	granted: { accessibility: false, screenRecording: false },
+	appearance: { scheme: "dark", colors: { bg: "oklch(0.3 0.002 250)", fg: "#fafafa", muted: "rgb(180 180 180)", border: "oklch(1 0 0 / 7%)" } },
 	text: {
 		drag: "Drag CuaDriver into the list above",
 		hint: "Already in the list? Turn on its switch.",
+		allowed: "CuaDriver is allowed here",
+		allowedHint: "Turn off its switch to revoke access.",
 		labels: { accessibility: "Accessibility", screenRecording: "Screen Recording" },
 		granted: "Granted",
 		close: "Close",
@@ -86,7 +89,17 @@ describe("coercePrivacyGuideRequest", () => {
 		expect(coercePrivacyGuideRequest({ ...request, pane: "camera" })).toBeUndefined();
 		expect(coercePrivacyGuideRequest({ ...request, text: { ...request.text, hint: "" } })).toBeUndefined();
 		expect(coercePrivacyGuideRequest({ ...request, text: { ...request.text, drag: { accessibility: "x" } } })).toBeUndefined();
+		expect(coercePrivacyGuideRequest({ ...request, text: { ...request.text, allowed: undefined } })).toBeUndefined();
 		expect(coercePrivacyGuideRequest(null)).toBeUndefined();
+	});
+
+	it("keeps only plain colors and falls back to dark for an unknown scheme", () => {
+		const coerced = coercePrivacyGuideRequest({
+			...request,
+			appearance: { scheme: "sepia", colors: { bg: "red; } body { background: url(x)", fg: "</style><script>", muted: "color-mix(in oklch, #fff 40%, oklch(0.3 0 0))", border: 7 } },
+		});
+		expect(coerced?.appearance).toEqual({ scheme: "dark", colors: { muted: "color-mix(in oklch, #fff 40%, oklch(0.3 0 0))" } });
+		expect(coercePrivacyGuideRequest({ ...request, appearance: undefined })?.appearance).toEqual({ scheme: "dark", colors: {} });
 	});
 });
 
@@ -119,7 +132,7 @@ describe("placePrivacyGuide", () => {
 describe("renderPrivacyGuideHtml", () => {
 	it("offers a draggable CuaDriver tile and marks the chosen permission", () => {
 		const html = renderPrivacyGuideHtml(request, { kind: "image", dataUrl: "data:image/png;base64,AAAA" });
-		expect(html).toContain('class="app" draggable="true" data-drag-app');
+		expect(html).toContain('class="app draggable" draggable="true" data-drag-app');
 		expect(html).toContain('src="data:image/png;base64,AAAA"');
 		expect(html).toContain("Drag CuaDriver into the list above");
 		expect(html).toContain('class="choice selected" href="ao-privacy-guide://pane/accessibility" role="tab" aria-selected="true"');
@@ -131,6 +144,22 @@ describe("renderPrivacyGuideHtml", () => {
 		expect(html).toContain('aria-label="Granted"');
 		expect(html).not.toContain("<img");
 		expect(html).toContain('class="placeholder"');
+	});
+
+	it("says CuaDriver is allowed and offers no drag on a pane it already holds", () => {
+		const html = renderPrivacyGuideHtml({ ...request, granted: { accessibility: true, screenRecording: false } });
+		expect(html).toContain("CuaDriver is allowed here");
+		expect(html).toContain("Turn off its switch to revoke access.");
+		expect(html).not.toContain("data-drag-app");
+		expect(html).not.toContain("Drag CuaDriver into the list above");
+	});
+
+	it("paints in AO's scheme and colors, not the OS appearance", () => {
+		const dark = renderPrivacyGuideHtml(request);
+		expect(dark).toContain("color-scheme: dark; --bg: oklch(0.3 0.002 250); --fg: #fafafa; --muted: rgb(180 180 180)");
+		expect(dark).not.toContain("prefers-color-scheme");
+		const light = renderPrivacyGuideHtml({ ...request, appearance: { scheme: "light", colors: {} } });
+		expect(light).toContain("color-scheme: light; --bg: oklch(1 0 0); --fg: oklch(0.18 0 0)");
 	});
 
 	it("shows a spinning gear while the icon loads and a still gear when there is none", () => {
@@ -189,19 +218,39 @@ describe("PrivacyGuide", () => {
 	it("moves to the next missing pane, then closes once everything is granted", async () => {
 		const { guide: subject, deps, window, stop } = guide();
 		await subject.show(request);
-		await subject.update({ accessibility: true, screenRecording: false });
+		await expect(subject.update({ accessibility: true, screenRecording: false })).resolves.toBe(true);
 		expect(deps.openExternal).toHaveBeenLastCalledWith(PRIVACY_PANE_URLS.screenRecording);
-		await subject.update({ accessibility: true, screenRecording: true });
+		await expect(subject.update({ accessibility: true, screenRecording: true })).resolves.toBe(false);
 		expect(window.close).toHaveBeenCalled();
 		expect(stop).toHaveBeenCalled();
 	});
 
-	it("stays open when it was opened to review grants that were all on", async () => {
-		const { guide: subject, window } = guide();
+	it("stays open when it was opened to review grants that were all on, and follows a revoke", async () => {
+		const { guide: subject, deps, window } = guide();
 		const allGranted = { accessibility: true, screenRecording: true };
 		await subject.show({ ...request, granted: allGranted });
-		await subject.update(allGranted);
+		expect(window.html()).toContain("CuaDriver is allowed here");
+		await expect(subject.update(allGranted)).resolves.toBe(true);
 		expect(window.close).not.toHaveBeenCalled();
+
+		// Revoked on the shown pane: the strip turns back into a drop target, in place.
+		await expect(subject.update({ accessibility: false, screenRecording: true })).resolves.toBe(true);
+		expect(window.html()).toContain("data-drag-app");
+		expect(deps.openExternal).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports itself closed once its X or System Settings quitting took it down", async () => {
+		const { guide: subject, window } = guide();
+		await expect(subject.update({ accessibility: false, screenRecording: false })).resolves.toBe(false);
+		await subject.show(request);
+		window.navigate("ao-privacy-guide://close");
+		await expect(subject.update({ accessibility: true, screenRecording: false })).resolves.toBe(false);
+
+		const again = guide();
+		await again.guide.show(request);
+		again.emit(front());
+		again.emit({ frontPid: 7, settingsPid: -1, bounds: null });
+		await expect(again.guide.update({ accessibility: true, screenRecording: false })).resolves.toBe(false);
 	});
 
 	it("renders with a loading gear first, then swaps in the icon", async () => {

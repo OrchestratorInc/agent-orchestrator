@@ -18,13 +18,32 @@ export const PRIVACY_PANE_URLS: Record<PrivacyPane, string> = {
 
 export const CUA_DRIVER_APP_PATH = "/Applications/CuaDriver.app";
 
-/** What the renderer asks for: which pane to point at, what is already granted, and its translated copy. */
+export type PrivacyGuideScheme = "light" | "dark";
+
+/** AO's own surface colors, so the strip matches the app's theme rather than the OS appearance. */
+export interface PrivacyGuideColors {
+	bg: string;
+	fg: string;
+	muted: string;
+	border: string;
+}
+
+export interface PrivacyGuideAppearance {
+	scheme: PrivacyGuideScheme;
+	colors: Partial<PrivacyGuideColors>;
+}
+
+/** What the renderer asks for: which pane to point at, what is already granted, AO's look, and its translated copy. */
 export interface PrivacyGuideRequest {
 	pane: PrivacyPane;
 	granted: Record<PrivacyPane, boolean>;
+	appearance: PrivacyGuideAppearance;
 	text: {
 		drag: string;
 		hint: string;
+		/** Shown instead of drag/hint on a pane CuaDriver already holds. */
+		allowed: string;
+		allowedHint: string;
 		labels: Record<PrivacyPane, string>;
 		granted: string;
 		close: string;
@@ -34,6 +53,17 @@ export interface PrivacyGuideRequest {
 // Panel links navigate to this scheme and the main process intercepts them.
 const GUIDE_SCHEME = "ao-privacy-guide:";
 const MAX_TEXT = 400;
+const MAX_COLOR = 160;
+// A hex color or one CSS color function (oklch(), color-mix(), …): nothing that
+// could end the declaration, the rule, or the style element it lands in.
+const COLOR_PATTERN = /^(?:#[0-9a-f]{3,8}|[a-z-]+\([a-z0-9#.,%/\s()+-]*\))$/i;
+const COLOR_KEYS: readonly (keyof PrivacyGuideColors)[] = ["bg", "fg", "muted", "border"];
+
+// Used for any color the renderer did not send; they match AO's default theme.
+const DEFAULT_COLORS: Record<PrivacyGuideScheme, PrivacyGuideColors & { ok: string }> = {
+	dark: { bg: "oklch(0.300 0.002 250)", fg: "oklch(0.970 0.002 250)", muted: "oklch(0.720 0.002 250)", border: "oklch(1 0 0 / 9%)", ok: "#4ade80" },
+	light: { bg: "oklch(1 0 0)", fg: "oklch(0.18 0 0)", muted: "oklch(0.5 0 0)", border: "oklch(0 0 0 / 10%)", ok: "#16a34a" },
+};
 
 export const PRIVACY_GUIDE_HEIGHT = 72;
 const MIN_WIDTH = 560;
@@ -49,7 +79,24 @@ function text(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 && value.length <= MAX_TEXT ? value : undefined;
 }
 
-/** Validates an IPC payload from the renderer; anything malformed is refused whole. */
+function color(value: unknown): string | undefined {
+	return typeof value === "string" && value.length <= MAX_COLOR && COLOR_PATTERN.test(value.trim()) ? value.trim() : undefined;
+}
+
+/** A bad scheme falls back to dark and a bad color to the scheme's default; neither refuses the request. */
+function coerceAppearance(value: unknown): PrivacyGuideAppearance {
+	const input = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+	const scheme: PrivacyGuideScheme = input.scheme === "light" ? "light" : "dark";
+	const sent = (input.colors && typeof input.colors === "object" ? input.colors : {}) as Record<string, unknown>;
+	const colors: Partial<PrivacyGuideColors> = {};
+	for (const key of COLOR_KEYS) {
+		const valid = color(sent[key]);
+		if (valid) colors[key] = valid;
+	}
+	return { scheme, colors };
+}
+
+/** Validates an IPC payload from the renderer; malformed copy or panes are refused whole. */
 export function coercePrivacyGuideRequest(value: unknown): PrivacyGuideRequest | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const input = value as Record<string, unknown>;
@@ -58,14 +105,18 @@ export function coercePrivacyGuideRequest(value: unknown): PrivacyGuideRequest |
 	const labels = copy?.labels as Record<string, unknown> | undefined;
 	if (!isPrivacyPane(input.pane) || !granted || !copy || !labels) return undefined;
 	const drag = text(copy.drag), hint = text(copy.hint), grantedText = text(copy.granted), close = text(copy.close);
+	const allowed = text(copy.allowed), allowedHint = text(copy.allowedHint);
 	const accessibility = text(labels.accessibility), screenRecording = text(labels.screenRecording);
-	if (!drag || !hint || !grantedText || !close || !accessibility || !screenRecording) return undefined;
+	if (!drag || !hint || !allowed || !allowedHint || !grantedText || !close || !accessibility || !screenRecording) return undefined;
 	return {
 		pane: input.pane,
 		granted: { accessibility: granted.accessibility === true, screenRecording: granted.screenRecording === true },
+		appearance: coerceAppearance(input.appearance),
 		text: {
 			drag,
 			hint,
+			allowed,
+			allowedHint,
 			labels: { accessibility, screenRecording },
 			granted: grantedText,
 			close,
@@ -109,9 +160,32 @@ function iconHtml(icon: PrivacyGuideIcon): string {
 	return `<span class="placeholder${icon.kind === "loading" ? " loading" : ""}">${GEAR_SVG}</span>`;
 }
 
-/** The strip's whole page. Colors follow the app's popover tokens in both themes. */
+const ARROW_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>`;
+const CHECK_SVG = `<svg class="ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+/**
+ * The strip's palette: AO's popover tokens as sent, the scheme's defaults for
+ * any missing, and the in-between surfaces mixed from them per scheme.
+ */
+function paletteCss({ scheme, colors }: PrivacyGuideAppearance): string {
+	const base = { ...DEFAULT_COLORS[scheme], ...colors };
+	const mix = (fg: number) => `color-mix(in oklch, var(--fg) ${fg}%, var(--bg))`;
+	const derived = scheme === "dark"
+		? { hover: mix(6), tile: mix(10), tab: mix(15), track: "color-mix(in oklch, var(--bg) 78%, black)" }
+		: { hover: mix(5), tile: mix(3), tab: "var(--bg)", track: mix(8) };
+	return `:root { color-scheme: ${scheme}; --bg: ${base.bg}; --fg: ${base.fg}; --muted: ${base.muted}; --border: ${base.border}; --ok: ${base.ok}; --hover: ${derived.hover}; --tile: ${derived.tile}; --tab: ${derived.tab}; --track: ${derived.track}; }`;
+}
+
+/**
+ * The strip's whole page, in AO's theme. On a pane CuaDriver already holds it
+ * says so and offers no drag: there is nothing to add, only a switch to review.
+ */
 export function renderPrivacyGuideHtml(request: PrivacyGuideRequest, icon: PrivacyGuideIcon = { kind: "missing" }): string {
 	const { pane, granted, text: copy } = request;
+	const allowed = granted[pane];
+	const title = allowed ? copy.allowed : copy.drag;
+	const hint = allowed ? copy.allowedHint : copy.hint;
+	const tile = allowed ? `<div class="app">` : `<div class="app draggable" draggable="true" data-drag-app>`;
 	const choices = PRIVACY_PANES.map((choice) => {
 		const state = choice === pane ? " selected" : "";
 		const mark = granted[choice] ? `<span class="mark" aria-label="${escapeHtml(copy.granted)}">✓</span>` : "";
@@ -120,17 +194,17 @@ export function renderPrivacyGuideHtml(request: PrivacyGuideRequest, icon: Priva
 	return `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
-<title>${escapeHtml(copy.drag)}</title>
+<title>${escapeHtml(title)}</title>
 <style>
-:root { color-scheme: dark; --bg: oklch(0.300 0.002 250); --fg: oklch(0.970 0.002 250); --muted: oklch(0.720 0.002 250); --hover: oklch(0.295 0.002 250); --tile: oklch(0.360 0.002 250); --border: oklch(1 0 0 / 9%); --track: oklch(0.235 0.002 250); --tab: oklch(0.400 0.002 250); --ok: #4ade80; }
-@media (prefers-color-scheme: light) { :root { color-scheme: light; --bg: oklch(1 0 0); --fg: oklch(0.18 0 0); --muted: oklch(0.5 0 0); --hover: oklch(0.955 0 0); --tile: oklch(0.975 0 0); --border: oklch(0 0 0 / 10%); --track: oklch(0.93 0 0); --tab: oklch(1 0 0); --ok: #16a34a; } }
+${paletteCss(request.appearance)}
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { font: 13px/1.35 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 0 10px 0 12px; display: flex; align-items: center; gap: 12px; user-select: none; overflow: hidden; }
 a { color: inherit; text-decoration: none; outline: none; }
 a:focus-visible { box-shadow: 0 0 0 2px var(--muted); }
-.app { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; border-radius: 10px; background: var(--tile); border: 1px solid var(--border); cursor: grab; flex: none; }
-.app:active { cursor: grabbing; }
+.app { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; border-radius: 10px; background: var(--tile); border: 1px solid var(--border); flex: none; }
+.app.draggable { cursor: grab; }
+.app.draggable:active { cursor: grabbing; }
 .app img { width: 36px; height: 36px; pointer-events: none; }
 .app > span:last-child { font-weight: 600; }
 .placeholder { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; background: var(--hover); color: var(--muted); }
@@ -141,6 +215,7 @@ a:focus-visible { box-shadow: 0 0 0 2px var(--muted); }
 .copy strong { display: flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; }
 .copy strong span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .copy svg { flex: none; }
+.copy svg.ok { color: var(--ok); }
 .copy p { margin: 2px 0 0; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 nav { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--track); border: 1px solid var(--border); flex: none; }
 .choice { display: flex; align-items: center; font-size: 12px; padding: 5px 10px; border-radius: 6px; color: var(--muted); white-space: nowrap; }
@@ -151,12 +226,12 @@ nav { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var
 .close:hover { background: var(--hover); color: var(--fg); }
 </style></head>
 <body>
-<div class="app" draggable="true" data-drag-app>${iconHtml(icon)}<span>CuaDriver</span></div>
+${tile}${iconHtml(icon)}<span>CuaDriver</span></div>
 <div class="copy">
-<strong><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg><span>${escapeHtml(copy.drag)}</span></strong>
-<p>${escapeHtml(copy.hint)}</p>
+<strong>${allowed ? CHECK_SVG : ARROW_SVG}<span>${escapeHtml(title)}</span></strong>
+<p>${escapeHtml(hint)}</p>
 </div>
-<nav role="tablist" aria-label="${escapeHtml(copy.drag)}">${choices}</nav>
+<nav role="tablist" aria-label="${escapeHtml(title)}">${choices}</nav>
 <a class="close" href="${GUIDE_SCHEME}//close" aria-label="${escapeHtml(copy.close)}" title="${escapeHtml(copy.close)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></a>
 </body></html>`;
 }
@@ -230,21 +305,36 @@ export class PrivacyGuide {
 		}
 	}
 
+	/** Whether the strip is up, or on its way up from a show() still in flight. */
+	isOpen(): boolean {
+		return this.request !== undefined;
+	}
+
 	/**
 	 * Updates what is granted; closes once the last missing permission is
-	 * granted. A guide opened to review grants that were all already on stays.
+	 * granted. A guide opened to review grants that were all already on stays,
+	 * and follows a revoke made from it. Resolves to whether the strip is still
+	 * open, so the renderer stops following grants once it is gone.
 	 */
-	async update(granted: Record<PrivacyPane, boolean>): Promise<void> {
-		if (!this.request || !this.window) return;
+	async update(granted: Record<PrivacyPane, boolean>): Promise<boolean> {
+		const request = this.request;
+		if (!request) return false;
 		if (PRIVACY_PANES.every((pane) => granted[pane])) {
-			if (!PRIVACY_PANES.every((pane) => this.request!.granted[pane])) this.close();
-			return;
+			if (!PRIVACY_PANES.every((pane) => request.granted[pane])) {
+				this.close();
+				return false;
+			}
+			return true;
 		}
-		const changed = PRIVACY_PANES.some((pane) => granted[pane] !== this.request!.granted[pane]);
-		if (!changed) return;
+		const changed = PRIVACY_PANES.some((pane) => granted[pane] !== request.granted[pane]);
+		if (!changed) return true;
 		// Move on to the next missing permission once the shown one is granted.
-		const pane = granted[this.request.pane] ? PRIVACY_PANES.find((candidate) => !granted[candidate])! : this.request.pane;
-		await this.show({ ...this.request, pane, granted });
+		const pane = granted[request.pane] && !request.granted[request.pane] ? PRIVACY_PANES.find((candidate) => !granted[candidate])! : request.pane;
+		// The pane stays where it is: re-render the strip, without reopening System Settings.
+		this.request = { ...request, pane, granted };
+		if (pane === request.pane) await this.render();
+		else await this.show(this.request);
+		return this.isOpen();
 	}
 
 	close(): void {

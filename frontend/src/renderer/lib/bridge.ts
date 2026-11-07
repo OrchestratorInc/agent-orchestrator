@@ -14,7 +14,7 @@ export const aoBridge: AoBridge =
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
 			showPrivacyGuide: async () => undefined,
-			updatePrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,

@@ -2472,6 +2472,8 @@
 	"settings.computerUse.openPermissions": "システム設定で開く",
 	"settings.computerUse.guide.drag": "CuaDriver を上のリストにドラッグ",
 	"settings.computerUse.guide.hint": "すでにある場合は、スイッチをオンにします。",
+	"settings.computerUse.guide.allowed": "CuaDriver はここで許可されています",
+	"settings.computerUse.guide.allowedHint": "アクセスを取り消すには、スイッチをオフにします。",
 	"settings.computerUse.guide.close": "閉じる",
 	"settings.computerUse.agentAccess": "エージェントにこのコンピューターの使用を許可",
 	"settings.computerUse.agentAccessDescription": "新しいチャットセッションに、画面を読み取りデスクトップアプリを操作するツールが追加されます。各操作の結果にはウィンドウのスクリーンショットが含まれます。",

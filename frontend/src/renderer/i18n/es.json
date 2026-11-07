@@ -2516,6 +2516,8 @@
 	"settings.computerUse.openPermissions": "Abrir en Ajustes del Sistema",
 	"settings.computerUse.guide.drag": "Arrastra CuaDriver a la lista de arriba",
 	"settings.computerUse.guide.hint": "¿Ya aparece? Activa su interruptor.",
+	"settings.computerUse.guide.allowed": "CuaDriver tiene permiso aquí",
+	"settings.computerUse.guide.allowedHint": "Desactiva su interruptor para revocar el acceso.",
 	"settings.computerUse.guide.close": "Cerrar",
 	"settings.computerUse.agentAccess": "Permitir que los agentes usen este ordenador",
 	"settings.computerUse.agentAccessDescription": "Las nuevas sesiones de chat reciben herramientas para leer la pantalla y manejar apps de escritorio. El resultado de cada acción incluye una captura de la ventana.",

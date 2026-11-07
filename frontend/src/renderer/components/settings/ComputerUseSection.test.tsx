@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn(), showPrivacyGuide: vi.fn(), updatePrivacyGuide: vi.fn() }));
+const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn(), showPrivacyGuide: vi.fn(), updatePrivacyGuide: vi.fn(), closePrivacyGuide: vi.fn() }));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: apiMocks.get, POST: apiMocks.post },
@@ -48,12 +48,11 @@ function daemon({ status, job = { target: "cua-driver", status: "idle", command:
 
 function renderSection() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	render(
+	return { client, ...render(
 		<QueryClientProvider client={client}>
 			<ComputerUseSection />
 		</QueryClientProvider>,
-	);
-	return client;
+	) };
 }
 
 beforeEach(() => {
@@ -64,7 +63,8 @@ beforeEach(() => {
 	apiMocks.post.mockReset();
 	bridgeMocks.openExternal.mockReset();
 	bridgeMocks.showPrivacyGuide.mockReset().mockResolvedValue(undefined);
-	bridgeMocks.updatePrivacyGuide.mockReset().mockResolvedValue(undefined);
+	bridgeMocks.updatePrivacyGuide.mockReset().mockResolvedValue(true);
+	bridgeMocks.closePrivacyGuide.mockReset().mockResolvedValue(undefined);
 });
 
 describe("ComputerUseSection", () => {
@@ -189,7 +189,46 @@ describe("ComputerUseSection", () => {
 		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
 			pane: "accessibility",
 			granted: { accessibility: true, screenRecording: true },
+			text: expect.objectContaining({ allowed: "CuaDriver is allowed here", allowedHint: "Turn off its switch to revoke access." }),
 		}));
+		// Still followed: a revoke made from the strip reaches it.
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: true }));
+	});
+
+	it("sends AO's resolved theme, not the OS appearance", async () => {
+		daemon({ status: () => installed });
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in System Settings" }));
+
+		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
+			appearance: expect.objectContaining({ scheme: expect.stringMatching(/^(light|dark)$/), colors: expect.any(Object) }),
+		}));
+	});
+
+	it("closes the guide when the page goes away", async () => {
+		daemon({ status: () => installed });
+		const { unmount } = renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in System Settings" }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalled());
+		unmount();
+
+		expect(bridgeMocks.closePrivacyGuide).toHaveBeenCalledTimes(1);
+	});
+
+	it("stops following grants once the guide reports itself closed", async () => {
+		daemon({ status: () => installed });
+		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
+		const { client, unmount } = renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in System Settings" }));
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledTimes(1));
+		await client.refetchQueries({ queryKey: ["computer-use", "status"] });
+
+		expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledTimes(1);
+		unmount();
+		expect(bridgeMocks.closePrivacyGuide).not.toHaveBeenCalled();
 	});
 
 	it("shows a spinning gear for macOS permissions while status loads", async () => {

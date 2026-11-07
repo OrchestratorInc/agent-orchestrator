@@ -134,7 +134,7 @@ if (typeof window !== "undefined") {
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
 			showPrivacyGuide: async () => undefined,
-			updatePrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,

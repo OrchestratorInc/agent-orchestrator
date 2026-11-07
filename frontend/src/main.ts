@@ -2855,7 +2855,7 @@ ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 });
 ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
-	await privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
 });
 ipcMain.handle("app:closePrivacyGuide", (event) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");

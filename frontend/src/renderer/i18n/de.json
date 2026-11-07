@@ -2472,6 +2472,8 @@
 	"settings.computerUse.openPermissions": "In den Systemeinstellungen öffnen",
 	"settings.computerUse.guide.drag": "Ziehen Sie CuaDriver in die Liste oben",
 	"settings.computerUse.guide.hint": "Schon aufgeführt? Schalter einschalten.",
+	"settings.computerUse.guide.allowed": "CuaDriver ist hier erlaubt",
+	"settings.computerUse.guide.allowedHint": "Schalter ausschalten, um den Zugriff zu entziehen.",
 	"settings.computerUse.guide.close": "Schließen",
 	"settings.computerUse.agentAccess": "Agenten diesen Computer nutzen lassen",
 	"settings.computerUse.agentAccessDescription": "Neue Chat-Sitzungen erhalten Werkzeuge, um den Bildschirm zu lesen und Desktop-Apps zu bedienen. Jedes Aktionsergebnis enthält einen Screenshot des Fensters.",
