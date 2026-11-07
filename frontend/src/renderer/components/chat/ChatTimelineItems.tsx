@@ -3108,7 +3108,8 @@ export function ApprovalCard({
 					{detail?.rawCommand ?? command}
 				</pre>
 
-				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
+				{/* Someone who can't decide (a viewer) reads the request, with nothing to press. */}
+				{onDecide ? <div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{denyDecision ? (
 						<Button
 							type="button"
@@ -3195,7 +3196,7 @@ export function ApprovalCard({
 							The agent offered no decisions AO can present. Open diagnostics.
 						</p>
 					) : null}
-				</div>
+				</div> : null}
 			</div>
 		</div>
 	);

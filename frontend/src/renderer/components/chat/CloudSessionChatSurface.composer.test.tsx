@@ -147,6 +147,34 @@ describe("the real composer in a shared cloud session", () => {
 		await waitFor(() => expect(lexicalEditorText(screen.getByRole("combobox", { name: "Message the agent" }))).toBe("my own draft"));
 	});
 
+	it("gives a guest whose role hasn't arrived the aside composer and no approval to press, then Agent once the role says editor", async () => {
+		const pendingApproval = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Retry the webhooks", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.approval_requested", payload: {
+				turnId: "turn-1", requestId: "approval-1", summary: "Run the migration",
+				decisions: [{ id: "allow-once", label: "Allow once", kind: "allow_once" }, { id: "reject", label: "Deny", kind: "reject_once" }],
+			}, createdAt: session.updatedAt },
+		];
+		mocks.listChatEvents.mockResolvedValue({ events: pendingApproval, hasMore: false, nextAfter: 3 });
+		mocks.live = undefined;
+		const guest = { ...session, cloud: { ...session.cloud, shared: true } };
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		client.setQueryData(workspaceQueryKey, []);
+		const ui = () => <QueryClientProvider client={client}><TooltipProvider><CloudSessionChatSurface session={guest} /></TooltipProvider></QueryClientProvider>;
+		const view = render(ui());
+		expect(await screen.findByRole("combobox", { name: "Message teammates" })).toBeInTheDocument();
+		await screen.findByText("Retry the webhooks");
+		expect(screen.queryByRole("radiogroup", { name: "Write to" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Allow once/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Deny/ })).toBeNull();
+		// The live stream says Ben may edit: Agent mode and its approval come back.
+		mocks.live = { ...live(null), viewers: [{ ...me, role: "editor" }, ben] };
+		view.rerender(ui());
+		expect(await screen.findByRole("button", { name: /Allow once/ })).toBeInTheDocument();
+		expect(screen.getByRole("radiogroup", { name: "Write to" })).toBeInTheDocument();
+	});
+
 	it("lets a viewer write asides only, with no switch to a dead end", async () => {
 		mocks.live = { ...live(null), viewers: [{ ...me, role: "viewer" }, ben] };
 		renderSurface();

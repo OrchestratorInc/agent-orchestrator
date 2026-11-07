@@ -1548,8 +1548,10 @@ export function CloudSessionChatSurface({
 		|| (viewers ?? []).some((viewer) => viewer.userId !== me)
 		|| Boolean(everyone.data && (everyone.data.people.length > 0 || everyone.data.teams.length > 0));
 	const collaborative = asidesOpen && othersCanOpen;
-	// A viewer can't write to the agent: they get the aside composer and nothing to switch.
-	const viewerOnly = asidesOpen && myRole === "viewer";
+	// Someone who can't write to the agent gets the aside composer and nothing
+	// to switch: a viewer, and, by the same rule as readOnly, a guest whose role
+	// the live stream hasn't said yet.
+	const viewerOnly = asidesOpen && readOnly;
 	const [chosenMode, setChosenMode] = useState<{ sessionId: string; mode: ComposerMode }>();
 	const composerMode: ComposerMode = viewerOnly ? "aside" : collaborative && chosenMode?.sessionId === session.id ? chosenMode.mode : "agent";
 	const postAside = useMutation({
@@ -2086,7 +2088,8 @@ export function CloudSessionChatSurface({
 				if (mode) updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
 			rememberedPermissionMode={rememberedMode.key === projectKey ? rememberedMode.mode : readRememberedApprovalMode(projectKey)}
-			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
+			// A read-only person never decides an approval, whatever the mode.
+			onDecide={readOnly ? undefined : (requestId, decisionId) => decide.mutate({ requestId, decisionId })}
 			busy={send.isPending}
 			controllerTransitioning={controllerTransitioning}
 			newWorkDisabled={newWorkDisabled}

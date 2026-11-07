@@ -116,6 +116,7 @@ type Props = {
 	composerMentions?: ComposerMentionSource;
 	composerEdit?: { id: string; text: string; mentions?: ComposerMention[] };
 	composerFocusRequest?: number;
+	onDecide?: (requestId: string, decisionId: string) => void;
 	composerLockedPlaceholder?: string;
 };
 const lastProps = () => mocks.chatProps.mock.lastCall?.[0] as Props;
@@ -261,6 +262,28 @@ describe("the composer's Aside mode", () => {
 		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
 		// No switch at all: Agent would only be a dead end for a viewer.
 		expect(lastProps().composerModes?.onModeChange).toBeUndefined();
+	});
+
+	it("treats a guest whose role hasn't arrived as a viewer, until the live role says editor", async () => {
+		mocks.live = undefined;
+		const guest = { ...session, cloud: { ...session.cloud, shared: true } };
+		const view = renderSurface(guest);
+		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
+		// Aside only, nothing to switch to, and no approval to decide.
+		expect(lastProps().composerModes?.onModeChange).toBeUndefined();
+		expect(lastProps().onDecide).toBeUndefined();
+		mocks.live = liveState({}, [{ ...me, role: "editor" }, ben]);
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><CloudSessionChatSurface session={guest} /></TooltipProvider></QueryClientProvider>);
+		await waitFor(() => expect(lastProps().composerModes?.onModeChange).toBeTypeOf("function"));
+		expect(lastProps().composerModes?.mode).toBe("agent");
+		expect(lastProps().onDecide).toBeTypeOf("function");
+	});
+
+	it("never offers a viewer an approval's decisions", async () => {
+		mocks.live = liveState({}, [{ ...me, role: "viewer" }, ben]);
+		renderSurface({ ...session, cloud: { ...session.cloud, shared: true } });
+		await waitFor(() => expect(lastProps().composerModes?.mode).toBe("aside"));
+		expect(lastProps().onDecide).toBeUndefined();
 	});
 
 	it("shows no modes or Suggest in a solo personal session", async () => {

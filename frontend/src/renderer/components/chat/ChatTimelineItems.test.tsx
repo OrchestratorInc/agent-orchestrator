@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	ActivityRow,
 	AdaptiveStreamPacingContext,
+	ApprovalCard,
 	AssistantMessage,
 	ChatHostId,
 	HumanMessage,
@@ -778,5 +779,26 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+});
+
+describe("ApprovalCard", () => {
+	const pending = {
+		kind: "activity" as const, id: "approval-1", turnId: "t1", sequence: 3, revision: 0, activityKind: "approval" as const, status: "pending" as const,
+		summary: "Run npm test", requestId: "r-1", createdAt: "2026-11-08T10:00:00Z",
+		decisions: [{ id: "accept", label: "Approve" }, { id: "cancel", label: "Cancel" }],
+		detail: { command: "npm test", rawCommand: "npm test", reason: "Run the tests" },
+	};
+
+	it("offers the decisions to someone who can decide", () => {
+		const onDecide = vi.fn();
+		render(<ApprovalCard activity={pending} onDecide={onDecide} />);
+		expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
+	});
+
+	it("shows a read-only person the request with nothing to press", () => {
+		render(<ApprovalCard activity={pending} />);
+		expect(screen.getByText("Run the tests")).toBeInTheDocument();
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
 	});
 });
