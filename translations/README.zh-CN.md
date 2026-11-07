@@ -21,7 +21,7 @@
 
 [**获取 Orchestrator.inc**](https://orchestrator.inc) &nbsp;&bull;&nbsp; [文档](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [版本](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [参与贡献](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
-[English](../README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
+[English](../README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md) · [Tiếng Việt](README.vi.md)
 
 <br />
 
