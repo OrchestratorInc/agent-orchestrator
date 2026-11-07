@@ -40,6 +40,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -141,6 +142,10 @@ func Run(buildVersion string) error {
 	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
 	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
+	// A daemon started from an AO shell tab must not pass that tab's marker to
+	// the agents it launches, or none of them would name itself to the daemon.
+	// Shell tabs set it again explicitly.
+	_ = os.Unsetenv(caller.ShellTerminalEnv)
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}

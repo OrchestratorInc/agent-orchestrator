@@ -5,12 +5,12 @@ import { Pressable } from "./ui/pressable";
 type TerminalTabFrameProps = {
 	active: boolean;
 	wide?: boolean;
-	/** None leaves the label alone at the tab's edge unless an action needs the slot. */
+	/** Optional: without one the label starts at the tab's edge. */
 	icon?: ReactNode;
 	label: string;
-	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
+	/** Shown on hover or focus: the tab's close button or menu. It takes the icon's slot, or the tab's right edge when there is no icon. */
 	action?: ReactNode;
-	/** Keep the action in the icon's slot at rest (unsaved dot, running switch). */
+	/** Keep the action showing at rest (unsaved dot, running switch). */
 	actionPinned?: boolean;
 	buttonRef?: Ref<HTMLButtonElement>;
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
