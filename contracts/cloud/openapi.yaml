@@ -6250,9 +6250,10 @@ components:
           maxLength: 500
           description: >-
             Coding-agent model the worker runs (harness-native id). One the
-            account cannot run is refused with MODEL_UNAVAILABLE. Omitted, a
-            worker on the orchestrator's harness runs the orchestrator's current
-            model, else the project's worker model, else the harness default.
+            account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the
+            worker runs the project's worker model; without one, a worker on the
+            orchestrator's harness runs the orchestrator's current model, else
+            the harness default.
         reasoningEffort:
           type: string
           enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
