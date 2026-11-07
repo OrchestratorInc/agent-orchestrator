@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // seedTerminalResumeHome builds a session dir whose native-home points at a
@@ -110,5 +113,29 @@ func TestPrepareNativeTerminalResumeRefusesWithoutRecordedNativeHome(t *testing.
 	found, err := p.PrepareNativeTerminalResume(context.Background(), data, "session-1", "chat-1", "/ws")
 	if err != nil || found {
 		t.Fatalf("found = %v err = %v, want a fresh start, not a failure", found, err)
+	}
+}
+
+// Hermes dedupes an auto-title that collides by numbering the newer, unrelated
+// conversation, and given that title back it prefers the numbered row. The
+// restore must therefore name the conversation by ID.
+func TestRestoreResumesExactConversationWhenAnotherHoldsNumberedTitle(t *testing.T) {
+	binary := fakeNativeBinary(t)
+	data, _ := seedTerminalResumeHome(t,
+		[3]string{"local-a", "Fix login", "/ws"},
+		[3]string{"local-b", "Fix login #2", "/ws"})
+	p := New()
+	found, err := p.PrepareNativeTerminalResume(context.Background(), data, "session-1", "local-a", "/ws")
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: data, Session: ports.SessionRef{ID: "session-1", WorkspacePath: "/ws"},
+	})
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if want := []string{binary, "chat", "--cli", "--in", "/ws", "--continue", "local-a"}; !slices.Equal(cmd, want) {
+		t.Fatalf("restore = %v, want %v", cmd, want)
 	}
 }
