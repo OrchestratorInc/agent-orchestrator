@@ -4078,6 +4078,12 @@ export function Timeline({
 	// over the first frames (and may arrive in more than one snapshot), so keep
 	// snapping briefly after the first real layout instead of animating across them.
 	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
+		// Sending shrinks the composer, which resizes the viewport. That must not turn
+		// the send's glide into a jump: keep it on course to the new end.
+		if (viewportResize.current && (glideRequested.current || isFlying())) {
+			reaim();
+			return;
+		}
 		if (viewportResize.current || !initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
 			if (viewportResize.current) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
@@ -4085,7 +4091,7 @@ export function Timeline({
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten, cancelScrollFollow]);
+	}, [followEnd, markWritten, cancelScrollFollow, isFlying, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
