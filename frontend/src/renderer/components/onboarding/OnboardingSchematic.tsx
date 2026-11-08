@@ -1229,6 +1229,11 @@ function WorkerCard({ card }: { card: PreviewCard }) {
 	);
 }
 
+/** The picker menu's place over the composer: its left edge on the agent chip
+ * (past the composer's padding, the + and the context ring), its bottom just
+ * above the composer's bottom bar. */
+const MENU_LEFT = 62;
+const MENU_BOTTOM = 40;
 const MENU_OPEN = { opacity: 1, y: 0 };
 const MENU_CLOSED = { opacity: 0, y: 6 };
 
@@ -1256,9 +1261,12 @@ function NewChatPage({
 			<div className="relative flex min-h-0 flex-1 flex-col items-center px-14 pt-[120px]">
 				<p className={cn("text-[14px]", TEXT)}>{t("chat.welcome.heading")}</p>
 				<div className="relative mt-6 h-[100px] w-full max-w-[500px]">
+					<Composer placeholder={t("firstRun.exampleComposerDraft")} agent={agent} className="inset-0" />
+					{/* Like the real picker (side "top", align "start"): it rises from the
+					    agent chip in the composer's bottom bar, over the composer. */}
 					<motion.div
-						className="absolute left-6 w-[230px]"
-						style={{ bottom: 64, height: menuHeight }}
+						className="absolute w-[230px]"
+						style={{ left: MENU_LEFT, bottom: MENU_BOTTOM, height: menuHeight }}
 						initial={false}
 						animate={menuOpen ? MENU_OPEN : MENU_CLOSED}
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: EASE_OUT, delay: menuOpen ? 0.35 : 0 }}
@@ -1280,7 +1288,6 @@ function NewChatPage({
 							</div>
 						</Slab>
 					</motion.div>
-					<Composer placeholder={t("firstRun.exampleComposerDraft")} agent={agent} className="inset-0" />
 				</div>
 				<div className={cn("mt-4 flex items-center gap-2 text-[10.5px]", PASSIVE)}>
 					<Folder className="size-3" {...ICON} />
