@@ -16,11 +16,15 @@ type Summary struct {
 
 // Project is the full read-model returned by GET /api/v1/projects/{id}.
 type Project struct {
-	ID             domain.ProjectID      `json:"id"`
-	Name           string                `json:"name"`
-	Kind           domain.ProjectKind    `json:"kind" enum:"single_repo,workspace,scratch"`
-	Path           string                `json:"path"`
-	Repo           string                `json:"repo"`
+	ID   domain.ProjectID   `json:"id"`
+	Name string             `json:"name"`
+	Kind domain.ProjectKind `json:"kind" enum:"single_repo,workspace,scratch"`
+	Path string             `json:"path"`
+	Repo string             `json:"repo"`
+	// CanonicalRepo is GitHub's current owner/name for a github.com Repo,
+	// which differs from Repo's path after a rename or transfer. Omitted for
+	// other hosts and while GitHub has not answered.
+	CanonicalRepo  string                `json:"canonicalRepo,omitempty"`
 	DefaultBranch  string                `json:"defaultBranch"`
 	Agent          string                `json:"agent,omitempty"`
 	Config         *domain.ProjectConfig `json:"config,omitempty"`

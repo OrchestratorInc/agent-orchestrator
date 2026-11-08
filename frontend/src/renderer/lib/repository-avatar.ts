@@ -1,4 +1,7 @@
-export function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | null {
+// canonicalRepo is the daemon's GitHub-resolved owner/name for a github.com
+// remote. It wins over the remote's own owner, which can be a renamed or
+// transferred login that GitHub answers with its placeholder avatar.
+export function repositoryOwnerAvatar(repo: string, canonicalRepo?: string): { owner: string; url: string } | null {
 	const value = repo.trim();
 	const scp = value.match(/^[^/@:\s]+@([^/:\s]+):(.+)$/);
 	let host: string;
@@ -15,7 +18,8 @@ export function repositoryOwnerAvatar(repo: string): { owner: string; url: strin
 			return null;
 		}
 	}
-	const owner = pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.replace(/\.git$/, "");
+	const canonicalOwner = host === "github.com" ? canonicalRepo?.match(/^([^/\s]+)\/[^/\s]+$/)?.[1] : undefined;
+	const owner = canonicalOwner ?? pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.replace(/\.git$/, "");
 	if (!owner) return null;
 	const encodedOwner = encodeURIComponent(owner);
 	// The avatars host serves the image directly with CORS, so it can be cached

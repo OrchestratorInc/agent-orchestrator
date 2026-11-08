@@ -83,6 +83,7 @@ type Service struct {
 	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
 	logger         *slog.Logger
+	githubRepos    ports.GitHubRepositoryResolver
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -109,6 +110,9 @@ type Deps struct {
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
+	// GitHubRepos resolves a github.com origin to its current owner/name so
+	// Get can report CanonicalRepo after a rename. Left nil, it is omitted.
+	GitHubRepos ports.GitHubRepositoryResolver
 }
 
 // New returns a project service backed by the given durable store.
@@ -130,6 +134,7 @@ func NewWithDeps(d Deps) *Service {
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
 		logger:         d.Logger,
+		githubRepos:    d.GitHubRepos,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -188,7 +193,33 @@ func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, erro
 		}
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 	}
+	p.CanonicalRepo = m.canonicalGitHubRepo(ctx, p.Repo)
 	return GetResult{Status: "ok", Project: &p}, nil
+}
+
+// canonicalRepoWait bounds how long Get waits for GitHub on a cold cache. A
+// slower lookup keeps running and fills the cache for the next read.
+const canonicalRepoWait = 2 * time.Second
+
+// canonicalGitHubRepo returns GitHub's current owner/name for a github.com
+// origin, or "" when the origin is on any other host or the lookup fails.
+// Only github.com origins are looked up: sending a self-hosted remote's host
+// or owner to a third party would leak internal names.
+func (m *Service) canonicalGitHubRepo(ctx context.Context, origin string) string {
+	if m.githubRepos == nil || origin == "" {
+		return ""
+	}
+	id, err := domain.ParseRepositoryIdentity(origin)
+	if err != nil || id.Host != "github.com" {
+		return ""
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, canonicalRepoWait)
+	defer cancel()
+	repo, err := m.githubRepos.ResolveGitHubRepository(waitCtx, id.Namespace, id.Name)
+	if err != nil {
+		return ""
+	}
+	return repo.FullName
 }
 
 // Add registers a local git repository as a project.

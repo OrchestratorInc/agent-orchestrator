@@ -19275,6 +19275,8 @@ components:
       properties:
         agent:
           type: string
+        canonicalRepo:
+          type: string
         config:
           $ref: '#/components/schemas/ProjectConfig'
         defaultBranch:

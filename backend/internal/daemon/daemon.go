@@ -721,7 +721,11 @@ func Run(buildVersion string) error {
 	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log})
+	githubRepos := newGitHubRepoResolver(log)
+	if githubRepos != nil {
+		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
+	}
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")

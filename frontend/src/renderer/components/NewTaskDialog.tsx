@@ -71,12 +71,13 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		const details = detailsIndex >= 0 ? localProjectDetails[detailsIndex]?.data : undefined;
 		const primaryRepo = details && "repo" in details && typeof details.repo === "string" ? details.repo : "";
 		const workspaceRepos = details && "workspaceRepos" in details ? details.workspaceRepos ?? [] : project.workspaceRepos ?? [];
-		const repositories = [
-			...(primaryRepo ? [{ repo: primaryRepo }] : []),
+		const canonicalRepo = details && "canonicalRepo" in details ? details.canonicalRepo : undefined;
+		const repositories: { repo: string; canonicalRepo?: string }[] = [
+			...(primaryRepo ? [{ repo: primaryRepo, canonicalRepo }] : []),
 			...workspaceRepos,
 		];
-		const avatars = repositories.flatMap(({ repo }) => {
-			const avatar = repositoryOwnerAvatar(repo);
+		const avatars = repositories.flatMap(({ repo, canonicalRepo }) => {
+			const avatar = repositoryOwnerAvatar(repo, canonicalRepo);
 			if (!avatar) return [];
 			const identity = `${new URL(avatar.url).hostname}/${avatar.owner.toLowerCase()}`;
 			if (seen.has(identity)) return [];

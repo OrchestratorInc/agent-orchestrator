@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -53,6 +54,18 @@ func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {
 		&scmgithub.GHTokenSource{},
 	}
 	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: tokens, SkipTokenPreflight: true, Logger: logger})
+}
+
+// newGitHubRepoResolver returns the resolver that follows github.com repository
+// renames and transfers, sharing AO's GitHub auth. It returns a nil interface
+// (not a typed nil) when the provider cannot be built, so callers degrade to
+// exact origin matching.
+func newGitHubRepoResolver(logger *slog.Logger) ports.GitHubRepositoryResolver {
+	gh, err := newGitHubSCMProvider(logger)
+	if err != nil {
+		return nil
+	}
+	return scmgithub.NewRepoResolver(gh)
 }
 
 func newGitLabSCMProvider(gitlabCfg config.GitLabConfig, logger *slog.Logger) (*scmgitlab.Provider, error) {
