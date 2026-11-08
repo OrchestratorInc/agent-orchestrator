@@ -42,6 +42,13 @@ test('an httpd change runs Go, CLI E2E and the Electron boundary', () => {
   assert.deepEqual(pickLanes(pr(['backend/internal/httpd/server.go'])).lanes, ['go', 'cli-e2e', 'boundary']);
 });
 
+test('files backend tests and Go CI read from outside backend/ run the Go lane', () => {
+  assert.deepEqual(pickLanes(pr(['contracts/session-start-interface.json'])).lanes, ['go']);
+  assert.deepEqual(pickLanes(pr(['go.work'])).lanes, ['go']);
+  assert.deepEqual(pickLanes(pr(['.github/scripts/go-test-parallel.sh'])).lanes, ['go', 'config']);
+  assert.ok(pickLanes(pr(['frontend/scripts/prepare-cloudflared.mjs'])).lanes.includes('go'));
+});
+
 test('packages/shared reaches the frontend and mobile, with all vitest files', () => {
   const pick = pickLanes(pr(['packages/shared/theme/palette.ts']));
   assert.deepEqual(pick.lanes, ['frontend', 'boundary', 'mobile']);
