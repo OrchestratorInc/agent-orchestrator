@@ -72,6 +72,24 @@ describe("InstallDependencyDialog", () => {
 		});
 	});
 
+	it("shows the command a running install is executing", async () => {
+		apiMocks.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/system/install/{target}") {
+				return { data: { target: "tmux", status: "running", command: "brew install tmux" }, error: undefined };
+			}
+			return { data: undefined, error: undefined };
+		});
+		render(
+			<InstallDependencyDialog
+				requirements={[{ id: "tmux", label: "tmux", required: true, satisfied: false }] as never}
+				onRefetchRequirements={vi.fn()}
+			/>,
+		);
+
+		// The dialog checks each install's plan as it opens; one already running shows what it runs.
+		expect(await screen.findByText(/brew install tmux/)).toBeInTheDocument();
+	});
+
 	it("surfaces a failed Check again refresh", async () => {
 		apiMocks.post.mockResolvedValue({ data: undefined, error: { message: "daemon unavailable" } });
 		const refetch = vi.fn();

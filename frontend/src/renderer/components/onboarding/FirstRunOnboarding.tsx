@@ -37,7 +37,6 @@ import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
 import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
-import { freshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { useOnboardingStep } from "../../lib/onboarding-telemetry";
@@ -118,7 +117,6 @@ type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2
 type InstallJob = components["schemas"]["InstallJob"];
 
 function readStoredStep(): Step {
-	if (freshMachineSim) return "welcome";
 	try {
 		const stored = window.localStorage.getItem(STEP_STORAGE_KEY);
 		if (STEPS.includes(stored as Step)) return stored as Step;
@@ -160,11 +158,6 @@ export function FirstRunOnboarding() {
 		(usesPreviewWorkspaceData || !migrationOffer.isPending);
 
 	useEffect(() => {
-		// TEMPORARY: the simulated fresh machine always gets the flow.
-		if (freshMachineSim) {
-			setStatus("pending");
-			return;
-		}
 		let mounted = true;
 		void aoBridge.appState.getFirstRunProjectPrompt()
 			.then((next) => { if (mounted) setStatus(next); })
@@ -175,7 +168,6 @@ export function FirstRunOnboarding() {
 	const markSeen = () => {
 		setStatus("seen");
 		storeStep(null);
-		if (freshMachineSim) return;
 		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
 			// A failed write leaves the flag pending; the flow shows again next launch.
 		});
@@ -183,7 +175,7 @@ export function FirstRunOnboarding() {
 
 	useEffect(() => {
 		if (status !== "pending" || !ready || open) return;
-		if (!freshMachineSim && (projectCount > 0 || migrationOffer.data?.show)) {
+		if (projectCount > 0 || migrationOffer.data?.show) {
 			markSeen();
 			return;
 		}
@@ -321,7 +313,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		// Back on every page but the welcome, which has nothing before it.
 		<BackContext.Provider value={step === "welcome" ? undefined : goBack}>
 		<div
-			className={cn("onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
+			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
 			data-testid="first-run-onboarding"
 			role="dialog"
 			aria-modal="true"
