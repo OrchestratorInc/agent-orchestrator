@@ -54,6 +54,7 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
+import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -237,6 +238,9 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
+		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
@@ -442,6 +446,15 @@ const api = {
 	chatImage: {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
+	},
+	// Session and project share links this device made (main/session-share-urls.ts).
+	sessionShareUrls: {
+		remember: (baseUrl: string, linkId: string, url: string) =>
+			ipcRenderer.invoke("sessionShareUrls:remember", { baseUrl, linkId, url }) as Promise<void>,
+		recall: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:recall", { baseUrl, linkIds }) as Promise<Record<string, string>>,
+		forget: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
 	},
 	// Public share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees

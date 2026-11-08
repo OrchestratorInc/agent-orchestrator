@@ -446,8 +446,6 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
@@ -456,7 +454,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -481,6 +479,7 @@ const SummaryView = memo(function SummaryView({
 			branch={
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (

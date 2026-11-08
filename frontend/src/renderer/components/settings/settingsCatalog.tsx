@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "lucide-react";
+import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -9,7 +9,6 @@ import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
-import { CodexAccountsSection } from "./CodexAccountsSection";
 import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -55,7 +54,6 @@ export function teamsPageFor({ share, orgId, mine }: {
 
 type CatalogContext = {
 	cloudEnabled: boolean;
-	developerMode: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
 	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
@@ -103,15 +101,6 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Bot,
 		label: (t) => t("settings.harness"),
 		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics, harnessTab }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(harnessTab ? { harnessTab } : {})} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
-	},
-	{
-		id: "agents",
-		icon: BadgeCheck,
-		label: (t) => t("settings.agents"),
-		// In developer mode, subscription accounts live on each CLI's Harness
-		// Account tab instead.
-		visible: ({ developerMode }) => !developerMode,
-		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "teams",

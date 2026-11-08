@@ -479,6 +479,8 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
+	savedCopy?: boolean;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -783,6 +785,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	savedCopy = false,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -1999,7 +2002,7 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
-								{importBlock && session ? null : <ControllerBanner
+								{savedCopy || (importBlock && session) ? null : <ControllerBanner
 									controller={snapshot.controller}
 									provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 									quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}

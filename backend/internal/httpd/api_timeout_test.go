@@ -200,6 +200,10 @@ func (m *timeoutProbeProjectManager) PrepareClone(ctx context.Context, _ project
 	return projectsvc.ClonePreparationResult{}, nil
 }
 
+func (m *timeoutProbeProjectManager) PrepareCloneWithProgress(ctx context.Context, in projectsvc.CloneInput, _ func(projectsvc.CloneProgress)) (projectsvc.ClonePreparationResult, error) {
+	return m.PrepareClone(ctx, in)
+}
+
 func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.Project, error) {
 	m.budget <- remainingRequestBudget(ctx)
 	return projectsvc.Project{}, errors.New("probe only")
@@ -216,7 +220,7 @@ func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
 		APIDeps{Projects: mgr},
 		ControlDeps{},
 	)
-	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare"} {
+	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare", "/api/v1/projects/clone/prepare/stream"} {
 		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remoteUrl":"https://github.com/acme/repo","destinationParent":"/tmp"}`))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(httptest.NewRecorder(), req)

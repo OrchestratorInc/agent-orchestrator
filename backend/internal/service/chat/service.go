@@ -1943,6 +1943,8 @@ type Snapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// AfterSequence is the floor of a tail read, or zero for a whole page.
+	AfterSequence int64
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -1971,7 +1973,8 @@ type SnapshotReader interface {
 // SnapshotReader so existing tests and recovery tools can still request a full
 // snapshot explicitly.
 type SnapshotPageReader interface {
-	LoadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, limit int64) (ConversationRows, error)
+	// afterSequence is a floor: rows at or below it are left out. Zero reads a whole page.
+	LoadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (ConversationRows, error)
 }
 
 // ConversationRows is the raw durable read.
@@ -1987,6 +1990,7 @@ type ConversationRows struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	AfterSequence                    int64
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -2030,7 +2034,7 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 // of the paged read, which alone puts the archive in place of the provider's
 // replay, joined oldest first, as a full Snapshot promises.
 func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
-	snap, err := s.SnapshotPage(ctx, id, 0, 0)
+	snap, err := s.SnapshotPage(ctx, id, 0, 0, 0)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -2039,7 +2043,7 @@ func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID
 		seenTurns[turn.ID] = true
 	}
 	for snap.HasMoreBefore && snap.OldestSequence > 0 {
-		page, err := s.SnapshotPage(ctx, id, snap.OldestSequence, 0)
+		page, err := s.SnapshotPage(ctx, id, snap.OldestSequence, 0, 0)
 		if err != nil {
 			return Snapshot{}, err
 		}
@@ -2185,7 +2189,10 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
-func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
+//
+// A positive afterSequence reads only the tail after it; AfterSequence echoes it
+// when the reader applied it.
+func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, afterSequence, limit int64) (Snapshot, error) {
 	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
@@ -2211,11 +2218,11 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		// old full read. Production always wires PageReader.
 		return s.Snapshot(ctx, id)
 	}
-	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, afterSequence, limit)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
-	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && !rows.HasMoreBefore {
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && !rows.HasMoreBefore && rows.AfterSequence == 0 {
 		if rows, err = s.withImportedHistory(ctx, id, source.HistoryThrough, rows, beforeSequence, limit); err != nil {
 			return Snapshot{}, err
 		}
@@ -2253,6 +2260,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
+		AfterSequence:                    rows.AfterSequence,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
@@ -2285,7 +2293,7 @@ func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, be
 	if err != nil {
 		return Snapshot{}, err
 	}
-	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, 0, limit)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -2306,15 +2314,15 @@ func (f SnapshotReaderFunc) LoadConversationSnapshot(
 }
 
 // SnapshotPageReaderFunc adapts a function to SnapshotPageReader.
-type SnapshotPageReaderFunc func(ctx context.Context, conversationID string, beforeSequence, limit int64) (ConversationRows, error)
+type SnapshotPageReaderFunc func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (ConversationRows, error)
 
 // LoadConversationSnapshotPage satisfies SnapshotPageReader.
 func (f SnapshotPageReaderFunc) LoadConversationSnapshotPage(
 	ctx context.Context,
 	conversationID string,
-	beforeSequence, limit int64,
+	beforeSequence, afterSequence, limit int64,
 ) (ConversationRows, error) {
-	return f(ctx, conversationID, beforeSequence, limit)
+	return f(ctx, conversationID, beforeSequence, afterSequence, limit)
 }
 
 /* ---- session_manager.ChatLauncher ---------------------------------------- */

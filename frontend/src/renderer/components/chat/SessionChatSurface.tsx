@@ -208,6 +208,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
+	// The host is connecting or unreachable: the chat is its last saved copy, to read only.
+	const hostUnreachable = Boolean(hostId) && !daemonReady;
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -684,7 +686,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
-					{error ?? "Could not load this conversation."}
+					{hostUnreachable && error ? t("remote.hostOffline") : error ?? "Could not load this conversation."}
 				</p>
 				{/* The terminal can still carry on from here. */}
 				{interfaceSwitch?.control}
@@ -694,7 +696,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	return (
 		<div className="relative h-full min-h-0">
-			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
+			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
@@ -708,7 +710,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				newWorkDisabled={newWorkDisabled}
+				newWorkDisabled={newWorkDisabled || hostUnreachable}
+				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
+				savedCopy={hostUnreachable}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}

@@ -122,7 +122,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
-import { sessionUiKey } from "../lib/hosts";
+import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
@@ -530,7 +530,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? workspaceSessionQuery.data : undefined;
 	const scopedFallback = routedWorkspace && fallbackSession && Boolean(fallbackSession.cloud) !== isCloudRoute
 		? undefined : fallbackSession;
-	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
+	// What a host showed last stays until a read replaces it, also across a failed
+	// read or a reconnect; only a host that refuses this device takes it away.
+	const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
+	const hostUnreachable = Boolean(hostId) && (!remoteBase || HOST_UNREACHABLE_CODES.has(remoteCode));
+	const hostRefused = remoteCode === "BAD_PASSWORD" || remoteCode === "HOST_API_INCOMPATIBLE";
+	const session = hostId ? (!hostRefused && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
 	// The Files review offers only what the session's kind of project has.
 	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);
@@ -941,7 +946,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderReviewerChat = (reviewId: string) => session?.cloud ? (
 		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewId} harness={reviewerChat?.harness ?? "claude-code"} />
 	) : (
-		<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewId} />
+		<ReviewerChatSurface hideHeader hostId={hostId} hostUnreachable={hostUnreachable} workerSessionId={sessionId} reviewId={reviewId} />
 	);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
@@ -2049,9 +2054,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
 			data-compact-session-chrome="false"
 		>
-			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
+			{hostLabel ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel}</span> : null}
 			{/* On a session shared with this person: what they can do in it, and through which team. */}
 			{session ? <SessionAccessTag session={session} /> : null}
+			{/* A shared project's pull requests and merge requests, on its orchestrator. */}
+			{isOrchestrator && session?.cloud && routedWorkspace ? (
+				<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
+			) : null}
 			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
@@ -2059,6 +2068,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					projectId={session.workspaceId}
 					sessionId={session.id}
 					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE)}
+					sessionName={session.title}
+					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
 				/>
 			) : null}
 			<SessionTopbarActions />
@@ -2454,10 +2465,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
 	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
-		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
-			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
+			: hostUnreachable
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		// A shared session's route names no organization, and once its sharing
 		// ends it is gone from the shared list too: it reads as shared because
@@ -2521,9 +2531,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							ref={splitScreenRef}
 							style={shownLayout?.vars as CSSProperties | undefined}
 						>
-							{isOrchestrator && session?.cloud && routedWorkspace ? (
-								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
-							) : null}
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
 							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
@@ -2574,6 +2581,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
 									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
+									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
 							) : showChatSurface ? (
@@ -2601,7 +2609,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onSelectShellTerminal={selectShellTerminal}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}
-									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
+									daemonReady={hostId ? !hostUnreachable : daemonStatus.state === "ready"}
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}

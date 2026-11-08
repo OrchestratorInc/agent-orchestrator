@@ -32,7 +32,6 @@ export type ChatSendKeyMode = "enter" | "mod-enter";
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
-	| "agents"
 	| "teams"
 	| "billing"
 	| "remoteHosts"

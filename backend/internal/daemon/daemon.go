@@ -426,8 +426,8 @@ func Run(buildVersion string) error {
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 			}, nil
 		}),
-		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, limit int64) (chatsvc.ConversationRows, error) {
-			rows, err := store.LoadConversationSnapshotPage(ctx, conversationID, beforeSequence, limit)
+		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (chatsvc.ConversationRows, error) {
+			rows, err := store.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit)
 			if err != nil {
 				return chatsvc.ConversationRows{}, err
 			}
@@ -443,6 +443,7 @@ func Run(buildVersion string) error {
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
+				AfterSequence:                    rows.AfterSequence,
 			}, nil
 		}),
 		Drivers: chatDrivers,

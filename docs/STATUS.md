@@ -135,15 +135,14 @@ surface (`npm run sqlc`, `npm run api`).
   installation/authentication observations, purpose-specific freshness,
   single-flight checks, bounded warm-up/retries, launch-time validation, and
   compatibility projections for older agent inventory/probe clients.
-- Codex account management under Settings → Agents. AO reconciles the current
-  device-global Codex identity, adds file-backed accounts through an inline
-  native login terminal, and shows structured authentication, capacity, usage,
-  and confirmed reset-credit facts without parsing credentials. A manual global
-  switch atomically changes the device credential while briefly fencing new
-  Codex mutations. Running AO Codex controllers and reviewers are never
-  interrupted or restarted by account switching; new controllers use the
-  selected account, and an existing session can be resumed manually when the
-  user wants it relaunched. Native history remains in the normal Codex home.
+- Claude Code and Codex subscription accounts on each harness's Settings →
+  Harness → Account tab. An account is a CLI config folder (`CLAUDE_CONFIG_DIR`
+  or `CODEX_HOME`) signed in by the CLI's own login; history stays shared, AO
+  never reads a token, and new tasks start on the provider's default account.
+  A session's Summary shows its account and moves the session to another one
+  (restart plus native resume, rolled back on failure).
+  The older device-global Codex switcher has no UI; its daemon API
+  (`/api/v1/agents/codex/accounts*`) remains.
   Users can sign accounts out and delete inactive signed-out accounts.
 - OpenAPI spec generated from Go DTOs; frontend TS types generated from it and
   drift-checked in CI.

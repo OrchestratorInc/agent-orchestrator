@@ -125,9 +125,12 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
+	// LoggedIn is any login the CLI launches with as this account, an API key
+	// included; a folder signed in as another login is not.
+	LoggedIn    bool
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
@@ -156,6 +159,7 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		view := AccountView{Account: account, Default: def == account.ID}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {

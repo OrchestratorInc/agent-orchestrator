@@ -5057,6 +5057,38 @@ paths:
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
+  /api/v1/projects/clone/prepare/stream:
+    post:
+      operationId: prepareCloneProjectStream
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneProjectInput'
+        required: true
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ClonePrepareStreamEvent'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Clone a project without registering it, streaming each git step as
+        a server-sent event
+      tags:
+      - projects
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -7047,6 +7079,32 @@ paths:
             along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Read only items newer than this conversation sequence. The response
+          echoes afterSequence when it applied the floor. Omit for a whole page.
+        in: query
+        name: afterSequence
+        schema:
+          description: Read only items newer than this conversation sequence. The
+            response echoes afterSequence when it applied the floor. Omit for a whole
+            page.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: 'Keep at most this many bytes of each command output: its head
+          and tail. A cut output carries outputBytes, the full size. Omit for whole
+          outputs.'
+        in: query
+        name: outputLimit
+        schema:
+          description: 'Keep at most this many bytes of each command output: its head
+            and tail. A cut output carries outputBytes, the full size. Omit for whole
+            outputs.'
+          maximum: 65536
+          minimum: 64
           type:
           - "null"
           - integer
@@ -13717,6 +13775,8 @@ components:
           type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
+        loggedIn:
+          type: boolean
         plan:
           type: string
         problem:
@@ -13734,6 +13794,7 @@ components:
       - device
       - default
       - signedIn
+      - loggedIn
       type: object
     AgentAccountUsageByModel:
       properties:
@@ -15316,6 +15377,41 @@ components:
       - path
       - remoteUrl
       - preparationId
+      type: object
+    ClonePrepareStreamEvent:
+      properties:
+        error:
+          $ref: '#/components/schemas/APIError'
+        progress:
+          $ref: '#/components/schemas/CloneProgress'
+        result:
+          $ref: '#/components/schemas/ClonePreparationResult'
+      type: object
+    CloneProgress:
+      properties:
+        attempt:
+          minimum: 1
+          type: integer
+        percent:
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        phase:
+          enum:
+          - enumerating_objects
+          - counting_objects
+          - compressing_objects
+          - receiving_objects
+          - resolving_deltas
+          - updating_files
+          - filtering_content
+          - retrying
+          type: string
+      required:
+      - phase
+      - attempt
       type: object
     CloneProjectInput:
       properties:
@@ -17127,6 +17223,9 @@ components:
           items:
             $ref: '#/components/schemas/ConversationActivityResponse'
           type: array
+        afterSequence:
+          format: int64
+          type: integer
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
@@ -20200,6 +20299,8 @@ components:
         commits:
           type: integer
         remoteBranch:
+          type: string
+        remoteHead:
           type: string
         unpushed:
           type: integer

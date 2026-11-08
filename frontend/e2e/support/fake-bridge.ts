@@ -111,6 +111,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
 					onScrollPhase: unsubscribe,
+					showPrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
+					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -144,6 +147,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				sessionShareUrls: {
+					remember: async () => undefined,
+					recall: async () => ({}),
+					forget: async () => undefined,
 				},
 				cloudShare: {
 					available: async () => true,
@@ -1049,6 +1057,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
 					onScrollPhase: unsubscribe,
+					showPrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
+					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -1078,6 +1089,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				sessionShareUrls: {
+					remember: async () => undefined,
+					recall: async () => ({}),
+					forget: async () => undefined,
 				},
 				cloudShare: {
 					available: async () => true,

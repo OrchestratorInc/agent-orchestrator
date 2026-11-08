@@ -61,10 +61,9 @@ type SettingsEntry = {
 	keywords: string[];
 };
 
-/** Keywords every row on a page inherits: "codex" finds Add account on the accounts page. */
+/** Keywords every row on a page inherits: "accounts" finds the Harness page, where accounts live. */
 const SECTION_KEYWORDS: Partial<Record<GlobalSettingsSection, string[]>> = {
-	agents: ["accounts", "codex", "claude", "subscriptions", "plan", "login"],
-	harness: ["agents", "agent cli", "install"],
+	harness: ["agents", "agent cli", "install", "accounts", "codex", "claude", "subscriptions", "plan", "login"],
 	remoteHosts: ["ssh", "remote", "machine", "server"],
 	mobile: ["phone", "ios", "android", "pair", "qr code"],
 	browserProfiles: ["browser", "profiles", "chrome"],
@@ -96,11 +95,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
 	{ id: "simplified-topbar", section: "general", label: "settings.simplifiedTopbar", keywords: ["top bar", "topbar", "toolbar", "floating", "tabs"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
-	{ id: "accounts", section: "agents", label: "settings.agents", keywords: [] },
-	{ id: "add-account", section: "agents", label: "settings.codexAccounts.add", keywords: ["sign in"] },
-	{ id: "remove-account", section: "agents", label: "settings.agentAccounts.remove", keywords: ["logout", "sign out"] },
-	{ id: "refresh-limits", section: "agents", label: "settings.agentAccounts.refresh", keywords: ["usage", "rate limit", "quota"] },
-	{ id: "usage-limits", section: "agents", label: "settings.codexAccounts.generalUsageLimits", keywords: ["usage", "rate limit", "quota"] },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login"] },
 	{ id: "remote-hosts", section: "remoteHosts", label: "settings.remoteHosts", keywords: [] },
@@ -134,8 +128,6 @@ type SettingsVisibility = { developerMode: boolean; diagnostics: boolean };
 /** Mirrors the visibility rules of the settings catalog for the pages the registry covers. */
 function sectionVisible(section: GlobalSettingsSection, { developerMode, diagnostics }: SettingsVisibility): boolean {
 	switch (section) {
-		case "agents":
-			return !developerMode;
 		case "diagnostics":
 			return developerMode && diagnostics;
 		default:
@@ -166,8 +158,6 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 /** The registry entry naming a whole settings page. */
 function sectionLeadId(section: GlobalSettingsSection): string {
 	switch (section) {
-		case "agents":
-			return "accounts";
 		case "remoteHosts":
 			return "remote-hosts";
 		case "browserProfiles":

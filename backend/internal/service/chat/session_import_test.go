@@ -63,11 +63,11 @@ func TestImportedSnapshotSurvivesProviderSourceDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st})
-	snapshot, err := svc.SnapshotPage(ctx, rec.ID, 0, 1)
+	snapshot, err := svc.SnapshotPage(ctx, rec.ID, 0, 0, 1)
 	if err != nil || len(snapshot.Messages) != 1 || snapshot.Messages[0].Text != "last" || !snapshot.HasMoreBefore || snapshot.Controller != ports.ChatControllerStopped {
 		t.Fatalf("saved snapshot: %#v %v", snapshot, err)
 	}
-	older, err := svc.SnapshotPage(ctx, rec.ID, snapshot.OldestSequence, 1)
+	older, err := svc.SnapshotPage(ctx, rec.ID, snapshot.OldestSequence, 0, 1)
 	if err != nil || len(older.Messages) != 1 || older.Messages[0].Text != "first" || older.HasMoreBefore {
 		t.Fatalf("older snapshot: %#v %v", older, err)
 	}
@@ -140,18 +140,18 @@ func TestAdoptedImportShowsArchiveInPlaceOfPartialReplay(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	page, err := svc.SnapshotPage(ctx, rec.ID, 0, 100)
+	page, err := svc.SnapshotPage(ctx, rec.ID, 0, 0, 100)
 	if err != nil || texts(page.Messages) != "first,reply one,second,reply two,third" || page.HasMoreBefore {
 		t.Fatalf("timeline = %q more=%v: %v", texts(page.Messages), page.HasMoreBefore, err)
 	}
 	if !page.Messages[0].CreatedAt.Equal(old) {
 		t.Fatalf("archived message time = %v, want %v", page.Messages[0].CreatedAt, old)
 	}
-	newest, err := svc.SnapshotPage(ctx, rec.ID, 0, 3)
+	newest, err := svc.SnapshotPage(ctx, rec.ID, 0, 0, 3)
 	if err != nil || texts(newest.Messages) != "second,reply two,third" || !newest.HasMoreBefore {
 		t.Fatalf("newest page = %q more=%v: %v", texts(newest.Messages), newest.HasMoreBefore, err)
 	}
-	older, err := svc.SnapshotPage(ctx, rec.ID, newest.OldestSequence, 3)
+	older, err := svc.SnapshotPage(ctx, rec.ID, newest.OldestSequence, 0, 3)
 	if err != nil || texts(older.Messages) != "first,reply one" || older.HasMoreBefore {
 		t.Fatalf("older page = %q more=%v: %v", texts(older.Messages), older.HasMoreBefore, err)
 	}
@@ -178,7 +178,7 @@ func TestTerminalImportArchiveIsReadableButCannotSendChat(t *testing.T) {
 	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st})
 	for _, read := range []func() (chatsvc.Snapshot, error){
 		func() (chatsvc.Snapshot, error) { return svc.Snapshot(ctx, rec.ID) },
-		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 20) },
+		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 0, 20) },
 	} {
 		snapshot, err := read()
 		if err != nil || snapshot.Mode != domain.SessionModeTUI || len(snapshot.Messages) != 1 || snapshot.Controller != ports.ChatControllerStopped {

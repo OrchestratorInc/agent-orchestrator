@@ -144,6 +144,9 @@ if (typeof window !== "undefined") {
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
@@ -206,6 +209,11 @@ if (typeof window !== "undefined") {
 		chatImage: {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
+		},
+		sessionShareUrls: {
+			remember: async () => undefined,
+			recall: async () => ({}),
+			forget: async () => undefined,
 		},
 		cloudShare: {
 			available: async () => true,
