@@ -399,7 +399,11 @@ describe("SessionInspector tabs", () => {
   });
 
   it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
-    vi.stubGlobal("IntersectionObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
     renderWithQuery(<SessionInspector orchestrator session={session([], {
       kind: "orchestrator",
       artifactFiles: [
