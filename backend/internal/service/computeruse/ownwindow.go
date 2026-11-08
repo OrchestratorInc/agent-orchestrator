@@ -63,16 +63,13 @@ func (s *Service) ownWindowDrags(arguments map[string]any) ([]ownWindowDrag, Own
 	}
 	steps, _ := arguments["steps"].([]any)
 	var drags []ownWindowDrag
-	routed, reads := false, 0
+	routed := false
 	for _, raw := range steps {
 		step, _ := raw.(map[string]any)
 		name, stepArguments := stepAction(step)
 		tool, _ := batchTool(name, stepArguments)
 		pid, windowID := windowOf(stepArguments, arguments)
-		switch {
-		case readSteps[tool]:
-			reads++
-		case tool == "drag" && pid == own:
+		if tool == "drag" && pid == own {
 			routed = true
 			if windowID != 0 && !hasAny(step, "wait_for", "expect") {
 				drags = append(drags, ownWindowDrag{pid: pid, windowID: windowID, drag: stepArguments})
@@ -82,7 +79,7 @@ func (s *Service) ownWindowDrags(arguments map[string]any) ([]ownWindowDrag, Own
 	if !routed {
 		return nil, nil, nil
 	}
-	if len(drags)+reads != len(steps) {
+	if len(drags) != len(steps) {
 		return nil, nil, actionRefused("COMPUTER_USE_OWN_WINDOW_BATCH", "run_steps", 0,
 			"A drag in AO's own window runs from AO's desktop app, not Cua Driver. Send it in a run_steps batch of only drag steps that each name AO's pid and window_id, with no wait_for or expect; send other actions in another batch.")
 	}

@@ -81,13 +81,17 @@ func TestDragInAOWindowRunsThroughTheDesktop(t *testing.T) {
 func TestDragInAOWindowRefusesWhatItCannotRun(t *testing.T) {
 	s, app, tools := ownWindowService(t)
 	ctx := context.Background()
-	mixed := []any{map[string]any{"click": map[string]any{"pid": 7, "window_id": 9, "x": 1, "y": 1}}, drag(7, 9)}
-	_, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": mixed}, SessionID: "w"})
 	var apiErr *apierr.Error
-	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_OWN_WINDOW_BATCH" {
-		t.Fatalf("mixed batch error = %v", err)
+	for name, first := range map[string]any{
+		"click": map[string]any{"click": map[string]any{"pid": 7, "window_id": 9, "x": 1, "y": 1}},
+		"read":  map[string]any{"get_window_state": map[string]any{"pid": 7, "window_id": 9}},
+	} {
+		_, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{first, drag(7, 9)}}, SessionID: "w"})
+		if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_OWN_WINDOW_BATCH" {
+			t.Fatalf("%s+drag batch error = %v", name, err)
+		}
 	}
-	_, err = s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{drag(7, 9)}}, SessionID: "w"})
+	_, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{drag(7, 9)}}, SessionID: "w"})
 	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_READ_FIRST" {
 		t.Fatalf("unread window error = %v", err)
 	}
