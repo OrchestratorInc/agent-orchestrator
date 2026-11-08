@@ -13,7 +13,8 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
-import { CLOUD_CHAT_NEWEST, mergeCloudEvents } from "../../lib/cloud-chat-history";
+import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
+import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -124,6 +125,32 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.calls[0]?.[0].snapshot.items).toHaveLength(2);
 		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(false);
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenLastCalledWith("org-1", session.id, { after: 2, before: CLOUD_CHAT_NEWEST, limit: 500 }));
+	});
+
+	it("reads the next account's own chat, never the previous account's cached one", async () => {
+		const step = (output: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence: 1, type: "workspace.script.step", createdAt: "2026-11-08T10:00:00Z",
+			payload: { phase: "setup", runId: "setup-1", step: 1, total: 1, status: "succeeded", exitCode: 0, durationMs: 10, command: "make deps", repository: "", startedAt: "2026-11-08T10:00:00Z", ...output },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// A member read the chat: Setup's output, which a share guest is not served.
+		queryClient.setQueryData(["cloud-chat-events", "org-1", session.id], [step({ output: "DB host db.internal:5432", user: "ao-worker" })]);
+		queryClient.setQueryData(cloudChatHistoryKey("org-1", session.id), { hasOlder: true, nextBefore: 1, recentPending: false, loadingOlder: false, generation: 1 });
+		// Another account signs in.
+		clearPreviousAccountState(queryClient);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [step({ output: "", outputHidden: true })], hasMore: false, nextAfter: 1, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		// The first frame waits for the read rather than showing the cached chat.
+		expect(cloudMocks.chatProps.mock.calls[0]?.[0].historyPending).toBe(true);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(false));
+		// It reads the newest page from scratch, not only what came after the cached list.
+		expect(cloudMocks.listChatEvents.mock.calls[0]?.[2]).toEqual({ before: CLOUD_CHAT_NEWEST, limit: 150 });
+		const shown = JSON.stringify(cloudMocks.chatProps.mock.calls.map((call) => call[0].snapshot));
+		expect(shown).toContain("make deps");
+		expect(shown).not.toContain("db.internal");
+		expect(shown).not.toContain("ao-worker");
 	});
 
 	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
