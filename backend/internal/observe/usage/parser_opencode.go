@@ -58,7 +58,7 @@ steps AS (
            (p.time_created << ?) | (p.rowid & ?) AS step_cursor
     FROM part p
     JOIN message m ON m.id = p.message_id
-    WHERE p.session_id IN (SELECT id FROM tree) AND p.time_created > 0
+    WHERE p.session_id IN (SELECT id FROM tree) AND p.time_created > 0 AND p.time_created >= ?
       AND CASE WHEN json_valid(p.data) THEN json_extract(p.data, '$.type') END = ?
 )
 SELECT step_cursor, part_id, session_id, message_id, time_created, data,
@@ -68,7 +68,7 @@ WHERE step_cursor > ?
 ORDER BY step_cursor
 LIMIT ?`,
 		nativeSessionID, openCodeCursorTieBits, int64(1)<<openCodeCursorTieBits-1,
-		openCodeStepFinish, after, limit)
+		after>>openCodeCursorTieBits, openCodeStepFinish, after, limit)
 	if err != nil {
 		return nil, err
 	}
