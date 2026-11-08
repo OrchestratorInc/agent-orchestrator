@@ -1811,6 +1811,8 @@
 	"shell.openSession": "Ouvrir {{title}}",
 	"shell.openOrchestrator": "Ouvrir l'orchestrateur",
 	"shell.orchestrator": "Orchestrateur",
+	"shell.orchestratorNewReply": "Nouvelle réponse",
+	"shell.orchestratorWorking": "En cours",
 	"shell.orchestratorBoard": "Tableau de l'orchestrateur",
 	"shell.orchestratorWithActivity": "Orchestrateur, {{activity}}",
 	"shell.pinned": "Épinglés",
