@@ -15,7 +15,8 @@ const methods = [
 	{ id: "device_code", label: "Device code", secret: false },
 	{ id: "api_key", label: "OpenAI API key", secret: true },
 ];
-const snapshot: AgentLoginSnapshot = { id: "login-1", agentId: "codex", method: "device_code", status: "running", expiresAt: "2026-10-23T12:00:00Z", loginUrl: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGHI" };
+const unsavedKey = (name: string) => ({ name, label: name, configured: false, device: false, deviceAvailable: true, checkable: false, agents: ["goose"] });
+const snapshot: AgentLoginSnapshot ={ id: "login-1", agentId: "codex", method: "device_code", status: "running", expiresAt: "2026-10-23T12:00:00Z", loginUrl: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGHI" };
 
 function setup(hostId?: string) {
 	const onVerify = vi.fn().mockResolvedValue(true);
@@ -40,21 +41,48 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const onVerify = vi.fn().mockResolvedValue("configured");
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
-		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[unsavedKey("OPENAI_API_KEY")]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription("Not set");
 		expect(screen.getByText("AO passes these keys to the agent sessions it starts.")).toBeVisible();
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
-		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined);
+		// The device choice shown beside the key is always sent explicitly.
+		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined, undefined, false);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledWith("env_OPENAI_API_KEY"));
 		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+	});
+	it("waits for the saved keys before saving one, and offers a retry when they fail to load", async () => {
+		const user = userEvent.setup();
+		const onRetry = vi.fn();
+		const keyMethods = [{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }];
+		const { rerender } = render(<HarnessLoginPanel agentId="goose" methods={keyMethods} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.type(screen.getByLabelText("API key"), "test-secret");
+		expect(screen.getByRole("status")).toHaveTextContent("Loading API keys…");
+		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
+		rerender(<HarnessLoginPanel agentId="goose" methods={keyMethods} providerKeysError="Could not load API keys." onRetryProviderKeys={onRetry} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not load API keys.");
+		await user.click(screen.getByRole("button", { name: "Retry" }));
+		expect(onRetry).toHaveBeenCalled();
+		expect(startAgentUILogin).not.toHaveBeenCalled();
+	});
+	it("keeps the typed key when checking it fails", async () => {
+		const user = userEvent.setup();
+		vi.mocked(checkProviderKey).mockRejectedValue(new Error("Could not check the key."));
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[{ ...unsavedKey("OPENAI_API_KEY"), checkable: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.type(screen.getByLabelText("API key"), "test-secret");
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not check the key.");
+		expect(screen.getByLabelText("API key")).toHaveValue("test-secret");
+		expect(startAgentUILogin).not.toHaveBeenCalled();
 	});
 	it.each(["qwen", "continue", "openhands"] as const)("requires a model for %s provider keys", async (agentId) => {
 		const user = userEvent.setup();
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId, method: "env_OPENAI_API_KEY", status: "succeeded" });
-		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", label: "Provider API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		// Where the daemon can't share keys outside AO, no device setting is sent.
+		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", label: "Provider API key", secret: true }]} providerKeys={[{ ...unsavedKey(agentId === "openhands" ? "LLM_API_KEY" : "OPENAI_API_KEY"), deviceAvailable: false }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.queryByRole("checkbox", { name: "Share with other apps" })).toBeNull();
 		await user.type(screen.getByLabelText("API key"), "test-secret");
 		const save = screen.getByRole("button", { name: "Save and verify" });
 		expect(save).toBeDisabled();
@@ -66,7 +94,7 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		const onProviderKeysChanged = vi.fn();
-		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[{ name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, checkable: false, agents: ["goose"] }]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[{ name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, deviceAvailable: true, checkable: false, agents: ["goose"] }]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/Saved, ending abcd · Also set outside AO/);
 		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).toBeChecked();
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
@@ -74,7 +102,7 @@ describe("HarnessLoginPanel", () => {
 		await waitFor(() => expect(onProviderKeysChanged).toHaveBeenCalled());
 	});
 	it("warns that a Claude Code API key can replace the subscription", () => {
-		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, deviceAvailable: true, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
 		// The billing note is a warning with its icon, not muted help text.
 		expect(screen.getByText(/instead of your Claude subscription/).closest("p")?.querySelector("svg.text-warning")).not.toBeNull();
@@ -95,7 +123,7 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		let answer: (value: Awaited<ReturnType<typeof checkProviderKey>>) => void = () => undefined;
 		vi.mocked(checkProviderKey).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
-		const saved = (name: string, label: string) => ({ name, label, configured: true, hint: "abcd", device: false, checkable: true, agents: ["qwen"] });
+		const saved = (name: string, label: string) => ({ name, label, configured: true, hint: "abcd", device: false, deviceAvailable: true, checkable: true, agents: ["qwen"] });
 		render(<HarnessLoginPanel agentId="qwen" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }, { id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[saved("OPENAI_API_KEY", "OpenAI API key"), saved("ANTHROPIC_API_KEY", "Anthropic API key")]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		// OpenAI's form is open first; ask it for models, then switch away.
 		await user.click(screen.getByRole("button", { name: "Load models" }));
@@ -280,7 +308,7 @@ describe("HarnessLoginPanel", () => {
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(await screen.findByRole("button", { name: "2. OpenAI" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "2. OpenAI" }));
-		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "2", undefined);
+		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "2", undefined, "OpenAI");
 	});
 	it("offers Enter separately for a numbered menu that still waits after a choice", async () => {
 		const user = userEvent.setup();

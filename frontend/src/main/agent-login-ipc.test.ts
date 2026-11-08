@@ -31,6 +31,18 @@ describe("requestAgentLogin", () => {
 		]);
 	});
 
+	it("sends native menu actions and an explicit device setting", async () => {
+		const fetchImpl = daemon(new Response("{}"));
+		await requestAgentLogin({ action: "act", agentId: "droid", operationId: "op-1", menuAction: "2", option: "OpenAI" }, 3002, fetchImpl);
+		await requestAgentLogin({ action: "act", agentId: "droid", operationId: "op-1", menuAction: "select" }, 3002, fetchImpl);
+		await requestAgentLogin({ action: "start", agentId: "goose", method: "env_OPENAI_API_KEY", secret: "test-key", device: false }, 3002, fetchImpl);
+		expect(fetchImpl.mock.calls.map(([url, init]) => [init?.method, url, init?.body])).toEqual([
+			["POST", "http://127.0.0.1:3002/api/v1/agents/droid/auth/operations/op-1/actions", JSON.stringify({ action: "2", option: "OpenAI" })],
+			["POST", "http://127.0.0.1:3002/api/v1/agents/droid/auth/operations/op-1/actions", JSON.stringify({ action: "select" })],
+			["POST", "http://127.0.0.1:3002/api/v1/agents/goose/auth/operations", JSON.stringify({ method: "env_OPENAI_API_KEY", secret: "test-key", device: false })],
+		]);
+	});
+
 	it("passes daemon errors through and reports an unavailable daemon", async () => {
 		const conflict = daemon(new Response(JSON.stringify({ code: "AGENT_AUTH_IN_PROGRESS" }), { status: 409 }));
 		await expect(requestAgentLogin({ action: "start", agentId: "codex", method: "browser" }, 3002, conflict))
@@ -55,6 +67,9 @@ describe("parseAgentLoginRequest", () => {
 		expect(() => parseAgentLoginRequest({ action: "get", agentId: "codex", operationId: "a/b" })).toThrow("Invalid sign-in operation.");
 		expect(() => parseAgentLoginRequest({ action: "code", agentId: "codex", operationId: "op-1", code: "x".repeat(4097) })).toThrow("Invalid sign-in code.");
 		expect(() => parseAgentLoginRequest({ action: "delete-all", agentId: "codex", operationId: "op-1" })).toThrow("Invalid sign-in action.");
+		expect(() => parseAgentLoginRequest({ action: "act", agentId: "droid", operationId: "op-1", menuAction: "\x1b[A" })).toThrow("Invalid sign-in menu action.");
+		expect(() => parseAgentLoginRequest({ action: "act", agentId: "droid", operationId: "op-1", menuAction: "1", option: "x".repeat(257) })).toThrow("Invalid sign-in menu option.");
+		expect(() => parseAgentLoginRequest({ action: "start", agentId: "goose", method: "env_OPENAI_API_KEY", device: "yes" })).toThrow("Invalid device setting.");
 	});
 });
 

@@ -778,6 +778,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				methods={agentAuthPlans.get(agentId)?.methods ?? []}
 				hostId={hostId}
 				providerKeys={providerKeys.data}
+				providerKeysError={providerKeys.isError ? providerKeys.error.message : undefined}
+				onRetryProviderKeys={() => void providerKeys.refetch()}
 				onProviderKeysChanged={() => void invalidateProviderKeys()}
 				onClose={closeUILogin}
 				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}

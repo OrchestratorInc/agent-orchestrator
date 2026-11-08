@@ -27,7 +27,7 @@ type AgentUILoginService interface {
 	StartLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 	Login(context.Context, string, string) (agentauth.LoginSnapshot, error)
 	CancelLogin(context.Context, string, string) (agentauth.LoginSnapshot, error)
-	ActOnLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
+	ActOnLogin(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
 	SubmitLoginCode(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 }
 
@@ -91,7 +91,7 @@ func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Reque
 		envelope.WriteError(w, r, apierr.Invalid("AGENT_AUTH_ACTION_INVALID", "Choose a supported login menu action.", nil))
 		return
 	}
-	result, err := svc.ActOnLogin(r.Context(), chi.URLParam(r, "agent"), chi.URLParam(r, "operationId"), req.Action)
+	result, err := svc.ActOnLogin(r.Context(), chi.URLParam(r, "agent"), chi.URLParam(r, "operationId"), req.Action, req.Option)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -156,14 +156,14 @@ func (c *AgentAuthController) startUILogin(w http.ResponseWriter, r *http.Reques
 	}
 	var result agentauth.LoginSnapshot
 	var err error
-	if req.Model != "" || req.Device || req.Provider != "" {
+	if req.Model != "" || req.Device != nil || req.Provider != "" {
 		if withOptions, ok := c.Svc.(interface {
 			StartLoginWithOptions(context.Context, string, string, string, agentauth.LoginOptions) (agentauth.LoginSnapshot, error)
 		}); ok {
 			result, err = withOptions.StartLoginWithOptions(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, agentauth.LoginOptions{Model: req.Model, Device: req.Device, Provider: req.Provider})
 		} else if withModel, ok := c.Svc.(interface {
 			StartLoginWithModel(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
-		}); ok && !req.Device && req.Provider == "" {
+		}); ok && (req.Device == nil || !*req.Device) && req.Provider == "" {
 			result, err = withModel.StartLoginWithModel(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, req.Model)
 		} else {
 			err = apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept these options.", nil)

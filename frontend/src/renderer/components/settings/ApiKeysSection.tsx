@@ -230,7 +230,7 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 		</div>
 		{error ? <p role="alert" className="text-xs leading-4 text-error">{error}</p> : null}
 		<div className="flex min-h-7 items-start gap-3">
-			<DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} className="flex-1 pt-1" />
+			{key.deviceAvailable ? <DeviceEnvToggle checked={device} disabled={busy} onChange={setDevice} className="flex-1 pt-1" /> : <span className="flex-1" />}
 			{key.configured ? <Button type="button" size="sm" variant="destructive-ghost" disabled={busy} onClick={() => void remove()}>
 				{busy && confirmRemove ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 				{t(confirmRemove ? "settings.apiKeys.confirmRemove" : "settings.apiKeys.remove")}

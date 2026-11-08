@@ -13,8 +13,8 @@ vi.mock("../../hooks/useProviderKeys", () => ({
 }));
 
 const keys: ProviderKey[] = [
-	{ name: "OPENAI_API_KEY", label: "OpenAI", configured: true, hint: "abcd", device: false, checkable: true, agents: ["goose", "crush"] },
-	{ name: "TAVILY_API_KEY", label: "Tavily", configured: false, device: false, checkable: false, agents: ["goose"] },
+	{ name: "OPENAI_API_KEY", label: "OpenAI", configured: true, hint: "abcd", device: false, deviceAvailable: true, checkable: true, agents: ["goose", "crush"] },
+	{ name: "TAVILY_API_KEY", label: "Tavily", configured: false, device: false, deviceAvailable: true, checkable: false, agents: ["goose"] },
 ];
 
 beforeEach(() => {
@@ -64,6 +64,14 @@ describe("ApiKeysSection", () => {
 		await user.click(within(form).getByRole("button", { name: "Cancel" }));
 		expect(screen.queryByLabelText("Tavily")).toBeNull();
 		expect(screen.getByRole("button", { name: "Add key · Tavily" })).toHaveFocus();
+	});
+
+	it("offers no share opt-in where the daemon can't share keys outside AO", async () => {
+		const user = userEvent.setup();
+		vi.mocked(useProviderKeys).mockReturnValue({ data: keys.map((key) => ({ ...key, deviceAvailable: false })), isPending: false, isError: false } as unknown as ReturnType<typeof useProviderKeys>);
+		render(<ApiKeysSection titleHidden />);
+		await user.click(screen.getByRole("button", { name: "Add key · Tavily" }));
+		expect(screen.queryByRole("checkbox", { name: "Share with other apps" })).toBeNull();
 	});
 
 	it("explains sharing only in the ⓘ tooltip, without ticking the box", async () => {

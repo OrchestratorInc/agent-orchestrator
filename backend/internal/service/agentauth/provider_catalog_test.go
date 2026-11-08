@@ -75,7 +75,7 @@ func TestOpenCodeCatalogKeyIsSavedInNativeStore(t *testing.T) {
 		{"unknown provider", LoginOptions{Provider: "azure"}},
 		{"missing provider", LoginOptions{}},
 		{"model", LoginOptions{Provider: "zeta", Model: "zeta-1"}},
-		{"device", LoginOptions{Provider: "zeta", Device: true}},
+		{"device", LoginOptions{Provider: "zeta", Device: new(true)}},
 	} {
 		if _, err := svc.StartLoginWithOptions(t.Context(), "opencode", catalogKeyMethod, "secret", tc.opts); err == nil {
 			t.Fatalf("%s: accepted", tc.name)

@@ -20,12 +20,15 @@ const CATALOG_METHOD = "provider_key";
 
 type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
-export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onProviderKeysChanged, onVerify, onClose, onTerminal }: {
+export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal }: {
 	agentId: AgentId;
 	methods: components["schemas"]["AgentLoginMethod"][];
 	hostId?: string;
-	/** Saved provider keys, without values, for this host. */
+	/** Saved provider keys, without values, for this host. Undefined while loading or after a failed load. */
 	providerKeys?: ProviderKey[];
+	/** Why the saved provider keys could not be loaded. */
+	providerKeysError?: string;
+	onRetryProviderKeys?: () => void;
 	onProviderKeysChanged?: () => void;
 	onVerify: (methodId: string) => Promise<boolean | "configured">;
 	onClose: () => void;
@@ -77,6 +80,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		const name = id ? providerKeyName(id) : undefined;
 		return name ? providerKeys?.find((key) => key.name === name) : undefined;
 	};
+	// Until the saved keys load, an AO-managed key can't be saved: AO would not
+	// know whether to check it first or keep its device setting.
+	const keyStateUnknown = (id?: string) => Boolean(id && providerKeyName(id) && !providerKeys);
 	const selectedKey = providerKeyFor(selectedMethodId);
 	const savedKey = selectedKey?.configured ? selectedKey : undefined;
 	// Start from the saved device setting so saving again never withdraws it silently.
@@ -183,7 +189,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		const targetNeedsModel = providerKeyNeedsModel(agentId, target?.id);
 		const targetKey = providerKeyFor(target?.id);
 		const targetCatalog = target?.id === CATALOG_METHOD;
-		if (pending.current || locked || !target || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim()) || (targetCatalog && !catalogProvider)) return;
+		if (pending.current || locked || !target || keyStateUnknown(target.id) || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim()) || (targetCatalog && !catalogProvider)) return;
 		pending.current = true;
 		setBusy(true);
 		setError("");
@@ -193,19 +199,34 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		setLoginCode("");
 		try {
 			// A new provider key is checked first so a mistyped key is never saved.
-			if (credential && targetKey?.checkable && (await checkProviderKey(targetKey.name, credential, hostId)).status === "invalid") {
-				if (mounted.current) {
-					setSecret(credential);
-					setError(t("settings.apiKeys.rejected"));
+			if (credential && targetKey?.checkable) {
+				let rejected = false;
+				try {
+					rejected = (await checkProviderKey(targetKey.name, credential, hostId)).status === "invalid";
+				} catch (err) {
+					// The check itself failed: keep the typed key so the user can retry.
+					if (mounted.current) {
+						setSecret(credential);
+						setError(err instanceof Error ? err.message : t("settings.apiKeys.checkFailed"));
+					}
+					return;
 				}
-				return;
+				if (rejected) {
+					if (mounted.current) {
+						setSecret(credential);
+						setError(t("settings.apiKeys.rejected"));
+					}
+					return;
+				}
 			}
 			await runAgentLoginTask(agentId, hostId, async () => {
 				if (!mounted.current) return;
+				// The device choice is sent only where it is shown; otherwise the
+				// key keeps its current setting.
 				const next = targetCatalog
 					? await startCatalogKeyLogin(agentId, catalogProvider, credential, hostId)
-					: targetKey && device
-					? await startAgentUILogin(agentId, target.id, credential, hostId, targetNeedsModel ? model.trim() : undefined, true)
+					: targetKey?.deviceAvailable
+					? await startAgentUILogin(agentId, target.id, credential, hostId, targetNeedsModel ? model.trim() : undefined, device)
 					: targetNeedsModel
 					? await startAgentUILogin(agentId, target.id, credential, hostId, model.trim())
 					: await startAgentUILogin(agentId, target.id, credential, hostId);
@@ -324,12 +345,14 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			if (current()) setError(err instanceof Error ? err.message : t("settings.apiKeys.checkFailed"));
 		} finally { if (current()) setLoadingModels(false); }
 	};
-	const menuAction = async (action: MenuAction) => {
+	// A numbered choice carries the label the user saw, so the daemon can refuse
+	// it when the menu on screen changed between render and click.
+	const menuAction = async (action: MenuAction, option?: string) => {
 		if (!operation || busy || !running) return;
 		nativeAnswered.current = true;
 		setBusy(true);
 		setError("");
-		try { updateOperation(await actOnAgentUILogin(agentId, operation.id, action, hostId)); }
+		try { updateOperation(await (option ? actOnAgentUILogin(agentId, operation.id, action, hostId, option) : actOnAgentUILogin(agentId, operation.id, action, hostId))); }
 		catch (err) { setError(err instanceof Error ? err.message : t("settings.harness.authFailed")); }
 		finally { setBusy(false); }
 	};
@@ -416,7 +439,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 					const selected = selectedMethodId === item.id;
 					const open = item.secret && selected;
 					// Save sits beside the last field: the key, or the model when one follows it.
-					const saveButton = <Button type="submit" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
+					const saveButton = <Button type="submit" disabled={busy || keyStateUnknown(item.id) || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
 						{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 						{t("settings.harness.loginUi.save")}
 					</Button>;
@@ -463,7 +486,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						</>}
 						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <KeyWarning className="col-start-2">{t("settings.apiKeys.claudeBilling")}</KeyWarning>}
 						{error && <p role="alert" className="col-start-2 text-xs leading-4 text-error">{error}</p>}
-						{selectedKey ? <DeviceEnvToggle className="col-start-2" checked={device} disabled={locked} onChange={setDevice} /> : null}
+						{keyStateUnknown(item.id) && (providerKeysError
+							? <div role="alert" className="col-start-2 flex flex-wrap items-center gap-x-2 text-xs leading-4 text-error">
+								<span>{providerKeysError}</span>
+								{onRetryProviderKeys && <Button type="button" size="sm" variant="ghost" className="-my-1" onClick={onRetryProviderKeys}>{t("settings.harness.retry")}</Button>}
+							</div>
+							: <p role="status" className="col-start-2 flex items-center gap-2 text-xs leading-4 text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{t("settings.apiKeys.loading")}</p>)}
+						{selectedKey?.deviceAvailable ? <DeviceEnvToggle className="col-start-2" checked={device} disabled={locked} onChange={setDevice} /> : null}
 					</div>}
 					</div>;
 				})}
@@ -490,7 +519,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 				<p id={titleId + "-native-options"} className="text-control leading-5 text-settings-label">{t("settings.harness.loginUi.nativeChoose")}</p>
 				{/* One shared list with dividers, like the method list above it. */}
 				<div role="group" aria-labelledby={titleId + "-native-options"} className="flex flex-col divide-y divide-border overflow-hidden rounded-md bg-(--color-bg-primary)">
-					{nativeOptions.map((option, index) => <button key={`${index}-${option}`} type="button" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction)} className="flex min-h-8 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-control leading-5 text-settings-label outline-none transition-colors hover:bg-(--color-interactive-hover) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+					{nativeOptions.map((option, index) => <button key={`${index}-${option}`} type="button" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction, option)} className="flex min-h-8 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-control leading-5 text-settings-label outline-none transition-colors hover:bg-(--color-interactive-hover) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 						<span className="tabular-nums text-settings-muted">{index + 1}.</span> {option}
 					</button>)}
 				</div>

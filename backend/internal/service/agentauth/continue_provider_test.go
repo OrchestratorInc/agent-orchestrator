@@ -16,7 +16,7 @@ func TestContinueProviderLoginWritesNativeConfigAndGlobalEnv(t *testing.T) {
 	continueConfigHome = func() (string, error) { return home, nil }
 	t.Cleanup(func() { continueConfigHome = previousHome })
 	previousPublish := publishProviderKey
-	publishProviderKey = func(_ context.Context, name, value string) error {
+	publishProviderKey = func(_ context.Context, name, value, _ string) error {
 		if name != "ANTHROPIC_API_KEY" || value != "test-secret" {
 			t.Fatal("unexpected device publication")
 		}

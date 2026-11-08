@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -159,19 +158,20 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 				published = []string{value}
 			}
 			_ = providerkeys.ExportForProbes(name, value, published...)
-			if device[name] && runtime.GOOS != "windows" {
+			if device[name] && deviceSupported {
 				republish[name] = value
 			}
 		}
 		// launchd and systemd user environments are session-scoped. Restore
 		// the keys the user published when AO starts again after a login or
 		// daemon restart, in the background so a slow or missing user bus
-		// never delays daemon startup.
+		// never delays daemon startup. A value the user set there since is
+		// left in place.
 		if len(republish) > 0 {
 			go func() {
 				for name, value := range republish {
 					refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					_ = publishProviderKey(refreshCtx, name, value)
+					_ = publishProviderKey(refreshCtx, name, value, value)
 					cancel()
 				}
 			}()
@@ -332,17 +332,24 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
+	// The terminal starts from the daemon's environment, which holds every
+	// AO-saved provider key. A key that would override this harness's own
+	// sign-in is held back, so the CLI never asks about it mid-login.
+	env := providerkeys.WithheldForSignIn(plan.AgentID)
 	if plan.AgentID == "claude-code" && s.dataDir != "" {
 		// The launcher runs in a private auth workspace. Preserve the daemon's
 		// resolved data root instead of re-resolving a relative inherited value.
-		input.Env = map[string]string{"AO_DATA_DIR": s.dataDir}
+		env["AO_DATA_DIR"] = s.dataDir
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
-		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+		env["XDG_DATA_HOME"] = dataHome
+	}
+	if len(env) > 0 {
+		input.Env = env
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

@@ -2,6 +2,7 @@ package agentauth
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 
@@ -25,6 +26,8 @@ type ProviderKey struct {
 	// Device reports that the key is also in the OS user environment, for
 	// programs started outside AO.
 	Device bool `json:"device"`
+	// DeviceAvailable reports that this daemon's platform supports Device.
+	DeviceAvailable bool `json:"deviceAvailable"`
 	// Checkable reports that AO can ask the provider to accept the key.
 	Checkable bool `json:"checkable"`
 	// Agents lists the harnesses that read this variable.
@@ -79,7 +82,7 @@ func (s *Service) ProviderKeys(context.Context) ([]ProviderKey, error) {
 		value, configured := keys[name]
 		out = append(out, ProviderKey{
 			Name: name, Label: info.label, Configured: configured, Hint: keyHint(value),
-			Device: configured && device[name], Checkable: providerkeys.Checkable(name),
+			Device: configured && device[name], DeviceAvailable: deviceSupported, Checkable: providerkeys.Checkable(name),
 			Agents: append([]string(nil), info.agents...),
 		})
 	}
@@ -119,7 +122,7 @@ func (s *Service) SaveProviderKey(ctx context.Context, name, secret string, devi
 	if len(secret) > 16*1024 || strings.ContainsAny(secret, "\r\n\x00") {
 		return ProviderKey{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Enter the key on a single line.", nil)
 	}
-	if err := s.storeProviderKey(ctx, name, secret, device, ""); err != nil {
+	if err := s.storeProviderKey(ctx, name, secret, &device, ""); err != nil {
 		return ProviderKey{}, err
 	}
 	return s.providerKey(ctx, name)
@@ -129,11 +132,24 @@ func (s *Service) SaveProviderKey(ctx context.Context, name, secret string, devi
 // value), activates it for this daemon, and publishes or withdraws it from the
 // OS user environment together with its companions. A non-empty harness is
 // the harness whose own panel saved it, which lets that harness's sessions
-// receive a key that would otherwise replace its subscription sign-in.
-func (s *Service) storeProviderKey(ctx context.Context, name, secret string, device bool, harness string) error {
+// receive a key that would otherwise replace its subscription sign-in. A nil
+// share keeps the device setting the key already has, so a client that has
+// not loaded it yet never withdraws a published key by omission.
+func (s *Service) storeProviderKey(ctx context.Context, name, secret string, share *bool, harness string) error {
+	if share != nil && *share && !deviceSupported {
+		return apierr.Invalid("AGENT_AUTH_DEVICE_ENV_UNSUPPORTED", "Sharing a key with other apps isn't available on this device.", nil)
+	}
 	keys, err := providerkeys.Load(s.dataDir)
 	if err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+	}
+	device := share != nil && *share
+	if share == nil {
+		current, err := providerkeys.DeviceNames(s.dataDir)
+		if err != nil {
+			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+		}
+		device = current[name] && keys[name] != "" && deviceSupported
 	}
 	if secret == "" {
 		secret = keys[name]
@@ -156,18 +172,18 @@ func (s *Service) storeProviderKey(ctx context.Context, name, secret string, dev
 	}
 	var fresh []string
 	if device {
-		if fresh, err = s.publishProviderKeys(ctx, present, values); err != nil {
+		if fresh, err = s.publishProviderKeys(ctx, present, values, keys); err != nil {
 			return err
 		}
 	} else {
 		for _, n := range present {
-			if err := s.withdrawProviderKey(ctx, n); err != nil {
+			if err := s.withdrawProviderKey(ctx, n, keys[n]); err != nil {
 				return err
 			}
 		}
 	}
 	if err := providerkeys.Save(ctx, s.dataDir, name, secret); err != nil {
-		s.rollbackPublished(ctx, fresh)
+		s.rollbackPublished(ctx, fresh, values)
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be saved in AO's device credential store.")
 	}
 	if !device {
@@ -214,8 +230,10 @@ func (s *Service) restoreSubscriptionKey(ctx context.Context, agentID, released 
 // publishProviderKeys records each name as AO-published before publishing
 // it, so a key in the OS user environment is never untracked: a later
 // withdrawal or removal can always find it. It returns the names AO had not
-// published before; on failure those are withdrawn again.
-func (s *Service) publishProviderKeys(ctx context.Context, names []string, values map[string]string) ([]string, error) {
+// published before; on failure those are withdrawn again. stored holds the
+// values saved before this call, so AO may replace its own earlier copy but
+// never a different value the user set themselves.
+func (s *Service) publishProviderKeys(ctx context.Context, names []string, values, stored map[string]string) ([]string, error) {
 	before, err := providerkeys.DeviceNames(s.dataDir)
 	if err != nil {
 		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
@@ -225,12 +243,19 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 		if !before[n] {
 			fresh = append(fresh, n)
 		}
+		previous := ""
+		if before[n] {
+			previous = stored[n]
+		}
 		if err := providerkeys.SetDevice(ctx, s.dataDir, n, true); err != nil {
-			s.rollbackPublished(ctx, fresh)
+			s.rollbackPublished(ctx, fresh, values)
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
 		}
-		if err := publishProviderKey(ctx, n, values[n]); err != nil {
-			s.rollbackPublished(ctx, fresh)
+		if err := publishProviderKey(ctx, n, values[n], previous); err != nil {
+			s.rollbackPublished(ctx, fresh, values)
+			if errors.Is(err, providerkeys.ErrUserValue) {
+				return nil, apierr.Invalid("AGENT_AUTH_DEVICE_ENV_TAKEN", "Your user environment already sets "+n+" to a different value. AO left it unchanged; remove it there first, or save the key without sharing it.", map[string]any{"name": n})
+			}
 			return nil, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The key could not be added to this device's user environment.")
 		}
 	}
@@ -238,26 +263,27 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 }
 
 // rollbackPublished withdraws names from the OS user environment and clears
-// their marker, best effort, after a failed save.
-func (s *Service) rollbackPublished(ctx context.Context, names []string) {
+// their marker, best effort, after a failed save. values holds the copies
+// AO tried to publish; a different value is left in place.
+func (s *Service) rollbackPublished(ctx context.Context, names []string, values map[string]string) {
 	for _, n := range names {
-		_ = unpublishProviderKey(ctx, n)
+		_ = unpublishProviderKey(ctx, n, values[n])
 		_ = providerkeys.SetDevice(ctx, s.dataDir, n, false)
 	}
 }
 
 // withdrawProviderKey removes name from the OS user environment only when AO
-// put it there, so a variable the user set themselves is left alone.
-func (s *Service) withdrawProviderKey(ctx context.Context, name string) error {
+// put it there and it still holds value, AO's copy, so a variable the user set
+// themselves is left alone. That environment is session-scoped and AO stops
+// republishing the key once its marker is cleared, so an unreachable user
+// manager (SSH, headless, WSL) never blocks turning sharing off or removal.
+func (s *Service) withdrawProviderKey(ctx context.Context, name, value string) error {
 	device, err := providerkeys.DeviceNames(s.dataDir)
 	if err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
-	if !device[name] {
-		return nil
-	}
-	if err := unpublishProviderKey(ctx, name); err != nil {
-		return apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The key could not be removed from this device's user environment.")
+	if device[name] {
+		_ = unpublishProviderKey(ctx, name, value)
 	}
 	return nil
 }
@@ -269,8 +295,12 @@ func (s *Service) RemoveProviderKey(ctx context.Context, name string) (ProviderK
 	if _, ok := providerKeyCatalog[name]; !ok {
 		return ProviderKey{}, unknownProviderKey(name)
 	}
+	keys, err := providerkeys.Load(s.dataDir)
+	if err != nil {
+		return ProviderKey{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+	}
 	for _, n := range append([]string{name}, companionVariables[name]...) {
-		if err := s.withdrawProviderKey(ctx, n); err != nil {
+		if err := s.withdrawProviderKey(ctx, n, keys[n]); err != nil {
 			return ProviderKey{}, err
 		}
 		if err := providerkeys.Remove(ctx, s.dataDir, n); err != nil {

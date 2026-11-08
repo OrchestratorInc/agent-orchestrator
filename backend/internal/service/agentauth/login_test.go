@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -150,7 +151,7 @@ func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
 	if strings.Contains(string(encoded), "do-not-return") || strings.Contains(string(encoded), "private-auth-pty") {
 		t.Fatalf("leaked terminal: %s", encoded)
 	}
-	if _, err := svc.ActOnLogin(t.Context(), "opencode", started.ID, "next"); err != nil {
+	if _, err := svc.ActOnLogin(t.Context(), "opencode", started.ID, "next", ""); err != nil {
 		t.Fatal(err)
 	}
 	pty.mu.Lock()
@@ -220,6 +221,99 @@ func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
 	}
 }
 
+func TestNativePromptIgnoresAnsweredMenusInScrollback(t *testing.T) {
+	for _, tc := range []struct{ output, kind string }{
+		// Answered, then a new prompt the UI can't fill: the terminal takes over.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nPaste your API key:\n", "terminal_required"},
+		// Answered, then progress: nothing to choose, and old words don't count.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nSelected OpenAI\nWaiting for authorization...\n", "waiting"},
+		// Typed but not yet submitted: still the prompt, so Enter stays on offer.
+		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\n", "menu"},
+		{"Select a provider\n1) Anthropic\n2) OpenAI\n(Use number keys, Enter to confirm)\n", "menu"},
+	} {
+		if kind, _, _, _ := nativePrompt(tc.output); kind != tc.kind {
+			t.Errorf("nativePrompt(%q) = %q, want %q", tc.output, kind, tc.kind)
+		}
+	}
+}
+
+func TestNativeSignInIsNotOfferedWhereItNeedsTypedInput(t *testing.T) {
+	for _, agentID := range []string{"droid", "qwen", "prime-agent"} {
+		for _, method := range loginMethods(agentID) {
+			if method.ID == "native" {
+				t.Errorf("%s offers guided native sign-in it cannot open", agentID)
+			}
+		}
+	}
+}
+
+type signInProberFake struct {
+	state domain.AgentAuthenticationState
+}
+
+func (f *signInProberFake) ResolveAgentBinary(_ context.Context, agentID string) (string, error) {
+	return "/test/bin/" + agentID, nil
+}
+func (f *signInProberFake) InvalidateAgentAuthentication(string) {}
+func (f *signInProberFake) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
+}
+
+// The hidden PTY reports no exit status: Esc, Ctrl+C or a CLI error also end
+// it. Only the harness's probe may turn an exit into a sign-in.
+func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		state     domain.AgentAuthenticationState
+		want      string
+		claimKept bool
+	}{
+		{"authorized", domain.AgentAuthenticationAuthorized, "succeeded", false},
+		{"signed out", domain.AgentAuthenticationUnauthorized, "failed", true},
+		{"inconclusive", domain.AgentAuthenticationUnknown, "succeeded", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GEMINI_API_KEY", "")
+			t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+			dataDir := t.TempDir()
+			if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+				t.Fatal(err)
+			}
+			if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+				t.Fatal(err)
+			}
+			pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+			svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: tc.state}, pty, dataDir)
+			t.Cleanup(svc.Close)
+			started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pty.mu.Lock()
+			pty.alive = false
+			pty.mu.Unlock()
+			var current LoginSnapshot
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if current, err = svc.Login(t.Context(), "gemini", started.ID); err != nil {
+					t.Fatal(err)
+				}
+				if current.Status != "running" {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if current.Status != tc.want {
+				t.Fatalf("status=%q, want %q", current.Status, tc.want)
+			}
+			_, withhold, err := providerkeys.ForSession(dataDir, "gemini")
+			if err != nil || (len(withhold) == 0) != tc.claimKept {
+				t.Fatalf("claim kept=%v, want %v (err %v)", len(withhold) == 0, tc.claimKept, err)
+			}
+		})
+	}
+}
+
 func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 	pty := &guidedTerminalFake{output: "Select a provider\n1) Anthropic\n2) OpenAI\n"}
 	svc := New(foundExecutable("goose"), pty)
@@ -243,13 +337,18 @@ func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 	if current.NativePrompt != "menu" || !reflect.DeepEqual(current.NativeOptions, []string{"Anthropic", "OpenAI"}) {
 		t.Fatalf("snapshot=%+v", current)
 	}
-	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "next"); err == nil {
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "next", ""); err == nil {
 		t.Fatal("accepted navigation on a numbered menu")
 	}
-	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "3"); err == nil {
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "3", ""); err == nil {
 		t.Fatal("accepted a digit outside the recognized options")
 	}
-	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2"); err != nil {
+	// A choice made on a menu that has since changed is refused.
+	var apiErr *apierr.Error
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "Anthropic"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_MENU_CHANGED" {
+		t.Fatalf("stale choice err=%v", err)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "OpenAI"); err != nil {
 		t.Fatal(err)
 	}
 	// A CLI that reads a line needs Enter after the digit.
@@ -260,7 +359,7 @@ func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "select"); err != nil {
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "select", ""); err != nil {
 		t.Fatalf("Enter on a numbered menu: %v", err)
 	}
 	pty.mu.Lock()

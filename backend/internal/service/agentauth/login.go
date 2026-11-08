@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -89,7 +90,10 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 	case "kimi":
 		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
 	default:
-		if plan, ok := planByAgentID[agentID]; ok && len(plan.command) > 0 && plan.LaunchMode == LaunchTerminal {
+		// A plan whose login screen opens only when the user types terminalInput
+		// (Droid, Qwen, Prime Agent) has no reviewed way to reach it in a hidden
+		// PTY: those keep the visible terminal login.
+		if plan, ok := planByAgentID[agentID]; ok && len(plan.command) > 0 && plan.LaunchMode == LaunchTerminal && (plan.terminalInput == "" || plan.initialInput != "") {
 			return []LoginMethod{{"native", "Native sign-in", false}}
 		}
 		return nil
@@ -143,11 +147,14 @@ type LoginOptions struct {
 	// Model is required by Qwen, Continue, and OpenHands provider-key setup.
 	Model string
 	// Device also publishes the key to the OS user environment, for programs
-	// started outside AO. AO-launched sessions receive it either way.
-	Device bool
+	// started outside AO. AO-launched sessions receive it either way. Nil
+	// keeps the key's current setting.
+	Device *bool
 	// Provider is the catalog provider a provider_key login configures.
 	Provider string
 }
+
+func (o LoginOptions) sharesDevice() bool { return o.Device != nil && *o.Device }
 
 // StartLoginWithOptions is StartLogin with a model and device setting for
 // provider-key methods. An empty secret reuses the key AO already saved.
@@ -156,10 +163,10 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	if (method == catalogKeyMethod) != (opts.Provider != "") {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "Choose a provider for a provider key, and only for a provider key.", nil)
 	}
-	if method == catalogKeyMethod && (model != "" || opts.Device) {
+	if method == catalogKeyMethod && (model != "" || opts.sharesDevice()) {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "A provider key saved in the harness's own store takes no model or device setting.", nil)
 	}
-	if _, ok := environmentMethod(agentID, method); !ok && opts.Device {
+	if _, ok := environmentMethod(agentID, method); !ok && opts.sharesDevice() {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_DEVICE_INVALID", "Only provider keys can be added to the device environment.", nil)
 	}
 	if name, ok := environmentMethod(agentID, method); ok && strings.TrimSpace(secret) == "" {
@@ -246,7 +253,8 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
 		}
 	}
-	cmd.Env = append(os.Environ(), "NO_COLOR=1", "TERM=dumb")
+	// AO's copy of a key that would override this sign-in stays out of it.
+	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), providerkeys.WithheldForSignIn(agentID))
 	if agentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
@@ -451,15 +459,25 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				s.mu.Unlock()
 				continue
 			}
-			// As for CLI logins, the finished sign-in replaces an AO-saved key
-			// that would override it, before "succeeded" is visible. The
-			// agent ID never changes after the operation is created.
-			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			_, _ = s.releaseSubscriptionKey(releaseCtx, op.snapshot.AgentID)
-			releaseCancel()
+			// The PTY reports no exit status, and the user may have pressed Esc
+			// or the CLI may have failed, so the harness's own probe decides.
+			// A confirmed sign-in replaces an AO-saved key that would override
+			// it, as for CLI logins, before "succeeded" is visible; a signed-out
+			// harness is reported failed and keeps the key. An inconclusive
+			// probe keeps the key too and leaves the verdict to the panel's own
+			// check. The agent ID never changes after the operation is created.
+			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			state := s.nativeSignInState(probeCtx, op.snapshot.AgentID)
+			if state == domain.AgentAuthenticationAuthorized {
+				_, _ = s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
+			}
+			probeCancel()
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "succeeded"
+				if state == domain.AgentAuthenticationUnauthorized {
+					op.snapshot.Status = "failed"
+				}
 			}
 			op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
 			s.mu.Unlock()
@@ -487,12 +505,45 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 	}
 }
 
+// signInProber runs a harness's own authentication probe. AO's agent service,
+// the daemon's binary resolver, provides it.
+type signInProber interface {
+	InvalidateAgentAuthentication(agentID string)
+	EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error)
+}
+
+// nativeSignInState probes agentID afresh after its native sign-in exited.
+// Without a prober, or when the probe fails, the state is unknown.
+func (s *Service) nativeSignInState(ctx context.Context, agentID string) domain.AgentAuthenticationState {
+	prober, ok := s.agents.(signInProber)
+	if !ok {
+		return domain.AgentAuthenticationUnknown
+	}
+	prober.InvalidateAgentAuthentication(agentID)
+	snapshot, err := prober.EnsureAgentReadiness(ctx, agentID, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		return domain.AgentAuthenticationUnknown
+	}
+	return snapshot.Authentication.State
+}
+
 var (
 	nativeSelectedLine = regexp.MustCompile(`(?m)^\s*[>❯●◉‣▸►]\s*([^\r\n]+?)\s*$`)
 	// A cursor glyph may lead the highlighted entry of a numbered picker.
 	nativeNumberedLine     = regexp.MustCompile(`(?m)^\s*(?:[>❯●◉‣▸►]\s*)?([1-9])[.)]\s+([^\r\n]+?)\s*$`)
-	nativeInteractiveWords = regexp.MustCompile(`(?i)(select|choose|enter|password|api key|token|credential)`)
+	nativeInteractiveWords = regexp.MustCompile(`(?i)\b(select|choose|enter|password|api key|token|credential)s?\b`)
+	// What may follow a numbered menu's last entry while it is still the
+	// prompt on screen: cursor glyphs, key hints, and a final input prompt
+	// holding at most the digit typed into it.
+	nativeMenuGlyphs  = regexp.MustCompile(`^[\s>❯›»?:·•●○◉*-]*$`)
+	nativeMenuPrompt  = regexp.MustCompile(`^.{0,60}[:?>❯›]\s*[1-9]?$`)
+	nativeMenuHint    = regexp.MustCompile(`(?i)(arrow|↑|↓|enter|esc|navigate|confirm|cancel|number)`)
+	nativeSecretWords = regexp.MustCompile(`(?i)(api key|token|password|secret|credential|paste|\bcode\b)`)
 )
+
+// nativeScreenLines bounds how far above the end of the output an arrow
+// picker's highlighted entry may sit and still be on screen.
+const nativeScreenLines = 40
 
 // Only canonical menu names can cross the credential boundary. Native CLIs
 // with other prompts retain an explicit terminal fallback.
@@ -503,25 +554,80 @@ var nativeOptions = map[string]string{
 // nativePrompt reduces PTY frames to reviewed UI states. An arrow-key picker
 // reports its highlighted option; a numbered picker reports the recognized
 // choices so the UI can offer them as buttons. Anything unrecognized keeps
-// the explicit terminal fallback.
+// the explicit terminal fallback. A line-oriented CLI leaves answered menus
+// and prompts in scrollback, so only what is still the prompt counts: a menu
+// followed by later output is history, and so are words above the last lines.
 func nativePrompt(output string) (kind, selected string, options, digits []string) {
 	plain := terminalui.PlainTerminalText(output)
 	if len(plain) > 16*1024 {
 		plain = plain[len(plain)-16*1024:]
 	}
-	numbered := nativeNumberedLine.FindAllStringSubmatch(plain, -1)
-	// Scrollback can hold earlier menus: read only the latest, which starts at
-	// the last "1." entry, and keep the digit the CLI printed for each choice.
-	for i := len(numbered) - 1; i >= 0; i-- {
-		if numbered[i][1] == "1" {
-			numbered = numbered[i:]
+	var lines []string
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, strings.TrimRight(line, " \t\r"))
+		}
+	}
+	// A numbered picker with at least two entries is drivable from the UI only
+	// when every choice is a reviewed label; otherwise hand it to the terminal.
+	if options, digits, entries := currentNumberedMenu(lines); entries > 1 {
+		if len(options) == entries {
+			return "menu", "", options, digits
+		}
+		return "terminal_required", "", nil, nil
+	}
+	screen := lines[max(0, len(lines)-nativeScreenLines):]
+	for i := len(screen) - 1; i >= 0; i-- {
+		match := nativeSelectedLine.FindStringSubmatch(screen[i])
+		if match == nil || nativeNumberedLine.MatchString(screen[i]) {
+			continue // an entry of a numbered menu already answered
+		}
+		label := strings.ToLower(strings.TrimSpace(match[1]))
+		if strings.Trim(label, "0123456789") == "" {
+			continue // the digit typed into an answered numbered menu
+		}
+		if canonical, ok := nativeOptions[label]; ok {
+			return "menu", canonical, nil, nil
+		}
+		return "terminal_required", "", nil, nil
+	}
+	if nativeInteractiveWords.MatchString(strings.Join(lines[max(0, len(lines)-2):], "\n")) {
+		return "terminal_required", "", nil, nil
+	}
+	return "waiting", "", nil, nil
+}
+
+// currentNumberedMenu reads the numbered menu that is still the prompt, if
+// any: the latest one, which starts at its last "1." entry, with nothing
+// after its last entry but a menu's own tail. It keeps the digit the CLI
+// printed for each recognized choice and counts every distinct entry.
+func currentNumberedMenu(lines []string) (options, digits []string, entries int) {
+	last := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if nativeNumberedLine.MatchString(lines[i]) {
+			last = i
+			break
+		}
+	}
+	if last < 0 {
+		return nil, nil, 0
+	}
+	for i, line := range lines[last+1:] {
+		if !nativeMenuTail(line, last+1+i == len(lines)-1) {
+			return nil, nil, 0
+		}
+	}
+	first := 0
+	for i := last; i >= 0; i-- {
+		if match := nativeNumberedLine.FindStringSubmatch(lines[i]); match != nil && match[1] == "1" {
+			first = i
 			break
 		}
 	}
 	seen := map[string]bool{}
-	entries := 0
-	for _, match := range numbered {
-		if seen[match[1]] {
+	for _, line := range lines[first : last+1] {
+		match := nativeNumberedLine.FindStringSubmatch(line)
+		if match == nil || seen[match[1]] {
 			continue
 		}
 		seen[match[1]] = true
@@ -531,31 +637,32 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 			digits = append(digits, match[1])
 		}
 	}
-	// A numbered picker with at least two entries is drivable from the UI only
-	// when every choice is a reviewed label; otherwise hand it to the terminal.
-	if entries > 1 {
-		if len(options) == entries {
-			return "menu", "", options, digits
-		}
-		return "terminal_required", "", nil, nil
+	return options, digits, entries
+}
+
+// nativeMenuTail reports whether line may follow a menu that is still on
+// screen. Only the final line may be an input prompt, and it may hold the
+// digit typed into it before Enter; a line asking for a secret never is.
+func nativeMenuTail(line string, final bool) bool {
+	text := strings.TrimSpace(line)
+	switch {
+	case nativeSecretWords.MatchString(text):
+		return false
+	case nativeMenuGlyphs.MatchString(text):
+		return true
+	case final && nativeMenuPrompt.MatchString(text):
+		return true
 	}
-	if matches := nativeSelectedLine.FindAllStringSubmatch(plain, -1); len(matches) > 0 {
-		label := strings.ToLower(strings.TrimSpace(matches[len(matches)-1][1]))
-		if canonical, ok := nativeOptions[label]; ok {
-			return "menu", canonical, nil, nil
-		}
-		return "terminal_required", "", nil, nil
-	}
-	if nativeInteractiveWords.MatchString(plain) {
-		return "terminal_required", "", nil, nil
-	}
-	return "waiting", "", nil, nil
+	return len(text) <= 80 && !strings.ContainsAny(text, "0123456789") && nativeMenuHint.MatchString(text)
 }
 
 // ActOnLogin sends a reviewed menu choice to a running native login. For a
 // numbered picker a digit names the Nth listed option, sent as the digit the
-// CLI printed for it; Select sends Enter. The PTY write runs outside s.mu.
-func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action string) (LoginSnapshot, error) {
+// CLI printed for it; Select sends Enter. option, when given, is the label the
+// user chose; a digit is refused when the menu now offers something else
+// there, so a menu redrawn between render and click never takes the wrong
+// choice. The PTY write runs outside s.mu.
+func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option string) (LoginSnapshot, error) {
 	s.mu.Lock()
 	op := s.operations[id]
 	if op == nil || op.snapshot.AgentID != agentID {
@@ -573,6 +680,10 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action string) (L
 		switch {
 		case action == "select":
 		case len(action) == 1 && action >= "1" && action <= "9" && int(action[0]-'0') <= len(op.nativeDigits):
+			if option != "" && op.snapshot.NativeOptions[action[0]-'1'] != option {
+				s.mu.Unlock()
+				return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_MENU_CHANGED", "The sign-in menu changed. Choose again.", nil)
+			}
 			key = op.nativeDigits[action[0]-'1']
 		default:
 			s.mu.Unlock()

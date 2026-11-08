@@ -8,6 +8,10 @@ import (
 
 var publishProviderKey = providerkeys.Publish
 
+// deviceSupported reports that publishProviderKey can reach programs started
+// outside AO on this platform.
+var deviceSupported = providerkeys.DeviceSupported
+
 // Environment methods are deliberately per harness. A key is offered only
 // where that CLI has a documented environment credential source. The same
 // provider key is device-wide for AO-launched sessions, regardless of project.

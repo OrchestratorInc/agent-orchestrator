@@ -1948,7 +1948,7 @@ func agentOperations() []operation {
 			summary:    "Send a fixed action to a recognized native login menu",
 			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
 			reqBody:    controllers.AgentLoginActionRequest{},
-			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",

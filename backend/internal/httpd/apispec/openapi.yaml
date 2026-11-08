@@ -263,6 +263,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Send a fixed action to a recognized native login menu
       tags:
       - agents
@@ -14304,6 +14310,9 @@ components:
           - "8"
           - "9"
           type: string
+        option:
+          maxLength: 256
+          type: string
       required:
       - action
       type: object
@@ -19683,6 +19692,8 @@ components:
           type: boolean
         device:
           type: boolean
+        deviceAvailable:
+          type: boolean
         hint:
           type: string
         label:
@@ -19694,6 +19705,7 @@ components:
       - label
       - configured
       - device
+      - deviceAvailable
       - checkable
       - agents
       type: object
@@ -22215,7 +22227,9 @@ components:
     StartAgentUILoginRequest:
       properties:
         device:
-          type: boolean
+          type:
+          - "null"
+          - boolean
         method:
           type: string
         model:

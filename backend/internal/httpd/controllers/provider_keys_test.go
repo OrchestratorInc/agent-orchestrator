@@ -75,7 +75,12 @@ func TestAgentUILoginPassesDeviceChoice(t *testing.T) {
 	svc := &fakeProviderKeyService{}
 	svc.uiResult = agentauth.LoginSnapshot{ID: "login-1", AgentID: "goose", Method: "env_OPENAI_API_KEY", Status: "succeeded"}
 	_, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/goose/auth/operations", `{"method":"env_OPENAI_API_KEY","secret":"test-secret","device":true}`)
-	if status != http.StatusAccepted || !svc.options.Device || svc.uiSecret != "test-secret" {
+	if status != http.StatusAccepted || svc.options.Device == nil || !*svc.options.Device || svc.uiSecret != "test-secret" {
 		t.Fatalf("status=%d options=%+v", status, svc.options)
+	}
+	// An explicit false still reaches the service, so it can withdraw the key.
+	_, status, _ = doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/goose/auth/operations", `{"method":"env_OPENAI_API_KEY","secret":"test-secret","device":false}`)
+	if status != http.StatusAccepted || svc.options.Device == nil || *svc.options.Device {
+		t.Fatalf("explicit false: status=%d options=%+v", status, svc.options)
 	}
 }

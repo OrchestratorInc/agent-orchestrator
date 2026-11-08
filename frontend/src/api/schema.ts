@@ -4836,6 +4836,7 @@ export interface components {
         AgentLoginActionRequest: {
             /** @enum {string} */
             action: "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+            option?: string;
         };
         AgentLoginMethod: {
             id: string;
@@ -6856,6 +6857,7 @@ export interface components {
             checkable: boolean;
             configured: boolean;
             device: boolean;
+            deviceAvailable: boolean;
             hint?: string;
             label: string;
             name: string;
@@ -7862,7 +7864,7 @@ export interface components {
             operation?: "install" | "reinstall" | "update";
         };
         StartAgentUILoginRequest: {
-            device?: boolean;
+            device?: null | boolean;
             method: string;
             model?: string;
             provider?: string;
@@ -8749,6 +8751,15 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

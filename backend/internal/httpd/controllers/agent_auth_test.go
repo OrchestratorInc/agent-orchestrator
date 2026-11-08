@@ -53,7 +53,7 @@ func (f *fakeAgentAuthService) CancelLogin(ctx context.Context, agentID, id stri
 	return f.Login(ctx, agentID, id)
 }
 
-func (f *fakeAgentAuthService) ActOnLogin(ctx context.Context, agentID, id, action string) (agentauth.LoginSnapshot, error) {
+func (f *fakeAgentAuthService) ActOnLogin(ctx context.Context, agentID, id, action, _ string) (agentauth.LoginSnapshot, error) {
 	f.uiMethod = action
 	return f.Login(ctx, agentID, id)
 }

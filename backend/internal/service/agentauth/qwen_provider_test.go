@@ -21,7 +21,7 @@ func TestQwenProviderLoginSelectsModelAndPreservesSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	previous := publishProviderKey
-	publishProviderKey = func(_ context.Context, name, value string) error {
+	publishProviderKey = func(_ context.Context, name, value, _ string) error {
 		if name != "OPENAI_API_KEY" || value != "test-secret" {
 			t.Fatal("unexpected device publication")
 		}

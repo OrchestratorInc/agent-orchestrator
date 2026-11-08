@@ -9,7 +9,11 @@ import type { IpcMain, WebContents } from "electron";
 export type AgentLoginRequest =
 	| { action: "start"; agentId: string; method: string; secret?: string; model?: string; device?: boolean; provider?: string }
 	| { action: "get" | "cancel"; agentId: string; operationId: string }
-	| { action: "code"; agentId: string; operationId: string; code: string };
+	| { action: "code"; agentId: string; operationId: string; code: string }
+	| { action: "act"; agentId: string; operationId: string; menuAction: AgentLoginMenuAction; option?: string };
+
+export const AGENT_LOGIN_MENU_ACTIONS = ["previous", "next", "select", "1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
+export type AgentLoginMenuAction = typeof AGENT_LOGIN_MENU_ACTIONS[number];
 
 export type AgentLoginResponse = { status: number; body: unknown };
 
@@ -27,6 +31,7 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const CATALOG_PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const MAX_SECRET_LENGTH = 16 * 1024;
 const MAX_CODE_LENGTH = 4096;
+const MAX_OPTION_LENGTH = 256;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 function text(value: unknown, max: number): value is string {
@@ -42,13 +47,20 @@ export function parseAgentLoginRequest(input: unknown): AgentLoginRequest {
 		if (value.model !== undefined && (typeof value.model !== "string" || !MODEL_ID.test(value.model))) throw new Error("Invalid model.");
 		if (value.device !== undefined && typeof value.device !== "boolean") throw new Error("Invalid device setting.");
 		if (value.provider !== undefined && (typeof value.provider !== "string" || !CATALOG_PROVIDER_ID.test(value.provider))) throw new Error("Invalid provider.");
-		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(value.device ? { device: true } : {}), ...(value.provider ? { provider: value.provider } : {}) };
+		// An omitted device setting keeps the key's current one; false withdraws it.
+		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(typeof value.device === "boolean" ? { device: value.device } : {}), ...(value.provider ? { provider: value.provider } : {}) };
 	}
 	if (typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)) throw new Error("Invalid sign-in operation.");
 	if (value.action === "get" || value.action === "cancel") return { action: value.action, agentId: value.agentId, operationId: value.operationId };
 	if (value.action === "code") {
 		if (!text(value.code, MAX_CODE_LENGTH)) throw new Error("Invalid sign-in code.");
 		return { action: "code", agentId: value.agentId, operationId: value.operationId, code: value.code };
+	}
+	if (value.action === "act") {
+		const menuAction = AGENT_LOGIN_MENU_ACTIONS.find((candidate) => candidate === value.menuAction);
+		if (!menuAction) throw new Error("Invalid sign-in menu action.");
+		if (value.option !== undefined && !text(value.option, MAX_OPTION_LENGTH)) throw new Error("Invalid sign-in menu option.");
+		return { action: "act", agentId: value.agentId, operationId: value.operationId, menuAction, ...(value.option ? { option: value.option } : {}) };
 	}
 	throw new Error("Invalid sign-in action.");
 }
@@ -61,7 +73,7 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 	let method = "POST";
 	let body: unknown;
 	if (request.action === "start") {
-		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}), ...(request.device ? { device: true } : {}), ...(request.provider ? { provider: request.provider } : {}) };
+		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}), ...(request.device !== undefined ? { device: request.device } : {}), ...(request.provider ? { provider: request.provider } : {}) };
 	} else {
 		url = `${operations}/${encodeURIComponent(request.operationId)}`;
 		if (request.action === "get") method = "GET";
@@ -69,6 +81,9 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 		else if (request.action === "code") {
 			url += "/code";
 			body = { code: request.code };
+		} else if (request.action === "act") {
+			url += "/actions";
+			body = { action: request.menuAction, ...(request.option ? { option: request.option } : {}) };
 		}
 	}
 	let response: Response;

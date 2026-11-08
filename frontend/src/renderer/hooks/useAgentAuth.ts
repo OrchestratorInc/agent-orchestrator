@@ -5,7 +5,7 @@ import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "../lib/api-clien
 import { clientForSessionHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import { LOCAL_HOST } from "../lib/hosts";
-import type { AgentLoginRequest } from "../../main/agent-login-ipc";
+import type { AgentLoginMenuAction, AgentLoginRequest } from "../../main/agent-login-ipc";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "./useShellTerminals";
 
 export type AgentAuthPlan = components["schemas"]["AgentAuthPlan"];
@@ -29,9 +29,10 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 
 // Credentials stay out of React Query's mutation cache and terminal replay.
 // An empty secret on a provider-key method reuses the key AO already saved;
-// device also publishes the key to the OS user environment.
+// device publishes the key to the OS user environment or withdraws it; left
+// undefined, the key keeps its current setting.
 export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string, device?: boolean): Promise<AgentLoginSnapshot> {
-	return startLogin(agentId, method, hostId, { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device ? { device: true } : {}) });
+	return startLogin(agentId, method, hostId, { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device !== undefined ? { device } : {}) });
 }
 
 /** Saves a key for a provider picked from the harness's own catalog, in that harness's own store. */
@@ -63,12 +64,17 @@ export async function getAgentUILogin(agentId: string, operationId: string, host
 	return data;
 }
 
-export type AgentLoginMenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+export type { AgentLoginMenuAction };
 
-export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string): Promise<AgentLoginSnapshot> {
-	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
-		params: { path: { agent: agentId, operationId } }, body: { action },
-	});
+/**
+ * Answers the native sign-in menu. option is the label the user chose; the
+ * daemon rejects the action when the menu on screen no longer offers it there.
+ */
+export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string, option?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "act", agentId, operationId, menuAction: action, ...(option ? { option } : {}) })
+		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
+			params: { path: { agent: agentId, operationId } }, body: { action, ...(option ? { option } : {}) },
+		});
 	if (error || !data) throw new Error(apiErrorMessage(error, "Could not control sign-in."));
 	return data;
 }

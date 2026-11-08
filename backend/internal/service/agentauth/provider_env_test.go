@@ -48,7 +48,7 @@ func TestEnvironmentMethodIsHarnessSpecific(t *testing.T) {
 
 func TestEnvironmentLoginPersistsWithoutStartingCLI(t *testing.T) {
 	previous := publishProviderKey
-	publishProviderKey = func(_ context.Context, name, _ string) error {
+	publishProviderKey = func(_ context.Context, name, _, _ string) error {
 		t.Fatalf("published %s to the device environment without the user choosing it", name)
 		return nil
 	}
@@ -74,11 +74,11 @@ func TestEnvironmentLoginPersistsWithoutStartingCLI(t *testing.T) {
 
 func TestEnvironmentLoginReportsDevicePublicationFailure(t *testing.T) {
 	previous := publishProviderKey
-	publishProviderKey = func(context.Context, string, string) error { return errors.New("device unavailable") }
+	publishProviderKey = func(context.Context, string, string, string) error { return errors.New("device unavailable") }
 	t.Cleanup(func() { publishProviderKey = previous })
 	dir := t.TempDir()
 	svc := NewWithAgentResolver(foundExecutable("goose"), nil, nil, dir)
-	if _, err := svc.StartLoginWithOptions(t.Context(), "goose", "env_OPENAI_API_KEY", "test-secret", LoginOptions{Device: true}); err == nil {
+	if _, err := svc.StartLoginWithOptions(t.Context(), "goose", "env_OPENAI_API_KEY", "test-secret", LoginOptions{Device: new(true)}); err == nil {
 		t.Fatal("reported success without publishing to the device environment")
 	}
 	keys, err := providerkeys.Load(dir)
@@ -88,9 +88,10 @@ func TestEnvironmentLoginReportsDevicePublicationFailure(t *testing.T) {
 }
 
 func TestOpenHandsProviderPublishesKeyAndModel(t *testing.T) {
+	allowDeviceEnvironment(t)
 	previous := publishProviderKey
 	published := map[string]string{}
-	publishProviderKey = func(_ context.Context, name, value string) error {
+	publishProviderKey = func(_ context.Context, name, value, _ string) error {
 		published[name] = value
 		return nil
 	}
@@ -102,7 +103,7 @@ func TestOpenHandsProviderPublishesKeyAndModel(t *testing.T) {
 	if _, err := svc.StartLogin(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret"); err == nil {
 		t.Fatal("accepted OpenHands key without model")
 	}
-	result, err := svc.StartLoginWithOptions(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret", LoginOptions{Model: "anthropic/claude-sonnet-4-5", Device: true})
+	result, err := svc.StartLoginWithOptions(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret", LoginOptions{Model: "anthropic/claude-sonnet-4-5", Device: new(true)})
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("OpenHands login = %+v, %v", result, err)
 	}

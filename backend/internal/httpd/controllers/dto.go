@@ -157,8 +157,9 @@ type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
 	Model  string `json:"model,omitempty"`
-	// Device also publishes a provider key to the OS user environment.
-	Device bool `json:"device,omitempty"`
+	// Device also publishes a provider key to the OS user environment; when
+	// omitted the key keeps its current setting.
+	Device *bool `json:"device,omitempty"`
 	// Provider is the catalog provider a provider_key login configures.
 	Provider string `json:"provider,omitempty"`
 }
@@ -206,6 +207,9 @@ type CheckProviderKeyRequest struct {
 // bytes or credentials.
 type AgentLoginActionRequest struct {
 	Action string `json:"action" enum:"previous,next,select,1,2,3,4,5,6,7,8,9"`
+	// Option is the label the user chose for a numbered action; the daemon
+	// refuses the action when the menu now offers something else there.
+	Option string `json:"option,omitempty" maxLength:"256"`
 }
 
 // SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
