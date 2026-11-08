@@ -37,6 +37,9 @@ const buttonVariants = cva(
 				primary: "button-raised button-emphasis [--button-color:var(--primary)] text-primary-foreground",
 				/** Brand-blue fill for a decision the turn is waiting on (approve, open link). */
 				accent: "button-raised button-emphasis [--button-color:var(--color-brand-logo)] text-logo-accent-foreground",
+				/** Brand-blue tint for a nudge that waits on nobody (the sidebar update pill). Flat: no bevel. */
+				"accent-soft":
+					"border-transparent bg-logo-accent/16 font-medium text-logo-accent hover:bg-logo-accent/24 active:bg-logo-accent/32 focus-visible:ring-2 focus-visible:ring-ring",
 				/** Quiet filled surface for secondary actions. */
 				secondary:
 					"button-raised [--button-color:var(--secondary)] text-secondary-foreground",
