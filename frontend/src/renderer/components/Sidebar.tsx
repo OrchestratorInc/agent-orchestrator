@@ -157,7 +157,6 @@ import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
-import { importableProject } from "../lib/session-import";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -1820,8 +1819,6 @@ const ProjectItem = memo(function ProjectItem({
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
 	const canPin = !isStandalone && !workspace.hostId;
-	const canImport = importableProject(workspace);
-	const openProjectImport = useSessionImportStore((state) => state.openProjectImport);
 	const isPinned = useSidebarOrderStore((state) => canPin && state.pinnedProjectIds.includes(workspace.id));
 	const setProjectPinned = useSidebarOrderStore((state) => state.setProjectPinned);
 	const openPullRequestCount = new Set(
@@ -2087,12 +2084,6 @@ const ProjectItem = memo(function ProjectItem({
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
-												{canImport ? (
-													<DropdownMenuItem onSelect={() => openProjectImport(workspace.id)}>
-														<Download aria-hidden="true" />
-														{t("sessionImport.menuItem")}
-													</DropdownMenuItem>
-												) : null}
 												{canPin ? (
 													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
 														{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
@@ -2233,12 +2224,6 @@ const ProjectItem = memo(function ProjectItem({
 					<ContextMenuItem onSelect={() => selection.goProject(workspace.id)}>
 						<LayoutGrid aria-hidden="true" />
 						{t("shell.openDashboard")}
-					</ContextMenuItem>
-				) : null}
-				{canImport ? (
-					<ContextMenuItem onSelect={() => openProjectImport(workspace.id)}>
-						<Download aria-hidden="true" />
-						{t("sessionImport.menuItem")}
 					</ContextMenuItem>
 				) : null}
 				{/* A remote host's path names a folder on that machine, not this one. */}
