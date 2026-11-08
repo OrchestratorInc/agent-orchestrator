@@ -1679,6 +1679,21 @@ SELECT * FROM conversation_activities
 WHERE conversation_id = ? AND provider_item_id = ?
 LIMIT 1;
 
+-- A question reaches the store with only its request id, and the chat host
+-- replays pending requests after a reconnect. Matching on the request id is
+-- what keeps that replay on the row AO already stored: the
+-- (conversation_id, request_id) index forbids a second row, and failing the
+-- insert stops the whole projection with the turn still running (#7944).
+-- name: SelectConversationActivityByRequest :one
+SELECT * FROM conversation_activities
+WHERE conversation_id = ? AND request_id = ?
+LIMIT 1;
+
+-- name: SettleConversationActivityByRequest :exec
+UPDATE conversation_activities
+SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
+WHERE conversation_id = ? AND request_id = ? AND status <> 'resolved';
+
 -- name: SelectConversationContextResetSequence :one
 SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) AS sequence
 FROM conversation_activities

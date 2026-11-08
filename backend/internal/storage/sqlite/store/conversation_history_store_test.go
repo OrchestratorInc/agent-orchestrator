@@ -1997,3 +1997,68 @@ func TestAppendUserMessagePersistsContinuation(t *testing.T) {
 		t.Fatalf("continuation by message = %v, want only the continue marked", continuation)
 	}
 }
+
+// The chat host replays a pending question after a reconnect, and a question
+// reaches the store with only its request id. The replay must land on the row
+// AO already stored rather than tripping the (conversation_id, request_id)
+// index and stopping the whole projection with the turn still running (#7944).
+func TestUpsertActivityReplayRefreshesTheStoredQuestionInsteadOfColliding(t *testing.T) {
+	s, _, conversation := conversationFixture(t)
+	ctx := context.Background()
+	activity := domain.ConversationActivity{
+		ID: "question", Kind: domain.ActivityKindUserInput, Status: domain.ActivityStatusPending,
+		Summary: "Questions", RequestID: "replayed-request",
+		Detail: []byte(`{"inputMode":"form","message":"Questions"}`),
+	}
+	if err := s.UpsertActivity(ctx, conversation, "", activity, histClock); err != nil {
+		t.Fatalf("UpsertActivity: %v", err)
+	}
+
+	replay := activity
+	replay.ID = "question-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", replay, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("replayed UpsertActivity: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	rows, status := questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusPending {
+		t.Fatalf("after replay: rows=%d status=%q, want one pending row", rows, status)
+	}
+
+	// A question the user answered is not reopened by a late replay.
+	if err := s.ResolveApproval(ctx, conversation, "replayed-request",
+		`{"resolvedBy":"user"}`, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ResolveApproval: %v", err)
+	}
+	late := activity
+	late.ID = "question-late-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", late, histClock.Add(3*time.Minute)); err != nil {
+		t.Fatalf("late replayed UpsertActivity: %v", err)
+	}
+	snapshot, err = s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot after late replay: %v", err)
+	}
+	rows, status = questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusResolved {
+		t.Fatalf("after late replay: rows=%d status=%q, want the one resolved row kept", rows, status)
+	}
+}
+
+func questionRowsByRequest(
+	snapshot store.ConversationSnapshot, requestID string,
+) (int, domain.ActivityStatus) {
+	rows := 0
+	status := domain.ActivityStatus("")
+	for _, activity := range snapshot.Activities {
+		if activity.RequestID == requestID {
+			rows++
+			status = activity.Status
+		}
+	}
+	return rows, status
+}
