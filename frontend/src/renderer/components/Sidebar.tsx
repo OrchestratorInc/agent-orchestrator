@@ -1366,19 +1366,6 @@ export function Sidebar({
 					/>
 					<CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
-					<Pressable
-						aria-label={t("settings.connectMobile")}
-						className={FOOTER_NAV_BUTTON_CLASS}
-						onClick={() => selection.goConnectMobile()}
-						tabIndex={isCollapsed ? -1 : 0}
-						type="button"
-					>
-						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
-							<Smartphone aria-hidden="true" />
-							<span className="tracking-tight">{t("settings.connectMobile")}</span>
-						</span>
-					</Pressable>
 					<div className="flex w-full items-center gap-1">
 						<Pressable
 							aria-label={t("shell.settings")}
@@ -1393,6 +1380,27 @@ export function Sidebar({
 								<span className="tracking-tight">{t("shell.settings")}</span>
 							</span>
 						</Pressable>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									aria-label={t("settings.connectMobile")}
+									// Same chrome as the Stay Awake button beside it.
+									className={cn(
+										NAV_ROW_HIGHLIGHT_HOST_CLASS,
+										"inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground",
+									)}
+									onClick={() => selection.goConnectMobile()}
+									tabIndex={isCollapsed ? -1 : 0}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-md">
+										<Smartphone aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="top">{t("settings.connectMobile")}</TooltipContent>
+						</Tooltip>
 						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
 					</div>
 				</div>
