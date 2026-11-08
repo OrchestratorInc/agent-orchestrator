@@ -247,6 +247,7 @@ func Run(buildVersion string) error {
 	defer sentryobs.SetPolicyCheck(nil)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
+	recordSlowWriteLocks(store, telemetrySink)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
