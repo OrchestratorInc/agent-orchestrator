@@ -1205,7 +1205,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
-	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
 			tone: "now",
