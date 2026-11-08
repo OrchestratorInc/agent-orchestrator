@@ -1,5 +1,4 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -584,7 +583,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -1658,14 +1657,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// only preview work arriving afterward may reveal Browser automatically.
 	useLayoutEffect(() => {
 		if (!session) return;
-		if (browserOnly) {
-			const current = useUiStore.getState().inspectorSessions[uiSessionId];
-			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
-			return;
-		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+	}, [hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession]);
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
@@ -2825,7 +2818,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
-							browserOnly={browserOnly}
+							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
 							filesView={
@@ -2868,11 +2861,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<TopbarButton
-							aria-label={
-								browserOnly
-									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-							}
+							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
 								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
@@ -2881,26 +2870,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							style={noDragStyle}
 							variant="icon"
 						>
-							{browserOnly ? (
-								<span className="relative inline-flex">
-									<BrowserIcon aria-hidden="true" className="size-icon-md" />
-									{!isInspectorOpen && browserUnseen ? (
-										<span
-											aria-hidden="true"
-											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-											data-testid="orchestrator-browser-unseen-indicator"
-										/>
-									) : null}
-								</span>
-							) : (
+							<span className="relative inline-flex">
 								<PanelRight className="size-icon-md" aria-hidden="true" />
-							)}
+								{browserOnly && !isInspectorOpen && browserUnseen ? (
+									<span
+										aria-hidden="true"
+										className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+										data-testid="orchestrator-browser-unseen-indicator"
+									/>
+								) : null}
+							</span>
 						</TopbarButton>
 					</TooltipTrigger>
-					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
-						{browserOnly
-							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
+					<TooltipContent shortcut="toggle-inspector" side="bottom">
+						{isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>

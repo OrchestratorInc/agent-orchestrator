@@ -383,20 +383,19 @@ afterEach(() => {
 });
 
 describe("SessionInspector tabs", () => {
-  it("shows only Browser content without navigation tabs for an orchestrator", () => {
-    renderWithQuery(<SessionInspector browserOnly session={session([], { kind: "orchestrator" })} />);
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(screen.getByText("Browser")).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Summary" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+  it("gives an orchestrator Summary and Browser, with its account but no branch", () => {
+    renderWithQuery(<SessionInspector orchestrator session={session([], { kind: "orchestrator" })} />);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Browser"]);
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-branch")).not.toBeInTheDocument();
   });
 
-  it("keeps the same Browser-only inspector for a remote orchestrator", () => {
-    renderWithQuery(<SessionInspector browserOnly hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  it("gives a remote orchestrator the same tabs without a local account", () => {
+    renderWithQuery(<SessionInspector orchestrator hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
+    expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+    expect(screen.queryByTestId("session-account-summary")).not.toBeInTheDocument();
   });
 
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
