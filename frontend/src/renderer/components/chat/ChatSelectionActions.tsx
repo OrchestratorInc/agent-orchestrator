@@ -6,10 +6,10 @@ import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
 import {
-	selectionActionClass,
 	selectionRangesEqual,
 	selectionToolbarClass,
 } from "../../lib/selection-toolbar";
+import { Button } from "../ui/button";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 
 /** Geometry state stays here: scrolling must not render the conversation. */
@@ -128,24 +128,26 @@ export function ChatSelectionActions({
 			style={{ left: position?.left ?? 0, top: position?.top ?? 0 }}
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<button
+			<Button
 				type="button"
+				variant="quiet"
+				size="sm"
 				title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
-				className={selectionActionClass}
 				disabled={pending}
 				onClick={() => void activate(false)}
 			>
 				{t("sideChat.addToChat")}
-			</button>
+			</Button>
 			{onSide || checkingSide ? (
-				<button
+				<Button
 					type="button"
-					className={selectionActionClass}
+					variant="quiet"
+					size="sm"
 					disabled={pending || checkingSide}
 					onClick={() => void activate(true)}
 				>
 					{t("sideChat.addToSideChat")}
-				</button>
+				</Button>
 			) : null}
 			{error ? (
 				<span

@@ -17,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { Trans, useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
+import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
 	cacheAgentReadiness,
@@ -48,7 +49,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
-import { GitHubIcon } from "../CreateProjectFlow";
+import { GitHubIcon } from "../GitHubIcon";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -713,7 +714,7 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 // ── 1. Sign in (optional) ───────────────────────────────────────────────────
 
 /** Why an account is worth it: what only an account unlocks. */
-const SIGN_IN_PERKS: Array<{ icon: LucideIcon; title: string; detail: string }> = [
+const SIGN_IN_PERKS: Array<{ icon: LucideIcon; title: MessageKey; detail: MessageKey }> = [
 	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail" },
 	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
 ];

@@ -2,9 +2,11 @@ import { type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
+import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { OrchestratorIcon } from "./icons";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ProjectBoardActions({ actions, placement, quiet = false, cloud = false, style }: {
@@ -15,6 +17,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	style?: CSSProperties;
 }) {
 	const { t } = useTranslation();
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
 		openNewTask, openOrchestrator } = actions;
 	const header = placement === "header";
@@ -34,9 +37,15 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
-						onClick={() => openOrchestrator()}
-						// The header never demotes Orchestrator; it is the region's one primary.
-						variant={header || !quiet ? "primary" : "secondary"}
+						onClick={() => {
+							if (header) captureTopbarAction("open_orchestrator", "board");
+							openOrchestrator();
+						}}
+						// The simplified bar shows Orchestrator quiet, labeled, first; the previous
+						// header never demotes it. The empty board's body keeps it as the call to action.
+						variant={simplifiedTopbar
+							? (header ? "action" : quiet ? "secondary" : "primary")
+							: (header || !quiet ? "primary" : "secondary")}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
@@ -55,16 +64,20 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}
-						onClick={openNewTask}
-						// One filled primary per region: in the header Task stays a utility control.
-						variant={header ? "action" : quiet || cloud ? "secondary" : "accent"}
+						onClick={() => {
+							if (header) captureTopbarAction("new_task", "board");
+							openNewTask();
+						}}
+						// The simplified bar's one filled action is New task; the previous header
+						// keeps it a utility control (one filled primary per region).
+						variant={header ? (simplifiedTopbar ? "primary" : "action") : quiet || cloud ? "secondary" : "accent"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{t(header ? "newTask.task" : "shell.newTask")}</span>
 					</TopbarButton>
 				</span>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{t("shell.newTask")}</TooltipContent>
+			<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
 		</Tooltip>
 	);
 	const feedback = spawnError && !quiet ? (
@@ -75,7 +88,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant="primary">{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
-	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>
+	return header ? (simplifiedTopbar ? <>{feedback}{orchestratorButton}{newTaskButton}</> : <>{feedback}{newTaskButton}{orchestratorButton}</>) : <>
 		<div className="mt-5 flex items-center gap-2">{orchestratorButton}{newTaskButton}</div>
 		{feedback}
 	</>;

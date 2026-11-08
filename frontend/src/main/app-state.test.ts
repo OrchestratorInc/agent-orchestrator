@@ -9,6 +9,7 @@ import {
 	readMigrationState,
 	readFirstRunProjectPrompt,
 	markFirstRunProjectPromptSeen,
+	claimFirstRunExperimentExposure,
 	updateMigration,
 	type AppStateMarker,
 } from "./app-state";
@@ -60,6 +61,16 @@ describe("writeAppStateMarker", () => {
 		await markFirstRunProjectPromptSeen(dir);
 		await writeAppStateMarker(options);
 		expect(await readFirstRunProjectPrompt(dir)).toBe("seen");
+	});
+
+	it("reserves exposure once across concurrent requests and later launches", async () => {
+		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
+		await writeAppStateMarker(options);
+		const claims = await Promise.all([claimFirstRunExperimentExposure(dir), claimFirstRunExperimentExposure(dir)]);
+		expect(claims.filter(Boolean)).toHaveLength(1);
+		await writeAppStateMarker(options);
+		expect(await claimFirstRunExperimentExposure(dir)).toBe(false);
+		expect(await readFirstRunProjectPrompt(dir)).toBe("pending");
 	});
 
 	it("treats a marker from an older build as an existing user", async () => {

@@ -30,7 +30,7 @@ import { AnimatePresence, motion, useReducedMotion, type TargetAndTransition, ty
 import { createContext, useContext, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
-import { GITHUB_MARK_PATH } from "../CreateProjectFlow";
+import { GITHUB_MARK_PATH } from "../GitHubIcon";
 import { OrchestratorIcon } from "../icons";
 import type { PhoneWorker } from "./OnboardingPhone";
 import { APP_HEIGHT, APP_WIDTH, type PreviewCard, type ScenePage } from "./OnboardingPreviews";

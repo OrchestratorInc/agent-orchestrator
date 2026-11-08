@@ -42,6 +42,11 @@ func (s *Service) SetSavedDefaultSignIn(signedIn func(ctx context.Context, harne
 	s.savedDefaultSignIn = signedIn
 }
 
+// SetSavedDefaultLaunchEnv supplies the account context new tasks will use.
+func (s *Service) SetSavedDefaultLaunchEnv(launchEnv func(context.Context, domain.AgentHarness) (map[string]string, error)) {
+	s.savedDefaultLaunchEnv = launchEnv
+}
+
 func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string) (domain.AgentAuthenticationObservation, bool) {
 	harness := domain.AgentHarness(agentID)
 	if _, ok := domain.AgentAccountProviderFor(harness); !ok || s.savedDefaultSignIn == nil {

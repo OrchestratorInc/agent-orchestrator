@@ -22,6 +22,7 @@ import type { ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import {
 	Dialog,
 	DialogContent,
@@ -144,7 +145,7 @@ export function SessionInterfaceSwitchButton({
 					/>
 				)}
 				{cancellable ? (
-					<button
+					<Pressable
 						type="button"
 						aria-label={cancelLabel}
 						title={cancelling ? "Cancelling…" : cancelLabel}
@@ -154,7 +155,7 @@ export function SessionInterfaceSwitchButton({
 							onCancel?.();
 						}}
 						className={cn(
-							"absolute inset-0 inline-flex items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50 group-hover:opacity-100",
+							"absolute inset-0 inline-flex items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100",
 							cancelling && "opacity-100",
 						)}
 					>
@@ -163,7 +164,7 @@ export function SessionInterfaceSwitchButton({
 						) : (
 							<X aria-hidden="true" className="size-3.5" />
 						)}
-					</button>
+					</Pressable>
 				) : null}
 			</div>
 		);
@@ -251,8 +252,7 @@ export function SessionInterfaceSwitchDialog({
 							If work is underway, switching will interrupt it.
 						</p>
 					) : (
-						<button
-							type="button"
+						<Pressable
 							className="rounded-lg border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-border-strong hover:bg-muted disabled:opacity-50"
 							disabled={busy}
 							onClick={() => onChoose("drain")}
@@ -262,10 +262,9 @@ export function SessionInterfaceSwitchDialog({
 								Wait for the running turn and anything already queued to finish. New AO messages wait safely
 								for {targetName}.
 							</span>
-						</button>
+						</Pressable>
 					)}
-					<button
-						type="button"
+					<Pressable
 						className="rounded-lg border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-warning/60 hover:bg-muted disabled:opacity-50"
 						disabled={busy}
 						onClick={() => onChoose("interrupt")}
@@ -279,7 +278,7 @@ export function SessionInterfaceSwitchDialog({
 								: "Cancel the running turn before switching. Files already changed remain in the worktree, but unfinished output and queued Chat turns are cancelled."}
 							{target === "chat" ? " Any unsent Terminal UI draft is discarded." : null}
 						</span>
-					</button>
+					</Pressable>
 					{waitingForInput && !requireExplicitTerminalStop ? (
 						<p className="text-[11px] leading-4 text-warning">
 							This turn is waiting for your input. “Finish work” will wait until you answer it; use “Stop
@@ -486,7 +485,7 @@ export function SessionInterfaceTransitionNotice({
 						type="button"
 						size="sm"
 						variant="outline"
-						className="mt-2 h-7 text-caption"
+						className="mt-2 text-caption"
 						disabled={interrupting}
 						onClick={onSwitchWithInterrupt}
 					>
@@ -500,7 +499,7 @@ export function SessionInterfaceTransitionNotice({
 							type="button"
 							size="sm"
 							variant="outline"
-							className="h-7 text-caption"
+							className="text-caption"
 							disabled={retrying || dismissing}
 							onClick={onRetry}
 						>
@@ -512,7 +511,7 @@ export function SessionInterfaceTransitionNotice({
 								type="button"
 								size="sm"
 								variant="outline"
-								className="h-7 text-caption"
+								className="text-caption"
 								disabled={retrying || dismissing}
 								onClick={onUseProviderHistory}
 							>
@@ -523,7 +522,7 @@ export function SessionInterfaceTransitionNotice({
 							type="button"
 							size="sm"
 							variant="ghost"
-							className="h-7 text-caption"
+							className="text-caption"
 							disabled={retrying || dismissing}
 							onClick={onDismiss}
 						>
@@ -552,9 +551,9 @@ function NoticeDismissButton({ dismissing, onDismiss }: { dismissing?: boolean; 
 	return (
 		<Button
 			type="button"
-			variant="ghost"
+			variant="quiet"
 			size="icon-sm"
-			className="size-control-xs rounded text-muted-foreground hover:text-foreground"
+			className="size-control-xs rounded"
 			onClick={onDismiss}
 			disabled={dismissing}
 			aria-label={t("session.dismissInterfaceNotice")}

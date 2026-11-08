@@ -182,6 +182,17 @@ export async function readFirstRunProjectPrompt(stateDir: string): Promise<"pend
 	return existing?.firstRunProjectPrompt === "pending" ? "pending" : "seen";
 }
 
+/** Atomic install reservation, independent of renderer remounts and telemetry consent. */
+export async function claimFirstRunExperimentExposure(stateDir: string): Promise<boolean> {
+	try {
+		await writeFile(path.join(stateDir, "first-run-project-experiment-exposed"), "1\n", { mode: 0o600, flag: "wx" });
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw error;
+	}
+}
+
 export async function markFirstRunProjectPromptSeen(stateDir: string): Promise<void> {
 	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
 	if (!existing) throw new Error("App state marker is unavailable");
