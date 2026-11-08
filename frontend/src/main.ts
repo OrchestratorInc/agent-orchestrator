@@ -218,6 +218,7 @@ import {
 } from "./main/browser-runtime-link";
 import { resolveBrowserRuntimeToken } from "./main/browser-runtime-token";
 import { checkRender, measureRender } from "./main/render-check";
+import { dragInAppWindow } from "./main/app-window-drag";
 import {
 	connectBrowserStream,
 	type BrowserStreamControl,
@@ -611,6 +612,8 @@ protocol.registerSchemesAsPrivileged([
 		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
 ]);
+
+if (process.platform !== "win32") process.on("SIGUSR1", () => {});
 
 // Only the app's single instance claims (or, for a loopback dev build,
 // releases) the ao-app:// deep-link protocol used by WorkOS auth callbacks and
@@ -1827,6 +1830,9 @@ function establishBrowserRuntimeLink(): void {
 			}
 			if (command.action === "__render-measure") {
 				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__app-drag") {
+				return dragInAppWindow(BaseWindow.getAllWindows(), command.args ?? {}, signal);
 			}
 			const host = browserViewHost;
 			if (!host) {

@@ -804,6 +804,7 @@ func Run(buildVersion string) error {
 	// Computer-use calls run only while "Let agents use this computer" is on,
 	// and it turns on only with Cua Driver installed.
 	computerUse.SetEnabled(settingsSvc.ComputerUseEnabled)
+	computerUse.SetOwnApp(ownAppViaDesktop{broker: browserBroker})
 	settingsSvc.SetCuaDriverInstalled(computerUse.Installed)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)

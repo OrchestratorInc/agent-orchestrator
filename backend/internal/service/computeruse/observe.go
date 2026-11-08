@@ -53,6 +53,7 @@ func snapshotKey(session any, snapshotID string) string {
 }
 
 func (s *Service) rememberSnapshot(session any, state map[string]any) {
+	s.rememberFrame(session, state)
 	id, _ := state["snapshot_id"].(string)
 	if id == "" || !has(state, "pid") || !has(state, "window_id") {
 		return

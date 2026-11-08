@@ -361,7 +361,7 @@ export function connectBrowserRuntime(
 				return;
 			}
 			opened = true;
-			void send({ type: "hello", version: PROTOCOL_VERSION, token: options.token }, next, epoch).catch((error) => {
+			void send({ type: "hello", version: PROTOCOL_VERSION, token: options.token, pid: process.pid }, next, epoch).catch((error) => {
 				log(`browser-runtime-link: hello failed: ${String(error)}`);
 				next.destroy();
 			});

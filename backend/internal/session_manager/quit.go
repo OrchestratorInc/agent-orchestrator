@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // StopAgentsForQuit releases processes without terminating sessions or removing worktrees.
@@ -38,6 +41,9 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 				}
 			} else {
 				_, stopErr = m.ExitAgent(ctx, rec.ID)
+				if stopErr == nil && canSleepStoppedChat(rec) {
+					stopErr = m.sleepStoppedChat(ctx, rec)
+				}
 				if errors.Is(stopErr, ErrAgentExited) {
 					stopErr = nil
 				}
@@ -54,4 +60,40 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
+}
+
+func canSleepStoppedChat(rec domain.SessionRecord) bool {
+	return domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		rec.Kind != domain.KindOrchestrator &&
+		rec.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
+		strings.TrimSpace(rec.Metadata.ProviderConversationID) != ""
+}
+
+func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord) error {
+	store, ok := m.store.(interface {
+		SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
+	})
+	if !ok {
+		return fmt.Errorf("sleep chat %s: hibernation store unavailable", rec.ID)
+	}
+	if err := m.lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid:                true,
+		State:                domain.ActivityIdle,
+		Event:                "chat.controller.stopped",
+		ControllerGeneration: strings.TrimSpace(rec.Metadata.ControllerGeneration),
+		Timestamp:            m.clock(),
+	}); err != nil {
+		return fmt.Errorf("sleep chat %s: %w", rec.ID, err)
+	}
+	for range 3 {
+		current, found, err := m.store.GetSession(ctx, rec.ID)
+		if err != nil || !found || current.IsTerminated || current.HibernatedAt != nil {
+			return err
+		}
+		at := m.clock()
+		if applied, err := store.SetSessionHibernated(ctx, rec.ID, current.Revision, &at); err != nil || applied {
+			return err
+		}
+	}
+	return fmt.Errorf("sleep chat %s: session changed concurrently", rec.ID)
 }

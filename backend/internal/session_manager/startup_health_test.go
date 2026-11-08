@@ -55,13 +55,31 @@ func TestStartupHealthNeverLaunchesStoppedSessions(t *testing.T) {
 	if len(launcher.checks) != 1 || !launcher.checks[0].ReconnectOnly {
 		t.Fatalf("startup did not enforce reconnect-only: %+v", launcher.checks)
 	}
-	for _, id := range []domain.SessionID{"mer-chat", "mer-tui"} {
-		if st.sessions[id].Activity.State != domain.ActivityExited || st.sessions[id].IsTerminated {
-			t.Fatalf("%s must stay stopped and resumable: %+v", id, st.sessions[id])
-		}
+	if chat := st.sessions["mer-chat"]; chat.HibernatedAt == nil || chat.Activity.State != domain.ActivityIdle || chat.IsTerminated {
+		t.Fatalf("a chat whose host died with AO must be asleep so opening it wakes it: %+v", chat)
+	}
+	if st.sessions["mer-tui"].Activity.State != domain.ActivityExited || st.sessions["mer-tui"].IsTerminated {
+		t.Fatalf("mer-tui must stay stopped and resumable: %+v", st.sessions["mer-tui"])
 	}
 	if !st.sessions["mer-saved"].IsTerminated || len(st.worktrees["mer-saved"]) != 1 {
 		t.Fatal("startup changed a shutdown-saved session or its restore marker")
+	}
+}
+
+func TestStartupHealthKeepsUserStoppedChatStopped(t *testing.T) {
+	m, st, _, _ := newLifecycleManager()
+	m.chat = &healthCheckLauncher{err: ports.ErrChatHostNotRunning}
+	rec := domain.SessionRecord{
+		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/chat", Branch: "ao/chat/root", ProviderConversationID: "thread-1"},
+		Activity: domain.Activity{State: domain.ActivityExited},
+	}
+	st.sessions[rec.ID] = rec
+	if err := m.checkSessionHealth(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[rec.ID]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("a chat the user stopped must keep Resume, not wake on open: %+v", got)
 	}
 }
 
