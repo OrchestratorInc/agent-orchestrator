@@ -2,7 +2,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import {
 	DndContext,
@@ -17,7 +16,6 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-	AlertTriangle,
 	Archive,
 	CalendarClock,
 	ChevronRight,
@@ -26,7 +24,6 @@ import {
 	GitMerge,
 	GitPullRequest,
 	LoaderCircle,
-	Download,
 	LayoutGrid,
 	File,
 	Folder,
@@ -38,13 +35,11 @@ import {
 	Pin,
 	PinOff,
 	Plus,
-	RefreshCw,
 	Search,
 	Settings,
 	Smartphone,
 	Trash2,
 	User,
-	X,
 	ArrowLeft,
 } from "@/components/app-icons";
 import {
@@ -63,9 +58,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { UpdateStatus } from "../../main/update-settings";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
-import { parseNightlyVersion } from "../lib/build-channel";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -87,7 +80,6 @@ import {
 	type SessionRowMarker,
 } from "../lib/session-presentation";
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
-import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useEdgeFade } from "../hooks/useEdgeFade";
@@ -105,7 +97,6 @@ import { useLatestCallback, useStableArray } from "../hooks/useStable";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useShellMaybe } from "../lib/shell-context";
-import { useSidebarUpdateDismissal } from "../hooks/useSidebarUpdateDismissal";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { useSessionPreviewHover } from "../hooks/useSessionPreviewHover";
@@ -152,6 +143,7 @@ import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { captureRendererException } from "../lib/telemetry";
 import { AwakeControl } from "./AwakeControl";
+import { FOOTER_RAIL_BUTTON_CLASS, SidebarUpdateRail, SidebarUpdateRow } from "./SidebarUpdate";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
@@ -202,12 +194,6 @@ const FOOTER_NAV_BUTTON_CLASS = cn(
 	NAV_ROW_CLASS,
 	NAV_ROW_HIGHLIGHT_HOST_CLASS,
 	"flex h-9 w-full items-center text-left transition-none",
-);
-
-/** Collapsed footer icon-rail control: same growing highlight in the square. */
-const FOOTER_RAIL_BUTTON_CLASS = cn(
-	NAV_ROW_HIGHLIGHT_HOST_CLASS,
-	"grid size-control-board place-items-center rounded-lg text-muted-foreground [&_svg]:size-icon-base",
 );
 
 // Top-of-sidebar rows (Search, Automations) and project rows: one 32px row with
@@ -739,8 +725,6 @@ export function Sidebar({
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
-	const availableUpdateVersion = updateStatus.state === "available" ? updateStatus.version : undefined;
-	const updateDismissal = useSidebarUpdateDismissal(availableUpdateVersion);
 	const openUpdateInstallPrompt = useUiStore((state) => state.openUpdateInstallPrompt);
 	// Daemon status for the smoke suite's sr-only mirror in the footer. Null when
 	// rendered outside the shell (unit tests) — the mirror simply doesn't render.
@@ -1346,14 +1330,7 @@ export function Sidebar({
 				)}
 				{settingsPage ? (
 					<>
-						<UpdateStatusRow
-							availableDismissed={updateDismissal.dismissed}
-							onDismissAvailable={updateDismissal.dismiss}
-							status={updateStatus}
-							tabIndex={isCollapsed ? -1 : 0}
-						/>
-						<UpdateInstallSlide
-							availableDismissed={updateDismissal.dismissed}
+						<SidebarUpdateRow
 							onRequestInstall={openUpdateInstallPrompt}
 							status={updateStatus}
 							tabIndex={isCollapsed ? -1 : 0}
@@ -1382,20 +1359,13 @@ export function Sidebar({
 					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
-					<UpdateStatusRow
-						availableDismissed={updateDismissal.dismissed}
-						onDismissAvailable={updateDismissal.dismiss}
+					<SidebarUpdateRow
+						onRequestInstall={openUpdateInstallPrompt}
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
 					<CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
-					<UpdateInstallSlide
-						availableDismissed={updateDismissal.dismissed}
-						onRequestInstall={openUpdateInstallPrompt}
-						status={updateStatus}
-						tabIndex={isCollapsed ? -1 : 0}
-					/>
 					<Pressable
 						aria-label={t("settings.connectMobile")}
 						className={FOOTER_NAV_BUTTON_CLASS}
@@ -1430,8 +1400,7 @@ export function Sidebar({
 					aria-hidden={!isCollapsed || undefined}
 					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
 				>
-					<UpdateStatusRail
-						availableDismissed={updateDismissal.dismissed}
+					<SidebarUpdateRail
 						onRequestInstall={openUpdateInstallPrompt}
 						status={updateStatus}
 						tabIndex={isCollapsed ? 0 : -1}
@@ -3201,340 +3170,6 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				{t("shell.signOutWithEmail", {
 					email: session?.user.email ?? "Orchestrator Cloud",
 				})}
-			</TooltipContent>
-		</Tooltip>
-	);
-}
-
-/**
- * What the sidebar should act on, derived from the live update status.
- *
- * `status.state` alone is not enough. It cycles through checking → available →
- * not-available on every background check while a staged build sits untouched,
- * which blinked the restart row out of existence every 15 minutes on nightly.
- * `status.staged` is stamped on every status by the main process for exactly
- * this reason, so the staged build is read from there rather than from `state`.
- */
-type SidebarUpdateAction =
-	| { kind: "downloading"; percent: number }
-	| { kind: "download"; version?: string }
-	| { kind: "install"; version?: string; escalated: boolean }
-	| { kind: "retry" }
-	| null;
-
-function sidebarUpdateAction(status: UpdateStatus, availableDismissed: boolean): SidebarUpdateAction {
-	if (status.state === "downloading") {
-		return { kind: "downloading", percent: Math.min(100, Math.max(0, status.percent ?? 0)) };
-	}
-	// `staged` is the stamp the main process puts on every status; the
-	// `downloaded` fallback keeps this correct for any status that predates it
-	// or arrives from a source that does not stamp.
-	const staged =
-		status.staged ??
-		(status.state === "downloaded"
-			? {
-					version: status.version,
-					stagedAt: status.stagedAt ?? 0,
-					escalated: status.escalated === true,
-				}
-			: undefined);
-	// Something newer than what is already staged still deserves the download
-	// action; the main process reports a re-discovered staged build as
-	// "downloaded", so an "available" here is genuinely a different version.
-	if (status.state === "available" && !availableDismissed && status.version !== staged?.version) {
-		return { kind: "download", version: status.version };
-	}
-	if (staged) return { kind: "install", version: staged.version, escalated: staged.escalated };
-	// Ranked below a staged build on purpose: an update ready to install is more
-	// actionable than "checks are failing". Only when there is nothing better to
-	// show does the failure take the row — it used to render nothing at all,
-	// which reads as "up to date" rather than "checks are not getting through".
-	if (status.checksFailing === true) return { kind: "retry" };
-	return null;
-}
-
-/**
- * Sidebar label for a build. A raw nightly string truncates to noise and two
- * consecutive nightlies differ only in trailing digits, so nightlies render as
- * base version plus build date instead.
- */
-function updateVersionLabel(
-	version: string | undefined,
-	variant: "available" | "ready",
-	t: TFunction,
-	locale: string,
-): string | null {
-	if (!version) return null;
-	const nightly = parseNightlyVersion(version);
-	if (nightly) {
-		return t("shell.nightlyBuild", {
-			version: nightly.base,
-			date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(nightly.builtAt),
-		});
-	}
-	return t(variant === "ready" ? "shell.versionReady" : "shell.versionAvailable", { version });
-}
-
-/** Plain version number for the install cue — base for nightlies, no channel/date. */
-function installVersionNumber(version: string | undefined): string | null {
-	if (!version) return null;
-	return parseNightlyVersion(version)?.base ?? version;
-}
-
-// UpdateStatusRow makes download progress visible in the footer. A staged build
-// ready to install renders as UpdateInstallSlide above Connect mobile / Settings.
-function UpdateStatusRow({
-	availableDismissed,
-	onDismissAvailable,
-	status,
-	tabIndex,
-}: {
-	availableDismissed: boolean;
-	onDismissAvailable: () => void;
-	status: UpdateStatus;
-	tabIndex: number;
-}) {
-	const { t, i18n } = useTranslation();
-	const locale = i18n.resolvedLanguage ?? i18n.language;
-	const action = sidebarUpdateAction(status, availableDismissed);
-	if (action === null || action.kind === "install") return null;
-
-	if (action.kind === "download") {
-		const versionLabel = updateVersionLabel(action.version, "available", t, locale);
-		// A manual check leaves autoDownload off, so without this the row would
-		// announce an update and offer nothing to act on.
-		return (
-			<div className="flex w-full items-center gap-1" data-testid="sidebar-update-available">
-				<Pressable
-					aria-label={
-						action.version
-							? t("shell.downloadUpdateVersion", { version: action.version })
-							: t("shell.downloadUpdate")
-					}
-					className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
-					onClick={() => void aoBridge.updates.download()}
-					tabIndex={tabIndex}
-					type="button"
-				>
-					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
-						<Download aria-hidden="true" className="size-icon-lg shrink-0" />
-						<span className="min-w-0 flex-1">
-							<span className="block truncate tracking-tight">{t("shell.updateAvailable")}</span>
-							{versionLabel && (
-								<span className="block truncate text-caption font-normal text-passive">{versionLabel}</span>
-							)}
-						</span>
-					</span>
-				</Pressable>
-				{action.version && (
-					<Button
-						aria-label={t("shell.dismissUpdateVersion", { version: action.version })}
-						onClick={onDismissAvailable}
-						size="icon"
-						tabIndex={tabIndex}
-						type="button"
-						variant="quiet"
-					>
-						<X aria-hidden="true" className="size-icon-base" />
-					</Button>
-				)}
-			</div>
-		);
-	}
-
-	if (action.kind === "downloading") {
-		return (
-			<div
-				aria-live="polite"
-				className={cn(NAV_ROW_CLASS, "flex w-full items-center text-left [&_svg]:size-icon-md [&_svg]:shrink-0")}
-				data-testid="sidebar-update-downloading"
-				role="status"
-			>
-				<Download aria-hidden="true" className="size-icon-lg shrink-0" />
-				<span className="min-w-0 flex-1 truncate tabular-nums">
-					{t("settings.updates.downloading", { percent: action.percent })}
-				</span>
-			</div>
-		);
-	}
-
-	return (
-		<Pressable
-			aria-label={t("shell.retryUpdateCheck")}
-			className="flex w-full items-center gap-2.5 rounded-lg border border-warning/35 bg-warning/12 p-2.5 text-left text-control font-medium text-warning hover:bg-warning/18 [&_svg]:text-warning"
-			data-testid="sidebar-update-failed"
-			onClick={() => void aoBridge.updates.check()}
-			tabIndex={tabIndex}
-			type="button"
-		>
-			<AlertTriangle aria-hidden="true" className="size-icon-lg shrink-0" />
-			<span className="min-w-0 flex-1">
-				<span className="block truncate tracking-tight">{t("shell.updateCheckFailed")}</span>
-				<span className="block truncate text-caption font-normal text-warning">
-					{t("shell.retryUpdateCheck")}
-				</span>
-			</span>
-		</Pressable>
-	);
-}
-
-/**
- * Alert-style install cue above Connect mobile / Settings. Muted fill so it
- * reads apart from nav rows; shows the version number only (no Nightly/date).
- */
-function UpdateInstallSlide({
-	availableDismissed,
-	onRequestInstall,
-	status,
-	tabIndex,
-}: {
-	availableDismissed: boolean;
-	onRequestInstall: () => void;
-	status: UpdateStatus;
-	tabIndex: number;
-}) {
-	const { t } = useTranslation();
-	const action = sidebarUpdateAction(status, availableDismissed);
-	if (action?.kind !== "install") return null;
-
-	const versionNumber = installVersionNumber(action.version);
-	return (
-		<Pressable
-			aria-label={
-				versionNumber
-					? t("shell.restartInstallUpdateVersion", { version: versionNumber })
-					: t("shell.restartInstallUpdate")
-			}
-			className={cn(
-				"mb-1 flex h-9 w-full items-center gap-2.5 rounded-lg bg-muted px-3 text-left text-sm font-normal text-foreground",
-				"hover:bg-interactive-hover",
-			)}
-			data-testid="sidebar-update-ready"
-			onClick={onRequestInstall}
-			tabIndex={tabIndex}
-			type="button"
-		>
-			<RefreshCw aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
-			<span className="min-w-0 flex-1 truncate tracking-tight">
-				{t("shell.restartToUpdate")}
-				{versionNumber ? (
-					<>
-						{" "}
-						<span className="text-muted-foreground">{versionNumber}</span>
-					</>
-				) : null}
-			</span>
-		</Pressable>
-	);
-}
-
-// Icon-rail variant of UpdateStatusRow. An available build downloads on click
-// and a staged one installs; an in-flight download is informational.
-function UpdateStatusRail({
-	availableDismissed,
-	onRequestInstall,
-	status,
-	tabIndex,
-}: {
-	availableDismissed: boolean;
-	/** Opens the restart confirmation; installing outright would quit the app. */
-	onRequestInstall: () => void;
-	status: UpdateStatus;
-	tabIndex: number;
-}) {
-	const { t } = useTranslation();
-	const action = sidebarUpdateAction(status, availableDismissed);
-	if (action === null) return null;
-
-	if (action.kind === "download") {
-		const label = t("settings.updates.available", { version: action.version ? ` (v${action.version})` : "" });
-		return (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Pressable
-						aria-label={
-							action.version
-								? t("shell.downloadUpdateVersion", { version: action.version })
-								: t("shell.downloadUpdate")
-						}
-						className={cn(FOOTER_RAIL_BUTTON_CLASS, "size-9 text-passive [&_svg]:size-4")}
-						onClick={() => void aoBridge.updates.download()}
-						tabIndex={tabIndex}
-						type="button"
-					>
-						<NavRowHighlight />
-						<span className="relative z-[1] grid place-items-center [&_svg]:size-4">
-							<Download aria-hidden="true" />
-						</span>
-					</Pressable>
-				</TooltipTrigger>
-				<TooltipContent side="right">{label}</TooltipContent>
-			</Tooltip>
-		);
-	}
-
-	if (action.kind === "downloading") {
-		const label = t("settings.updates.downloading", { percent: action.percent });
-		return (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span
-						aria-label={label}
-						aria-live="polite"
-						className="grid size-9 place-items-center rounded-lg text-passive [&_svg]:size-4"
-						role="status"
-					>
-						<Download aria-hidden="true" />
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="right">{label}</TooltipContent>
-			</Tooltip>
-		);
-	}
-
-	if (action.kind === "retry") {
-		return (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Pressable
-						aria-label={t("shell.retryUpdateCheck")}
-						className="grid size-9 place-items-center rounded-lg bg-warning/12 text-warning hover:bg-warning/18 [&_svg]:size-4"
-						onClick={() => void aoBridge.updates.check()}
-						tabIndex={tabIndex}
-						type="button"
-					>
-						<AlertTriangle aria-hidden="true" />
-					</Pressable>
-				</TooltipTrigger>
-				<TooltipContent side="right">
-					{t("shell.updateCheckFailed")} · {t("shell.retryUpdateCheck")}
-				</TooltipContent>
-			</Tooltip>
-		);
-	}
-
-	const versionNumber = installVersionNumber(action.version);
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Pressable
-					aria-label={
-						versionNumber
-							? t("shell.restartInstallUpdateVersion", { version: versionNumber })
-							: t("shell.restartInstallUpdate")
-					}
-					className="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground hover:bg-interactive-hover hover:text-foreground [&_svg]:size-4"
-					onClick={onRequestInstall}
-					tabIndex={tabIndex}
-					type="button"
-				>
-					<RefreshCw aria-hidden="true" />
-				</Pressable>
-			</TooltipTrigger>
-			<TooltipContent side="right">
-				{t("shell.restartToUpdate")}
-				{versionNumber ? ` ${versionNumber}` : ""}
 			</TooltipContent>
 		</Tooltip>
 	);

@@ -529,6 +529,7 @@ beforeEach(() => {
 		settingsModal: null,
 		provisioningProjectIds: new Set(),
 		restartingProjectIds: new Set(),
+		updateInstallPromptOpen: false,
 	});
 	getMock.mockReset();
 	getMock.mockResolvedValue({
@@ -3714,76 +3715,122 @@ describe("Sidebar", () => {
 		resolveKill?.();
 	});
 
-	it("downloads the update when the available row is clicked", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
+	it("downloads the update from the available row's pill", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9", releaseNotes: "### Fixes\n- Faster boot" });
 		renderSidebar();
 
-		// Both footer variants (expanded row and collapsed rail icon) are mounted.
-		const buttons = await screen.findAllByLabelText("Download update v9.9.9");
-		expect(buttons.length).toBeGreaterThan(0);
-		expect(screen.getByText("Update available")).toBeInTheDocument();
-		const availableRow = screen.getByTestId("sidebar-update-available");
-		expect(within(availableRow).getByText("v9.9.9")).toBeVisible();
-		expect(availableRow.querySelector(".rounded-full")).toBeNull();
-		expect(screen.getByRole("button", { name: "Hide update v9.9.9 for 24 hours" })).not.toHaveClass(
-			"bg-interactive-hover",
-		);
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		expect(availableRow).toHaveTextContent("9.9.9 is here");
+		const pill = within(availableRow).getByRole("button", { name: "Download update v9.9.9" });
+		expect(pill).toHaveTextContent("Update");
+		expect(pill).toHaveClass("rounded-full", "bg-logo-accent/16");
+		// One action and no dismiss control.
+		expect(within(availableRow).getAllByRole("button")).toHaveLength(1);
 		// Nothing is staged yet, so the restart action must not be offered.
 		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
 
-		await userEvent.click(buttons[0]);
+		await userEvent.click(pill);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("dismisses the current available update without downloading it", async () => {
+	it("shows what's new from the dotted version number", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9", releaseNotes: "Faster boot" });
+		renderSidebar();
+
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		const version = within(availableRow).getByText("9.9.9");
+		expect(version).toHaveClass("decoration-dotted");
+		await userEvent.hover(version);
+		expect(await screen.findByText("What's new in 9.9.9")).toBeVisible();
+		expect(screen.getByText("Faster boot")).toBeVisible();
+	});
+
+	it("leaves the version plain when there is nothing more to read", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
 		renderSidebar();
 
-		await userEvent.click(await screen.findByRole("button", {
-			name: "Hide update v9.9.9 for 24 hours",
-		}));
-
-		expect(screen.queryByText("Update available")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Download update v9.9.9")).not.toBeInTheDocument();
-		expect(downloadUpdateMock).not.toHaveBeenCalled();
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		expect(within(availableRow).getByText("9.9.9 is here")).toBeVisible();
+		expect(availableRow.querySelector(".decoration-dotted")).toBeNull();
 	});
 
-	it("keeps showing update activity while the automatic download is in progress", async () => {
+	it("names a nightly by its base version and keeps the build date for the hover card", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "0.12.11-nightly.202609021713" });
+		renderSidebar();
+
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		expect(availableRow).toHaveTextContent(/^0\.12\.11 is here/);
+		expect(within(availableRow).queryByText(/Nightly/)).not.toBeInTheDocument();
+		await userEvent.hover(within(availableRow).getByText("0.12.11"));
+		expect(await screen.findByText(/^Nightly · Sep [23]$/)).toBeVisible();
+	});
+
+	it("shows download progress as a bar, not a percentage", async () => {
 		updateStatusMock.mockResolvedValue({ state: "downloading", version: "9.9.9", percent: 42 });
 		renderSidebar();
 
-		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.getByText("Downloading… 42%")).toBeInTheDocument();
-		const downloadingRow = screen.getByTestId("sidebar-update-downloading");
-		expect(downloadingRow).not.toHaveClass("border");
-		expect(downloadingRow.querySelector("svg circle")).toBeNull();
-		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
+		const downloadingRow = await screen.findByTestId("sidebar-update-downloading");
+		expect(within(downloadingRow).getByText("Downloading update")).toBeVisible();
+		expect(within(downloadingRow).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
+		expect(downloadingRow).not.toHaveTextContent("%");
 		// A download already in flight must not offer a second one.
 		expect(screen.queryByLabelText(/Download update/)).not.toBeInTheDocument();
-		expect(screen.queryByLabelText(/Hide update/)).not.toBeInTheDocument();
+		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
 	});
 
-	it("keeps automatic update check failures out of the sidebar", async () => {
+	it("keeps failing update checks out of the sidebar", async () => {
 		updateStatusMock.mockResolvedValue({ state: "idle", checksFailing: true });
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.queryAllByLabelText("Retry update check")).toHaveLength(2);
-		expect(screen.getByText("Update check failed")).toBeInTheDocument();
-		expect(screen.getByTestId("sidebar-update-failed")).toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Retry update")).not.toBeInTheDocument();
 	});
 
-	it("keeps explicit update errors out of the sidebar", async () => {
+	it("keeps a failed check's error out of the sidebar", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "error",
 			message: "net::ERR_SSL_PROTOCOL_ERROR",
 			netError: true,
+			errorInfo: { kind: "unreachable", phase: "check" },
 		});
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Retry update check")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+	});
+
+	it("offers a retry when a download fails", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Download failed.",
+			version: "9.9.9",
+			errorInfo: { kind: "generic", phase: "download" },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		expect(within(failedRow).getByText("Update failed")).toBeVisible();
+		expect(within(failedRow).getByText("Couldn't download")).toBeVisible();
+		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries a failed install through the restart confirmation", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Install failed.",
+			errorInfo: { kind: "generic", phase: "install" },
+			staged: { version: "9.9.9", stagedAt: Date.now(), escalated: false },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		expect(within(failedRow).getByText("Couldn't install")).toBeVisible();
+		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
+		expect(downloadUpdateMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps a ready install action when a later check fails", async () => {
@@ -3811,29 +3858,31 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
-	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {
+	it("asks to restart a staged build from the same tinted pill", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
 			stagedAt: Date.now(),
+			escalated: true,
 			checksFailing: true,
 		});
 		renderSidebar();
 
-		// A build ready to install is more actionable than "checks are failing".
-		expect(await screen.findAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
-		const readyRow = screen.getByTestId("sidebar-update-ready");
-		expect(readyRow).toHaveClass("bg-muted", "rounded-lg", "w-full");
-		expect(readyRow).not.toHaveClass("shadow-md", "rounded-xl", "absolute", "bottom-2", "text-success", "border-success/35", "bg-success/12", "border-primary/35", "bg-primary/12");
-		expect(within(readyRow).getByText("Restart to update")).toBeVisible();
-		expect(within(readyRow).getByText("9.9.9")).toBeVisible();
-		expect(within(readyRow).queryByText(/ready|Nightly/)).not.toBeInTheDocument();
-		expect(readyRow.querySelector(".rounded-full")).toBeNull();
-		expect(screen.queryAllByLabelText("Retry update check")).toHaveLength(0);
-		// Stays above Connect mobile / Settings — not overlaid on them.
-		const connectMobile = screen.getByRole("button", { name: "Connect mobile" });
-		expect(readyRow.compareDocumentPosition(connectMobile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(screen.queryByLabelText(/Hide update/)).not.toBeInTheDocument();
+		const readyRow = await screen.findByTestId("sidebar-update-ready");
+		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
+		expect(within(readyRow).getByText("Restart to finish")).toBeVisible();
+		const pill = within(readyRow).getByRole("button", { name: "Restart to install update v9.9.9" });
+		expect(pill).toHaveTextContent("Restart");
+		// Escalation does not change the treatment: one quiet pill style throughout.
+		expect(pill).toHaveClass("rounded-full", "bg-logo-accent/16");
+		expect(pill).not.toHaveClass("bg-logo-accent", "text-success");
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+		// Sits above the account and Settings rows, not overlaid on them.
+		const settings = screen.getAllByRole("button", { name: "Settings" })[0];
+		expect(readyRow.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		await userEvent.click(pill);
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
 	});
 
 	it("keeps the staged restart row up while a background check runs", async () => {
@@ -3852,7 +3901,7 @@ describe("Sidebar", () => {
 		expect(screen.getByTestId("sidebar-update-ready")).toBeVisible();
 	});
 
-	it("shows the base version number for a staged nightly without channel or date", async () => {
+	it("names a staged nightly by its base version", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "0.12.11-nightly.202609021713",
@@ -3861,54 +3910,16 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(within(readyRow).getByText("Restart to update")).toBeVisible();
-		expect(within(readyRow).getByText("0.12.11")).toBeVisible();
 		expect(within(readyRow).queryByText(/Nightly|Sep/)).not.toBeInTheDocument();
 		expect(screen.getAllByLabelText("Restart to install update v0.12.11")).not.toHaveLength(0);
 	});
 
-	it("stays quiet for a one-off update failure that has not become a streak", async () => {
+	it("shows nothing while AO is up to date", async () => {
 		updateStatusMock.mockResolvedValue({ state: "idle" });
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.queryByLabelText("Retry update check")).not.toBeInTheDocument();
-		expect(screen.queryByText("Update check failed")).not.toBeInTheDocument();
-	});
-
-	it("keeps the muted install cue when the staged update is escalated", async () => {
-		updateStatusMock.mockResolvedValue({
-			state: "downloaded",
-			version: "9.9.9",
-			stagedAt: Date.now(),
-			escalated: true,
-		});
-		renderSidebar();
-
-		// Both footer variants (expanded row and collapsed rail icon) are mounted.
-		const buttons = await screen.findAllByLabelText("Restart to install update v9.9.9");
-		expect(buttons.length).toBeGreaterThan(0);
-		for (const button of buttons) {
-			expect(button).toHaveClass("bg-muted");
-			expect(button).not.toHaveClass("text-success", "bg-working/12");
-		}
-		expect(screen.getByTestId("sidebar-update-ready")).toHaveTextContent("Restart to update");
-		expect(within(screen.getByTestId("sidebar-update-ready")).getByText("9.9.9")).toBeVisible();
-	});
-
-	it("keeps install label and version number on one line without nightly copy", async () => {
-		updateStatusMock.mockResolvedValue({
-			state: "downloaded",
-			version: "0.12.11-nightly.202609021713",
-			stagedAt: Date.now(),
-		});
-		renderSidebar();
-
-		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(readyRow).toHaveTextContent("Restart to update");
-		expect(readyRow).toHaveTextContent("0.12.11");
-		expect(within(readyRow).queryByText(/Nightly|ready/)).not.toBeInTheDocument();
-		expect(readyRow).toHaveAccessibleName("Restart to install update v0.12.11");
+		expect(screen.queryByTestId(/^sidebar-update-/)).not.toBeInTheDocument();
 	});
 
 	it("commits a project drop", () => {

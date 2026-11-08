@@ -55,14 +55,14 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await page.goto("/#/settings");
 	await page.getByRole("button", { name: "Updates", exact: true }).click();
 	await page.getByRole("button", { name: "Update to v2.0.0" }).click();
-	await expect(page.getByTestId("sidebar-update-downloading")).toContainText(/Starting download…|Downloading… 0%/);
+	await expect(page.getByTestId("sidebar-update-downloading")).toContainText("Downloading update");
 	await expect(page.getByTestId("update-status-line")).toContainText(/Starting download…|Downloading…/);
 
 	// A missed push is recovered by one local status read, without feed checks.
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "downloading", version: "2.0.0", percent: 42, transferred: 42_000_000, total: 100_000_000 });
 	});
-	await expect(page.getByTestId("sidebar-update-downloading")).toContainText("Downloading… 42%");
+	await expect(page.getByTestId("sidebar-update-downloading").getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
 	await expect(page.getByTestId("update-status-line")).toContainText("42.0 / 100.0 MB");
 	await expect(page.getByTestId("app-version")).toHaveText("v1.0.0");
 	await expect(page.getByText("Updating to v2.0.0")).toBeVisible();
@@ -70,15 +70,14 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Restart to update");
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Ready to install");
 	await expect(page.getByTestId("update-status-line")).toContainText("Preparing update…");
 	await expect(page.getByRole("button", { name: "Install Update", exact: true })).toHaveCount(0);
 
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "downloaded", version: "2.0.0" });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Restart to update");
-	await expect(page.getByTestId("sidebar-update-ready")).toHaveAttribute("aria-label", "Restart to install update v2.0.0");
-	await expect(page.getByTestId("sidebar-update-ready")).not.toHaveClass(/text-success/);
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Restart to finish");
+	await expect(page.getByTestId("sidebar-update-ready").getByRole("button", { name: "Restart to install update v2.0.0" })).toHaveText("Restart");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toBeEnabled();
 });
