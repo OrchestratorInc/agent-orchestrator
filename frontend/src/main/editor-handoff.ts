@@ -3,6 +3,8 @@ import { closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import {
 	isEditorId,
+	isNeovimTerminalId,
+	type NeovimTerminalId,
 	isTerminalId,
 	type ChatPathActionInput,
 	type EditorHandoffState,
@@ -92,6 +94,8 @@ export type EditorHandoffDeps = {
 	/** The session's artifact directory, which lives outside its workspace. */
 	resolveArtifactDir: (sessionId: string) => Promise<string>;
 	readPreference: () => Promise<EditorId>;
+	readNeovimTerminal?: () => Promise<NeovimTerminalId>;
+	writeNeovimTerminal?: (terminal: NeovimTerminalId) => Promise<void>;
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
@@ -119,6 +123,7 @@ export type EditorHandoff = {
 	pathAction(input: ChatPathActionInput): Promise<void>;
 	getEditors(): Promise<EditorPreferenceState>;
 	setPreferredEditor(editorId: unknown): Promise<EditorId>;
+	setNeovimTerminal(terminal: unknown): Promise<NeovimTerminalId>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	openArtifactInBrowser(input: OpenArtifactInBrowserInput): Promise<void>;
@@ -541,6 +546,37 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return [...(terminal ? [terminal] : []), ...resolveInstalledTerminals(deps, isExecutable, isDirectory, macApps)];
 	};
 
+	const selectedNeovimTerminal = async (): Promise<NeovimTerminalId> => deps.platform === "darwin"
+		? await deps.readNeovimTerminal?.() ?? "terminal" : "terminal";
+	const neovimTerminals = () => resolveTerminals().filter(({ target }) => isNeovimTerminalId(target.id));
+	const withNeovimHost = (target: OpenTarget, selected: NeovimTerminalId): OpenTarget => target.id === "neovim" && deps.platform === "darwin" && selected !== "terminal"
+		? { ...target, name: `${target.name} (${selected === "iterm2" ? "iTerm2" : "Ghostty"})` } : target;
+	// Resolve at launch so removal of a selected app never falls back silently.
+	const editorCommand = async (editorId: EditorId, fallback: ResolvedCommand): Promise<ResolvedCommand> => {
+		if (editorId !== "neovim" || deps.platform !== "darwin") return fallback;
+		const selected = await selectedNeovimTerminal();
+		const terminal = neovimTerminals().find(({ target }) => target.id === selected);
+		const name = selected === "iterm2" ? "iTerm2" : selected === "ghostty" ? "Ghostty" : "Terminal";
+		if (!terminal) throw new Error(`${name} is not installed. Choose another Neovim terminal in Settings.`);
+		const appPath = terminal.command.iconPath;
+		if (selected !== "terminal" && !appPath) throw new Error(`Could not locate ${name}. Choose another Neovim terminal in Settings.`);
+		const executable = resolveOnPath("nvim", deps.platform, deps.env, isExecutable);
+		if (!executable) throw new Error("Neovim is not installed. Check that nvim is on PATH.");
+		const args = (targetPath: string, directory: string) => {
+			if (selected === "ghostty") return ["-n", "-a", appPath!, "--args", `--working-directory=${directory}`, "-e", executable, targetPath];
+			const line = `cd ${shellQuote(directory)} && exec ${shellQuote(executable)} ${shellQuote(targetPath)}`;
+			const script = selected === "iterm2"
+				? `tell application ${appleScriptString(appPath!)}\nactivate\nset editorWindow to (create window with default profile)\ntell current session of editorWindow\nwrite text ${appleScriptString(line)}\nend tell\nend tell`
+				: `tell application "Terminal"\nactivate\ndo script ${appleScriptString(line)}\nend tell`;
+			return ["-e", script];
+		};
+		return {
+			command: selected === "ghostty" ? "/usr/bin/open" : "/usr/bin/osascript",
+			argsForWorkspace: (dir) => args(dir, dir),
+			argsForFile: (file) => args(file, path.posix.dirname(file)),
+		};
+	};
+
 	const openTarget = async (target: OpenTarget, resolved: ResolvedCommand | undefined, directory: string, revealPath?: string) => {
 		try {
 			if (target.kind === "file_manager") {
@@ -622,12 +658,13 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const editor = resolveEditors().find(({ target }) => target.id === input.editorId);
 			if (!editor) throw new Error("That editor is not installed. Choose another option.");
 			// Batch shims and terminal editors use cmd.exe, which expands percent variables even in quotes.
-			const command = editor.command.command;
+			const resolvedEditor = await editorCommand(input.editorId, editor.command);
+			const command = resolvedEditor.command;
 			if (deps.platform === "win32" && /[%!"]/.test(realTarget) && (/\.(?:cmd|bat)$/i.test(command) || api.basename(command).toLowerCase() === "cmd.exe")) {
 				throw new Error("That path cannot be passed safely to this editor launcher.");
 			}
 			const cwd = isDirectory(realTarget) ? realTarget : api.dirname(realTarget);
-			await deps.launch(editor.command.command, (editor.command.argsForFile ?? editor.command.argsForWorkspace)(realTarget), cwd);
+			await deps.launch(resolvedEditor.command, (resolvedEditor.argsForFile ?? resolvedEditor.argsForWorkspace)(realTarget), cwd);
 		},
 		async getState(sessionId, options) {
 			if (options?.refreshTerminals === true) await refreshTerminals();
@@ -638,7 +675,8 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			// the generic target remains available to existing shortcut/artifact callers.
 			const menuTerminals = deps.platform === "linux" && terminals.some(({ target }) => target.id !== "terminal")
 				? terminals.filter(({ target }) => target.id !== "terminal") : terminals;
-			const targets = [...editors.map(({ target }) => target), fileManager, ...menuTerminals.map(({ target }) => target)];
+			const selected = await selectedNeovimTerminal();
+			const targets = [...editors.map(({ target }) => withNeovimHost(target, selected)), fileManager, ...menuTerminals.map(({ target }) => target)];
 			const targetsWithIcons = await Promise.all(targets.map(async (target) => {
 				if (target.iconDataUrl) return target;
 				const editor = editors.find((entry) => entry.target.id === target.id);
@@ -672,7 +710,24 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		},
 
 		async getEditors() {
-			return { editors: resolveEditors().map(({ target }) => target), preferredEditorId: await deps.readPreference() };
+			const selected = await selectedNeovimTerminal();
+			const terminals = deps.platform === "darwin" ? await Promise.all(neovimTerminals().map(async ({ target, command }) => {
+				const icon = target.iconDataUrl ?? (command.iconPath ? await readIcon(command.iconPath) : undefined);
+				return icon ? { ...target, iconDataUrl: icon } : target;
+			})) : undefined;
+			return {
+				editors: resolveEditors().map(({ target }) => withNeovimHost(target, selected)),
+				preferredEditorId: await deps.readPreference(),
+				...(terminals ? { neovimTerminal: { selected, targets: terminals } } : {}),
+			};
+		},
+
+		async setNeovimTerminal(terminal) {
+			if (deps.platform !== "darwin" || !deps.writeNeovimTerminal) throw new Error("Neovim terminal selection is not available on this platform.");
+			if (!isNeovimTerminalId(terminal)) throw new Error("That Neovim terminal is not supported.");
+			if (!neovimTerminals().some(({ target }) => target.id === terminal)) throw new Error("That terminal is not installed. Choose another Neovim terminal.");
+			await deps.writeNeovimTerminal(terminal);
+			return terminal;
 		},
 
 		async setPreferredEditor(editorId) {
@@ -700,8 +755,8 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				throw new Error("That open target is not available.");
 			}
 			const workspacePath = await deps.resolveWorkspace(sessionId);
-			const resolved = entry?.command;
-			await openTarget(target, resolved, workspacePath);
+			const resolved = entry && isEditorId(targetId) ? await editorCommand(targetId, entry.command) : entry?.command;
+			await openTarget(withNeovimHost(target, await selectedNeovimTerminal()), resolved, workspacePath);
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
 			return target;
 		},

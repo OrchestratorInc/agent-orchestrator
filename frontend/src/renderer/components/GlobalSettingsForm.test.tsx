@@ -63,6 +63,7 @@ const {
 	isWindowsPlatform,
 	getEditors,
 	setPreferredEditor,
+	setNeovimTerminal,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -96,6 +97,7 @@ const {
 	isWindowsPlatform: vi.fn(() => true),
 	getEditors: vi.fn(),
 	setPreferredEditor: vi.fn(),
+	setNeovimTerminal: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -143,7 +145,7 @@ vi.mock("../lib/bridge", () => ({
 			onStatus: updOnStatus,
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
-		editorHandoff: { getEditors, setPreferredEditor },
+		editorHandoff: { getEditors, setPreferredEditor, setNeovimTerminal },
 		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut },
 	},
 }));
@@ -197,6 +199,7 @@ beforeEach(async () => {
 		isWindowsPlatform,
 		getEditors,
 		setPreferredEditor,
+		setNeovimTerminal,
 	]) {
 		m.mockReset();
 	}
@@ -548,6 +551,42 @@ describe("GlobalSettingsForm", () => {
 			expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom", path: "/opt/homebrew/bin/fish" } }),
 		);
 		await waitFor(() => expect(screen.getByLabelText("Terminal shell")).toHaveTextContent("fish"));
+	});
+
+
+	it("saves the Neovim terminal and refreshes its launch hints", async () => {
+		const targets = [{ id: "terminal", name: "Terminal", kind: "terminal" }, { id: "iterm2", name: "iTerm2", kind: "terminal" }];
+		getEditors.mockResolvedValue({ editors: [{ id: "neovim", name: "Neovim", kind: "editor" }], preferredEditorId: "neovim", neovimTerminal: { selected: "terminal", targets } });
+		setNeovimTerminal.mockImplementation(async (selected: string) => {
+			getEditors.mockResolvedValue({ editors: [{ id: "neovim", name: "Neovim (iTerm2)", kind: "editor" }], preferredEditorId: "neovim", neovimTerminal: { selected, targets } });
+			return selected;
+		});
+		const user = userEvent.setup();
+		renderForm("general");
+		const selector = await screen.findByLabelText("Neovim terminal");
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "iTerm2" }));
+		await waitFor(() => expect(setNeovimTerminal).toHaveBeenCalledWith("iterm2"));
+		await waitFor(() => expect(selector).toHaveTextContent("iTerm2"));
+	});
+
+	it("shows terminal-save errors without changing the selection", async () => {
+		getEditors.mockResolvedValue({ editors: [], preferredEditorId: "cursor", neovimTerminal: { selected: "terminal", targets: [{ id: "terminal", name: "Terminal", kind: "terminal" }, { id: "iterm2", name: "iTerm2", kind: "terminal" }] } });
+		setNeovimTerminal.mockRejectedValue(new Error("Could not save the Neovim terminal"));
+		const user = userEvent.setup();
+		renderForm("general");
+		const selector = await screen.findByLabelText("Neovim terminal");
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "iTerm2" }));
+		expect(await screen.findByText("Could not save the Neovim terminal", { selector: '[role="alert"]' })).toBeInTheDocument();
+		expect(selector).toHaveTextContent("Terminal");
+	});
+
+	it("retains a missing Neovim terminal and offers installed replacements", async () => {
+		getEditors.mockResolvedValue({ editors: [], preferredEditorId: "neovim", neovimTerminal: { selected: "ghostty", targets: [{ id: "terminal", name: "Terminal", kind: "terminal" }] } });
+		renderForm("general");
+		expect(await screen.findByText("Ghostty is not installed. Choose another Neovim terminal.", { selector: '[role="alert"]' })).toBeInTheDocument();
+		expect(screen.getByLabelText("Neovim terminal")).toHaveTextContent("Ghostty");
 	});
 
 	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
