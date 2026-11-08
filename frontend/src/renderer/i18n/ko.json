@@ -1786,6 +1786,8 @@
 	"shell.openSession": "{{title}} 열기",
 	"shell.openOrchestrator": "오케스트레이터 열기",
 	"shell.orchestrator": "오케스트레이터",
+	"shell.orchestratorNewReply": "새 답장",
+	"shell.orchestratorWorking": "작업 중",
 	"shell.orchestratorBoard": "오케스트레이터 보드",
 	"shell.orchestratorWithActivity": "오케스트레이터, {{activity}}",
 	"shell.pinned": "고정됨",

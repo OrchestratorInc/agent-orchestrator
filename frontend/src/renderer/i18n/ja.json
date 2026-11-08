@@ -1786,6 +1786,8 @@
 	"shell.openSession": "{{title}} を開く",
 	"shell.openOrchestrator": "オーケストレーターを開く",
 	"shell.orchestrator": "オーケストレーター",
+	"shell.orchestratorNewReply": "新しい返信",
+	"shell.orchestratorWorking": "作業中",
 	"shell.orchestratorBoard": "オーケストレーターボード",
 	"shell.orchestratorWithActivity": "オーケストレーター、{{activity}}",
 	"shell.pinned": "ピン留め",

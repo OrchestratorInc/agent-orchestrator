@@ -2184,6 +2184,8 @@
 	"shell.openSession": "Открыть {{title}}",
 	"shell.openOrchestrator": "Открыть оркестратор",
 	"shell.orchestrator": "Оркестратор",
+	"shell.orchestratorNewReply": "Новый ответ",
+	"shell.orchestratorWorking": "Работает",
 	"shell.orchestratorBoard": "Доска оркестратора",
 	"shell.orchestratorWithActivity": "Оркестратор, {{activity}}",
 	"shell.pinned": "Закреплено",

@@ -2121,6 +2121,8 @@
 	"shell.openSession": "Open {{title}}",
 	"shell.openOrchestrator": "Open orchestrator",
 	"shell.orchestrator": "Orchestrator",
+	"shell.orchestratorNewReply": "New reply",
+	"shell.orchestratorWorking": "Working",
 	"shell.orchestratorBoard": "Orchestrator board",
 	"shell.orchestratorWithActivity": "Orchestrator, {{activity}}",
 	"shell.pinned": "Pinned",
