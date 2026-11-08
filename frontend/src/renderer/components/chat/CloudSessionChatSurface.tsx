@@ -660,6 +660,11 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// A Setup that ran before any turn started sits just above that prompt.
 	// Without the session's start loaded, the first prompt here is not its first.
 	const firstTurnStart = events.find((event) => event.type === "chat.turn_started")?.sequence ?? Infinity;
+	// A turn whose prompt is above the loaded events began before every prompt
+	// here (a prompt queued while it ran sits inside it, ahead of its later
+	// events): it sorts before them, in the order of its first loaded event.
+	const windowStart = events[0]?.sequence ?? 0;
+	const windowSpan = (events.at(-1)?.sequence ?? 0) - windowStart + 2;
 	const firstPrompt = partial ? undefined : events.find((event) => event.type === "chat.user_message")?.sequence;
 	const runSequence = (run: ScriptRun) =>
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
@@ -668,12 +673,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
 			// A turn starts with its prompt. One whose first event here is any
-			// other began before the loaded events (the control plane starts a
-			// page inside a turn only when the turn is very long): it had started.
+			// other began before the loaded events (a page starts inside the
+			// turn a later prompt queued in, or inside a very long one): it had
+			// started.
 			const startedEarlier = partial && event.type !== "chat.user_message" && event.type !== "chat.turn_started";
-			turns.set(turnID, startedEarlier
-				? { id: turnID, state: "running", requestedAt: event.createdAt, startedAt: event.createdAt }
-				: { id: turnID, state: "queued", requestedAt: event.createdAt });
+			const promptAbove = partial && event.type !== "chat.user_message";
+			turns.set(turnID, {
+				// Keyed by the turn alone: as older pages load, a turn first seen
+				// partway gains its prompt, and the reader's view stays on it.
+				groupKey: `turn:${turnID}`,
+				...(startedEarlier
+					? { id: turnID, state: "running", requestedAt: event.createdAt, startedAt: event.createdAt }
+					: { id: turnID, state: "queued", requestedAt: event.createdAt }),
+				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
+			});
 		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;

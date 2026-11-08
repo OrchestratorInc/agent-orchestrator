@@ -5785,9 +5785,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? `${item.turnId}-${item.sequence}` : itemKey(item),
+			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
 			turnId: item.turnId,
-			anchor: item.sequence,
+			// A turn that began above the loaded history sorts where it began.
+			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
 		groupForTurn.set(item.turnId, group);
