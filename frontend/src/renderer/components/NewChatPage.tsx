@@ -8,7 +8,6 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { isDevFakeProject } from "../lib/dev-fake-project";
 import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
@@ -249,9 +248,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 
 	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
 		const target = { ...targetRef.current };
-		// Dev builds' guided-tour preview: the pretend project has no daemon
-		// behind it, so the send goes nowhere (the tour still counts it).
-		if (isDevFakeProject(target.projectId)) return;
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
 		setEcho(brief);
@@ -356,7 +352,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
-	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError && !isDevFakeProject(projectId) ? (
+	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">

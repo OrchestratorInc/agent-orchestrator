@@ -366,7 +366,7 @@ function InstallRow({
 	} else if (!unsupported) {
 		action = (
 			<Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={onInstall}>
-				{failed ? t("startup.githubLoginTryAgain") : t("firstRun.install")}
+				{failed ? t("startup.installTryAgain") : t("firstRun.install")}
 			</Button>
 		);
 	}
@@ -374,6 +374,10 @@ function InstallRow({
 	const detail = succeeded ? null : (
 		<>
 			{notice && !running ? <p className="text-caption text-warning" role="status">{notice}</p> : null}
+			{/* What is running on this machine (brew, sudo, npm…), in full. */}
+			{running && job?.command ? (
+				<p className="break-all text-caption text-settings-muted">{t("startup.installingCommand", { command: job.command })}</p>
+			) : null}
 			{running ? (
 				<div className="ao-install-progress" aria-hidden="true">
 					<div className="ao-install-progress__bar" />

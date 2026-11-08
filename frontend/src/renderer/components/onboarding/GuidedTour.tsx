@@ -1,11 +1,9 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { ArrowRight, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { useWorkspaceQuery, workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
-import { DEV_FAKE_PROJECT_ID, setDevFakeProject } from "../../lib/dev-fake-project";
+import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { onComposerSent } from "../../lib/guided-tour-signals";
 import { IS_DEV } from "../../lib/is-dev";
 import { sessionNavigateTarget } from "../../lib/navigate-to-session";
@@ -21,9 +19,8 @@ import { Button } from "../ui/button";
 // does it: open or add a project, open the orchestrator, send it a message.
 // When that control isn't on screen (they wandered off, or the page is still
 // loading) the card waits in the corner with a way back. Controls opt in with
-// `data-tour="…"`. Dev builds add Continue, and on the first step Continue
-// with a fake project (dev-fake-project), to preview the whole tour on a
-// machine that already has projects.
+// `data-tour="…"`. Dev builds add Continue on the steps after the first, to
+// step through the rest of the tour.
 //
 // The card is not the shared Popover: that one is a dialog, and pages treat
 // an open dialog as owning Escape and focus. This is a guide beside the work.
@@ -93,9 +90,8 @@ function findVisible(selectors: readonly string[]): Element | null {
 
 // `known`: the projects there when the tour started, so the first step can
 // tell a new one (null until the list loads). `projectId`: the project the
-// tour settled on (added or opened). `fake`: a dev build previewing with the
-// pretend project. A per-viewer convenience, so localStorage.
-type TourState = { step: TourStep; known: string[] | null; projectId?: string; fake?: boolean };
+// tour settled on (added or opened). A per-viewer convenience, so localStorage.
+type TourState = { step: TourStep; known: string[] | null; projectId?: string };
 const STORAGE_KEY = "ao.guidedTour";
 const STEPS: readonly TourStep[] = [...COUNTED, "done"];
 
@@ -107,7 +103,6 @@ function readState(): TourState | null {
 			step: parsed.step as TourStep,
 			known: Array.isArray(parsed.known) ? parsed.known.filter((id): id is string => typeof id === "string") : null,
 			projectId: typeof parsed.projectId === "string" ? parsed.projectId : undefined,
-			fake: IS_DEV && parsed.fake === true,
 		};
 	} catch {
 		return null;
@@ -115,11 +110,9 @@ function readState(): TourState | null {
 }
 
 let state: TourState | null = typeof window === "undefined" ? null : readState();
-setDevFakeProject(Boolean(state?.fake));
 const listeners = new Set<() => void>();
 function setState(next: TourState | null) {
 	state = next;
-	setDevFakeProject(Boolean(next?.fake));
 	try {
 		if (next) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
 		else window.localStorage.removeItem(STORAGE_KEY);
@@ -272,7 +265,6 @@ export function GuidedTour() {
 	const navigate = useNavigate();
 	const router = useRouter();
 	const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
-	const queryClient = useQueryClient();
 	const seen = useSeen(step);
 	const view = useWindowSize();
 
@@ -294,23 +286,19 @@ export function GuidedTour() {
 		// listKey stands for localProjectIds, which is a fresh array each render.
 	}, [tour, listKey]);
 
-	// The last step ends when any chat sends a message: a real send, or the
-	// pretend project's, which goes nowhere.
+	// The last step ends when any chat sends a message.
 	useEffect(() => {
 		if (step !== "task") return;
 		reportOnboardingStep("first_task", "viewed");
 		return onComposerSent(() => {
-			if (!state?.fake) reportOnboardingStep("first_task", "completed");
+			reportOnboardingStep("first_task", "completed");
 			moveOn("task", "done");
 		});
 	}, [step]);
 
 	const end = () => {
-		if (state?.step === "task" && !state.fake) reportOnboardingStep("first_task", "abandoned");
-		const fake = state?.fake;
+		if (state?.step === "task") reportOnboardingStep("first_task", "abandoned");
 		setState(null);
-		// The pretend project goes with the tour: leave its pages, then drop it.
-		if (fake) void navigate({ to: "/" }).then(() => queryClient.refetchQueries({ queryKey: workspaceQueryKey }));
 	};
 	const endRef = useRef(end);
 	endRef.current = end;
@@ -360,30 +348,19 @@ export function GuidedTour() {
 	const destination =
 		step === "project" || !projectId ? { to: "/" as const }
 		: step === "orchestrator" ? { to: "/projects/$projectId" as const, params: { projectId } }
-		: step === "task" && tour.fake ? { to: "/new" as const, search: { project: projectId } }
 		: step === "task" && orchestrator ? sessionNavigateTarget(projectId, orchestrator.id)
 		: { to: "/projects/$projectId" as const, params: { projectId } };
 	const destinationPath = router.buildLocation(destination).pathname;
 	const offTrack = step !== "done" && !shown;
 	const showTakeMeThere = offTrack && pathname !== destinationPath;
 
-	// Dev builds: the first step adds the pretend project and opens its board
-	// (which moves the tour on); with it, the board's step opens a new chat in
-	// it. Otherwise straight to the next step.
-	const devContinue = async () => {
-		if (step === "project") {
-			setState({ ...tour, fake: true });
-			await queryClient.refetchQueries({ queryKey: workspaceQueryKey });
-			void navigate({ to: "/projects/$projectId", params: { projectId: DEV_FAKE_PROJECT_ID } });
-			return;
-		}
-		if (step === "orchestrator" && tour.fake) {
-			void navigate({ to: "/new", search: { project: DEV_FAKE_PROJECT_ID } });
-			return;
-		}
+	// Dev builds: straight to the next step. The first step has none, since a
+	// project is needed for the rest.
+	const devContinue = () => {
 		if (step === "done") end();
 		else moveOn(step, STEPS[STEPS.indexOf(step) + 1]!);
 	};
+	const showDevContinue = IS_DEV && step !== "done" && step !== "project";
 
 	const copy = COPY[step === "project" && shown?.element.querySelector(RECENT_PROJECT) ? "recent" : step];
 	const position = placeCard(step === "done" ? undefined : shown?.rect, cardSize, view);
@@ -453,11 +430,11 @@ export function GuidedTour() {
 					<h2 id="guided-tour-title" className="pt-1 text-sm font-semibold text-foreground">{t(copy.title)}</h2>
 					<p className="pt-1 text-pretty text-sm leading-relaxed text-muted-foreground">{t(copy.body)}</p>
 				</div>
-				{showTakeMeThere || step === "done" || IS_DEV ? (
+				{showTakeMeThere || step === "done" || showDevContinue ? (
 					<div className="flex flex-wrap items-center justify-end gap-2 pt-4">
-						{IS_DEV && step !== "done" ? (
-							<Button type="button" variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void devContinue()}>
-								{t(step === "project" && !tour.fake ? "firstRun.tourDevFake" : "firstRun.continue")}
+						{showDevContinue ? (
+							<Button type="button" variant="ghost" size="sm" className="text-muted-foreground" onClick={devContinue}>
+								{t("firstRun.continue")}
 							</Button>
 						) : null}
 						{showTakeMeThere ? (

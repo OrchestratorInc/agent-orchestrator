@@ -6496,11 +6496,11 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
  * window it takes the chrome treatment (clear canvases, the one 70% tint) back
  * from the floating-surface rule above, and the shell under it is hidden so
  * the desktop blur shows through instead of the app. */
-html[data-window-translucent="true"]:has([data-testid="first-run-onboarding"]) .app-shell-root {
+html[data-window-translucent="true"]:has(.first-run-onboarding) .app-shell-root {
 	visibility: hidden;
 }
 
-html[data-window-translucent="true"] [data-testid="first-run-onboarding"] {
+html[data-window-translucent="true"] .first-run-onboarding {
 	--color-bg-primary: transparent;
 	--color-bg-sidebar: transparent;
 	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
@@ -6608,6 +6608,8 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 		linear-gradient(#7fb4f5, #7fb4f5),
 		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
 	background-blend-mode: screen, multiply, normal;
+	/* A backdrop, not the subject: kept well under the drawing and the copy. */
+	opacity: 0.5;
 }
 
 /* Light theme inverts the wallpaper: its lightness flips and its blue stays,
@@ -6629,8 +6631,8 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 }
 
 .onboarding-backdrop::after {
-	-webkit-mask-image: radial-gradient(circle, black 2.6px, transparent 3.2px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
-	mask-image: radial-gradient(circle, black 2.6px, transparent 3.2px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	-webkit-mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
 	-webkit-mask-size: 7px 7px, 100% 100%;
 	mask-size: 7px 7px, 100% 100%;
 	-webkit-mask-repeat: repeat, no-repeat;
@@ -6653,7 +6655,7 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
  * shadow; labels are monospace. Scoped to the stage, so the real app is
  * untouched. Utilities read the leaf tokens directly (@theme inline), so the
  * leaves are set here. */
-[data-testid="first-run-onboarding"] {
+.first-run-onboarding {
 	/* Resolved here, outside the stage's overrides: the page's real colours.
 	 * --schematic-solid stays opaque in a translucent window too (its canvas
 	 * colour is cleared there), for parts that must hide what is behind them. */
