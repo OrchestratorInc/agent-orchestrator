@@ -8,6 +8,7 @@ import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnap
 import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
@@ -176,7 +177,9 @@ vi.mock("./ChatWorkspace", async () => {
 			onAddToSideChat,
 			onSend,
 			composerNotice,
+			importBlock,
 		}: {
+			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
@@ -213,6 +216,7 @@ vi.mock("./ChatWorkspace", async () => {
 					{snapshot.sessionId ? <div>Mounted {mountedSessionId}</div> : null}
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
 					{composerNotice}
+					{importBlock ? <div>Blocked {importBlock}</div> : null}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
@@ -1222,6 +1226,13 @@ describe("controller catalogs during an interface handoff", () => {
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
 			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
 		}
+	});
+
+	it("blocks an imported chat whose agent is signed out", async () => {
+		const client = new QueryClient();
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: "installed" }, authentication: { state: "unauthorized" } }] });
+		render(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} /></Wrapper>);
+		expect(await screen.findByText("Blocked signed_out")).toBeInTheDocument();
 	});
 
 	it("waits for a ready controller during native and imported resumes", () => {

@@ -178,7 +178,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { ProjectImportOffer } from "../ProjectImportOffer";
-import { useImportedAgentBlock } from "../../lib/session-import";
+import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -481,6 +481,7 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
+	importBlock?: AgentBlock;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -786,6 +787,7 @@ function ChatWorkspaceContent({
 	composerNotice,
 	composerLockedPlaceholder,
 	savedCopy = false,
+	importBlock,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -857,7 +859,6 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
-	const importBlock = useImportedAgentBlock(session, activeRemoteHostId).block;
  const fileNavigationGeneration=useRef(0);
  useEffect(()=>{fileNavigationGeneration.current++;return ()=>{fileNavigationGeneration.current++}},[snapshot.sessionId,activeRemoteHostId,workspaceActiveTabKey]);
 	const remoteCreateMux = useMemo(

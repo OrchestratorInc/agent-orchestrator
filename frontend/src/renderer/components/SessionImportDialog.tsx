@@ -97,7 +97,7 @@ function useImportRun(onDone: (results: ImportResult[]) => void) {
 
 function useAgentBlocks() {
 	const readiness = useAgentReadinessQuery();
-	return (harness: string) => agentBlock(readiness.data?.agents.find((agent) => agent.id === harness));
+	return (harness: string) => agentBlock(readiness.data?.agents?.find((agent) => agent.id === harness));
 }
 
 function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () => void }) {

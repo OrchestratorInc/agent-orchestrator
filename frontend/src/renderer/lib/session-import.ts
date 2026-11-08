@@ -59,7 +59,7 @@ export function useImportedAgentBlock(
 	const readiness = useAgentReadinessQuery(watch);
 	if (!watch) return { checking: false };
 	return {
-		block: agentBlock(readiness.data?.agents.find((agent) => agent.id === session?.provider)),
+		block: agentBlock(readiness.data?.agents?.find((agent) => agent.id === session?.provider)),
 		checking: readiness.isPending && readiness.fetchStatus !== "idle",
 	};
 }
@@ -96,6 +96,6 @@ export async function importChats(queryClient: QueryClient, ids: string[], folde
 				data && { ...data, candidates: data.candidates.map((c) => (imported.has(c.id) ? { ...c, sessionId: imported.get(c.id) } : c)) },
 			);
 		}
-		await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	}
 }

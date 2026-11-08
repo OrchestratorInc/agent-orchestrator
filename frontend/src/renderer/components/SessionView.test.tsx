@@ -1067,6 +1067,7 @@ describe("SessionView", () => {
 		resumeAgentPostMock.mockResolvedValue({ data: {}, error: undefined });
 		chatViewPostMock.mockReset().mockResolvedValue({ error: undefined });
 		reviewGetMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [] }, error: undefined };
 			if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
 				return {
 					data: {

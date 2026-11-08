@@ -3,6 +3,7 @@ import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
+import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -225,6 +226,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -713,6 +715,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				newWorkDisabled={newWorkDisabled || hostUnreachable}
 				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
 				savedCopy={hostUnreachable}
+				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
