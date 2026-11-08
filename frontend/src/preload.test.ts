@@ -9,6 +9,7 @@ const electronMocks = vi.hoisted(() => {
 		exposeInMainWorld: vi.fn(),
 		getPathForFile: vi.fn(),
 		invoke: vi.fn(),
+		executeInMainWorld: vi.fn(),
 		listeners,
 		off: vi.fn(),
 		on: vi.fn((channel: string, listener: (...args: unknown[]) => void) => {
@@ -19,9 +20,9 @@ const electronMocks = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld },
+	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld, executeInMainWorld: electronMocks.executeInMainWorld },
 	ipcRenderer: {
-		invoke: electronMocks.invoke,
+		invoke: (...args: unknown[]) => Promise.resolve(electronMocks.invoke(...args)),
 		off: electronMocks.off,
 		on: electronMocks.on,
 		send: electronMocks.send,
@@ -88,6 +89,29 @@ describe("preload Developer Mode updater bridge", () => {
 });
 
 describe("preload telemetry generation bridge", () => {
+	it("purges early captures before applying the first policy", async () => {
+		electronMocks.invoke.mockResolvedValue(false);
+		for (let i = 0; i < 25; i++) await exposedBridge().telemetry.capture({ kind: "message", message: "early" });
+		expect(electronMocks.invoke).not.toHaveBeenCalled();
+		rendererQueuePurgeRequestListener?.({}, { requestId: "early-purge" });
+		await exposedBridge().telemetry.capture({ kind: "message", message: "after-purge" });
+		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-first", acknowledged: true, state: "applied" });
+		expect(electronMocks.invoke).toHaveBeenCalledExactlyOnceWith("telemetry:capture", { kind: "message", message: "after-purge", consentGeneration: "generation-first" });
+	});
+
+	it("forwards at most twenty early captures using the first known generation", async () => {
+		vi.resetModules();
+		await import("./preload");
+		const bridge = electronMocks.exposeInMainWorld.mock.calls.at(-1)?.[1] as AoBridge;
+		electronMocks.invoke.mockClear();
+		electronMocks.invoke.mockResolvedValue(false);
+		for (let i = 0; i < 25; i++) await bridge.telemetry.capture({ kind: "message", message: "early" });
+		expect(electronMocks.invoke).not.toHaveBeenCalled();
+		electronMocks.listeners.get("telemetry:policyChanged")?.({}, { eventsEnabled: true, consentGeneration: "generation-first", acknowledged: true, state: "applied" });
+		expect(electronMocks.invoke).toHaveBeenCalledTimes(20);
+		expect(electronMocks.invoke).toHaveBeenLastCalledWith("telemetry:capture", { kind: "message", message: "early", consentGeneration: "generation-first" });
+	});
+
 	it("tags captures with the latest broadcast generation without a renderer reload", async () => {
 		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
 		await exposedBridge().telemetry.capture({ kind: "message", message: "first" });
@@ -186,6 +210,31 @@ describe("preload openFolderPath bridge", () => {
 		dispose = exposedBridge().app.onOpenFolderPath(secondListener);
 
 		expect(secondListener).not.toHaveBeenCalled();
+	});
+});
+
+describe("preload cloud sign-in bridge", () => {
+	it("delivers each session notification's account and removes the exact wrapped listener", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().cloud.onSessionChanged(listener);
+		const wrapped = electronMocks.listeners.get("cloud:sessionChanged");
+		const account = { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" };
+
+		wrapped?.({}, account);
+		wrapped?.({}, null);
+		expect(listener.mock.calls).toEqual([[account], [null]]);
+
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("cloud:sessionChanged", wrapped);
+	});
+
+	it("takes the pending sign-in's context from main and hands back what main returns", async () => {
+		const pending = { account: { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" }, signIn: { webDistinctId: "019a3f5e-8c2b" } };
+		electronMocks.invoke.mockResolvedValueOnce(pending).mockResolvedValueOnce(null);
+
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toEqual(pending);
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toBeNull();
+		expect(electronMocks.invoke.mock.calls).toEqual([["cloud:takePendingSignIn"], ["cloud:takePendingSignIn"]]);
 	});
 });
 
@@ -419,5 +468,30 @@ describe("preload browser downloads bridge", () => {
 		expect(listener).toHaveBeenCalledWith({ downloads: [] });
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
+	});
+});
+
+describe("preload cloud binary requests", () => {
+	const init = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments", method: "POST" };
+
+	it("cancels a request by its id, and every one still running when the page goes away", async () => {
+		let finish!: (value: unknown) => void;
+		electronMocks.invoke.mockReturnValueOnce(new Promise(() => undefined)).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		const bridge = exposedBridge().cloudCp;
+		void bridge.requestBinary({ ...init, requestId: "running" });
+		const done = bridge.requestBinary({ ...init, requestId: "done" });
+		expect(electronMocks.invoke).toHaveBeenCalledWith("cloudCp:requestBinary", expect.objectContaining({ requestId: "running" }));
+		finish({ status: 201, headers: {}, body: new Uint8Array() });
+		await done;
+
+		bridge.cancelBinary("other");
+		expect(electronMocks.send).toHaveBeenCalledWith("cloudCp:cancelBinary", "other");
+		electronMocks.send.mockClear();
+		// A reload: what still runs is cancelled, not what already finished.
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send.mock.calls).toEqual([["cloudCp:cancelBinary", "running"]]);
+		electronMocks.send.mockClear();
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send).not.toHaveBeenCalled();
 	});
 });

@@ -8,11 +8,13 @@ package reaper
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -46,6 +48,10 @@ type Config struct {
 	// because a single failed probe must not kill the loop. nil means
 	// slog.Default.
 	Logger *slog.Logger
+	// StartAfter holds the periodic loop until it closes; nil starts at once.
+	// The daemon closes it after the startup check, so a runtime that died
+	// while AO was down is judged by that check, not read as a crash first.
+	StartAfter <-chan struct{}
 }
 
 type sessionSource interface {
@@ -63,13 +69,14 @@ type runtimeProber interface {
 // Reaper is the polling timer. Construct it with New; start the background
 // goroutine with Start, or drive a single cycle synchronously with Tick.
 type Reaper struct {
-	sink     runtimeObservationSink
-	sessions sessionSource
-	runtime  runtimeProber
-	workload ports.SupervisedProcessInspector
-	tick     time.Duration
-	clock    func() time.Time
-	logger   *slog.Logger
+	sink       runtimeObservationSink
+	sessions   sessionSource
+	runtime    runtimeProber
+	workload   ports.SupervisedProcessInspector
+	tick       time.Duration
+	clock      func() time.Time
+	logger     *slog.Logger
+	startAfter <-chan struct{}
 
 	// The periodic loop and boot-time reconciliation may call Tick on the same
 	// Reaper concurrently, so the per-run warning set needs synchronization.
@@ -87,6 +94,7 @@ func New(sink runtimeObservationSink, sessions sessionSource, runtime runtimePro
 		tick:                cfg.Tick,
 		clock:               cfg.Clock,
 		logger:              cfg.Logger,
+		startAfter:          cfg.StartAfter,
 		warnedMissingHandle: make(map[domain.SessionID]struct{}),
 	}
 	if workload, ok := runtime.(ports.SupervisedProcessInspector); ok {
@@ -122,6 +130,13 @@ func (r *Reaper) Start(ctx context.Context) <-chan struct{} {
 
 func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
+	if r.startAfter != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.startAfter:
+		}
+	}
 	t := time.NewTicker(r.tick)
 	defer t.Stop()
 	for {
@@ -131,10 +146,15 @@ func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 		case <-t.C:
 			if err := r.Tick(ctx); err != nil {
 				r.logger.Error("reaper: tick failed", "err", err)
+				sentryobs.CaptureBackground(ctx, err, "reaper", "reaper_tick", nil)
 			}
 		}
 	}
 }
+
+// errMassDeath stands in for the tripped mass-death breaker, which has no
+// error of its own.
+var errMassDeath = errors.New("reaper: mass-death circuit breaker tripped")
 
 // Tick runs one observation cycle: it enumerates non-terminated sessions,
 // probes each one's runtime, and reports each result back as a fact.
@@ -184,6 +204,9 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		// board untouched and let the next probe decide.
 		r.logger.Error("reaper: mass-death circuit breaker tripped, reporting the pass as inconclusive",
 			"dead", dead, "probed", len(observations))
+		// The outage signal: many agents "died" in one pass. The counts are
+		// logged locally; Sentry only needs to know the breaker tripped.
+		sentryobs.CaptureBackground(ctx, errMassDeath, "reaper", "reaper_breaker", map[string]string{"reason": "mass_death"})
 		for i := range observations {
 			if observations[i].facts.Runtime == ports.ProbeDead {
 				observations[i].facts.Runtime = ports.ProbeFailed
@@ -195,6 +218,7 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		if err := r.sink.ApplyRuntimeObservation(ctx, obs.id, obs.facts); err != nil {
 			r.logger.Error("reaper: ApplyRuntimeObservation failed",
 				"session", obs.id, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "reaper", "runtime_observation", nil)
 		}
 	}
 	return nil
@@ -212,6 +236,12 @@ func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now ti
 	// let a healthy chat session look dead to the reaper. The chat controller
 	// reports its own health through the conversation's controller state.
 	if domain.NormalizeSessionMode(sess.Mode) == domain.SessionModeChat {
+		return ports.RuntimeFacts{}, false
+	}
+	// A stopped session keeps the handle of the launch AO released until it is
+	// resumed. The LCM ignores that launch's death, and counting it as dead on
+	// every pass would let stopped sessions trip the mass-death breaker.
+	if sess.RuntimeReleased() {
 		return ports.RuntimeFacts{}, false
 	}
 	handle, ok := handleFromRecord(sess)

@@ -18,7 +18,10 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], rend
 	const { t } = useTranslation();
 	return <>
 		{hosts.map((host) => {
-			if (host.status !== "connected") return <SidebarMenuItem key={host.url} data-host-id={host.hostId}>
+			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
+			// While the host connects or is offline, its last lists show under its status;
+			// a host that refused this device's password shows nothing it kept.
+			if (host.status !== "connected") return <Fragment key={host.url}><SidebarMenuItem data-host-id={host.hostId}>
 				<SidebarMenuButton
 					aria-label={host.status === "offline" ? t("remote.retryHost", { label: host.label }) : undefined}
 					className="h-9 gap-2 rounded-lg px-2.5 text-sm text-muted-foreground hover:bg-interactive-hover [&_svg]:size-icon-md"
@@ -30,8 +33,9 @@ export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], rend
 					<span className="truncate">{host.label}</span>
 					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : host.failureReason === "unauthorized" ? t("remote.passwordRejected") : host.failureReason === "incompatible" ? t("remote.updateAO") : t("remote.retryHost", { label: host.label })}</span>
 				</SidebarMenuButton>
-			</SidebarMenuItem>;
-			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
+			</SidebarMenuItem>
+				{host.failureReason !== "unauthorized" && projects.map((workspace) => <Fragment key={`${host.hostId}:${workspace.id}`}>{renderProject(host, workspace)}</Fragment>)}
+			</Fragment>;
 			return <Fragment key={host.url}>
 				{projects.map((workspace) => <Fragment key={`${host.hostId}:${workspace.id}`}>{renderProject(host, workspace)}</Fragment>)}
 				{failedHostIds.includes(host.hostId) && <SidebarMenuItem>

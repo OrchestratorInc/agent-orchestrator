@@ -16,6 +16,7 @@ import (
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -84,6 +85,9 @@ type Service struct {
 	modelCalls         map[string]*modelCatalogCall
 	modelGeneration    map[string]int64
 	discoverySlots     chan struct{}
+
+	savedDefaultLaunchEnv func(ctx context.Context, harness domain.AgentHarness) (map[string]string, error)
+
 	// inputChecks tracks background credential-input checks for cached
 	// catalogs, so a cache read never waits on them.
 	inputCheckMu  sync.Mutex
@@ -153,6 +157,9 @@ func NewWithDeps(deps Deps) *Service {
 	svc.modelGate = deps.ModelGate
 	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
 		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
+		svc.codexAccounts.resolveBinary = func(ctx context.Context) (string, error) {
+			return svc.ResolveAgentBinary(ctx, string(domain.HarnessCodex))
+		}
 		if deps.Clock != nil {
 			svc.codexAccounts.now = deps.Clock
 		}
@@ -547,7 +554,7 @@ func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projec
 		}
 		binary = resolved
 	}
-	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
 	if err != nil {
 		return false
 	}
@@ -587,7 +594,7 @@ func activeModelCatalogScope(scope string) bool {
 	return modelCatalogScope(scope) == scope
 }
 
-func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
+func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
@@ -596,7 +603,16 @@ func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (port
 		request.CredentialType = credentialType
 		return request, nil
 	}
-	request.Env = s.runtimeCredentialEnv(agentID)
+	if agentID == string(domain.HarnessClaudeCode) && s.savedDefaultLaunchEnv != nil {
+		var err error
+		request.Env, err = s.savedDefaultLaunchEnv(ctx, domain.HarnessClaudeCode)
+		if err != nil {
+			return ports.AgentModelDiscoveryRequest{}, err
+		}
+	}
+	if len(request.Env) == 0 {
+		request.Env = s.runtimeCredentialEnv(agentID)
+	}
 	return s.globalModelDiscoveryRequest(request)
 }
 
@@ -802,8 +818,15 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			binary = resolved
 		}
 	}
-	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
+	persistCtx := s.ctx
+	if persistCtx == nil {
+		persistCtx = context.Background()
+	}
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
 	if err != nil {
+		if errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+			return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, cached.BinaryVersion, generation), nil
+		}
 		return ports.AgentModelCatalog{}, err
 	}
 	// Fingerprints the same inputs the discovery run would read, so a change to
@@ -857,15 +880,17 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
-	persistCtx := s.ctx
-	if persistCtx == nil {
-		persistCtx = context.Background()
-	}
 	if errors.Is(discoverErr, ports.ErrAgentModelDiscoverySignInRequired) {
 		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, version, generation), nil
 	}
 	if discoverErr != nil {
 		warningCode := modelCatalogWarningCode(discoverErr)
+		// Discovery failures answer 200 with the problem in the catalog, so the
+		// request logger never sees them. Auth states (signed out, expired or
+		// rejected login) carry a warning code and are user state, not faults.
+		if warningCode == "" {
+			sentryobs.CaptureBackground(persistCtx, discoverErr, "agent_catalog", "model_discovery", map[string]string{"agent": agentID})
+		}
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
 		// when it was produced from the same discovery inputs; otherwise a revoked
 		// key or provider switch could leave invalid IDs in the picker.

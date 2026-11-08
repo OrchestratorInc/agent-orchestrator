@@ -87,9 +87,10 @@ export type ChromeApi = {
 		onRemoved: Listener<[TabGroup]>;
 	};
 	windows: {
-		create(props: { url?: string; type?: "normal" | "popup"; width?: number; height?: number; focused?: boolean }): Promise<WindowInfo & { tabs?: Tab[] }>;
+		create(props: { url?: string; type?: "normal" | "popup"; width?: number; height?: number; focused?: boolean; state?: "normal" }): Promise<WindowInfo & { tabs?: Tab[] }>;
+		get(windowId: number): Promise<WindowInfo>;
 		getLastFocused(options?: { windowTypes?: string[] }): Promise<WindowInfo>;
-		update(windowId: number, props: { focused?: boolean; drawAttention?: boolean }): Promise<WindowInfo>;
+		update(windowId: number, props: { focused?: boolean; drawAttention?: boolean; state?: "normal" }): Promise<WindowInfo>;
 		remove(windowId: number): Promise<void>;
 		onRemoved: Listener<[number]>;
 	};
@@ -118,6 +119,8 @@ export type ChromeApi = {
 	webNavigation: {
 		getAllFrames(details: { tabId: number }): Promise<Frame[] | null>;
 		onCommitted: Listener<[NavigationDetails]>;
+		onDOMContentLoaded: Listener<[NavigationDetails]>;
+		onReferenceFragmentUpdated: Listener<[NavigationDetails]>;
 		onCompleted: Listener<[NavigationDetails]>;
 		onErrorOccurred: Listener<[NavigationDetails]>;
 	};
@@ -125,6 +128,10 @@ export type ChromeApi = {
 		onBeforeRequest: WebRequestEvent;
 		onCompleted: WebRequestEvent;
 		onErrorOccurred: WebRequestEvent;
+	};
+	alarms: {
+		create(name: string, info: { periodInMinutes: number; delayInMinutes?: number }): Promise<void>;
+		onAlarm: Listener<[{ name: string }]>;
 	};
 	action: {
 		setBadgeText(details: { text: string }): Promise<void>;

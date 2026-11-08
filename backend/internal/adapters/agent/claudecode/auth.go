@@ -357,6 +357,9 @@ var claudeNow = time.Now
 // it: the provider has just contradicted whatever was stored.
 func InvalidateAuthCache() { claudeAuthCache.invalidate() }
 
+// InvalidateAuthCache implements ports.AgentAuthCacheInvalidator.
+func (p *Plugin) InvalidateAuthCache() { InvalidateAuthCache() }
+
 // claudeAuthReport is the parsed shape of `claude auth status --json`. Only
 // LoggedIn drives the verdict; the rest is diagnostics.
 type claudeAuthReport struct {

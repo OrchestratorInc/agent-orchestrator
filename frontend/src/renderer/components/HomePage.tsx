@@ -2,13 +2,15 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useMigrationOffer } from "../hooks/useMigrationOffer";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { firstRunPromptVariant, type FirstRunPromptAction, type FirstRunPromptVariant } from "../lib/experiments";
+import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
-import { isMacPlatform } from "../lib/platform";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -22,9 +24,12 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 /**
  * Home landing layout contracts (do not regress without explicit design sign-off):
@@ -44,11 +49,10 @@ import { Badge } from "./ui/badge";
  *   project: it never appears in the recent rows or counts toward the
  *   heading — the grid's standalone action and the sidebar own it.
  */
-const isMac = isMacPlatform();
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
-	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 text-left transition-[scale,background-color] duration-fast ease-out hover:bg-accent hover:text-foreground active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transform-none";
+	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 transition-[background-color] duration-fast ease-out hover:bg-accent hover:text-foreground";
 const HOME_ICON_SLOT_CLASS =
 	"grid size-8 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4";
 const HOME_PROJECT_ICON_CLASS =
@@ -85,15 +89,13 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
 
 	return (
-		<button
+		<Pressable
 			// Host must use NAV_ROW_HIGHLIGHT_HOST_CLASS — pill owns the fill.
 			className={cn(
-				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-left text-muted-foreground",
-				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-muted-foreground",
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
-			type="button"
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
@@ -110,7 +112,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 			<span className="relative z-[1] ml-auto shrink-0 text-right text-caption tabular-nums text-muted-foreground">
 				{relativeProjectTime(latestProjectFact, emptyTimeLabel)}
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -126,35 +128,57 @@ function HomeActionCard({
 	onClick?: () => void;
 }) {
 	return (
-		<button
-			className={cn(
-				HOME_BUTTON_CLASS,
-				"disabled:pointer-events-none disabled:opacity-50",
-			)}
+		<Pressable
+			className={cn(HOME_BUTTON_CLASS, "disabled:pointer-events-none disabled:opacity-50")}
 			disabled={disabled}
 			onClick={onClick}
-			type="button"
 		>
 			<span className={HOME_ICON_SLOT_CLASS} aria-hidden="true">
 				{icon}
 			</span>
 			<span className="min-w-0 text-sm font-medium leading-5 text-foreground">{label}</span>
-		</button>
+		</Pressable>
 	);
 }
 
 export function HomePage() {
+	return (
+		<div className="relative flex h-full min-h-0 flex-col">
+			{/* The welcome page has no header. On macOS an invisible strip keeps
+			    the top edge draggable without moving the content. */}
+			{dragStyle ? <div aria-hidden="true" className="absolute inset-x-0 top-0 z-chrome h-toolbar" style={dragStyle} /> : null}
+			<HomePageContent />
+		</div>
+	);
+}
+
+function HomePageContent() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, workspaceStartupState } =
 		useShell();
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
 	const { cloudEnabled } = useCloudGate();
 	const workspaceQuery = useWorkspaceQuery();
+	const migrationOffer = useMigrationOffer();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
+	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
+	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
+	// True once we know whether this launch shows the prompt, so the agent-updates notice only waits for that decision.
+	const [firstRunDecided, setFirstRunDecided] = useState(false);
+	const firstRunOfferedThisMount = useRef(false);
+	const firstRunVariant = useRef<FirstRunPromptVariant | null>(null);
+	const firstRunActionRecorded = useRef(false);
 	const projects = workspaceQuery.data ?? [];
+	useEffect(() => {
+		let mounted = true;
+		void aoBridge.appState.getFirstRunProjectPrompt()
+			.then((status) => { if (mounted) setFirstRunStatus(status); })
+			.catch(() => { if (mounted) setFirstRunStatus("seen"); });
+		return () => { mounted = false; };
+	}, []);
 	const recentProjects = useMemo(
 		() =>
 			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
@@ -172,6 +196,59 @@ export function HomePage() {
 			workspaceStartupState === "loading" ||
 			(!workspaceQuery.isSuccess && !workspaceQuery.isError) ||
 			requirementsBlocked);
+	useEffect(() => {
+		if (showStartup || !workspaceQuery.isSuccess || firstRunStatus !== "pending") return;
+		if (!usesPreviewWorkspaceData && migrationOffer.isPending) return;
+		if (projects.length > 0 || migrationOffer.data?.show) {
+			setFirstRunDecided(true);
+			void aoBridge.appState.markFirstRunProjectPromptSeen().then(() => setFirstRunStatus("seen")).catch(() => undefined);
+			return;
+		}
+		if (firstRunOfferedThisMount.current) return;
+		let cancelled = false;
+		void aoBridge.appState.getExperimentCohort().catch(() => null).then((cohort) => {
+			if (cancelled) return;
+			const variant = firstRunPromptVariant(cohort);
+			firstRunOfferedThisMount.current = true;
+			firstRunVariant.current = variant;
+			setFirstRunDecided(true);
+			void aoBridge.appState.claimFirstRunExperimentExposure().then((claimed) => {
+				if (claimed) void captureRendererEvent("ao.onboarding.first_run_experiment_exposed", { variant });
+			}).catch(() => undefined);
+			if (variant === "prompt") {
+				setFirstRunPromptOpen(true);
+				setSourceSignal({ source: "clone", nonce: Date.now() });
+			} else {
+				setFirstRunStatus("seen");
+				void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => undefined);
+			}
+		});
+		return () => { cancelled = true; };
+	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
+
+	const setFirstRunPromptActive = useUiStore((state) => state.setFirstRunPromptActive);
+	// Shell notices wait while the prompt is showing or still being decided. Once the
+	// user starts a clone the prompt closes, so a failed or abandoned clone cannot
+	// hold them back for the rest of the session.
+	const firstRunBlocksNotices = firstRunStatus === "loading" || firstRunPromptOpen || (firstRunStatus === "pending" && !firstRunDecided);
+	useEffect(() => {
+		setFirstRunPromptActive(firstRunBlocksNotices);
+		return () => setFirstRunPromptActive(false);
+	}, [firstRunBlocksNotices, setFirstRunPromptActive]);
+
+	const recordFirstRunPromptAction = (action: FirstRunPromptAction) => {
+		if (firstRunVariant.current !== "prompt" || firstRunActionRecorded.current) return;
+		firstRunActionRecorded.current = true;
+		void captureRendererEvent("ao.onboarding.first_run_prompt_action", { action });
+	};
+	const finishFirstRunPrompt = (action: FirstRunPromptAction = "dismissed") => {
+		recordFirstRunPromptAction(action);
+		setFirstRunPromptOpen(false);
+		setFirstRunStatus("seen");
+		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
+			// A failed write leaves the durable offer pending for the next launch.
+		});
+	};
 
 	if (showStartup) return <DaemonStartupLoader />;
 
@@ -189,38 +266,29 @@ export function HomePage() {
 
 	if (workspaceStartupState === "error" || workspaceQuery.isError) {
 		return (
-			<div className="flex min-h-full items-center justify-center px-6 py-16">
+			<div className="flex min-h-0 flex-1 items-center justify-center px-6 py-16">
 				<p className="text-center text-xs text-passive">{t("shell.couldNotLoadProjects")}</p>
 			</div>
 		);
 	}
 
 	return (
-		<div className="relative flex min-h-full items-center justify-center px-6 py-16">
-			{/* The home route hides the shell topbar, so on macOS this strip is the
-			    center pane's window-drag handle (the sidebar has its own). */}
-			{isMac ? (
-				<div
-					aria-hidden="true"
-					className="absolute inset-x-0 top-0 h-traffic-light-clearance"
-					data-slot="home-drag-region"
-					style={{ WebkitAppRegion: "drag" } as CSSProperties}
-				/>
-			) : null}
+		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
-					<section className="space-y-3 px-3">
+					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
-							<button
-								className="inline-flex shrink-0 items-center gap-1.5 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground hover:border-current hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							<Button
+								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}
 								type="button"
+								variant="link"
 							>
 								<Star className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
 								{t("home.starUs")}
-							</button>
+							</Button>
 						</div>
 
 						<div className="grid grid-cols-2 gap-3">
@@ -239,7 +307,8 @@ export function HomePage() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
-							{developerMode && cloudEnabled ? (
+							{/* Cloud is on for everyone a control plane is configured for. */}
+							{cloudEnabled ? (
 								<HomeActionCard
 									icon={<Cloud strokeWidth={1.8} />}
 									label={t("createProject.cloudTitle")}
@@ -279,15 +348,23 @@ export function HomePage() {
 						)}
 					</section>
 
-					<GitHubOnboardingNotice />
 				</div>
 
 				<CreateProjectFlow
+					firstRunClone={firstRunPromptOpen}
+					onFirstRunDismiss={finishFirstRunPrompt}
+					onFirstRunProgress={() => {
+						recordFirstRunPromptAction("clone");
+						setFirstRunPromptOpen(false);
+					}}
 					existingProjectNames={projects.map((project) => project.name)}
 					existingProjectPaths={projects.map((project) => project.path)}
 					mode="choose"
 					onCloneProject={cloneProject}
-					onCreateProject={createProject}
+					onCreateProject={async (input) => {
+						await createProject(input);
+						if (firstRunStatus === "pending") finishFirstRunPrompt("clone");
+					}}
 					onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 					onInitializeProject={initializeProjectRepository}
 					onOpenExistingProject={openExistingProject}

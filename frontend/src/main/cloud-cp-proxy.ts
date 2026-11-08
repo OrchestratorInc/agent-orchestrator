@@ -8,13 +8,25 @@
 // response (or forwards SSE chunks over a per-stream channel). The bearer
 // token never crosses the context bridge in either direction — a renderer
 // supplied Authorization header is discarded, and only status/headers/body
-// travel back.
+// travel back. The token goes only to the configured control plane (see
+// cloud-control-plane-url.ts): a request whose baseUrl names any other server
+// is refused before the token is read.
 
 import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { getCloudAccessToken } from "./cloud-auth";
+import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-control-plane-url";
+import {
+	CLOUD_CP_BINARY_TIMEOUT,
+	CLOUD_CP_BINARY_TOO_LARGE,
+	DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS,
+	MAX_CLOUD_CP_BINARY_BYTES,
+	MAX_CLOUD_CP_BINARY_TIMEOUT_MS,
+} from "../shared/cloud-binary";
 
 export const CLOUD_CP_REQUEST_CHANNEL = "cloudCp:request";
+export const CLOUD_CP_REQUEST_BINARY_CHANNEL = "cloudCp:requestBinary";
+export const CLOUD_CP_CANCEL_BINARY_CHANNEL = "cloudCp:cancelBinary";
 export const CLOUD_CP_OPEN_STREAM_CHANNEL = "cloudCp:openStream";
 export const CLOUD_CP_CLOSE_STREAM_CHANNEL = "cloudCp:closeStream";
 
@@ -25,6 +37,11 @@ export function cloudCpStreamChannel(streamId: string): string {
 
 /** Only CP API paths may be proxied; anything else is rejected before fetch. */
 const API_PREFIX = "/api/cloud/v1";
+
+/** The share link routes, read-only through this proxy. */
+const SHARE_LINKS_ROUTE = "/me/artifact-shares";
+/** A cloud session's file is shared through POST .../sessions/{id}/artifacts/share. */
+const SESSION_FILE_SHARE_ROUTE = /\/sessions\/[^/]+\/artifacts\/share\/?$/;
 
 /** Upper bound on live SSE streams per renderer WebContents. */
 export const MAX_STREAMS_PER_WEBCONTENTS = 8;
@@ -50,6 +67,31 @@ export interface CloudCpProxyResponse {
 	body: string;
 }
 
+/**
+ * A request whose body or response is bytes: a session attachment's upload or
+ * download. The text channel above cannot carry binary.
+ */
+export interface CloudCpProxyBinaryRequestInit {
+	baseUrl: string;
+	path: string;
+	method: string;
+	headers?: Record<string, string>;
+	body?: Uint8Array;
+	/** Names the request for cloudCp:cancelBinary; one the renderer chose. */
+	requestId?: string;
+	/** How long the request may take, at most MAX_CLOUD_CP_BINARY_TIMEOUT_MS. */
+	timeoutMs?: number;
+}
+
+export interface CloudCpProxyBinaryResponse {
+	status: number;
+	headers: Record<string, string>;
+	body: Uint8Array;
+}
+
+/** Bytes either way on the binary channel; the control plane takes attachments up to 25 MiB. */
+export { MAX_CLOUD_CP_BINARY_BYTES };
+
 export type CloudCpStreamEvent =
 	| { type: "chunk"; data: string }
 	| { type: "end" }
@@ -68,11 +110,23 @@ export interface CloudCpStreamSender {
 
 export interface CloudCpProxy {
 	request(init: unknown): Promise<CloudCpProxyResponse>;
+	/** sender is the WebContents that asked: its requests end when it goes away. */
+	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
+	/** Abort one of a WebContents' binary requests; another's is never touched. */
+	cancelBinary(sender: Pick<CloudCpBinarySender, "id">, requestId: unknown): void;
 	openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }>;
 	closeStream(sender: Pick<CloudCpStreamSender, "id">, streamId: unknown): void;
 }
 
+/** Structural slice of Electron.WebContents the binary side needs. */
+export interface CloudCpBinarySender {
+	readonly id: number;
+	once(event: "destroyed", listener: () => void): unknown;
+}
+
 export interface CloudCpProxyOptions {
+	/** The configured control plane, the only server the token is sent to. */
+	controlPlaneUrl: ControlPlaneUrlResolver;
 	/** Transport override for tests; defaults to the main-process global fetch. */
 	fetchImpl?: typeof fetch;
 }
@@ -110,6 +164,39 @@ export function parseCloudBaseUrl(baseUrl: unknown): URL {
 }
 
 function validateInit(init: unknown): CloudCpProxyRequestInit {
+	const { body } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
+	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
+	return validateRequestTarget(init) as CloudCpProxyRequestInit;
+}
+
+const REQUEST_ID = /^[\w-]{1,64}$/;
+
+function validateBinaryInit(init: unknown): CloudCpProxyBinaryRequestInit {
+	const { body, requestId, timeoutMs } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
+	if (body !== undefined && !(body instanceof Uint8Array)) throw invalid("body must be bytes when present.");
+	if (requestId !== undefined && (typeof requestId !== "string" || !REQUEST_ID.test(requestId))) throw invalid("requestId must be a short token.");
+	if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+		throw invalid("timeoutMs must be a positive number.");
+	}
+	return {
+		...(validateRequestTarget(init) as CloudCpProxyBinaryRequestInit),
+		requestId: requestId as string | undefined,
+		timeoutMs: timeoutMs as number | undefined,
+	};
+}
+
+/** A binary response main makes itself, in the control plane's error envelope. */
+function binaryError(status: number, code: string, message: string): CloudCpProxyBinaryResponse {
+	return {
+		status,
+		headers: { "content-type": "application/json" },
+		body: new TextEncoder().encode(JSON.stringify({ error: code, code, message })),
+	};
+}
+
+const MiB = 1024 * 1024;
+
+function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCpProxyBinaryRequestInit {
 	if (typeof init !== "object" || init === null) {
 		throw invalid("the request payload must be an object.");
 	}
@@ -119,7 +206,6 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	if (typeof method !== "string" || !/^[A-Za-z]+$/.test(method)) {
 		throw invalid("method must be an HTTP method token.");
 	}
-	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
 	if (headers !== undefined) {
 		if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
 			throw invalid("headers must be a plain record of strings.");
@@ -142,8 +228,8 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 		path,
 		method,
 		headers: headers as Record<string, string> | undefined,
-		body: body as string | undefined,
-	};
+		body: body as string | Uint8Array | undefined,
+	} as CloudCpProxyRequestInit | CloudCpProxyBinaryRequestInit;
 }
 
 /**
@@ -151,7 +237,7 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
  * resolves dot segments (including percent-encoded ones) and backslashes, so
  * a raw-string prefix check alone would let "/api/cloud/v1/../../x" escape.
  */
-function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
+function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">): string {
 	const base = new URL(init.baseUrl);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const target = new URL(base.origin + basePath + init.path);
@@ -161,6 +247,16 @@ function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
 		(target.pathname === expectedPrefix || target.pathname.startsWith(`${expectedPrefix}/`));
 	if (!inBounds) {
 		throw invalid(`path must stay under ${API_PREFIX} after URL normalization.`);
+	}
+	// Share links are published, updated and revoked only through the main
+	// process's cloudShare flow, which reads files only inside a session's
+	// artifacts folder and publishes only what its inspection showed; through
+	// this proxy the renderer may only read them.
+	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
+	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`) ||
+		SESSION_FILE_SHARE_ROUTE.test(decodeURIComponent(target.pathname));
+	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {
+		throw invalid("share links can only be changed from the desktop's share flow.");
 	}
 	return target.toString();
 }
@@ -209,7 +305,24 @@ interface ActiveStream {
 	closed: boolean;
 }
 
-export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions = {}): CloudCpProxy {
+/**
+ * The request's URL on the configured control plane. A renderer names its
+ * baseUrl, but only the configured one is ever dialed: any other is refused.
+ */
+export async function pinnedTargetUrl(
+	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">,
+	controlPlaneUrl: ControlPlaneUrlResolver,
+): Promise<string> {
+	const configured = await controlPlaneUrl();
+	if (!configured) throw invalid("no AO Cloud control plane is configured.");
+	parseCloudBaseUrl(configured);
+	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
+		throw invalid("baseUrl is not the configured AO Cloud control plane.");
+	}
+	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
+}
+
+export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions): CloudCpProxy {
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium/Node throw "Illegal invocation" for a bare reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -274,7 +387,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 
 	async function request(init: unknown): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
-		const url = resolveTargetUrl(valid);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const token = await getCloudAccessToken(getDataDir());
 		// 401-shaped without touching the network, so the renderer client's
 		// standard auth-error path handles signed-out exactly like a server 401.
@@ -291,9 +404,89 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		return { status: response.status, headers, body: await response.text() };
 	}
 
+	// In-flight binary requests by WebContents and request id, so a cancel
+	// or the WebContents going away (a reload included: preload cancels on
+	// pagehide) ends them instead of leaving an upload running unseen.
+	const binaryRequests = new Map<number, Map<string, AbortController>>();
+
+	function trackBinaryRequest(sender: CloudCpBinarySender | undefined, requestId: string | undefined, controller: AbortController): () => void {
+		if (sender === undefined || requestId === undefined) return () => undefined;
+		let requests = binaryRequests.get(sender.id);
+		if (requests === undefined) {
+			requests = new Map();
+			binaryRequests.set(sender.id, requests);
+			sender.once("destroyed", () => {
+				for (const pending of binaryRequests.get(sender.id)?.values() ?? []) pending.abort();
+				binaryRequests.delete(sender.id);
+			});
+		}
+		requests.get(requestId)?.abort();
+		requests.set(requestId, controller);
+		return () => {
+			if (requests.get(requestId) === controller) requests.delete(requestId);
+		};
+	}
+
+	function cancelBinary(sender: Pick<CloudCpBinarySender, "id">, requestId: unknown): void {
+		if (typeof requestId !== "string") return;
+		binaryRequests.get(sender.id)?.get(requestId)?.abort();
+	}
+
+	async function requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse> {
+		const valid = validateBinaryInit(init);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		// Over the channel's limit is a refusal with a message the person can
+		// read, not a request.
+		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
+			return binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to AO Cloud at once.`);
+		}
+		const token = await getCloudAccessToken(getDataDir());
+		if (token === null || token === "") {
+			const unauthorized = unauthorizedResponse();
+			return { ...unauthorized, body: new TextEncoder().encode(unauthorized.body) };
+		}
+		const timeoutMs = Math.min(valid.timeoutMs ?? DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS, MAX_CLOUD_CP_BINARY_TIMEOUT_MS);
+		const cancelled = new AbortController();
+		const timeout = AbortSignal.timeout(timeoutMs);
+		const untrack = trackBinaryRequest(sender, valid.requestId, cancelled);
+		try {
+			const response = await doFetch(url, {
+				method: valid.method.toUpperCase(),
+				headers: buildHeaders(valid.headers, token),
+				// A Uint8Array over IPC may view a SharedArrayBuffer-typed buffer; copy
+				// into a plain ArrayBuffer that fetch accepts as a body.
+				body: valid.body === undefined ? undefined : new Uint8Array(valid.body).buffer,
+				signal: AbortSignal.any([cancelled.signal, timeout]),
+			});
+			const headers: Record<string, string> = {};
+			response.headers.forEach((value, key) => {
+				headers[key] = value;
+			});
+			const tooLarge = () => binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from AO Cloud at once.`);
+			const declared = Number(response.headers.get("content-length"));
+			if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
+				await response.body?.cancel().catch(() => undefined);
+				return tooLarge();
+			}
+			const body = new Uint8Array(await response.arrayBuffer());
+			if (body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) return tooLarge();
+			return { status: response.status, headers, body };
+		} catch (error) {
+			if (timeout.aborted && !cancelled.signal.aborted) {
+				return binaryError(504, CLOUD_CP_BINARY_TIMEOUT,
+					`AO Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
+			}
+			throw error;
+		} finally {
+			untrack();
+		}
+	}
+
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
 		const valid = validateInit(init);
-		const url = resolveTargetUrl(valid);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const ids = trackSender(sender);
 		if (ids.size >= MAX_STREAMS_PER_WEBCONTENTS) {
 			throw streamError(429, `This window already has ${MAX_STREAMS_PER_WEBCONTENTS} open cloud streams.`);
@@ -344,12 +537,16 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		teardown(streamId, stream);
 	}
 
-	return { request, openStream, closeStream };
+	return { request, requestBinary, cancelBinary, openStream, closeStream };
 }
 
-export function installCloudCpProxy(getDataDir: () => string): void {
-	const proxy = createCloudCpProxy(getDataDir);
+export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
+	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
+	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (event, init: unknown) => proxy.requestBinary(init, event.sender));
+	ipcMain.on(CLOUD_CP_CANCEL_BINARY_CHANNEL, (event, requestId: unknown) => {
+		proxy.cancelBinary(event.sender, requestId);
+	});
 	ipcMain.handle(CLOUD_CP_OPEN_STREAM_CHANNEL, (event, init: unknown) => proxy.openStream(event.sender, init));
 	ipcMain.on(CLOUD_CP_CLOSE_STREAM_CHANNEL, (event, streamId: unknown) => {
 		proxy.closeStream(event.sender, streamId);

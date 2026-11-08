@@ -87,6 +87,13 @@ readiness" state is purely `ci.state ∈ {unknown, pending}` or
 `mergeability.state == unknown` in the served summary
 (`frontend/src/renderer/lib/pr-display.ts`).
 
+PRs a worker reports with `ao report --pr-created` show as "Reported by worker"
+links unless the session already tracks them (`ListPRListing`). That check
+compares normalized URLs after mapping a repository's old name to its current
+one through `repository_renames`. Discovery fills that table when a listing
+under one name returns PRs whose base repository has another name, so a link
+built from a renamed origin still matches the tracked PR.
+
 ## The Polling Pipeline
 
 `Observer.Poll` (`backend/internal/observe/scm/observer.go`) runs every 30s

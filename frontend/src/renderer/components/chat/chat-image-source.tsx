@@ -34,6 +34,11 @@ export function useChatImageSrc(src: string | undefined): string | undefined {
 	return resolveMarkdownImageSrc(source.sessionId, "", src, source.version, source.baseUrl);
 }
 
+/** The session of the open chat, or undefined outside one. */
+export function useChatSessionId(): string | undefined {
+	return useContext(ChatImageSourceContext)?.sessionId;
+}
+
 /** Whether the open chat runs on a remote host, whose session files the local daemon cannot serve. */
 export function useChatRemoteHost(): boolean {
 	return useContext(ChatImageSourceContext)?.remoteHost ?? false;

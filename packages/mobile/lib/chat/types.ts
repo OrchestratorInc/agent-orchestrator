@@ -1,7 +1,12 @@
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
-export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
+/**
+ * `recovered` is a turn replayed from a provider's stored history whose outcome
+ * the provider did not report; the daemon swaps it for the known result when it
+ * has one.
+ */
+export type TurnState = "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed" | "cancelled";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =
 	| "command"
@@ -26,6 +31,8 @@ export type ConversationPlan = {
 	steps: PlanStep[];
 	/** A list the agent keeps across turns (Claude's task list): every later turn carries a copy. */
 	spansTurns?: boolean;
+	/** A later turn or run carries a newer copy of this list; the daemon sets it. */
+	superseded?: boolean;
 };
 export type DiffFile = {
 	path: string;
@@ -154,6 +161,8 @@ export type ActivityDetail = {
 	clientMessageId?: string;
 	explanation?: string;
 	steps?: PlanStep[];
+	spansTurns?: boolean;
+	superseded?: boolean;
 	tokensBefore?: number;
 	tokensAfter?: number;
 	tokensReclaimed?: number;

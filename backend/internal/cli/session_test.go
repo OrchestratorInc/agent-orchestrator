@@ -720,7 +720,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 				sessionJSON("demo-old", "demo", "worker", "terminated", true)+`,`+
 				sessionJSON("demo-orch", "demo", "orchestrator", "terminated", true)+`]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/cleanup":
-			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","reason":"workspace has uncommitted changes"}]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","code":"dirty","reason":"workspace has uncommitted changes"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -736,7 +736,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Cleaned: demo-old",
-		"Skipped: demo-orch (workspace has uncommitted changes)",
+		"Skipped: demo-orch (workspace has uncommitted changes) [dirty]\n",
 		"Cleanup complete. 1 session cleaned, 1 skipped.",
 	} {
 		if !strings.Contains(out, want) {
@@ -1160,5 +1160,31 @@ func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
 				t.Fatalf("%s request deadline in %s, want no client timeout", tc.call, time.Until(deadline).Round(time.Minute))
 			}
 		})
+	}
+}
+
+// The session that spawned the killed one shows the termination only when it
+// ran the kill, so the CLI names the AO session it runs in.
+func TestSessionKill_SendsCallerSession(t *testing.T) {
+	cfg := setConfigEnv(t)
+	t.Setenv("AO_SESSION_ID", "orchestrator-1")
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/kill" {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","freed":true}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "kill", "demo-1"); err != nil {
+		t.Fatalf("session kill failed: %v\nstderr=%s", err, errOut)
+	}
+	if body["callerSessionId"] != "orchestrator-1" {
+		t.Fatalf("kill body = %v, want callerSessionId orchestrator-1", body)
 	}
 }
