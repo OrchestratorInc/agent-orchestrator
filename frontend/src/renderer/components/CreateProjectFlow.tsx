@@ -2501,7 +2501,7 @@ function ProjectImportDialog({
 														onChangeRemote(githubRepositoryRemoteUrl(next));
 													}}
 												>
-													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full bg-[var(--color-bg-import-card)] font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
+													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
 														<SelectValue placeholder={t("createProject.githubOwner")}>
 															{customGitHubOwner ? (
 																<span className="flex items-center gap-2">

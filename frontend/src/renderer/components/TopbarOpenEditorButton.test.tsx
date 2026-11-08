@@ -201,7 +201,7 @@ describe("TopbarOpenEditorButton", () => {
 		expect(button.querySelector("[data-compact-label]")).not.toBeInTheDocument();
 		expect(button.querySelector("svg")).toBeInTheDocument();
 		expect(button).toHaveClass("size-control-md");
-		expect(button).toHaveClass("border-transparent");
+		expect(button).toHaveClass("border-0");
 		const options = screen.getByRole("button", { name: "Open workspace options" });
 		expect(options).toHaveClass("size-control-md", "hover:bg-transparent");
 		expect(button).toHaveClass("hover:bg-transparent");

@@ -1371,23 +1371,9 @@ button.settings-row-bar {
 
 .composer-toolbar .composer-toolbar-option {
 	height: var(--size-composer-toolbar-height);
-	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
-	   --card (an opaque color) instead of --color-bg-settings-row. */
-	border-radius: var(--radius-md) !important;
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground)) !important;
 }
 
-.composer-toolbar .composer-toolbar-option:hover:not(:disabled),
-.composer-toolbar .composer-toolbar-option[data-state="open"] {
-	background-color: color-mix(in oklch, var(--card) 88%, var(--foreground)) !important;
-}
-
-.composer-toolbar .composer-toolbar-option:focus-visible {
-	box-shadow: none;
-}
-
-/* Inline value control inside the task composer's bottom toolbar. Each chip is
-   its own dropdown trigger with the quiet filled chrome settings uses. */
+/* Task selector sizing; shared menu triggers own their colors and states. */
 @utility composer-chip {
 	display: inline-flex;
 	width: auto;
@@ -1396,39 +1382,8 @@ button.settings-row-bar {
 	height: var(--size-settings-action-height);
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border: 1px solid transparent;
-	border-radius: var(--radius-md);
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground));
 	padding-inline: var(--space-2);
 	font-size: var(--font-size-base);
-	color: var(--color-foreground);
-	transition-property: background-color, border-color, box-shadow, color;
-	transition-duration: var(--duration-fast);
-
-	&:hover:not(:disabled) {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-	}
-
-	&:focus-visible {
-		border-color: transparent;
-		box-shadow: none;
-		outline: none;
-	}
-
-	&[data-state="open"] {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-		border-color: transparent;
-	}
-
-	/* The agent chip's SelectTrigger chevron has no rotation of its own — give
-	   it the same open-state flip as the settings dropdowns. */
-	& svg {
-		transition: transform var(--duration-normal) ease-out;
-	}
-
-	&[data-state="open"] svg {
-		transform: rotate(180deg);
-	}
 }
 
 /* Model menus can contain hundreds of entries. Keep scrolling available without
