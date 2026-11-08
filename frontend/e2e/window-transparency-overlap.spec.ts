@@ -31,6 +31,17 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
 	});
 	const after = await surface.screenshot({ animations: "disabled" });
+	if (!before.equals(after)) {
+		// Temporary CI diagnostics: keep the differing captures for inspection.
+		const fs = await import("node:fs");
+		const dir = "test-results/wt-diff";
+		fs.mkdirSync(dir, { recursive: true });
+		const tag = `${process.env.WT_VARIANT ?? "v"}-${Date.now()}`;
+		fs.writeFileSync(`${dir}/${tag}-before.png`, before);
+		fs.writeFileSync(`${dir}/${tag}-after.png`, after);
+		fs.writeFileSync(`${dir}/${tag}-meta.json`, JSON.stringify({ bounds, cards }, null, 2));
+		fs.writeFileSync(`${dir}/${tag}-dom.html`, await surface.evaluate((el) => el.outerHTML));
+	}
 	expect(before.equals(after), "content underneath must not affect the surface's pixels").toBe(true);
 	await underneath.evaluateAll((elements) => {
 		for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
