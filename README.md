@@ -141,7 +141,7 @@ Control the agents running on your desktop from your phone. Install the app for 
 
 ### Cloud Agents
 
-Run workers in hosted workspaces instead of on your machine. Choose **Clone to the cloud** and pick a GitHub repository to start.
+Run workers in hosted workspaces instead of on your machine. Choose **Create a cloud project** and pick a GitHub repository to start.
 
 - **Keep running.** Tasks keep going with your laptop closed.
 - **Follow along.** Open the chat, files, and terminal from the desktop app.

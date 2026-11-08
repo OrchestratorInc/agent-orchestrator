@@ -663,7 +663,7 @@
 	"createProject.cloudDisplayName": "Nome do projeto",
 	"createProject.cloudDisplayNameRequired": "Informe um nome de projeto.",
 	"createProject.cloudInvalidUrl": "Informe uma URL https do repositório.",
-	"createProject.cloudTitle": "Novo projeto na nuvem",
+	"createProject.cloudTitle": "Criar um projeto na nuvem",
 	"createProject.cloudWorkspaceConnecting": "Conectando ao seu workspace na nuvem...",
 	"createProject.couldNotAdd": "Não foi possível adicionar o projeto",
 	"createProject.couldNotLoadAgents": "Não foi possível carregar o catálogo de agentes.",

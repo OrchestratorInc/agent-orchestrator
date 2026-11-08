@@ -663,7 +663,7 @@
 	"createProject.cloudDisplayName": "Название проекта",
 	"createProject.cloudDisplayNameRequired": "Введите название проекта.",
 	"createProject.cloudInvalidUrl": "Введите HTTPS URL репозитория.",
-	"createProject.cloudTitle": "Клонировать в облако",
+	"createProject.cloudTitle": "Создать облачный проект",
 	"createProject.cloudWorkspaceConnecting": "Подключение к облачному рабочему пространству...",
 	"createProject.couldNotAdd": "Не удалось добавить проект",
 	"createProject.couldNotLoadAgents": "Не удалось загрузить каталог агентов.",

@@ -141,7 +141,7 @@ Steuere die Agenten auf deinem Desktop vom Smartphone aus. Installiere die App f
 
 ### Cloud Agents
 
-Lass Worker in gehosteten Workspaces statt auf deinem Rechner laufen. Wähle **Clone to the cloud** und ein GitHub-Repository, um loszulegen.
+Lass Worker in gehosteten Workspaces statt auf deinem Rechner laufen. Wähle **Create a cloud project** und ein GitHub-Repository, um loszulegen.
 
 - **Läuft weiter.** Aufgaben laufen auch bei zugeklapptem Laptop weiter.
 - **Mitverfolgen.** Öffne Chat, Dateien und Terminal in der Desktop-App.
