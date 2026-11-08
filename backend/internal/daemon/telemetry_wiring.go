@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -83,13 +82,11 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
-	denied := telemetryadapter.NewDenylistSink(gated, slices.Concat(cfg.Telemetry.DisabledEvents, localOnlyEventNames))
+	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
 	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
 }
 
 const writeLockHeldEvent = "ao.daemon.write_lock_held"
-
-var localOnlyEventNames = []string{writeLockHeldEvent}
 
 func recordSlowWriteLocks(store *sqlite.Store, sink ports.EventSink) {
 	store.SetWriteLockObserver(func(caller string, held time.Duration) {

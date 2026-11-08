@@ -86,7 +86,8 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
-	"ao.automation.created": {"use_case": {}, "template_id": {}},
+	"ao.automation.created":     {"use_case": {}, "template_id": {}},
+	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
 
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.

@@ -128,6 +128,11 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Reliability data, such as an error type and context, a crash message and
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
+- Slow database writes: when one write holds the daemon's database write lock
+  for a second or more, `ao.daemon.write_lock_held` sends how long it was held
+  (`duration_ms`) and the names and line numbers of the four innermost code
+  functions that held it (`caller`). It never includes file paths, database
+  contents, or message text
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
