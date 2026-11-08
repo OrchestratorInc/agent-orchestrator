@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
@@ -84,6 +85,7 @@ import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -443,14 +445,15 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
+	// Reached through a share: this person sees the session's pull requests but
+	// leaves managing them, and the session's policies, to its owner.
+	const guest = session.cloud?.shared === true;
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -475,6 +478,7 @@ const SummaryView = memo(function SummaryView({
 			branch={
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (
@@ -489,7 +493,7 @@ const SummaryView = memo(function SummaryView({
 									hostId={hostId}
 									sessionId={session.id}
 									cloudOrgId={session.cloud?.orgId}
-									guest={session.cloud?.shared === true}
+									guest={guest}
 									projectId={session.workspaceId}
 								/>
 							))}
@@ -500,7 +504,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			}
-			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
@@ -584,13 +588,12 @@ function InspectorPolicyRow({
 				{description ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={description}
-								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								type="button"
+								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className={cn("leading-normal", tooltipClassName)}>{description}</TooltipContent>
 					</Tooltip>
@@ -643,9 +646,9 @@ function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRRefere
 					<span>{t("inspector.reportedByWorker")}</span>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+							<Pressable aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground">
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
 					</Tooltip>
@@ -676,7 +679,7 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.ci.autoInjectError", { status: response.status })));
+			if (error) throw apiErrorException(error, t("inspector.ci.autoInjectError", { status: response.status }));
 		},
 		onMutate: async (autoInjectCI) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -739,7 +742,7 @@ function AutoInjectReviewPolicyControl({ session, hostId }: { session: Workspace
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.review.autoInjectError")));
+			if (error) throw apiErrorException(error, t("inspector.review.autoInjectError"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -805,7 +808,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
 			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to update merge policy (${response.status})`));
+			if (error) throw apiErrorException(error, `Failed to update merge policy (${response.status})`);
 		},
 		onMutate: async (terminateOnPrMerge) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -850,33 +853,29 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
 			<span className="min-w-0 text-sm text-settings-label">{t("inspector.archiveShort")}</span>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<SessionArchiveDialog
-							onConfirm={confirmTermination}
-							onOpenChange={setConfirmOpen}
-							open={confirmOpen}
-							session={session}
-							trigger={
-								<button
-									aria-label={t("inspector.archive")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-									onClick={() => {
-										clearTerminateSessionState(queryClient, session.id, hostId);
-										// Always open the confirm; the modal owns its own dismissal.
-										setConfirmOpen(true);
-									}}
-									type="button"
-								>
-									<Archive className="size-icon-sm" aria-hidden="true" />
-								</button>
-							}
-						/>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
-			</Tooltip>
+			<span className="inline-flex">
+				<SessionArchiveDialog
+					onConfirm={confirmTermination}
+					onOpenChange={setConfirmOpen}
+					open={confirmOpen}
+					session={session}
+					trigger={
+						<Button
+							aria-label={t("inspector.archive")}
+							size="icon-sm"
+							variant="quiet"
+							onClick={() => {
+								clearTerminateSessionState(queryClient, session.id, hostId);
+								// Always open the confirm; the modal owns its own dismissal.
+								setConfirmOpen(true);
+							}}
+							type="button"
+						>
+							<Archive className="size-icon-sm" aria-hidden="true" />
+						</Button>
+					}
+				/>
+			</span>
 		</div>
 	);
 
@@ -974,7 +973,7 @@ export function PRSummaryCard({
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
 		},
 		onSuccess: async (result) => {
@@ -1014,9 +1013,9 @@ export function PRSummaryCard({
 		stateLabel: t(prStateLabelKeys[pr.state]),
 		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
-			<button className="whitespace-nowrap text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
+			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
-			</button>
+			</Button>
 		) : undefined,
 	};
 	return (
@@ -1028,7 +1027,7 @@ export function PRSummaryCard({
 				canMerge && asksToMerge ? (
 					<Button
 						aria-label={t("pr.merge.requestFor", { number: pr.number })}
-						className="gap-1 px-2 text-xs"
+						className="gap-1 px-2"
 						disabled={requestMerge.isPending || Boolean(pendingRequest)}
 						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
 						size="sm"
@@ -1046,7 +1045,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1081,10 +1080,9 @@ function ArtifactSummaryCard({
 	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
 		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<button
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left outline-none"
+			<Pressable
+				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5"
 				onClick={handleOpen}
-				type="button"
 			>
 				{artifact.kind === "html" ? (
 					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
@@ -1092,7 +1090,7 @@ function ArtifactSummaryCard({
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-			</button>
+			</Pressable>
 		</div>
 	);
 }
@@ -1464,7 +1462,7 @@ function LocalReviewsSection({
 					agentConfig: nextReviewerConfig,
 				},
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to save reviewer"));
+			if (error) throw apiErrorException(error, "Unable to save reviewer");
 			if (data) queryClient.setQueryData(reviewsKey, data);
 		},
 		onSuccess: () => {
@@ -1481,7 +1479,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { enabled },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.reviewRequestFailed")));
+			if (error) throw apiErrorException(error, t("inspector.reviewRequestFailed"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -1498,7 +1496,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableStartReview"));
 			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
@@ -1531,7 +1529,7 @@ function LocalReviewsSection({
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/cancel", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableCancelReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableCancelReview"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: reviewsKey });
@@ -1543,7 +1541,7 @@ function LocalReviewsSection({
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/kill", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
+			if (error) throw apiErrorException(error, t("inspector.unableKillReviewSession"));
 			return {
 				data,
 				requestReviewsKey: reviewsKey,
@@ -1783,10 +1781,12 @@ function CloudReviewsSection({
 		prs: (pullRequestsQuery.data?.pullRequests ?? []).map(cloudPullRequestFacts),
 	};
 	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
+	const guest = session.cloud?.shared === true;
 	return (
 		<>
 			<ReviewPanel
 				cloud
+				readOnly={guest}
 				autoReviewEnabled={autoReviewEnabled}
 				error={
 					pullRequestsQuery.error ??
@@ -1833,6 +1833,7 @@ function CloudReviewsSection({
 			/>
 			<MergedReviewsSection
 				githubPRs={[]}
+				readOnly={guest}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
@@ -1906,6 +1907,7 @@ function cloudReviewsToLocal(
 function MergedReviewsSection({
 	githubPRs,
 	hostId,
+	readOnly = false,
 	isLoading,
 	onOpenReviewFile,
 	onWorkerMessageSent,
@@ -1915,6 +1917,8 @@ function MergedReviewsSection({
 }: {
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
+	/** Reached through a share: the reviews show, but only the owner acts on them. */
+	readOnly?: boolean;
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onWorkerMessageSent?: () => void;
@@ -1959,14 +1963,14 @@ function MergedReviewsSection({
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: review.pullRequestUrl, reviewerId: review.reviewerId },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to request re-review"));
+		if (error) throw apiErrorException(error, "Unable to request re-review");
 	};
 	const resolveInlineComment = async (comment: InspectorInlineComment) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to resolve review comment"));
+		if (error) throw apiErrorException(error, "Unable to resolve review comment");
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
@@ -1980,14 +1984,14 @@ function MergedReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { text: message, clientMessageId: crypto.randomUUID() },
 			});
-			if (error) throw new Error(apiErrorMessage(error, fallbackError));
+			if (error) throw apiErrorException(error, fallbackError);
 			return;
 		}
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 			params: { path: { sessionId: session.id } },
 			body: { message, userAuthored: true },
 		});
-		if (error) throw new Error(apiErrorMessage(error, fallbackError));
+		if (error) throw apiErrorException(error, fallbackError);
 	};
 	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
 		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");
@@ -2231,11 +2235,11 @@ function MergedReviewsSection({
 			groups={groups}
 			isLoading={isLoading}
 			labels={labels}
-			onRequestRereview={requestRereview}
-			onResolveInlineComment={resolveInlineComment}
+			onRequestRereview={readOnly ? undefined : requestRereview}
+			onResolveInlineComment={readOnly ? undefined : resolveInlineComment}
 			onOpenInAOBrowser={openInAOBrowser}
-			onSendInlineComment={sendInlineCommentToWorker}
-			onSendReviewSummary={sendReviewSummaryToWorker}
+			onSendInlineComment={readOnly ? undefined : sendInlineCommentToWorker}
+			onSendReviewSummary={readOnly ? undefined : sendReviewSummaryToWorker}
 			onViewInlineCommentInFile={(comment) => {
 				if (comment.file) onOpenReviewFile?.({ line: comment.line, path: comment.file });
 			}}
@@ -2377,6 +2381,7 @@ function mockProjectConfig(): ProjectConfig {
 
 function ReviewPanel({
 	cloud = false,
+	readOnly = false,
 	notice,
 	cloudReviewerHarnesses = [],
 	cloudReviewerHarness = "",
@@ -2442,6 +2447,8 @@ function ReviewPanel({
 	onKill: () => void;
 	/** Cloud sessions choose from only credentials connected for the session owner. */
 	cloud?: boolean;
+	/** Reached through a share: the reviews show, but only the owner runs them. */
+	readOnly?: boolean;
 	/** Cloud-only: the trigger declined to run and says why. */
 	notice?: string | null;
 	cloudReviewerHarnesses?: string[];
@@ -2530,18 +2537,18 @@ function ReviewPanel({
 				{notice ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={notice}
-								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-								type="button"
+								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="mt-px size-icon-2xs shrink-0" />
 								<span className="min-w-0 text-xs">{t("inspector.reviewAlreadyRanShort")}</span>
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
 					</Tooltip>
 				) : null}
+				{readOnly ? null : (
 				<div className="review-run-controls-container flex min-w-0 flex-col text-xs">
 					{cloud ? (
 						<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
@@ -2617,7 +2624,7 @@ function ReviewPanel({
 										<span className="truncate">{agentLabel(surface.harness)}</span>
 									</span>
 									<Button
-										className="shrink-0 px-1.5 text-xs"
+										className="shrink-0 px-1.5"
 										disabled={surface.mode !== "chat" && !surface.handleId}
 										onClick={() => onOpenReviewer(surface)}
 										size="sm"
@@ -2643,7 +2650,7 @@ function ReviewPanel({
 						<div className="flex min-w-0 items-center justify-end gap-1.5">
 							<Button
 								aria-label={primaryReviewActionLabel}
-								className="shrink-0 gap-1 px-1.5 text-xs [&_svg]:size-icon-sm"
+								className="shrink-0 gap-1 px-1.5 [&_svg]:size-icon-sm"
 								disabled={reviewRunning ? isCancelling || isKilling || isSwitchingReviewer : runDisabled || autoReviewEnabled}
 								onClick={reviewRunning ? onCancel : onTrigger}
 								size="sm"
@@ -2676,6 +2683,7 @@ function ReviewPanel({
 						</div>
 					</div>
 				</div>
+				)}
 				{reviewLive ? (
 					<div className="flex items-center gap-2 border-t border-border pt-3">
 						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />

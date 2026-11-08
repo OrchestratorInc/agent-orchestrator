@@ -1018,6 +1018,7 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
+func (*fakeSessionLifecycle) StopAgentsForQuit(context.Context) error      { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}

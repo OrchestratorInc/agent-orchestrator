@@ -27,7 +27,8 @@ export type RemoteHost = {
 	failureReason?: "unauthorized" | "incompatible";
 };
 
-export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
+/** listed: hosts holds the saved list, not the empty one before the first read. */
+export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refresh: () => Promise<void> } {
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status, session } = useCloudSession();
 	const accountId = session?.user.id ?? "";
@@ -40,6 +41,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 	accountRef.current = accountId;
 	const previousAccount = useRef(accountId);
 	const [hosts, setHosts] = useState<RemoteHost[]>([]);
+	const [listed, setListed] = useState(false);
 	const hostsRef = useRef(hosts);
 	hostsRef.current = hosts;
 	const retryableHosts = useRef(new Set<string>());
@@ -64,6 +66,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map(disconnectHost));
 		if (!current()) return;
 		savedHostUrls.current = new Map(saved.map((host) => [host.hostId, host.url]));
+		setListed(true);
 		setHosts((previous) => saved.map((host) => ({
 			...host,
 			status: previous.some((entry) => entry.hostId === host.hostId && entry.url === host.url && entry.status === "connected") ? "connected" : "connecting",
@@ -100,6 +103,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			previousAccount.current = accountId;
 			refreshGeneration.current++;
 			setHosts([]);
+			setListed(false);
 			for (const hostId of connectedHosts()) void disconnectHost(hostId);
 		}
 		if (enabled) {
@@ -108,6 +112,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		}
 		refreshGeneration.current++;
 		setHosts([]);
+		setListed(false);
 		retryableHosts.current.clear();
 		savedHostUrls.current.clear();
 		for (const hostId of connectedHosts()) void disconnectHost(hostId);
@@ -150,5 +155,5 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		return () => clearInterval(timer);
 	}, [enabled, cloudBaseUrl, refresh]);
 
-	return { hosts: enabled ? hosts : NO_HOSTS, refresh };
+	return { hosts: enabled ? hosts : NO_HOSTS, listed: enabled && listed, refresh };
 }

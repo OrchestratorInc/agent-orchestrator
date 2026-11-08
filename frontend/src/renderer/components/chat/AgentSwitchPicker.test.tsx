@@ -10,6 +10,11 @@ const unavailableGet = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
 vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: undefined }) }));
+const cloudModels = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test", userId: "user-1", client: { listUserAgentModels: cloudModels } }),
+}));
+vi.mock("../../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: [], isError: false }) }));
 vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agent: string) => ({
 		queryKey: ["agent-models", agent],
@@ -70,6 +75,30 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Effort.*High/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
 		expect(current.onPickEffort).toHaveBeenCalledWith("max");
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
+	});
+
+	it.each(["Opus", "Sonnet"])("closes only the submenu after selecting model %s", async (model) => {
+		const user = userEvent.setup();
+		const { current } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Model.*Opus/ }));
+		fireEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
+		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
+		else expect(current.onPickModel).not.toHaveBeenCalled();
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+		expect(screen.queryByRole("menuitemradio", { name: /^Sonnet/ })).not.toBeInTheDocument();
+	});
+
+	it.each(["Fast mode", "Thinking"])("keeps the parent menu open after toggling %s", async (label) => {
+		const user = userEvent.setup();
+		const onToggle = vi.fn();
+		open(undefined, false, "cursor", { fast: false, thinking: false, onToggleFast: onToggle, onToggleThinking: onToggle });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("switch", { name: label }));
+		expect(onToggle).toHaveBeenCalledExactlyOnceWith(true);
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
 	it("keeps a running Cursor chat's own effort and thinking", async () => {
@@ -171,6 +200,7 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
 	it("leaves out a chat agent whose chat adapter is missing", async () => {
@@ -191,6 +221,27 @@ describe("AgentModelPicker", () => {
 		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
 		await user.click(await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ }));
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-x" }));
+	});
+
+	it("lists Cloud's models for the account for a Cloud task, not this computer's", async () => {
+		cloudModels.mockResolvedValue({ source: "worker", cliVersion: "0.165.0", models: [{ id: "gpt-cloud", displayName: "GPT Cloud", default: true }] });
+		const onPendingChange = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AgentModelPicker
+					currentHarness="claude-code"
+					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], onPickEffort: vi.fn() }}
+					agentSwitch={{ projectId: "", cloudOrgId: "org-1", onPendingChange }}
+				/>
+			</QueryClientProvider>,
+		);
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
+		await user.click(await screen.findByRole("menuitemradio", { name: /GPT Cloud.*Codex/ }));
+		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
+		expect(cloudModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
+		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-cloud" }));
 	});
 
 	it("shows the pending agent's own model and effort rows", async () => {

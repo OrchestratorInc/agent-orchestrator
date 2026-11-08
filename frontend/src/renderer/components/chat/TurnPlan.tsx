@@ -22,8 +22,9 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
-import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
+import { syncEdgeFade as syncViewportEdgeFade } from "../../hooks/useEdgeFade";
 
 const STEP_LABEL: Record<PlanStepStatus, string> = {
 	pending: "not started",
@@ -107,12 +108,11 @@ export const TurnPlan = memo(function TurnPlan({
 			data-turn-plan="true"
 		>
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setExpanded((open) => !open)}
 				aria-expanded={expanded}
 				aria-label={expanded ? "Collapse plan" : "Expand plan"}
-				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5"
 			>
 				<PlanMark done={allDone} />
 				<span className="shrink-0 text-sm font-medium text-foreground">Plan</span>
@@ -131,7 +131,7 @@ export const TurnPlan = memo(function TurnPlan({
 						expanded && "rotate-180",
 					)}
 				/>
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{expanded ? (
@@ -152,7 +152,7 @@ export const TurnPlan = memo(function TurnPlan({
 						<div
 							ref={viewportRef}
 							onScroll={syncEdgeFade}
-							className="edge-fade-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+							className="edge-fade scrollbar-none relative max-h-60 overflow-y-auto"
 						>
 							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
 							    step is spoken rather than left to a colour. */}

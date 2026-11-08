@@ -77,8 +77,8 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 }
 
 func boundedSnapshotReader(st *sqlite.Store) chatsvc.SnapshotPageReader {
-	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, limit int64) (chatsvc.ConversationRows, error) {
-		rows, err := st.LoadConversationSnapshotPage(ctx, id, before, limit)
+	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, after, limit int64) (chatsvc.ConversationRows, error) {
+		rows, err := st.LoadConversationSnapshotRange(ctx, id, before, after, limit)
 		return chatsvc.ConversationRows{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch,
 			Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities}, err
 	})
@@ -3401,6 +3401,40 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	}
 }
 
+// Claude Code can answer on its own after a background task finishes. That
+// message has no AO turn, but it is settled transcript the user can select.
+func TestSendAcceptsExcerptFromMessageOutsideAnyTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := "Nothing else has changed. Did you close the `test` window?"
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "turnless", Delta: source},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "turnless", Text: source},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 1 && !s.Messages[0].Streaming
+	})
+	message := snapshot.Messages[0]
+	if message.TurnID != "" {
+		t.Fatalf("source turn = %q, want a message outside any turn", message.TurnID)
+	}
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "I think it crashed", ClientMessageID: "turnless-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: message.ID,
+			Revision: message.Revision, Text: "Did you close the test window?",
+		}},
+	}); err != nil {
+		t.Fatalf("send with excerpt from a message outside any turn: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Selected text:\n---\nDid you close the test window?") ||
+		!strings.Contains(sent[0].Text, "Assistant:\n"+source) {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+}
+
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
@@ -5127,6 +5161,17 @@ func TestServiceStopTerminatesPersistentConversation(t *testing.T) {
 	}
 	if !provider.terminated.Load() {
 		t.Fatal("explicit session stop detached persistent conversation instead of terminating it")
+	}
+}
+
+func TestServiceTerminateAllTerminatesPersistentConversation(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	if err := h.svc.TerminateAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.terminated.Load() {
+		t.Fatal("desktop quit detached the persistent provider instead of terminating it")
 	}
 }
 

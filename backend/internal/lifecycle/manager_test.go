@@ -178,6 +178,16 @@ func (f *fakeStore) CommitSessionControllerEpoch(
 	return f.changeSessionControllerEpoch(id, source, target, nativeConversationID, now, false)
 }
 
+func (f *fakeStore) CommitSessionControllerEpochArchivedChat(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	now time.Time,
+) (bool, error) {
+	return f.changeSessionControllerEpoch(id, source, target, nativeConversationID, now, false)
+}
+
 func (f *fakeStore) RestoreSessionControllerEpoch(
 	_ context.Context,
 	id domain.SessionID,

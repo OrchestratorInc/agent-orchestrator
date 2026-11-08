@@ -28,6 +28,10 @@ permissions:
 
 env:
   VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
+  # Teams: unset (the default) gives it to nightly builds only; the repository
+  # variable set to "on" gives it to stable builds too, "off" to none. Any other
+  # value stops the build (frontend/src/shared/teams-flag.ts).
+  VITE_AO_TEAMS: ${{ vars.VITE_AO_TEAMS }}
 
 jobs:
   build:

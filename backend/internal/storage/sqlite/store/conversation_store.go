@@ -1705,6 +1705,12 @@ func (s *Store) SettleTurnWithFailureCode(
 	}
 	// A history replay re-settles a turn without its error, which is not
 	// portable. Keep the live reason: a usage limit is classified from it.
+	// A resumed Codex thread also replays a turn AO already failed as interrupted.
+	// The stored failure is what happened; nobody interrupted that turn.
+	if errMessage == "" && state == domain.TurnStateInterrupted &&
+		turn.State == domain.TurnStateFailed && turn.ErrorMessage != "" {
+		state = domain.TurnStateFailed
+	}
 	if errMessage == "" && turn.State == state {
 		errMessage = turn.ErrorMessage
 	}
@@ -3847,6 +3853,8 @@ type ConversationSnapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// AfterSequence is the floor a range read applied, or zero.
+	AfterSequence int64
 }
 
 // DefaultConversationPageSize is the standard number of messages in a conversation page.
@@ -4120,6 +4128,21 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	return s.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit)
+}
+
+// LoadConversationSnapshotRange is LoadConversationSnapshotPage with a floor:
+// rows at or below afterSequence are left out, so a client that holds them reads
+// only the tail. AfterSequence echoes the floor when it applied. A floor below
+// the visible history is not applied, because the client then holds rows the
+// conversation no longer shows and needs the whole page. HasMoreBefore with an
+// applied floor means rows between the floor and OldestSequence were left out.
+func (s *Store) LoadConversationSnapshotRange(
+	ctx context.Context,
+	conversationID string,
+	beforeSequence, afterSequence int64,
+	limit int64,
+) (ConversationSnapshot, error) {
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4155,8 +4178,16 @@ func (s *Store) LoadConversationSnapshotPage(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	// The floor bounds the rows; visibleAfterSequence alone still decides which
+	// turns are visible, because a positive value there means a context reset.
+	floor := visibleAfterSequence
+	if afterSequence <= 0 || afterSequence < visibleAfterSequence {
+		afterSequence = 0
+	} else {
+		floor = afterSequence
+	}
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
-	if beforeSequence <= visibleAfterSequence {
+	if beforeSequence <= floor {
 		snapshot := ConversationSnapshot{
 			Conversation:                     conversationToDomain(conv),
 			ActiveBranch:                     presentation.activeBranch,
@@ -4164,12 +4195,13 @@ func (s *Store) LoadConversationSnapshotPage(
 			NativeForkAvailableAfterSequence: presentation.nativeForkAvailableAfterSequence,
 			BranchPoints:                     presentation.branchPoints,
 			BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
-			OldestSequence:                   visibleAfterSequence,
+			OldestSequence:                   floor,
 			HasMoreBefore:                    false,
+			AfterSequence:                    afterSequence,
 		}
 		return snapshot, nil
 	}
-	messageRows, activityRows, oldest, hasMore, err := s.conversationPage(ctx, conversationID, beforeSequence, visibleAfterSequence, limit)
+	messageRows, activityRows, oldest, hasMore, err := s.conversationPage(ctx, conversationID, beforeSequence, floor, limit)
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
@@ -4200,6 +4232,7 @@ func (s *Store) LoadConversationSnapshotPage(
 		BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
 		OldestSequence:                   oldest,
 		HasMoreBefore:                    hasMore,
+		AfterSequence:                    afterSequence,
 	}
 	for _, row := range turnRows {
 		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfterSequence) {
@@ -4214,12 +4247,12 @@ func (s *Store) LoadConversationSnapshotPage(
 	// SQL returns newest-first so LIMIT is useful; the API contract remains
 	// oldest-first inside each page.
 	for i := len(messageRows) - 1; i >= 0; i-- {
-		if messageRows[i].Sequence >= oldest && messageRows[i].Sequence > visibleAfterSequence {
+		if messageRows[i].Sequence >= oldest && messageRows[i].Sequence > floor {
 			snapshot.Messages = append(snapshot.Messages, messageToDomain(messageRows[i]))
 		}
 	}
 	for i := len(activityRows) - 1; i >= 0; i-- {
-		if activityRows[i].Sequence >= oldest && activityRows[i].Sequence > visibleAfterSequence {
+		if activityRows[i].Sequence >= oldest && activityRows[i].Sequence > floor {
 			snapshot.Activities = append(snapshot.Activities, activityToDomain(activityRows[i]))
 		}
 	}

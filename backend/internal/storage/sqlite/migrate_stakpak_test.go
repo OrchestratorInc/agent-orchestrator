@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	stakpakMigration        = 20261103175333601
-	stakpakPriorMigration   = 20261103094403671
+	stakpakMigration        = 20261108105252617
+	stakpakPriorMigration   = 20261107181854835
 	stakpakInsertSessionSQL = `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'stk-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
 )
 
