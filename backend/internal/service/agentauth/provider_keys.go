@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -240,33 +241,44 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 	if err != nil {
 		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
+	// fresh holds only names AO actually published here for the first time,
+	// so undo never unsets a value AO did not put in the environment.
 	var fresh []string
 	replaced := map[string]string{}
 	undo = func() {
-		s.rollbackPublished(ctx, fresh, values)
+		// The save may have failed because ctx ended; cleanup still runs.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		s.rollbackPublished(cleanupCtx, fresh, values)
 		for n, earlier := range replaced {
-			_ = publishProviderKey(ctx, n, earlier, values[n])
+			_ = publishProviderKey(cleanupCtx, n, earlier, values[n])
 		}
 	}
 	for _, n := range names {
 		previous := ""
 		if before[n] {
 			previous = stored[n]
-		} else {
-			fresh = append(fresh, n)
 		}
 		if err := providerkeys.SetDevice(ctx, s.dataDir, n, true); err != nil {
 			undo()
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
 		}
 		if err := publishProviderKey(ctx, n, values[n], previous); err != nil {
+			// Nothing was published for n: drop only the marker it gained.
+			if !before[n] {
+				clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				_ = providerkeys.SetDevice(clearCtx, s.dataDir, n, false)
+				cancel()
+			}
 			undo()
 			if errors.Is(err, providerkeys.ErrUserValue) {
 				return nil, apierr.Invalid("AGENT_AUTH_DEVICE_ENV_TAKEN", "Your user environment already sets "+n+" to a different value. AO left it unchanged; remove it there first, or save the key without sharing it.", map[string]any{"name": n})
 			}
 			return nil, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The key could not be added to this device's user environment.")
 		}
-		if previous != "" && previous != values[n] {
+		if !before[n] {
+			fresh = append(fresh, n)
+		} else if previous != "" && previous != values[n] {
 			replaced[n] = previous
 		}
 	}

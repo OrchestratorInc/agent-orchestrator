@@ -285,3 +285,45 @@ func TestFailedSaveRestoresTheEarlierSharedValue(t *testing.T) {
 		t.Fatalf("store has %q but the user environment has %q", keys["GROQ_API_KEY"], published["GROQ_API_KEY"])
 	}
 }
+
+func TestFailedPublishNeverUnsetsAValueAONeverPublished(t *testing.T) {
+	_, withdrawn := stubDeviceEnvironment(t)
+	publishProviderKey = func(context.Context, string, string, string) error { return errors.New("no user bus") }
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-secret", true); err == nil {
+		t.Fatal("reported success without publishing")
+	}
+	// The user may already hold this exact value; AO put nothing there.
+	if _, ok := withdrawn["GROQ_API_KEY"]; ok {
+		t.Fatal("withdrew a value AO never published")
+	}
+	if device, _ := providerkeys.DeviceNames(dir); device["GROQ_API_KEY"] {
+		t.Fatal("left a device marker for a key AO never published")
+	}
+}
+
+func TestPublishUndoRunsAfterTheRequestEnds(t *testing.T) {
+	stubDeviceEnvironment(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var cleanupErr error
+	unpublishProviderKey = func(cleanupCtx context.Context, _, _ string) error {
+		cleanupErr = cleanupCtx.Err()
+		return nil
+	}
+	// The request ends right after publishing, so the store write fails.
+	publishProviderKey = func(context.Context, string, string, string) error {
+		cancel()
+		return nil
+	}
+	t.Setenv("GROQ_API_KEY", "")
+	svc := NewWithAgentResolver(nil, nil, nil, t.TempDir())
+	if _, err := svc.SaveProviderKey(ctx, "GROQ_API_KEY", "groq-secret", true); err == nil {
+		t.Fatal("saved after the request ended")
+	}
+	if cleanupErr != nil {
+		t.Fatalf("cleanup ran with an ended context: %v", cleanupErr)
+	}
+}
