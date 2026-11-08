@@ -14,7 +14,7 @@ import { AgentModelCombobox } from "./AgentModelCombobox";
 import { EffortPicker } from "./EffortPicker";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
-import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { MENU_TRIGGER_CHROME, OptionMenuItem } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -139,19 +139,24 @@ export function AgentModelField({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
-		const shownMode = selectedMode || (options.some((option) => option.value === defaultMode) ? defaultMode : "") || "";
+		// Cloud (and a catalog with no marked mode) has no listed default: unset
+		// means the agent's own default, which the picker names and can return to.
+		const defaultListed = options.some((option) => option.value === defaultMode);
+		const shownMode = selectedMode || (defaultListed ? defaultMode : "") || "";
 		const selectMode = (value: string) => {
 			onModeChange(value === defaultMode ? "" : value);
 			onModelChange("");
 		};
 		// The agent picks its own model for each mode, so its modes are the row's
 		// effort levels and the model column reads "Auto".
-		if (options.length > 0 && !(selectedMode && !defaultMode)) {
+		if (options.length > 0) {
 			return (
 				<>
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<span className="text-settings-muted">{t("settings.models.autoRouteLabel")}</span>
-						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName="w-fit" onChange={selectMode} />
+						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName="w-fit" onChange={selectMode}
+							followLabel={defaultListed ? undefined : t("settings.models.agentDefaultMode")}
+							footer={!defaultListed && selectedMode ? <OptionMenuItem onSelect={() => { onModeChange(""); onModelChange(""); }}>{t("settings.models.useAgentMode")}</OptionMenuItem> : undefined} />
 					</div>
 					{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 				</>

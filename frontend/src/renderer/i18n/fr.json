@@ -3353,6 +3353,7 @@
 	"settings.models.selectModel": "Sélectionner un modèle",
 	"settings.models.useAgentModel": "Utiliser le modèle de l’agent",
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
+	"settings.models.agentDefaultMode": "Par défaut de l’agent",
 	"settings.models.clearEffort": "Effacer l’effort",
 	"settings.models.currentEffort": "Effort actuel : {{effort}}",
 	"settings.models.savedEffortUnavailable": "{{effort}} (indisponible)",

@@ -3403,6 +3403,7 @@
 	"settings.models.selectModel": "Выбрать модель",
 	"settings.models.useAgentModel": "Использовать модель агента",
 	"settings.models.useAgentMode": "Использовать режим агента",
+	"settings.models.agentDefaultMode": "По умолчанию агента",
 	"settings.models.clearEffort": "Сбросить усилие",
 	"settings.models.currentEffort": "Текущее усилие: {{effort}}",
 	"settings.models.savedEffortUnavailable": "{{effort}} (недоступно)",

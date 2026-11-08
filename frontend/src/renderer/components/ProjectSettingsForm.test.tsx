@@ -625,6 +625,87 @@ describe("ProjectSettingsForm", () => {
 		expect(await screen.findByRole("button", { name: "Worker mode" })).toHaveTextContent("Low");
 	});
 
+	function mockAmpWorker(agentConfig: Record<string, string>, models: Array<{ id: string; label: string; isDefault?: boolean }>) {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents" || path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "amp", selectionMode: "mode", models } };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "amp", agentConfig },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+	}
+
+	it("shows Amp's model as Auto and saves its marked mode as unset", async () => {
+		mockAmpWorker({ mode: "high", model: "stale-model" }, [
+			{ id: "low", label: "Low", isDefault: true },
+			{ id: "high", label: "High" },
+		]);
+		renderSettings("proj-1", undefined, "agents");
+		const mode = await screen.findByRole("button", { name: "Worker mode" });
+		expect(mode).toHaveTextContent("High");
+		expect(mode.parentElement).toHaveTextContent(/^Auto/);
+		await userEvent.click(mode);
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "High"]);
+		expect(screen.queryByRole("menuitem", { name: "Use agent mode" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const saved = putMock.mock.calls[0][1].body.config.worker.agentConfig;
+		expect(saved?.mode).toBeUndefined();
+		expect(saved?.model).toBeUndefined();
+	});
+
+	it("names Amp's own default when no mode is marked and can return to it", async () => {
+		mockAmpWorker({ mode: "high" }, [
+			{ id: "low", label: "Low" },
+			{ id: "high", label: "High" },
+		]);
+		renderSettings("proj-1", undefined, "agents");
+		const mode = await screen.findByRole("button", { name: "Worker mode" });
+		expect(mode).toHaveTextContent("High");
+		await userEvent.click(mode);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent mode" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Worker mode" })).toHaveTextContent("Agent default"));
+		await userEvent.click(screen.getByRole("button", { name: "Worker mode" }));
+		expect(screen.getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.queryByRole("menuitem", { name: "Use agent mode" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig?.mode).toBeUndefined();
+	});
+
+	it("keeps a Cursor model's effort inside the model menu", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents" || path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "cursor", selectionMode: "catalog", allowCustom: false,
+				models: [
+					{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
+					{ id: "claude-opus-4-8-low", label: "Claude Opus 4.8 Low" },
+				],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "cursor", agentConfig: { model: "claude-opus-4-8-high" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toBeEnabled());
+		expect(screen.queryByRole("button", { name: "Worker Effort" })).not.toBeInTheDocument();
+		await userEvent.click(picker);
+		expect(screen.getByRole("menuitem", { name: /Reasoning effort/ })).toBeInTheDocument();
+	});
+
 	it("loads agents fields and saves without dropping hidden workflow config", async () => {
 		mockProject({
 			id: "proj-1",
