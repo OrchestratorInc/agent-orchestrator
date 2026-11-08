@@ -234,10 +234,17 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
+	prev := s.readings[account.ID]
+	if prev != nil && prev.at.After(r.at) {
+		// A newer probe already published. Do not replace it or confirm its login
+		// with evidence from the older probe.
+		s.mu.Unlock()
+		return prev
+	}
 	// When only the usage read was unavailable, keep the last reading and its
 	// original timestamp, and only for the same login.
 	if err == nil && identity.SignedIn && !r.mismatch && r.usageUnavailable && identity.Email != "" {
-		if prev := s.readings[account.ID]; prev != nil && prev.identity.SignedIn &&
+		if prev != nil && prev.identity.SignedIn &&
 			strings.EqualFold(prev.identity.Email, identity.Email) {
 			r.limits = prev.limits
 		}

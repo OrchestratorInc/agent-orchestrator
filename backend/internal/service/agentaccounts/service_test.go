@@ -781,12 +781,19 @@ func TestListKeepsLastUsageWhenProbeFailsForSameLogin(t *testing.T) {
 		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 42}},
 	}
 	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	unavailable := fmt.Errorf("provider %w", domain.ErrUsageUnavailable)
+	claude.limitsErr = unavailable
+	first, err := svc.List(ctx, true)
+	if err != nil || len(first) != 1 || first[0].Limits != nil || first[0].LimitsErr != unavailable.Error() {
+		t.Fatalf("first unavailable reading: %+v, %v", first, err)
+	}
+	claude.limitsErr = nil
 	before, err := svc.List(ctx, true)
 	if err != nil || len(before) != 1 || before[0].Limits == nil {
 		t.Fatalf("initial reading: %+v, %v", before, err)
 	}
-	claude.limitsErr = fmt.Errorf("provider %w", domain.ErrUsageUnavailable)
-	for _, email := range []string{"a@example.com", "a@example.com", "b@example.com"} {
+	claude.limitsErr = unavailable
+	for _, email := range []string{"A@example.com", "a@example.com", "b@example.com"} {
 		claude.signedInAs[""] = email
 		views, err := svc.List(ctx, true)
 		if err != nil || len(views) != 1 || views[0].LimitsErr != "provider usage is temporarily unavailable" {
@@ -799,6 +806,13 @@ func TestListKeepsLastUsageWhenProbeFailsForSameLogin(t *testing.T) {
 		if views[0].Limits != want {
 			t.Fatalf("cached reading for %s = %+v, want %+v", email, views[0].Limits, want)
 		}
+	}
+	claude.limitsErr = nil
+	claude.windows = []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 17}}
+	recovered, err := svc.List(ctx, true)
+	if err != nil || len(recovered) != 1 || recovered[0].LimitsErr != "" ||
+		recovered[0].Limits == nil || len(recovered[0].Limits.Windows) != 1 || recovered[0].Limits.Windows[0].UsedPercent != 17 {
+		t.Fatalf("recovered reading: %+v, %v", recovered, err)
 	}
 }
 
@@ -859,5 +873,52 @@ func TestListDoesNotCarryUsageAcrossLoginsWithoutAnEmail(t *testing.T) {
 	views, err := svc.List(ctx, true)
 	if err != nil || views[0].Limits != nil || views[0].LimitsErr == "" {
 		t.Fatalf("a login that cannot be told apart must not inherit a reading: %+v, %v", views, err)
+	}
+}
+
+type overlappingClaude struct {
+	fakeClaude
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *overlappingClaude) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	select {
+	case <-f.started:
+		return f.fakeClaude.Identity(ctx, home)
+	default:
+		close(f.started)
+		select {
+		case <-f.release:
+			return domain.AgentAccountIdentityCheck{SignedIn: true, Email: "old@example.com"}, nil
+		case <-ctx.Done():
+			return domain.AgentAccountIdentityCheck{}, ctx.Err()
+		}
+	}
+}
+
+func TestOlderRefreshCannotReplaceNewerAccountReading(t *testing.T) {
+	ctx := context.Background()
+	claude := &overlappingClaude{
+		fakeClaude: fakeClaude{signedInAs: map[string]string{"": "new@example.com"}},
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	svc := New(&memStore{}, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	var confirmed int
+	svc.SetLoginConfirmed(func(domain.AgentAccount, time.Time) { confirmed++ })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.List(ctx, true)
+	}()
+	<-claude.started
+	_, refreshErr := svc.List(ctx, true)
+	close(claude.release)
+	<-done
+
+	views, err := svc.List(ctx, false)
+	if refreshErr != nil || err != nil || len(views) != 1 || views[0].Account.Email != "new@example.com" || confirmed != 1 {
+		t.Fatalf("expected newer login and one confirmation, got %+v, confirmations=%d, errors=%v/%v", views, confirmed, refreshErr, err)
 	}
 }
