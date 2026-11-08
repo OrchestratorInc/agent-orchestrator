@@ -77,16 +77,10 @@ export const ReauthBanner = memo(function ReauthBanner({
 	cloud?: boolean;
 }) {
 	const { t } = useTranslation();
-	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const [dismissedFailure, setDismissedFailure] = useState<string>();
 	const failure = account.authFailureId ?? `${harness}:${account.reauthRequiredAt}:${account.reauthReason}`;
 	const required = account.authenticationState === "required" ||
 		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
-	const provider = required && !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
-	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
-	const accounts = useAgentAccounts(provider !== null);
-	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
-	const savedAccount = accounts.data?.find((candidate) => candidate.id === sessionAccountId && !candidate.device);
 	if (!required || dismissedFailure === failure) return null;
 	const agent = agentLabel(harness);
 	const host = hostId ? labelForHost(hostId) ?? hostId : undefined;
@@ -96,22 +90,35 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="secondary" className="shrink-0"
-				onClick={() => openGlobalSettings("harness", {
-					focusAgentId: harness,
-					...(hostId ? { hostId } : {}),
-					harnessView: cloud ? "cloud" : "local",
-					...(savedAccount ? { loginAccountId: savedAccount.id } : { startLogin: true }),
-					preserveProject: true,
-				})}>
-				{t("chat.reauth.logInAgain")}
-			</Button>
+			<ReauthLogInButton harness={harness} sessionId={sessionId} hostId={hostId} cloud={cloud} />
 			<CloseButton size="icon-xs" className="shrink-0"
 				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
 				onClick={() => setDismissedFailure(failure)} />
 		</div>
 	);
 });
+
+function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: string; sessionId?: string; hostId?: string; cloud: boolean }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const accounts = useAgentAccounts(provider !== null);
+	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	const savedAccount = accounts.data?.find((candidate) => candidate.id === sessionAccountId && !candidate.device);
+	return (
+		<Button type="button" size="sm" variant="secondary" className="shrink-0"
+			onClick={() => openGlobalSettings("harness", {
+				focusAgentId: harness,
+				...(hostId ? { hostId } : {}),
+				harnessView: cloud ? "cloud" : "local",
+				...(savedAccount ? { loginAccountId: savedAccount.id } : { startLogin: true }),
+				preserveProject: true,
+			})}>
+			{t("chat.reauth.logInAgain")}
+		</Button>
+	);
+}
 
 /**
  * The provider's own view of the thread, when it is bad.
