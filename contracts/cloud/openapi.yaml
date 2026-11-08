@@ -5144,13 +5144,14 @@ components:
     FeedItem:
       type: object
       additionalProperties: false
-      required: [orgId, orgName, projectId, projectName, sessionId, title, owner, status, line, people, following, updatedAt]
+      required: [orgId, projectId, projectName, sessionId, title, owner, status, line, people, following, updatedAt]
       properties:
         orgId:
           type: string
           format: uuid
         orgName:
           type: string
+          description: The workspace's name, only for a workspace the caller is a member of. A guest is not told it.
         projectId:
           type: string
           format: uuid

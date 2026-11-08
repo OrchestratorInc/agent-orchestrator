@@ -3035,7 +3035,8 @@ export interface components {
         FeedItem: {
             /** Format: uuid */
             orgId: string;
-            orgName: string;
+            /** @description The workspace's name, only for a workspace the caller is a member of. A guest is not told it. */
+            orgName?: string;
             /** Format: uuid */
             projectId: string;
             projectName: string;
