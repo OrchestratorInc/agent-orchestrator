@@ -29,7 +29,7 @@ export interface ShareLinkRecordStore {
 	set(key: string, shareId: string, fingerprint?: string, url?: string): Promise<void>;
 	/** Drops every record of a link, after it is unpublished. */
 	forgetShare(shareId: string): Promise<void>;
-	syncLinks(shares: CloudShareLink[]): Promise<void>;
+	syncLinks(baseUrl: string, shares: CloudShareLink[]): Promise<void>;
 }
 
 /**
@@ -56,15 +56,15 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		await this.save();
 	}
 
-	async syncLinks(shares: CloudShareLink[]): Promise<void> {
+	async syncLinks(baseUrl: string, shares: CloudShareLink[]): Promise<void> {
 		const byId = new Map(shares.map((share) => [share.id, share]));
 		const records = await this.load();
 		let changed = false;
 		for (const [key, value] of Object.entries(records)) {
 			const record = asRecord(value);
-			const share = record && byId.get(record.shareId);
-			if (!record || !share) continue;
-			const url = share.revokedAt ? undefined : artifactShareUrl(share);
+			if (!record || recordBaseUrl(key) !== baseUrl) continue;
+			const share = byId.get(record.shareId);
+			const url = share && !share.revokedAt ? artifactShareUrl(share) : undefined;
 			if (record.url === url) continue;
 			records[key] = encodeRecord({ ...record, url });
 			changed = true;
@@ -111,6 +111,15 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 function encodeRecord({ shareId, fingerprint, url }: ShareLinkRecord): string | ShareLinkRecord {
 	if (!fingerprint && !url) return shareId;
 	return { shareId, ...(fingerprint ? { fingerprint } : {}), ...(url ? { url } : {}) };
+}
+
+function recordBaseUrl(key: string): string | undefined {
+	try {
+		const parts: unknown = JSON.parse(key);
+		return Array.isArray(parts) && typeof parts[0] === "string" ? parts[0] : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function asRecord(value: string | ShareLinkRecord | undefined): ShareLinkRecord | undefined {

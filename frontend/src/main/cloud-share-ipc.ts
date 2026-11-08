@@ -182,8 +182,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		shareLinksAvailable(deps, baseUrlArgument(value)));
 
 	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> => {
-		const links = await listShareLinks(deps, baseUrlArgument(value));
-		await deps.records.syncLinks(links.shares);
+		const baseUrl = baseUrlArgument(value);
+		const links = await listShareLinks(deps, baseUrl);
+		await deps.records.syncLinks(baseUrl, links.shares);
 		return links;
 	});
 

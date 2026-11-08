@@ -152,6 +152,20 @@ describe("cloudShare IPC", () => {
 		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID });
 	});
 
+	it("drops a link's URL once the control plane no longer lists it, and keeps other control planes' links", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const other = shareRecordKey("https://other.test", "sess-1", "docs/report.html");
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({
+			[key]: { shareId: SHARE_ID, url: "https://share.test/abc" },
+			[other]: { shareId: "other-share", url: "https://other.share.test/" },
+		}));
+		await setup({ shares: [] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		const records = JSON.parse(await fs.readFile(recordsFile, "utf8"));
+		expect(records[key]).toBe(SHARE_ID);
+		expect(records[other]).toEqual({ shareId: "other-share", url: "https://other.share.test/" });
+	});
+
 	it("remembers what a file held when it was published, so a later change shows", async () => {
 		const { invoke, publish, file } = setup();
 		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("publishedFingerprint");
