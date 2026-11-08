@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -207,10 +208,7 @@ func Run(buildVersion string) error {
 	// (startup reconcile, preview servers, chat side stops, usage, pricing,
 	// lifecycle stack) are not covered: a predecessor stuck in one past the
 	// wait still makes this daemon exit 75.
-	installerShutdownTimeout := max(cfg.ShutdownTimeout, systeminstall.DefaultShutdownTimeout())
-	if cfg.InstallerShutdownTimeout > 0 {
-		installerShutdownTimeout = max(cfg.ShutdownTimeout, cfg.InstallerShutdownTimeout)
-	}
+	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
 		return err

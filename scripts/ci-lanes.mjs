@@ -52,7 +52,6 @@ export function outputs(pick) {
     `lanes=${JSON.stringify(pick.lanes)}`,
     `frontend=${pick.lanes.some(lane => FRONTEND_WORKFLOW_LANES.includes(lane))}`,
     `full=${pick.full}`,
-    `macos=${pick.macos}`,
     `vitest=${pick.vitest}`,
   ].join('\n') + '\n';
 }

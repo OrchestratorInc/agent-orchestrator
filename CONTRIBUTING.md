@@ -79,8 +79,8 @@ The AO Cloud control plane (the hosted service behind Cloud Agents) is not in th
 `.github/workflows/ci.yml` runs on every PR. Its `changes` job reads the PR's
 files and starts only the lanes those files can affect; the rules live in
 `scripts/ci-lanes.mjs`. `ci-ok` passes when every lane that started passes, so
-it is the one check to watch. A change under `.github/workflows/` starts every
-lane, and a push to `main` runs every lane in full.
+it is the one check to watch. A change to a workflow or to the lane rules starts
+every Linux lane, and a push to `main` runs every lane in full.
 
 On a PR, vitest runs the tests related to the changed frontend files plus the
 files listed in `frontend/scripts/ci-vitest-always-run.txt`. Add a test to that
@@ -97,7 +97,8 @@ Ready PRs targeting `main` run the Linux suites. Ask a maintainer to add
 `ci:macos` for macOS helpers, updater or packaging changes, or `ci:full` for
 Windows paths, process handling, or other cross-platform changes. `ci:full`
 also enables the frontend macOS jobs. Changes to the macOS helpers under
-`frontend/native/` start the macOS jobs without a label.
+`frontend/native/`, their build scripts, or the DMG assets start the macOS jobs
+without a label.
 
 Label changes alone do not restart CI. CI reads the labels when it runs, so
 push again or re-run the latest CI run after changing them. Main pushes retain

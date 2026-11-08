@@ -92,7 +92,7 @@ test('vitest runs all files when related selection cannot be trusted', () => {
 
 test('outputs are one GitHub output line each', () => {
   const text = outputs(pickLanes(pr(['frontend/src/docs/content/a.mdx'])));
-  assert.equal(text, 'lanes=["docs"]\nfrontend=true\nfull=false\nmacos=false\nvitest=\n');
+  assert.equal(text, 'lanes=["docs"]\nfrontend=true\nfull=false\nvitest=\n');
 });
 
 test('every lane is used by a workflow', () => {
