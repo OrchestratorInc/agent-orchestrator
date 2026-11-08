@@ -4,9 +4,10 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 
-const { getMock, postMock } = vi.hoisted(() => ({
+const { getMock, postMock, remotePostMock } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
+	remotePostMock: vi.fn(),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -14,12 +15,18 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: () => "request failed",
 }));
 
+vi.mock("../lib/host-clients", () => ({
+	clientForHost: () => ({ POST: remotePostMock }),
+}));
+
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	agentReadinessQueryKeyForHost,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
+	useEnsuredReadinessHosts,
 } from "./useAgentReadinessQuery";
 
 function wrapper(queryClient: QueryClient) {
@@ -35,6 +42,10 @@ beforeEach(() => {
 	});
 	postMock.mockReset().mockResolvedValue({
 		data: { agents: [agentReadiness("codex", "Codex")] },
+		error: undefined,
+	});
+	remotePostMock.mockReset().mockResolvedValue({
+		data: { agents: [agentReadiness("claude-code", "Claude Code")] },
 		error: undefined,
 	});
 });
@@ -115,5 +126,68 @@ describe("agent readiness query", () => {
 			expect(result.current).toBe(true);
 			unmount();
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("ensured readiness across hosts", () => {
+	it("checks each host once, and a host joining never reopens another's gate", async () => {
+		const queryClient = new QueryClient();
+		const { result, rerender, unmount } = renderHook(
+			({ hostIds }) => useEnsuredReadinessHosts(hostIds),
+			{ initialProps: { hostIds: ["local"] }, wrapper: wrapper(queryClient) },
+		);
+		await waitFor(() => expect(result.current.has("local")).toBe(true));
+		rerender({ hostIds: ["local", "host-vm"] });
+		// This computer stays done while the remote's own check runs.
+		expect(result.current.has("local")).toBe(true);
+		await waitFor(() => expect(result.current.has("host-vm")).toBe(true));
+		expect(postMock).toHaveBeenCalledTimes(1);
+		expect(remotePostMock).toHaveBeenCalledTimes(1);
+		expect(remotePostMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: [], purpose: "display" } });
+		expect(queryClient.getQueryData(agentReadinessQueryKeyForHost("host-vm"))).toEqual({ agents: [agentReadiness("claude-code", "Claude Code")] });
+		unmount();
+	});
+
+	it("drops a host that leaves and checks it afresh when it returns", async () => {
+		const { result, rerender, unmount } = renderHook(
+			({ hostIds }) => useEnsuredReadinessHosts(hostIds),
+			{ initialProps: { hostIds: ["local", "host-vm"] }, wrapper: wrapper(new QueryClient()) },
+		);
+		await waitFor(() => expect(result.current.has("host-vm")).toBe(true));
+		rerender({ hostIds: ["local"] });
+		expect(result.current.has("host-vm")).toBe(false);
+		expect(result.current.has("local")).toBe(true);
+		rerender({ hostIds: ["local", "host-vm"] });
+		await waitFor(() => expect(result.current.has("host-vm")).toBe(true));
+		expect(remotePostMock).toHaveBeenCalledTimes(2);
+		expect(postMock).toHaveBeenCalledTimes(1);
+		unmount();
+	});
+
+	it("keeps a remote that fails out of the gate without holding back this computer", async () => {
+		remotePostMock.mockRejectedValue(new Error("offline"));
+		const { result, unmount } = renderHook(() => useEnsuredReadinessHosts(["local", "host-vm"]), { wrapper: wrapper(new QueryClient()) });
+		await waitFor(() => expect(result.current.has("local")).toBe(true));
+		expect(result.current.has("host-vm")).toBe(false);
+		unmount();
+	});
+
+	it("does not let a previous enabled period complete a newer check", async () => {
+		const resolvers: Array<(value: unknown) => void> = [];
+		postMock.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+		const { result, rerender, unmount } = renderHook(
+			({ enabled }) => useEnsuredReadinessHosts(["local"], { enabled }),
+			{ initialProps: { enabled: true }, wrapper: wrapper(new QueryClient()) },
+		);
+		rerender({ enabled: false });
+		rerender({ enabled: true });
+		const response = { data: { agents: [agentReadiness("codex")] } };
+		await act(async () => resolvers[0](response));
+		expect(result.current.has("local")).toBe(false);
+		await act(async () => resolvers[1](response));
+		expect(result.current.has("local")).toBe(true);
+		rerender({ enabled: false });
+		expect(result.current.size).toBe(0);
+		unmount();
 	});
 });

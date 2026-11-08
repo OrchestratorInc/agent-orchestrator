@@ -1,10 +1,11 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import { isLocal, type HostId } from "../lib/hosts";
 
 export type AgentReadiness = components["schemas"]["AgentReadinessResponse"];
 export type AgentReadinessSnapshot = components["schemas"]["AgentReadinessSnapshot"];
@@ -59,13 +60,71 @@ export const agentReadinessQueryOptions = {
 	gcTime: Number.POSITIVE_INFINITY,
 };
 
-export function useAgentReadinessQuery(enabled = true, hostId?: string) {
-	return useQuery({
+export function agentReadinessQueryOptionsForHost(hostId?: string) {
+	return {
 		...agentReadinessQueryOptions,
 		queryKey: agentReadinessQueryKeyForHost(hostId),
 		queryFn: () => fetchAgentReadiness(hostId),
-		enabled,
-	});
+	};
+}
+
+export function useAgentReadinessQuery(enabled = true, hostId?: string) {
+	return useQuery({ ...agentReadinessQueryOptionsForHost(hostId), enabled });
+}
+
+const NO_HOSTS: ReadonlySet<HostId> = new Set();
+
+/**
+ * useEnsureAgentReadiness for several hosts at once: the hosts whose display
+ * check has finished. Each host keeps its own check, so a host connecting or
+ * leaving never reopens the gate of another.
+ */
+export function useEnsuredReadinessHosts(hostIds: readonly HostId[], { enabled = true, retryOnError = false }: { enabled?: boolean; retryOnError?: boolean } = {}): ReadonlySet<HostId> {
+	const queryClient = useQueryClient();
+	const hostsKey = [...new Set(hostIds)].sort().join("\u0000");
+	const running = useRef(new Map<HostId, () => void>());
+	const [ensured, setEnsured] = useState<ReadonlySet<HostId>>(NO_HOSTS);
+	useEffect(() => {
+		const wanted = new Set(enabled && hostsKey !== "" ? hostsKey.split("\u0000") : []);
+		const drop = (hostId: HostId) => setEnsured((current) => {
+			if (!current.has(hostId)) return current;
+			const next = new Set(current);
+			next.delete(hostId);
+			return next;
+		});
+		for (const [hostId, stop] of running.current) {
+			if (wanted.has(hostId)) continue;
+			stop();
+			running.current.delete(hostId);
+			drop(hostId);
+		}
+		for (const hostId of wanted) {
+			if (running.current.has(hostId)) continue;
+			const target = isLocal(hostId) ? undefined : hostId;
+			let active = true;
+			let retryTimer: ReturnType<typeof setTimeout> | undefined;
+			const ensure = () => void ensureAgentReadiness([], "display", target)
+				.then((next) => {
+					if (!active) return;
+					cacheAgentReadiness(queryClient, next, target);
+					setEnsured((current) => current.has(hostId) ? current : new Set([...current, hostId]));
+				})
+				.catch(() => {
+					// Keep cached display data, but never report a failed check as done.
+					if (active && retryOnError) retryTimer = setTimeout(ensure, 30_000);
+				});
+			running.current.set(hostId, () => {
+				active = false;
+				clearTimeout(retryTimer);
+			});
+			ensure();
+		}
+	}, [enabled, hostsKey, queryClient, retryOnError]);
+	useEffect(() => () => {
+		for (const stop of running.current.values()) stop();
+		running.current.clear();
+	}, []);
+	return enabled ? ensured : NO_HOSTS;
 }
 
 export function useEnsureAgentReadiness({
