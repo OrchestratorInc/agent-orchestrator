@@ -258,6 +258,16 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
 // setupRoute reports a request that may run the project's Setup steps.
+// moveCaptureRoute reports a route that captures a session's whole worktree,
+// which can outlast the default request budget.
+func moveCaptureRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview":
+		return true
+	}
+	return false
+}
+
 func setupRoute(req *http.Request) bool {
 	if req.Method != http.MethodPost {
 		return false
@@ -354,9 +364,8 @@ func (a *API) Register(root chi.Router) {
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					// An import scan reads every local history. A move to AO Cloud
-					// pushes the branch to origin.
-					if attachmentUploadRoute(req) || sessionImportRoute(req) || chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/move/export" {
+					// An import scan reads every local history.
+					if attachmentUploadRoute(req) || sessionImportRoute(req) || moveCaptureRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}

@@ -36,18 +36,10 @@ func (e *FileTooLargeError) Unwrap() error { return ErrFileTooLarge }
 // local branch to it, so a rolled-back move leaves a branch that matches
 // origin. It never force-pushes.
 func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes int64) error {
-	if len(c.LFS) > 0 {
-		// ponytail: refuses LFS; upload with `git lfs push origin <tip>` once git-lfs is a dependency.
-		return fmt.Errorf("%w: %s", ErrLFSObjects, strings.Join(c.LFS, ", "))
-	}
-	tip := c.Tip()
-	big, err := blobsOver(ctx, worktree, tip, maxFileBytes)
-	if err != nil {
+	if err := CheckPush(ctx, worktree, c, maxFileBytes); err != nil {
 		return err
 	}
-	if len(big) > 0 {
-		return &FileTooLargeError{Limit: maxFileBytes, Files: big}
-	}
+	tip := c.Tip()
 	ref := "refs/heads/" + c.Branch
 	if out, err := runGit(ctx, worktree, nil, nil, "push", "--porcelain", "--no-verify", "origin", tip+":"+ref); err != nil {
 		var ge *gitError
@@ -72,4 +64,21 @@ func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes in
 	// The worktree already holds the WIP content; point the index at it too.
 	_, err = runGit(ctx, worktree, nil, nil, "reset", "-q")
 	return err
+}
+
+// CheckPush returns the refusal PushBranch would give c before pushing: Git
+// LFS files, or files over maxFileBytes that origin does not have.
+func CheckPush(ctx context.Context, worktree string, c Capture, maxFileBytes int64) error {
+	if len(c.LFS) > 0 {
+		// ponytail: refuses LFS; upload with `git lfs push origin <tip>` once git-lfs is a dependency.
+		return fmt.Errorf("%w: %s", ErrLFSObjects, strings.Join(c.LFS, ", "))
+	}
+	big, err := blobsOver(ctx, worktree, c.Tip(), maxFileBytes)
+	if err != nil {
+		return err
+	}
+	if len(big) > 0 {
+		return &FileTooLargeError{Limit: maxFileBytes, Files: big}
+	}
+	return nil
 }

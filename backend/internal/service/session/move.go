@@ -93,35 +93,9 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 	if in.MoveID == "" {
 		return MoveExport{}, apierr.Invalid("MOVE_ID_REQUIRED", "moveId is required", nil)
 	}
-	rec, found, err := s.store.GetSession(ctx, id)
+	rec, project, repoKey, err := s.moveSource(ctx, id, true)
 	if err != nil {
 		return MoveExport{}, err
-	}
-	if !found {
-		return MoveExport{}, apierr.NotFound("SESSION_NOT_FOUND", "Session not found")
-	}
-	switch {
-	case rec.MovedTo != nil:
-		return MoveExport{}, apierr.Conflict("SESSION_MOVED", "This session already moved to AO Cloud.", nil)
-	case rec.IsTerminated:
-		return MoveExport{}, apierr.Conflict("SESSION_TERMINATED", "Restore the session before moving it.", nil)
-	case rec.Kind != domain.KindWorker:
-		return MoveExport{}, apierr.Conflict("MOVE_UNSUPPORTED_SESSION", "Only worker sessions can move.", nil)
-	case rec.Activity.State != domain.ActivityExited:
-		return MoveExport{}, apierr.Conflict("MOVE_AGENT_RUNNING", "Stop the agent before moving the session.", nil)
-	case rec.Metadata.WorkspacePath == "":
-		return MoveExport{}, apierr.Conflict("MOVE_NO_WORKSPACE", "The session has no worktree to move.", nil)
-	}
-	project, found, err := s.store.GetProject(ctx, string(rec.ProjectID))
-	if err != nil {
-		return MoveExport{}, err
-	}
-	if !found || project.Kind.WithDefault() != domain.ProjectKindSingleRepo {
-		return MoveExport{}, apierr.Conflict("MOVE_UNSUPPORTED_PROJECT", "Only sessions in a single-repository project can move.", nil)
-	}
-	repoKey := domain.RepositoryKey(project.RepoOriginURL)
-	if repoKey == "" {
-		return MoveExport{}, apierr.Conflict("MOVE_NO_ORIGIN", "The project has no origin repository AO Cloud can fetch from.", nil)
 	}
 
 	label := strings.TrimSpace(in.SourceLabel)
@@ -161,6 +135,67 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 		}
 	}
 	return out, nil
+}
+
+// MovePreview is what a move to AO Cloud would push now.
+type MovePreview struct {
+	Branch  string
+	Changes []sessionmove.Change
+}
+
+// PreviewMove captures the session's worktree as ExportMove would, without
+// pushing or moving its branch, so the app can show what a move publishes,
+// and any refusal, before the agent stops.
+func (s *Service) PreviewMove(ctx context.Context, id domain.SessionID) (MovePreview, error) {
+	rec, project, _, err := s.moveSource(ctx, id, false)
+	if err != nil {
+		return MovePreview{}, err
+	}
+	wt := rec.Metadata.WorkspacePath
+	c, err := sessionmove.CaptureWorktree(ctx, sessionmove.CaptureOptions{Worktree: wt, Exclude: project.Config.Symlinks})
+	if err != nil {
+		return MovePreview{}, moveAPIError(err)
+	}
+	if err := sessionmove.CheckPush(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
+		return MovePreview{}, moveAPIError(err)
+	}
+	return MovePreview{Branch: c.Branch, Changes: c.Changes}, nil
+}
+
+// moveSource loads a session that can move to AO Cloud and its project.
+// stopped also requires its agent to have exited.
+func (s *Service) moveSource(ctx context.Context, id domain.SessionID, stopped bool) (domain.SessionRecord, domain.ProjectRecord, string, error) {
+	rec, found, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return rec, domain.ProjectRecord{}, "", err
+	}
+	if !found {
+		return rec, domain.ProjectRecord{}, "", apierr.NotFound("SESSION_NOT_FOUND", "Session not found")
+	}
+	switch {
+	case rec.MovedTo != nil:
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("SESSION_MOVED", "This session already moved to AO Cloud.", nil)
+	case rec.IsTerminated:
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("SESSION_TERMINATED", "Restore the session before moving it.", nil)
+	case rec.Kind != domain.KindWorker:
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("MOVE_UNSUPPORTED_SESSION", "Only worker sessions can move.", nil)
+	case stopped && rec.Activity.State != domain.ActivityExited:
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("MOVE_AGENT_RUNNING", "Stop the agent before moving the session.", nil)
+	case rec.Metadata.WorkspacePath == "":
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("MOVE_NO_WORKSPACE", "The session has no worktree to move.", nil)
+	}
+	project, found, err := s.store.GetProject(ctx, string(rec.ProjectID))
+	if err != nil {
+		return rec, project, "", err
+	}
+	if !found || project.Kind.WithDefault() != domain.ProjectKindSingleRepo {
+		return rec, project, "", apierr.Conflict("MOVE_UNSUPPORTED_PROJECT", "Only sessions in a single-repository project can move.", nil)
+	}
+	repoKey := domain.RepositoryKey(project.RepoOriginURL)
+	if repoKey == "" {
+		return rec, project, "", apierr.Conflict("MOVE_NO_ORIGIN", "The project has no origin repository AO Cloud can fetch from.", nil)
+	}
+	return rec, project, repoKey, nil
 }
 
 // ImportMove starts a session AO Cloud pushed, on this machine: it places the

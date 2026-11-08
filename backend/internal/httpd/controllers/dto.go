@@ -4709,6 +4709,19 @@ type ForkSessionResponse struct {
 	DisplayName string           `json:"displayName"`
 }
 
+// MovePreviewResponse is what a move to AO Cloud would push now: the branch
+// and the uncommitted paths its WIP commit would carry.
+type MovePreviewResponse struct {
+	Branch  string       `json:"branch"`
+	Changes []MoveChange `json:"changes"`
+}
+
+// MoveChange is one uncommitted path a move would push.
+type MoveChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified,deleted"`
+}
+
 // MoveExportRequest asks this machine to push a stopped session for a move to
 // AO Cloud.
 type MoveExportRequest struct {

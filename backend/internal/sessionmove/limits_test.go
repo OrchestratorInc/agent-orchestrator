@@ -39,8 +39,11 @@ func TestPushRefusesFilesOverTheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = PushBranch(t.Context(), f.src, c, 1<<20)
 	var tooBig *FileTooLargeError
+	if err := CheckPush(t.Context(), f.src, c, 1<<20); !errors.As(err, &tooBig) {
+		t.Fatalf("CheckPush err = %v, want FileTooLargeError", err)
+	}
+	err = PushBranch(t.Context(), f.src, c, 1<<20)
 	if !errors.As(err, &tooBig) || len(tooBig.Files) != 1 || tooBig.Files[0].Path != "video.mov" {
 		t.Fatalf("err = %v, want video.mov over the limit", err)
 	}

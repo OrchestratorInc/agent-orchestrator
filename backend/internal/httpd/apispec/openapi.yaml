@@ -10946,6 +10946,45 @@ paths:
         note to move it to AO Cloud
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/move/preview:
+    get:
+      operationId: previewSessionMove
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovePreviewResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List what a move to AO Cloud would push, or why it cannot move
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pin:
     delete:
       operationId: unpinSession
@@ -21371,6 +21410,20 @@ components:
       - location
       - lastError
       type: object
+    MoveChange:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          - deleted
+          type: string
+      required:
+      - path
+      - status
+      type: object
     MoveCompleteRequest:
       properties:
         moveId:
@@ -21509,6 +21562,18 @@ components:
       - terminateOnPrMerge
       - autoInjectReview
       - autoInjectCI
+      type: object
+    MovePreviewResponse:
+      properties:
+        branch:
+          type: string
+        changes:
+          items:
+            $ref: '#/components/schemas/MoveChange'
+          type: array
+      required:
+      - branch
+      - changes
       type: object
     NotificationEnvelope:
       properties:
