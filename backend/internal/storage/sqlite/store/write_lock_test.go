@@ -62,14 +62,18 @@ func TestContextMutexReportsSlowHolderAfterRelease(t *testing.T) {
 	var caller string
 	var held time.Duration
 	observe := func(c string, h time.Duration) {
-		mutex.Lock()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := mutex.LockContext(ctx); err != nil {
+			t.Errorf("observer could not take the released lock: %v", err)
+			return
+		}
 		mutex.Unlock()
 		caller, held = c, h
 	}
 	mutex.onSlow.Store(&observe)
 
-	mutex.Lock()
-	mutex.Unlock()
+	holdWriteLock(mutex, 0)
 	if caller != "" {
 		t.Fatalf("fast hold reported by %q", caller)
 	}
