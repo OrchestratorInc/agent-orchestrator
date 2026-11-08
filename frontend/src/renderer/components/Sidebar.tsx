@@ -1363,7 +1363,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<ArrowLeft aria-hidden="true" />
 								<span className="tracking-tight">{t("settings.back")}</span>
 							</span>
@@ -1402,7 +1402,7 @@ export function Sidebar({
 						type="button"
 					>
 						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 							<Smartphone aria-hidden="true" />
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
@@ -1416,7 +1416,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<Settings aria-hidden="true" />
 								<span className="tracking-tight">{t("shell.settings")}</span>
 							</span>
@@ -3038,7 +3038,7 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 			type="button"
 		>
 			<NavRowHighlight />
-			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 				<LogIn aria-hidden="true" />
 				<span className="tracking-tight">{t("shell.signInToAOCloud")}</span>
 			</span>
@@ -3101,7 +3101,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<AccountAvatar user={session?.user} />
 						<span className="min-w-0 truncate tracking-tight">{name}</span>
 						{plan ? (
@@ -3303,7 +3303,7 @@ function UpdateStatusRow({
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<Download aria-hidden="true" className="size-icon-lg shrink-0" />
 						<span className="min-w-0 flex-1">
 							<span className="block truncate tracking-tight">{t("shell.updateAvailable")}</span>
