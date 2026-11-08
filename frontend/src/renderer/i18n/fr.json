@@ -4955,7 +4955,7 @@
 	"command.sessionMatches_many": "{{count}} résultats",
 	"moveSession.menu": "Déplacer vers un autre ordinateur…",
 	"moveSession.title": "Déplacer vers un autre ordinateur",
-	"moveSession.description": "{{title}} continue sur l’ordinateur choisi, avec sa branche, ses modifications non validées et sa conversation.",
+	"moveSession.description": "{{title}} continue sur l’ordinateur choisi. Sa branche et ses modifications non validées sont poussées vers origin, et sa conversation est copiée.",
 	"moveSession.pick": "Ordinateur",
 	"moveSession.none": "Aucun autre ordinateur connecté n’a de projet pour ce dépôt. Ajoutez d’abord le projet là-bas.",
 	"moveSession.start": "Déplacer",
@@ -4970,7 +4970,13 @@
 	"moveSession.resumed": "La session continue sur {{host}}.",
 	"moveSession.notResumed": "Son agent sur {{host}} est arrêté ; ouvrez la session pour le reprendre.",
 	"moveSession.done": "Déplacée. Elle continue sur {{host}}.",
+	"moveSession.doneSummary": "Déplacée. Elle continue sur {{host}} à partir d’un résumé ; la conversation complète n’a pas pu y reprendre et reste sur {{source}}.",
+	"moveSession.movedHeading": "Déplacée vers {{host}}",
+	"moveSession.movedMessage": "Elle continue là-bas sous le nom {{sessionId}}.",
 	"moveSession.commitFailed": "Elle tourne sur {{target}}, mais {{source}} n’a pas pu marquer l’ancienne session comme déplacée : {{message}}",
 	"newTask.runOn": "Exécuter sur {{host}}",
+	"newTask.attachmentsStay_one": "{{count}} pièce jointe reste sur l’ordinateur précédent ; ajoutez-la de nouveau ici.",
+	"newTask.attachmentsStay_other": "{{count}} pièces jointes restent sur l’ordinateur précédent ; ajoutez-les de nouveau ici.",
+	"newTask.attachmentsStay_many": "{{count}} pièces jointes restent sur l’ordinateur précédent ; ajoutez-les de nouveau ici.",
 	"shell.addToComputer": "Ajouter à un autre ordinateur"
 }

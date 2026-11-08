@@ -4815,7 +4815,7 @@
 	"command.sessionMatches_other": "{{count}} matches",
 	"moveSession.menu": "Move to another computer…",
 	"moveSession.title": "Move to another computer",
-	"moveSession.description": "{{title}} continues on the computer you pick, with its branch, uncommitted changes and conversation.",
+	"moveSession.description": "{{title}} continues on the computer you pick. Its branch and uncommitted changes are pushed to origin, and its conversation is copied over.",
 	"moveSession.pick": "Computer",
 	"moveSession.none": "No other connected computer has a project for this repository. Add the project there first.",
 	"moveSession.start": "Move",
@@ -4830,7 +4830,12 @@
 	"moveSession.resumed": "The session continues on {{host}}.",
 	"moveSession.notResumed": "Its agent on {{host}} is stopped; open the session to resume it.",
 	"moveSession.done": "Moved. It continues on {{host}}.",
+	"moveSession.doneSummary": "Moved. It continues on {{host}} from a summary; the full conversation could not be resumed there and stays on {{source}}.",
+	"moveSession.movedHeading": "Moved to {{host}}",
+	"moveSession.movedMessage": "It continues there as {{sessionId}}.",
 	"moveSession.commitFailed": "It runs on {{target}}, but {{source}} could not mark the old session as moved: {{message}}",
 	"newTask.runOn": "Run on {{host}}",
+	"newTask.attachmentsStay_one": "{{count}} attachment stays on the previous computer; add it again here.",
+	"newTask.attachmentsStay_other": "{{count}} attachments stay on the previous computer; add them again here.",
 	"shell.addToComputer": "Add to another computer"
 }

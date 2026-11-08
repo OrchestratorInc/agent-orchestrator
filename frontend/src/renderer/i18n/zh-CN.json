@@ -4817,7 +4817,7 @@
 	"command.sessionMatches_other": "{{count}} 个匹配",
 	"moveSession.menu": "移到另一台电脑…",
 	"moveSession.title": "移到另一台电脑",
-	"moveSession.description": "{{title}} 会在你选择的电脑上继续，带上分支、未提交的更改和对话。",
+	"moveSession.description": "{{title}} 会在你选择的电脑上继续。分支和未提交的更改会推送到 origin，对话会被复制过去。",
 	"moveSession.pick": "电脑",
 	"moveSession.none": "其他已连接的电脑上都没有此仓库的项目。请先在那里添加项目。",
 	"moveSession.start": "移动",
@@ -4832,7 +4832,12 @@
 	"moveSession.resumed": "会话将在 {{host}} 上继续。",
 	"moveSession.notResumed": "它在 {{host}} 上的代理已停止；打开会话即可恢复。",
 	"moveSession.done": "已移动，将在 {{host}} 上继续。",
+	"moveSession.doneSummary": "已移动，将在 {{host}} 上从摘要继续；完整对话无法在那里恢复，仍保留在 {{source}}。",
+	"moveSession.movedHeading": "已移到 {{host}}",
+	"moveSession.movedMessage": "在那里以 {{sessionId}} 继续。",
 	"moveSession.commitFailed": "它已在 {{target}} 上运行，但 {{source}} 无法将旧会话标记为已移动：{{message}}",
 	"newTask.runOn": "在 {{host}} 上运行",
+	"newTask.attachmentsStay_other": "{{count}} 个附件留在之前的电脑上；请在这里重新添加。",
+	"newTask.attachmentsStay_one": "{{count}} 个附件留在之前的电脑上；请在这里重新添加。",
 	"shell.addToComputer": "添加到另一台电脑"
 }

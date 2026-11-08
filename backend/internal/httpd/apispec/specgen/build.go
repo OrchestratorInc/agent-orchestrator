@@ -391,6 +391,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersReceiveTransferResponse":                  "ReceiveTransferResponse",
 	"ControllersCommitTransferRequest":                    "CommitTransferRequest",
 	"ControllersCommitTransferResponse":                   "CommitTransferResponse",
+	"ControllersCancelTransferRequest":                    "CancelTransferRequest",
+	"ControllersCancelTransferResponse":                   "CancelTransferResponse",
+	"ControllersSessionTransferStateResponse":             "SessionTransferStateResponse",
 	"DomainSessionTransfer":                               "SessionTransfer",
 	"DomainSessionTransferSource":                         "SessionTransferSource",
 	"DomainSessionTransferNative":                         "SessionTransferNative",
@@ -4062,6 +4065,15 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/transfer", id: "getSessionTransferState", tag: "sessions",
+			summary:    "Report where a session moved, if it did",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SessionTransferStateResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/transfer/prepare", id: "prepareSessionTransfer", tag: "sessions",
 			summary:    "Stop a session's agent and hand over its branch, uncommitted work and conversation for another machine",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -4120,6 +4132,17 @@ func sessionOperations() []operation {
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/transfer/cancel", id: "cancelSessionTransfer", tag: "sessions",
+			summary:    "Forget an unfinished move so the session can resume here",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.CancelTransferRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.CancelTransferResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

@@ -1959,6 +1959,8 @@ func mapSessionError(err error) error {
 			"the agent controller for this session is not running", nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):
 		return apierr.Conflict("SESSION_MOVED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrTransferPending):
+		return apierr.Conflict("TRANSFER_PENDING", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)

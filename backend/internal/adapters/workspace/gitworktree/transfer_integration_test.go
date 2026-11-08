@@ -60,6 +60,14 @@ func TestTransferPushFetchAlign(t *testing.T) {
 	if got, _ := wsB.RevParse(ctx, repoB, remotePreserved); got != preserved {
 		t.Fatalf("fetched preserved = %q, want %s", got, preserved)
 	}
+	for range 2 {
+		if err := wsA.DeleteTransferRef(ctx, repoA, remotePreserved); err != nil {
+			t.Fatalf("delete preserved ref: %v", err)
+		}
+	}
+	if out := gitOutput(t, git, filepath.Join(tmp, "origin.git"), "for-each-ref", "refs/ao/"); out != "" {
+		t.Fatalf("origin still has %s", out)
+	}
 	if err := wsB.AlignTransferBranch(ctx, repoB, branch, head); err != nil {
 		t.Fatalf("align new branch: %v", err)
 	}

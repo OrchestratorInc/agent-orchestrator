@@ -4955,7 +4955,7 @@
 	"command.sessionMatches_many": "{{count}} coincidencias",
 	"moveSession.menu": "Mover a otro ordenador…",
 	"moveSession.title": "Mover a otro ordenador",
-	"moveSession.description": "{{title}} continúa en el ordenador que elijas, con su rama, los cambios sin confirmar y la conversación.",
+	"moveSession.description": "{{title}} continúa en el ordenador que elijas. Su rama y los cambios sin confirmar se suben a origin, y la conversación se copia.",
 	"moveSession.pick": "Ordenador",
 	"moveSession.none": "Ningún otro ordenador conectado tiene un proyecto para este repositorio. Añade primero el proyecto allí.",
 	"moveSession.start": "Mover",
@@ -4970,7 +4970,13 @@
 	"moveSession.resumed": "La sesión continúa en {{host}}.",
 	"moveSession.notResumed": "Su agente en {{host}} está detenido; abre la sesión para reanudarlo.",
 	"moveSession.done": "Movida. Continúa en {{host}}.",
+	"moveSession.doneSummary": "Movida. Continúa en {{host}} a partir de un resumen; la conversación completa no se pudo reanudar allí y queda en {{source}}.",
+	"moveSession.movedHeading": "Movida a {{host}}",
+	"moveSession.movedMessage": "Continúa allí como {{sessionId}}.",
 	"moveSession.commitFailed": "Se ejecuta en {{target}}, pero {{source}} no pudo marcar la sesión anterior como movida: {{message}}",
 	"newTask.runOn": "Ejecutar en {{host}}",
+	"newTask.attachmentsStay_one": "{{count}} adjunto se queda en el ordenador anterior; vuelve a añadirlo aquí.",
+	"newTask.attachmentsStay_other": "{{count}} adjuntos se quedan en el ordenador anterior; vuelve a añadirlos aquí.",
+	"newTask.attachmentsStay_many": "{{count}} adjuntos se quedan en el ordenador anterior; vuelve a añadirlos aquí.",
 	"shell.addToComputer": "Añadir a otro ordenador"
 }

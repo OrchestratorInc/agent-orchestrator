@@ -4835,7 +4835,7 @@
 	"command.sessionMatches_other": "{{count}}件の一致",
 	"moveSession.menu": "別のコンピューターに移動…",
 	"moveSession.title": "別のコンピューターに移動",
-	"moveSession.description": "{{title}} は、ブランチ、未コミットの変更、会話とともに選んだコンピューターで続行します。",
+	"moveSession.description": "{{title}} は選んだコンピューターで続行します。ブランチと未コミットの変更は origin にプッシュされ、会話はコピーされます。",
 	"moveSession.pick": "コンピューター",
 	"moveSession.none": "このリポジトリのプロジェクトがある接続中のコンピューターは他にありません。先にそちらへプロジェクトを追加してください。",
 	"moveSession.start": "移動",
@@ -4850,7 +4850,12 @@
 	"moveSession.resumed": "セッションは {{host}} で続行します。",
 	"moveSession.notResumed": "{{host}} のエージェントは停止しています。セッションを開くと再開します。",
 	"moveSession.done": "移動しました。{{host}} で続行します。",
+	"moveSession.doneSummary": "移動しました。{{host}} で要約から続行します。完全な会話はそこで再開できず、{{source}} に残ります。",
+	"moveSession.movedHeading": "{{host}} に移動しました",
+	"moveSession.movedMessage": "そちらで {{sessionId}} として続行します。",
 	"moveSession.commitFailed": "{{target}} で実行中ですが、{{source}} は元のセッションを移動済みにできませんでした: {{message}}",
 	"newTask.runOn": "{{host}} で実行",
+	"newTask.attachmentsStay_other": "添付ファイル {{count}} 件は前のコンピューターに残ります。ここで追加し直してください。",
+	"newTask.attachmentsStay_one": "添付ファイル {{count}} 件は前のコンピューターに残ります。ここで追加し直してください。",
 	"shell.addToComputer": "別のコンピューターに追加"
 }

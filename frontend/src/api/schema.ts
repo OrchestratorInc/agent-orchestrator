@@ -4403,6 +4403,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report where a session moved, if it did */
+        get: operations["getSessionTransferState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/transfer/{transferId}/native": {
         parameters: {
             query?: never;
@@ -4414,6 +4431,23 @@ export interface paths {
         get: operations["getSessionTransferArchive"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/transfer/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Forget an unfinished move so the session can resume here */
+        post: operations["cancelSessionTransfer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5868,6 +5902,12 @@ export interface components {
         CancelSessionInterfaceTransitionResponse: {
             ok: boolean;
             sessionId: string;
+        };
+        CancelTransferRequest: {
+            transferId: string;
+        };
+        CancelTransferResponse: {
+            ok: boolean;
         };
         CatalogProvider: {
             env?: string;
@@ -7786,7 +7826,9 @@ export interface components {
             taskPreparation?: string;
         };
         PrepareTransferRequest: {
-            /** @description This machine's name as the user sees it, for the destination's note. */
+            /** @description The machine the session is moving to; sessionId is not known yet. */
+            destination: components["schemas"]["SessionTransferDestination"];
+            /** @description This machine's name as the user sees it, for the destination's note; empty uses its hostname. */
             sourceLabel: string;
             transferId: string;
         };
@@ -7961,6 +8003,8 @@ export interface components {
         ReceiveTransferResponse: {
             /** @description This machine's hostname, for the source's moved marker. */
             hostLabel: string;
+            /** @description True when the agent resumed its moved conversation; false when it started from the handoff note. */
+            resumed: boolean;
             session: components["schemas"]["ControllersSessionView"];
             warnings: string[];
         };
@@ -8696,6 +8740,9 @@ export interface components {
         SessionTransferSource: {
             label: string;
             sessionId: string;
+        };
+        SessionTransferStateResponse: {
+            movedTo?: components["schemas"]["SessionMovedTo"];
         };
         SessionWait: {
             /** @enum {string} */
@@ -26210,6 +26257,38 @@ export interface operations {
             };
         };
     };
+    getSessionTransferState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTransferStateResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getSessionTransferArchive: {
         parameters: {
             query?: never;
@@ -26235,6 +26314,51 @@ export interface operations {
             };
             /** @description Unprocessable Entity */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelSessionTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelTransferResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

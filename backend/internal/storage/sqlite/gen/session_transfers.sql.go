@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+const cancelPendingTransfer = `-- name: CancelPendingTransfer :exec
+DELETE FROM session_transfers WHERE session_id = ? AND transfer_id = ? AND dest_session_id = ''
+`
+
+type CancelPendingTransferParams struct {
+	SessionID  string
+	TransferID string
+}
+
+func (q *Queries) CancelPendingTransfer(ctx context.Context, arg CancelPendingTransferParams) error {
+	_, err := q.db.ExecContext(ctx, cancelPendingTransfer, arg.SessionID, arg.TransferID)
+	return err
+}
+
 const getSessionTransfer = `-- name: GetSessionTransfer :one
 SELECT transfer_id, dest_host_id, dest_label, dest_session_id FROM session_transfers WHERE session_id = ?
 `
@@ -34,7 +48,7 @@ func (q *Queries) GetSessionTransfer(ctx context.Context, sessionID string) (Get
 }
 
 const listTransferredSessionIDs = `-- name: ListTransferredSessionIDs :many
-SELECT session_id FROM session_transfers
+SELECT session_id FROM session_transfers WHERE dest_session_id != ''
 `
 
 func (q *Queries) ListTransferredSessionIDs(ctx context.Context) ([]string, error) {
@@ -60,10 +74,46 @@ func (q *Queries) ListTransferredSessionIDs(ctx context.Context) ([]string, erro
 	return items, nil
 }
 
+const recordPendingTransfer = `-- name: RecordPendingTransfer :exec
+INSERT INTO session_transfers (session_id, transfer_id, dest_host_id, dest_label, dest_session_id, created_at)
+VALUES (?, ?, ?, ?, '', ?)
+ON CONFLICT(session_id) DO UPDATE SET
+    transfer_id = excluded.transfer_id,
+    dest_host_id = excluded.dest_host_id,
+    dest_label = excluded.dest_label,
+    created_at = excluded.created_at
+WHERE session_transfers.dest_session_id = ''
+`
+
+type RecordPendingTransferParams struct {
+	SessionID  string
+	TransferID string
+	DestHostID string
+	DestLabel  string
+	CreatedAt  time.Time
+}
+
+func (q *Queries) RecordPendingTransfer(ctx context.Context, arg RecordPendingTransferParams) error {
+	_, err := q.db.ExecContext(ctx, recordPendingTransfer,
+		arg.SessionID,
+		arg.TransferID,
+		arg.DestHostID,
+		arg.DestLabel,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const recordSessionTransfer = `-- name: RecordSessionTransfer :exec
 INSERT INTO session_transfers (session_id, transfer_id, dest_host_id, dest_label, dest_session_id, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(session_id) DO NOTHING
+ON CONFLICT(session_id) DO UPDATE SET
+    transfer_id = excluded.transfer_id,
+    dest_host_id = excluded.dest_host_id,
+    dest_label = excluded.dest_label,
+    dest_session_id = excluded.dest_session_id,
+    created_at = excluded.created_at
+WHERE session_transfers.dest_session_id = ''
 `
 
 type RecordSessionTransferParams struct {

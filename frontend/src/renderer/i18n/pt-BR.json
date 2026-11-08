@@ -4955,7 +4955,7 @@
 	"command.sessionMatches_many": "{{count}} correspondências",
 	"moveSession.menu": "Mover para outro computador…",
 	"moveSession.title": "Mover para outro computador",
-	"moveSession.description": "{{title}} continua no computador escolhido, com o branch, as alterações não confirmadas e a conversa.",
+	"moveSession.description": "{{title}} continua no computador escolhido. O branch e as alterações não confirmadas são enviados para o origin, e a conversa é copiada.",
 	"moveSession.pick": "Computador",
 	"moveSession.none": "Nenhum outro computador conectado tem um projeto para este repositório. Adicione o projeto lá primeiro.",
 	"moveSession.start": "Mover",
@@ -4970,7 +4970,13 @@
 	"moveSession.resumed": "A sessão continua em {{host}}.",
 	"moveSession.notResumed": "O agente em {{host}} está parado; abra a sessão para retomá-lo.",
 	"moveSession.done": "Movida. Continua em {{host}}.",
+	"moveSession.doneSummary": "Movida. Continua em {{host}} a partir de um resumo; a conversa completa não pôde ser retomada lá e fica em {{source}}.",
+	"moveSession.movedHeading": "Movida para {{host}}",
+	"moveSession.movedMessage": "Continua lá como {{sessionId}}.",
 	"moveSession.commitFailed": "Ela roda em {{target}}, mas {{source}} não conseguiu marcar a sessão antiga como movida: {{message}}",
 	"newTask.runOn": "Executar em {{host}}",
+	"newTask.attachmentsStay_one": "{{count}} anexo fica no computador anterior; adicione-o novamente aqui.",
+	"newTask.attachmentsStay_other": "{{count}} anexos ficam no computador anterior; adicione-os novamente aqui.",
+	"newTask.attachmentsStay_many": "{{count}} anexos ficam no computador anterior; adicione-os novamente aqui.",
 	"shell.addToComputer": "Adicionar a outro computador"
 }

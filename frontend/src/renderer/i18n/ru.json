@@ -5067,7 +5067,7 @@
 	"command.sessionMatches_other": "{{count}} совпадения",
 	"moveSession.menu": "Перенести на другой компьютер…",
 	"moveSession.title": "Перенести на другой компьютер",
-	"moveSession.description": "{{title}} продолжится на выбранном компьютере вместе с веткой, незафиксированными изменениями и разговором.",
+	"moveSession.description": "{{title}} продолжится на выбранном компьютере. Ветка и незафиксированные изменения отправляются в origin, а разговор копируется.",
 	"moveSession.pick": "Компьютер",
 	"moveSession.none": "Ни на одном другом подключённом компьютере нет проекта для этого репозитория. Сначала добавьте проект туда.",
 	"moveSession.start": "Перенести",
@@ -5082,7 +5082,14 @@
 	"moveSession.resumed": "Сессия продолжается на {{host}}.",
 	"moveSession.notResumed": "Агент на {{host}} остановлен; откройте сессию, чтобы возобновить его.",
 	"moveSession.done": "Перенесено. Сессия продолжается на {{host}}.",
+	"moveSession.doneSummary": "Перенесено. Сессия продолжается на {{host}} с краткого изложения: полный разговор там возобновить не удалось, он остаётся на {{source}}.",
+	"moveSession.movedHeading": "Перенесено на {{host}}",
+	"moveSession.movedMessage": "Сессия продолжается там как {{sessionId}}.",
 	"moveSession.commitFailed": "Сессия работает на {{target}}, но {{source}} не смог отметить старую сессию как перенесённую: {{message}}",
 	"newTask.runOn": "Запустить на {{host}}",
+	"newTask.attachmentsStay_one": "{{count}} вложение осталось на предыдущем компьютере; добавьте его здесь заново.",
+	"newTask.attachmentsStay_few": "{{count}} вложения остались на предыдущем компьютере; добавьте их здесь заново.",
+	"newTask.attachmentsStay_many": "{{count}} вложений осталось на предыдущем компьютере; добавьте их здесь заново.",
+	"newTask.attachmentsStay_other": "{{count}} вложения остались на предыдущем компьютере; добавьте их здесь заново.",
 	"shell.addToComputer": "Добавить на другой компьютер"
 }

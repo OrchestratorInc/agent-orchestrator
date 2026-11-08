@@ -38,6 +38,7 @@ import {
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useSessionMovedTo } from "../hooks/useSessionMovedTo";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -1578,13 +1579,18 @@ type TerminalEndedStripProps = {
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
 	const terminated = variant === "session" && session && !sessionIsActive(session);
+	// A session that moved to another computer is refused here; point there instead.
+	const movedTo = useSessionMovedTo(terminated ? session : undefined);
+	const canRestore = restorable && !movedTo;
 	const agentExited = variant === "session" && sessionAgentExited(session);
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
-	const heading = reviewDelivered
+	const heading = movedTo
+		? t("moveSession.movedHeading", { host: movedTo.label })
+		: reviewDelivered
 		? t("terminal.reviewCompleted")
 		: startupFailed
 			? t("terminal.startupFailed")
@@ -1593,7 +1599,9 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 				: agentExited
 					? t("terminal.agentExited")
 					: t("terminal.ended");
-	const message = reviewDelivered
+	const message = movedTo
+		? t("moveSession.movedMessage", { sessionId: movedTo.sessionId })
+		: reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: canRestore
 		? t("terminal.restoreToContinue")
@@ -1610,7 +1618,7 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					<div
 						className={cn(
 							"font-mono text-caption font-medium uppercase tracking-wide-md",
-							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+							(terminated && !movedTo) || startupFailed ? "text-destructive" : "text-muted-foreground",
 						)}
 					>
 						{heading}
@@ -1620,7 +1628,12 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
-				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
+				{variant === "session" && session && !movedTo ? <ResumeAgentControl session={session} /> : null}
+				{movedTo?.open ? (
+					<Button type="button" variant="secondary" onClick={movedTo.open}>
+						{t("moveSession.open")}
+					</Button>
+				) : null}
 				{canRestore && (
 					<Tooltip>
 						<TooltipTrigger asChild>

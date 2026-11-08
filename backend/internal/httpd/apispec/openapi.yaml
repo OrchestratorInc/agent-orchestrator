@@ -13239,6 +13239,33 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/transfer:
+    get:
+      operationId: getSessionTransferState
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTransferStateResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report where a session moved, if it did
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/transfer/{transferId}/native:
     get:
       operationId: getSessionTransferArchive
@@ -13277,6 +13304,45 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Download a prepared transfer's conversation archive
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/transfer/cancel:
+    post:
+      operationId: cancelSessionTransfer
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelTransferRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelTransferResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Forget an unfinished move so the session can resume here
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/transfer/commit:
@@ -17403,6 +17469,22 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    CancelTransferRequest:
+      properties:
+        transferId:
+          maxLength: 64
+          minLength: 8
+          type: string
+      required:
+      - transferId
+      type: object
+    CancelTransferResponse:
+      properties:
+        ok:
+          type: boolean
+      required:
+      - ok
       type: object
     CatalogProvider:
       properties:
@@ -22451,9 +22533,13 @@ components:
       type: object
     PrepareTransferRequest:
       properties:
+        destination:
+          $ref: '#/components/schemas/SessionTransferDestination'
+          description: The machine the session is moving to; sessionId is not known
+            yet.
         sourceLabel:
           description: This machine's name as the user sees it, for the destination's
-            note.
+            note; empty uses its hostname.
           maxLength: 200
           type: string
         transferId:
@@ -22463,6 +22549,7 @@ components:
       required:
       - transferId
       - sourceLabel
+      - destination
       type: object
     PreviewServerStatusResponse:
       properties:
@@ -22888,6 +22975,10 @@ components:
         hostLabel:
           description: This machine's hostname, for the source's moved marker.
           type: string
+        resumed:
+          description: True when the agent resumed its moved conversation; false when
+            it started from the handoff note.
+          type: boolean
         session:
           $ref: '#/components/schemas/ControllersSessionView'
         warnings:
@@ -22898,6 +22989,7 @@ components:
       - session
       - warnings
       - hostLabel
+      - resumed
       type: object
     RecordAgentSignInResponse:
       properties:
@@ -24770,6 +24862,11 @@ components:
       required:
       - label
       - sessionId
+      type: object
+    SessionTransferStateResponse:
+      properties:
+        movedTo:
+          $ref: '#/components/schemas/SessionMovedTo'
       type: object
     SessionWait:
       properties:

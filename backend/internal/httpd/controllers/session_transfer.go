@@ -23,11 +23,13 @@ const maxTransferPartBytes = 64 << 20
 // sessionTransferService moves sessions between machines. It is optional so
 // focused SessionService fakes need not implement it.
 type sessionTransferService interface {
-	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string) (domain.SessionTransfer, error)
-	TransferArchivePath(transferID string) (string, error)
+	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error)
+	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
+	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
 	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
-	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, []string, error)
+	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, bool, []string, error)
 	CommitTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error)
+	SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error)
 }
 
 // TransferIDParam names a transfer in a route.
@@ -42,8 +44,19 @@ type TransferPartParam struct {
 
 // PrepareTransferRequest is the body of POST /sessions/{sessionId}/transfer/prepare.
 type PrepareTransferRequest struct {
-	TransferID  string `json:"transferId" minLength:"8" maxLength:"64"`
-	SourceLabel string `json:"sourceLabel" maxLength:"200" description:"This machine's name as the user sees it, for the destination's note."`
+	TransferID  string                            `json:"transferId" minLength:"8" maxLength:"64"`
+	SourceLabel string                            `json:"sourceLabel" maxLength:"200" description:"This machine's name as the user sees it, for the destination's note; empty uses its hostname."`
+	Destination domain.SessionTransferDestination `json:"destination" description:"The machine the session is moving to; sessionId is not known yet."`
+}
+
+// CancelTransferRequest is the body of POST /sessions/{sessionId}/transfer/cancel.
+type CancelTransferRequest struct {
+	TransferID string `json:"transferId" minLength:"8" maxLength:"64"`
+}
+
+// CancelTransferResponse confirms a cancelled move.
+type CancelTransferResponse struct {
+	OK bool `json:"ok"`
 }
 
 // SessionTransferResponse returns a prepared transfer.
@@ -62,6 +75,7 @@ type ReceiveTransferResponse struct {
 	Session   SessionView `json:"session"`
 	Warnings  []string    `json:"warnings"`
 	HostLabel string      `json:"hostLabel" description:"This machine's hostname, for the source's moved marker."`
+	Resumed   bool        `json:"resumed" description:"True when the agent resumed its moved conversation; false when it started from the handoff note."`
 }
 
 // CommitTransferRequest is the body of POST /sessions/{sessionId}/transfer/commit.
@@ -73,6 +87,11 @@ type CommitTransferRequest struct {
 // CommitTransferResponse reports where the moved session continues.
 type CommitTransferResponse struct {
 	MovedTo domain.SessionMovedTo `json:"movedTo"`
+}
+
+// SessionTransferStateResponse reports where a session moved, if it did.
+type SessionTransferStateResponse struct {
+	MovedTo *domain.SessionMovedTo `json:"movedTo,omitempty"`
 }
 
 func (c *SessionsController) transferService(w http.ResponseWriter, r *http.Request, method, path string) (sessionTransferService, bool) {
@@ -94,7 +113,7 @@ func (c *SessionsController) prepareTransfer(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	t, err := svc.PrepareTransfer(r.Context(), sessionID(r), strings.TrimSpace(in.TransferID), in.SourceLabel)
+	t, err := svc.PrepareTransfer(r.Context(), sessionID(r), strings.TrimSpace(in.TransferID), in.SourceLabel, in.Destination)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -107,7 +126,7 @@ func (c *SessionsController) transferArchive(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	path, err := svc.TransferArchivePath(chi.URLParam(r, "transferId"))
+	path, err := svc.TransferArchivePath(sessionID(r), chi.URLParam(r, "transferId"))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -159,7 +178,7 @@ func (c *SessionsController) receiveTransfer(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TRANSFER_INCOMPLETE", "projectId, transfer.transferId, transfer.branch and transfer.headSha are required", nil)
 		return
 	}
-	sess, warnings, err := svc.ReceiveTransfer(r.Context(), in.ProjectID, in.Transfer)
+	sess, resumed, warnings, err := svc.ReceiveTransfer(r.Context(), in.ProjectID, in.Transfer)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -167,7 +186,7 @@ func (c *SessionsController) receiveTransfer(w http.ResponseWriter, r *http.Requ
 	if warnings == nil {
 		warnings = []string{}
 	}
-	envelope.WriteJSON(w, http.StatusOK, ReceiveTransferResponse{Session: sessionView(r, sess), Warnings: warnings, HostLabel: sessionsvc.MachineName()})
+	envelope.WriteJSON(w, http.StatusOK, ReceiveTransferResponse{Session: sessionView(r, sess), Warnings: warnings, HostLabel: sessionsvc.MachineName(), Resumed: resumed})
 }
 
 func (c *SessionsController) commitTransfer(w http.ResponseWriter, r *http.Request) {
@@ -186,4 +205,38 @@ func (c *SessionsController) commitTransfer(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, CommitTransferResponse{MovedTo: moved})
+}
+
+func (c *SessionsController) cancelTransfer(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.transferService(w, r, "POST", "/api/v1/sessions/{sessionId}/transfer/cancel")
+	if !ok {
+		return
+	}
+	var in CancelTransferRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if err := svc.CancelTransfer(r.Context(), sessionID(r), strings.TrimSpace(in.TransferID)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, CancelTransferResponse{OK: true})
+}
+
+func (c *SessionsController) transferState(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.transferService(w, r, "GET", "/api/v1/sessions/{sessionId}/transfer")
+	if !ok {
+		return
+	}
+	moved, found, err := svc.SessionMovedTo(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	var resp SessionTransferStateResponse
+	if found {
+		resp.MovedTo = &moved
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }

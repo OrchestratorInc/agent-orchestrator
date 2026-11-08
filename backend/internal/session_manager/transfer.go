@@ -34,14 +34,26 @@ var (
 	ErrSessionMoved = errors.New("session: moved to another computer")
 	// ErrSpawnTransfer is the spawn stage that applies moved state.
 	ErrSpawnTransfer = errors.New("transfer")
+	// ErrTransferPending refuses to run a session whose move did not finish.
+	ErrTransferPending = errors.New("a move of this session to another computer did not finish")
+	// ErrTransferDefaultBranch refuses a session working on the default branch.
+	ErrTransferDefaultBranch = errors.New("the session works on the project's default branch; moving it would push that branch to origin")
 )
 
 // MaxTransferArchiveBytes caps an uploaded conversation archive.
 const MaxTransferArchiveBytes int64 = 4 << 30
 
-var transferIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$`)
+// transferStaleAfter is when an unfinished transfer's files are swept.
+const transferStaleAfter = 7 * 24 * time.Hour
+
+var (
+	transferIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$`)
+	commitSHAPattern  = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+)
 
 type sessionTransferStore interface {
+	RecordPendingTransfer(ctx context.Context, id domain.SessionID, dest domain.SessionMovedTo, at time.Time) error
+	CancelPendingTransfer(ctx context.Context, id domain.SessionID, transferID string) error
 	RecordSessionTransfer(ctx context.Context, id domain.SessionID, moved domain.SessionMovedTo, at time.Time) error
 	SessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error)
 }
@@ -53,27 +65,54 @@ func (m *Manager) transferDir(transferID string) (string, error) {
 	return filepath.Join(m.dataDir, "transfers", transferID), nil
 }
 
+// readTransferPayload returns a prepared transfer of session id.
+func (m *Manager) readTransferPayload(id domain.SessionID, transferID string) (domain.SessionTransfer, bool, error) {
+	dir, err := m.transferDir(transferID)
+	if err != nil {
+		return domain.SessionTransfer{}, false, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "payload.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return domain.SessionTransfer{}, false, nil
+	}
+	if err != nil {
+		return domain.SessionTransfer{}, false, err
+	}
+	var t domain.SessionTransfer
+	if err := json.Unmarshal(data, &t); err != nil {
+		return domain.SessionTransfer{}, false, err
+	}
+	if t.Source.SessionID != id {
+		return domain.SessionTransfer{}, false, fmt.Errorf("%w: transfer %s belongs to another session", ErrTransferUnsupported, transferID)
+	}
+	return t, true, nil
+}
+
 // PrepareTransfer stops the session's agent and hands over its state: it
 // pushes the branch and any uncommitted work to origin and exports the agent's
-// conversation into the data dir. The session itself is left as it was, so
-// resume-agent undoes everything. Calling it again with the same transfer id
-// returns the first result.
-func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string) (domain.SessionTransfer, error) {
+// conversation into the data dir. It then marks the session as being moved to
+// dest, so it cannot run here until CommitTransfer or CancelTransfer. Calling
+// it again with the same transfer id, or for an unfinished move to the same
+// host, returns the earlier result.
+func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
 	dir, err := m.transferDir(transferID)
 	if err != nil {
 		return domain.SessionTransfer{}, err
 	}
-	payloadPath := filepath.Join(dir, "payload.json")
-	if data, err := os.ReadFile(payloadPath); err == nil {
-		var t domain.SessionTransfer
-		if err := json.Unmarshal(data, &t); err != nil {
-			return domain.SessionTransfer{}, err
-		}
-		if t.Source.SessionID != id {
-			return domain.SessionTransfer{}, fmt.Errorf("%w: transfer %s belongs to another session", ErrTransferUnsupported, transferID)
-		}
-		return t, nil
+	if t, ok, err := m.readTransferPayload(id, transferID); err != nil || ok {
+		return t, err
 	}
+	if state, ok, err := m.transferState(ctx, id); err != nil {
+		return domain.SessionTransfer{}, err
+	} else if ok && state.Pending() {
+		if state.HostID != dest.HostID {
+			return domain.SessionTransfer{}, fmt.Errorf("%w: finish the move to %s first", ErrTransferPending, state.Label)
+		}
+		if t, ok, err := m.readTransferPayload(id, state.TransferID); err != nil || ok {
+			return t, err
+		}
+	}
+	m.sweepTransfers(ctx)
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return domain.SessionTransfer{}, err
@@ -85,6 +124,12 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	if err := transferable(rec, project); err != nil {
 		return domain.SessionTransfer{}, err
 	}
+	if refresher, ok := m.workspace.(ports.WorkspaceDefaultBranchRefresher); ok {
+		def, err := refresher.ResolveDefaultBranch(ctx, project.Path, project.Config.WorktreeBaseBranch())
+		if err == nil && def.Branch != "" && def.Branch == rec.Metadata.Branch {
+			return domain.SessionTransfer{}, ErrTransferDefaultBranch
+		}
+	}
 	if _, moved, err := m.sessionMovedTo(ctx, id); err != nil {
 		return domain.SessionTransfer{}, err
 	} else if moved {
@@ -94,7 +139,7 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	if !ok {
 		return domain.SessionTransfer{}, fmt.Errorf("%w: workspace adapter cannot transfer", ErrTransferUnsupported)
 	}
-	if rec.Activity.State == domain.ActivityActive {
+	if rec.Activity.State == domain.ActivityActive || rec.Activity.State == domain.ActivityBlocked {
 		return domain.SessionTransfer{}, ErrTransferAgentBusy
 	}
 	if _, err := m.ExitAgent(ctx, id); err != nil && !errors.Is(err, ErrAgentExited) {
@@ -137,10 +182,86 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 		IssueID:         rec.IssueID,
 		RequestedOutput: rec.RequestedOutput,
 	}
-	if err := writeFileAtomic(payloadPath, t); err != nil {
+	if err := writeFileAtomic(filepath.Join(dir, "payload.json"), t); err != nil {
 		return domain.SessionTransfer{}, err
 	}
+	if store, ok := m.store.(sessionTransferStore); ok {
+		pending := domain.SessionMovedTo{TransferID: transferID, HostID: dest.HostID, Label: dest.Label}
+		if err := store.RecordPendingTransfer(ctx, id, pending, m.clock()); err != nil {
+			return domain.SessionTransfer{}, err
+		}
+	}
 	return t, nil
+}
+
+// CancelTransfer forgets an unfinished move so the session can run here again,
+// and removes what the move left behind. The agent stays stopped.
+func (m *Manager) CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error {
+	if _, err := m.transferDir(transferID); err != nil {
+		return err
+	}
+	if store, ok := m.store.(sessionTransferStore); ok {
+		if err := store.CancelPendingTransfer(ctx, id, transferID); err != nil {
+			return err
+		}
+	}
+	m.removeSourceTransfer(ctx, id, transferID)
+	return nil
+}
+
+// removeSourceTransfer deletes a prepared transfer's files and its preserved
+// ref on origin. Failures are logged: the move itself is already settled.
+func (m *Manager) removeSourceTransfer(ctx context.Context, id domain.SessionID, transferID string) {
+	dir, err := m.transferDir(transferID)
+	if err != nil {
+		return
+	}
+	if t, ok, err := m.readTransferPayload(id, transferID); err == nil && ok && t.PreservedRef != "" {
+		m.deletePreservedRef(ctx, id, t.PreservedRef)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		m.logger.Warn("transfer: could not remove transfer files", "transferID", transferID, "error", err)
+	}
+}
+
+func (m *Manager) deletePreservedRef(ctx context.Context, id domain.SessionID, ref string) {
+	git, ok := m.workspace.(ports.WorkspaceTransfer)
+	if !ok {
+		return
+	}
+	rec, err := m.getRecord(ctx, id)
+	if err != nil {
+		return
+	}
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil {
+		return
+	}
+	if err := git.DeleteTransferRef(ctx, project.Path, ref); err != nil {
+		m.logger.Warn("transfer: could not delete the preserved ref from origin", "sessionID", id, "ref", ref, "error", err)
+	}
+}
+
+// sweepTransfers removes transfer files, and their preserved refs on origin,
+// left by moves that never finished.
+// ponytail: runs on the next prepare or receive; add a daemon-start sweep if they pile up.
+func (m *Manager) sweepTransfers(ctx context.Context) {
+	root := filepath.Join(m.dataDir, "transfers")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !e.IsDir() || m.clock().Sub(info.ModTime()) < transferStaleAfter {
+			continue
+		}
+		var t domain.SessionTransfer
+		if data, err := os.ReadFile(filepath.Join(root, e.Name(), "payload.json")); err == nil && json.Unmarshal(data, &t) == nil && t.PreservedRef != "" {
+			m.deletePreservedRef(ctx, t.Source.SessionID, t.PreservedRef)
+		}
+		_ = os.RemoveAll(filepath.Join(root, e.Name()))
+	}
 }
 
 func transferable(rec domain.SessionRecord, project domain.ProjectRecord) error {
@@ -209,11 +330,14 @@ func (m *Manager) nativeConfigDir(ctx context.Context, harness domain.AgentHarne
 	return provider.NativeSessionConfigDir(ctx, env)
 }
 
-// TransferArchivePath is the exported conversation of a prepared transfer.
-func (m *Manager) TransferArchivePath(transferID string) (string, error) {
+// TransferArchivePath is the exported conversation of session id's prepared transfer.
+func (m *Manager) TransferArchivePath(id domain.SessionID, transferID string) (string, error) {
 	dir, err := m.transferDir(transferID)
 	if err != nil {
 		return "", err
+	}
+	if _, ok, err := m.readTransferPayload(id, transferID); err != nil || !ok {
+		return "", fmt.Errorf("%w: no prepared transfer %s for session %s", ErrTransferArchive, transferID, id)
 	}
 	path := filepath.Join(dir, "native.tgz")
 	if _, err := os.Stat(path); err != nil {
@@ -236,19 +360,31 @@ func (m *Manager) StoreTransferArchivePart(transferID string, part int, r io.Rea
 	if err := os.MkdirAll(parts, 0o700); err != nil {
 		return err
 	}
+	name := fmt.Sprintf("part-%05d", part)
+	var used int64
+	if entries, err := os.ReadDir(parts); err == nil {
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil && e.Name() != name {
+				used += info.Size()
+			}
+		}
+	}
 	tmp, err := os.CreateTemp(parts, ".part-*")
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(tmp, io.LimitReader(r, MaxTransferArchiveBytes))
+	n, err := io.Copy(tmp, io.LimitReader(r, MaxTransferArchiveBytes-used+1))
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr
+	}
+	if err == nil && used+n > MaxTransferArchiveBytes {
+		err = fmt.Errorf("%w: larger than %d bytes", ErrTransferArchive, MaxTransferArchiveBytes)
 	}
 	if err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
-	return os.Rename(tmp.Name(), filepath.Join(parts, fmt.Sprintf("part-%05d", part)))
+	return os.Rename(tmp.Name(), filepath.Join(parts, name))
 }
 
 // assembleTransferArchive joins the uploaded parts in order and checks the
@@ -300,15 +436,21 @@ func (m *Manager) assembleTransferArchive(transferID string, native domain.Sessi
 // on another machine. prompt is the first turn of the resumed conversation.
 // A retry with the same transfer id returns the session already started.
 func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (domain.SessionRecord, error) {
-	if _, err := m.transferDir(t.TransferID); err != nil {
+	dir, err := m.transferDir(t.TransferID)
+	if err != nil {
 		return domain.SessionRecord{}, err
+	}
+	if !commitSHAPattern.MatchString(t.HeadSHA) {
+		return domain.SessionRecord{}, fmt.Errorf("%w: invalid head %q", ErrTransferUnsupported, t.HeadSHA)
 	}
 	clientRequestID := "transfer-" + t.TransferID
 	if existing, found, err := m.store.GetSessionByClientRequestID(ctx, clientRequestID); err != nil {
 		return domain.SessionRecord{}, err
 	} else if found {
+		_ = os.RemoveAll(dir)
 		return existing, nil
 	}
+	m.sweepTransfers(ctx)
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return domain.SessionRecord{}, err
@@ -362,6 +504,9 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 			FallbackPrompt: t.HandoffNote,
 		},
 	})
+	if err == nil {
+		_ = os.RemoveAll(dir)
+	}
 	return rec, err
 }
 
@@ -432,6 +577,9 @@ func (m *Manager) CommitTransfer(ctx context.Context, id domain.SessionID, trans
 	if err != nil {
 		return domain.SessionMovedTo{}, err
 	}
+	if dest.SessionID == "" {
+		return domain.SessionMovedTo{}, fmt.Errorf("%w: the destination session is missing", ErrTransferUnsupported)
+	}
 	if err := store.RecordSessionTransfer(ctx, id, domain.SessionMovedTo{TransferID: transferID, HostID: dest.HostID, Label: dest.Label, SessionID: dest.SessionID}, m.clock()); err != nil {
 		return domain.SessionMovedTo{}, err
 	}
@@ -439,6 +587,7 @@ func (m *Manager) CommitTransfer(ctx context.Context, id domain.SessionID, trans
 	if err != nil {
 		return domain.SessionMovedTo{}, err
 	}
+	m.removeSourceTransfer(ctx, id, transferID)
 	if !rec.IsTerminated {
 		if _, err := m.Kill(ctx, id); err != nil && !errors.Is(err, ErrTerminated) {
 			return moved, fmt.Errorf("commit transfer %s: end session: %w", id, err)
@@ -465,6 +614,15 @@ func (m *Manager) SessionMovedTo(ctx context.Context, id domain.SessionID) (doma
 }
 
 func (m *Manager) sessionMovedTo(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {
+	state, ok, err := m.transferState(ctx, id)
+	if err != nil || !ok || state.Pending() {
+		return domain.SessionMovedTo{}, false, err
+	}
+	return state, true, nil
+}
+
+// transferState is the session's finished or pending move.
+func (m *Manager) transferState(ctx context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {
 	store, ok := m.store.(sessionTransferStore)
 	if !ok {
 		return domain.SessionMovedTo{}, false, nil
@@ -474,14 +632,15 @@ func (m *Manager) sessionMovedTo(ctx context.Context, id domain.SessionID) (doma
 
 // refuseMoved keeps a session that continues elsewhere from running here again.
 func (m *Manager) refuseMoved(ctx context.Context, id domain.SessionID) error {
-	moved, ok, err := m.sessionMovedTo(ctx, id)
-	if err != nil {
+	state, ok, err := m.transferState(ctx, id)
+	switch {
+	case err != nil || !ok:
 		return err
+	case state.Pending():
+		return fmt.Errorf("%w: open Move to another computer to finish the move to %s", ErrTransferPending, state.Label)
+	default:
+		return fmt.Errorf("%w: continues on %s as %s", ErrSessionMoved, state.Label, state.SessionID)
 	}
-	if ok {
-		return fmt.Errorf("%w: continues on %s as %s", ErrSessionMoved, moved.Label, moved.SessionID)
-	}
-	return nil
 }
 
 // transferRequestHash binds a receive retry to the same transfer content.

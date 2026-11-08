@@ -4835,7 +4835,7 @@
 	"command.sessionMatches_other": "{{count}}개 일치",
 	"moveSession.menu": "다른 컴퓨터로 이동…",
 	"moveSession.title": "다른 컴퓨터로 이동",
-	"moveSession.description": "{{title}}은(는) 브랜치, 커밋되지 않은 변경 사항, 대화와 함께 선택한 컴퓨터에서 계속됩니다.",
+	"moveSession.description": "{{title}}은(는) 선택한 컴퓨터에서 계속됩니다. 브랜치와 커밋되지 않은 변경 사항은 origin에 푸시되고 대화는 복사됩니다.",
 	"moveSession.pick": "컴퓨터",
 	"moveSession.none": "이 저장소의 프로젝트가 있는 다른 연결된 컴퓨터가 없습니다. 먼저 그곳에 프로젝트를 추가하세요.",
 	"moveSession.start": "이동",
@@ -4850,7 +4850,12 @@
 	"moveSession.resumed": "세션은 {{host}}에서 계속됩니다.",
 	"moveSession.notResumed": "{{host}}의 에이전트가 멈춰 있습니다. 세션을 열어 다시 시작하세요.",
 	"moveSession.done": "이동했습니다. {{host}}에서 계속됩니다.",
+	"moveSession.doneSummary": "이동했습니다. {{host}}에서 요약으로 계속됩니다. 전체 대화는 그곳에서 재개할 수 없어 {{source}}에 남아 있습니다.",
+	"moveSession.movedHeading": "{{host}}(으)로 이동함",
+	"moveSession.movedMessage": "그곳에서 {{sessionId}}(으)로 계속됩니다.",
 	"moveSession.commitFailed": "{{target}}에서 실행 중이지만 {{source}}이(가) 이전 세션을 이동됨으로 표시하지 못했습니다: {{message}}",
 	"newTask.runOn": "{{host}}에서 실행",
+	"newTask.attachmentsStay_other": "첨부 파일 {{count}}개는 이전 컴퓨터에 남습니다. 여기에서 다시 추가하세요.",
+	"newTask.attachmentsStay_one": "첨부 파일 {{count}}개는 이전 컴퓨터에 남습니다. 여기에서 다시 추가하세요.",
 	"shell.addToComputer": "다른 컴퓨터에 추가"
 }

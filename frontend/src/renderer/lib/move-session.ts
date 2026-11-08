@@ -28,6 +28,8 @@ export type MoveResult = {
 	transferId: string;
 	/** The destination's name as the source records it. */
 	destinationLabel: string;
+	/** False when no conversation was copied or it could not be resumed, so the agent started from a summary. */
+	resumed: boolean;
 };
 
 /** A move that failed before the destination took the session. */
@@ -45,28 +47,31 @@ export function newTransferId(): string {
 /**
  * Moves a session from one AO daemon to another: prepare on the source, copy
  * the conversation archive, receive on the destination, then mark the source
- * moved. Until the destination accepts the session, a failure resumes the
- * source agent, so nothing is lost. After that, only marking the source is
- * left, which commitMove can retry.
+ * moved. Until the destination accepts the session, a failure cancels the move
+ * and resumes the source agent, so nothing is lost. After that, only marking
+ * the source is left, which commitMove can retry. Running it again after an
+ * interrupted move to the same destination finishes that move.
  */
 export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	const { source, target } = input;
-	const transferId = input.transferId ?? newTransferId();
+	let transferId = input.transferId ?? newTransferId();
 	let step: MoveStep = "prepare";
 	let sessionId: string;
 	let warnings: string[];
 	let hostLabel: string;
+	let resumed: boolean;
+	input.onStep?.("prepare");
+	await checkDestination(target);
 	try {
-		input.onStep?.("prepare");
 		const prepared = await source.client.POST("/api/v1/sessions/{sessionId}/transfer/prepare", {
 			params: { path: { sessionId: source.sessionId } },
 			// "This computer" means nothing on the destination; empty makes the source daemon use its hostname.
-			body: { transferId, sourceLabel: source.hostId === LOCAL_HOST ? "" : source.label },
+			body: { transferId, sourceLabel: source.hostId === LOCAL_HOST ? "" : source.label, destination: { hostId: target.hostId, label: target.label, sessionId: "" } },
 		});
-		// A busy agent is refused before anything stops, so there is nothing to resume.
-		if (apiErrorCode(prepared.error) === "TRANSFER_AGENT_BUSY") throw new MoveError(apiErrorMessage(prepared.error), "prepare", true);
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
+		// An unfinished earlier move to this host comes back instead of a new one.
+		transferId = transfer.transferId;
 		if (transfer.native) {
 			step = "copy";
 			input.onStep?.("copy");
@@ -74,19 +79,34 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		}
 		step = "receive";
 		input.onStep?.("receive");
-		({ sessionId, warnings, hostLabel } = await receive(target.client, target.projectId, transfer));
+		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer));
 	} catch (error) {
-		if (error instanceof MoveError) throw error;
 		const message = error instanceof Error ? error.message : String(error);
-		const resumed = await source.client
-			.POST("/api/v1/sessions/{sessionId}/resume-agent", { params: { path: { sessionId: source.sessionId } } })
-			.then((res) => !res.error, () => false);
-		throw new MoveError(message, step, resumed);
+		throw new MoveError(message, step, await cancelMove(source, transferId));
 	}
 	input.onStep?.("commit");
 	const destinationLabel = target.hostId === LOCAL_HOST && hostLabel ? hostLabel : target.label;
 	const commitError = await commitMove(source, { hostId: target.hostId, label: destinationLabel }, transferId, sessionId);
-	return { sessionId, warnings, committed: !commitError, commitError, transferId, destinationLabel };
+	return { sessionId, warnings, committed: !commitError, commitError, transferId, destinationLabel, resumed };
+}
+
+/** Refuses a destination whose AO has no receive route, before the source agent stops. */
+async function checkDestination(target: MoveInput["target"]): Promise<void> {
+	const res = await target.client.POST("/api/v1/sessions/transfer/receive", { body: {} as never }).catch(() => undefined);
+	if (apiErrorCode(res?.error) === "TRANSFER_INCOMPLETE") return;
+	const message = res ? `${target.label} runs an AO version that cannot receive sessions; update AO there first` : `Could not reach ${target.label}`;
+	throw new MoveError(message, "prepare", true);
+}
+
+/** Forgets the move on the source and resumes its agent. True when the agent runs there again. */
+async function cancelMove(source: MoveInput["source"], transferId: string): Promise<boolean> {
+	const path = { params: { path: { sessionId: source.sessionId } } };
+	await source.client.POST("/api/v1/sessions/{sessionId}/transfer/cancel", { ...path, body: { transferId } }).catch(() => undefined);
+	return source.client.POST("/api/v1/sessions/{sessionId}/resume-agent", path).then(
+		// A refusal before the agent stopped leaves it running.
+		(res) => !res.error || apiErrorCode(res.error) === "AGENT_NOT_EXITED",
+		() => false,
+	);
 }
 
 async function copyArchive(source: MoveInput["source"], target: Client, transferId: string): Promise<void> {
@@ -109,12 +129,12 @@ async function copyArchive(source: MoveInput["source"], target: Client, transfer
 
 /** Receive is idempotent per transfer, so a dropped response is retried once
  *  before the source is resumed; otherwise both computers could run it. */
-async function receive(target: Client, projectId: string, transfer: Transfer): Promise<{ sessionId: string; warnings: string[]; hostLabel: string }> {
+async function receive(target: Client, projectId: string, transfer: Transfer): Promise<{ sessionId: string; warnings: string[]; hostLabel: string; resumed: boolean }> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const res = await target.POST("/api/v1/sessions/transfer/receive", { body: { projectId, transfer } });
 			if (res.error || !res.data) throw apiErrorException(res.error, "The other computer could not start the session");
-			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], hostLabel: res.data.hostLabel ?? "" };
+			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], hostLabel: res.data.hostLabel ?? "", resumed: res.data.resumed ?? false };
 		} catch (error) {
 			if (attempt >= 1 || !(error instanceof TypeError)) throw error;
 		}

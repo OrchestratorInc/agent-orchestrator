@@ -20,12 +20,19 @@ function fakeClient(handlers: Record<string, Handler>) {
 
 const transfer = { transferId: "tr1", branch: "feat/x", headSha: "abc", native: { size: 3, sha256: "s", nativeId: "n", sourceCwd: "/a" } };
 
-function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler = () => ({ data: { session: { id: "web-9" }, warnings: [] } })) {
+const received = { data: { session: { id: "web-9" }, warnings: [], resumed: true } };
+
+function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler = () => received) {
 	const source = fakeClient({
 		"POST /api/v1/sessions/{sessionId}/transfer/prepare": () => ({ data: { transfer } }),
 		"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/native": () => ({ data: archive }),
+		"POST /api/v1/sessions/{sessionId}/resume-agent": () => ({ error: { code: "AGENT_NOT_EXITED", message: "agent is running" } }),
 	});
-	const target = fakeClient({ "POST /api/v1/sessions/transfer/receive": receive });
+	// An empty body is the preflight, which a current daemon refuses as incomplete.
+	const target = fakeClient({
+		"POST /api/v1/sessions/transfer/receive": (options) =>
+			(options.body as { transfer?: unknown }).transfer ? receive(options) : { error: { code: "TRANSFER_INCOMPLETE", message: "incomplete" } },
+	});
 	const input = {
 		source: { client: source.client, hostId: "host-a", sessionId: "web-3", label: "MacBook A" },
 		target: { client: target.client, hostId: "host-b", label: "MacBook B", projectId: "web" },
@@ -40,7 +47,7 @@ describe("moveSession", () => {
 		const steps: string[] = [];
 		const result = await moveSession({ ...input, onStep: (step) => steps.push(step) });
 
-		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destinationLabel: "MacBook B" });
+		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destinationLabel: "MacBook B", resumed: true });
 		expect(steps).toEqual(["prepare", "copy", "receive", "commit"]);
 		expect(source.calls).toEqual([
 			"POST /api/v1/sessions/{sessionId}/transfer/prepare",
@@ -48,6 +55,7 @@ describe("moveSession", () => {
 			"POST /api/v1/sessions/{sessionId}/transfer/commit",
 		]);
 		expect(target.calls).toEqual([
+			"POST /api/v1/sessions/transfer/receive",
 			"PUT /api/v1/sessions/transfer/{transferId}/native/{part} #0",
 			"PUT /api/v1/sessions/transfer/{transferId}/native/{part} #1",
 			"POST /api/v1/sessions/transfer/receive",
@@ -55,25 +63,58 @@ describe("moveSession", () => {
 	});
 
 	it("names this computer by hostname on the other daemon, not as This computer", async () => {
-		const { source, input } = hosts(undefined, () => ({ data: { session: { id: "web-9" }, warnings: [], hostLabel: "studio" } }));
+		const { source, input } = hosts(undefined, () => ({ data: { ...received.data, hostLabel: "studio" } }));
 		await moveSession({ ...input, source: { ...input.source, hostId: "local", label: "This computer" } });
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ sourceLabel: "" });
 
-		const back = hosts(undefined, () => ({ data: { session: { id: "web-9" }, warnings: [], hostLabel: "studio" } }));
+		const back = hosts(undefined, () => ({ data: { ...received.data, hostLabel: "studio" } }));
 		const result = await moveSession({ ...back.input, target: { ...back.input.target, hostId: "local", label: "This computer" } });
 		expect(result.destinationLabel).toBe("studio");
 		expect(back.source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ destination: { hostId: "local", label: "studio" } });
 	});
 
-	it("resumes the source agent when the destination refuses", async () => {
+	it("cancels the move and resumes the source agent when the destination refuses", async () => {
 		const { source, input } = hosts(undefined, () => ({ error: { code: "TRANSFER_REPO_MISMATCH", message: "the project here is a different repository" } }));
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) => (path.endsWith("/resume-agent") ? (await post(path, options), { data: { ok: true } }) : post(path, options));
 		const error = await moveSession(input).catch((e: unknown) => e);
 
 		expect(error).toBeInstanceOf(MoveError);
 		expect((error as MoveError).step).toBe("receive");
 		expect((error as MoveError).resumedSource).toBe(true);
-		expect(source.calls.at(-1)).toBe("POST /api/v1/sessions/{sessionId}/resume-agent");
+		expect(source.calls.slice(-2)).toEqual(["POST /api/v1/sessions/{sessionId}/transfer/cancel", "POST /api/v1/sessions/{sessionId}/resume-agent"]);
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/cancel"]).toEqual({ transferId: "tr1" });
 		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/commit");
+	});
+
+	it("stops before touching the source when the destination cannot receive", async () => {
+		const { source, target, input } = hosts();
+		const targetClient = target.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		targetClient.POST = async () => ({ error: { code: "NOT_FOUND", message: "Not Found" } });
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error).toBeInstanceOf(MoveError);
+		expect(error.message).toContain("cannot receive sessions");
+		expect(error.resumedSource).toBe(true);
+		expect(source.calls).toEqual([]);
+	});
+
+	it("finishes an unfinished earlier move under its own transfer id", async () => {
+		const { source, input } = hosts();
+		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
+		const post = sourceClient.POST;
+		sourceClient.POST = async (path, options) =>
+			path.endsWith("/transfer/prepare") ? (await post(path, options), { data: { transfer: { ...transfer, transferId: "tr-earlier" } } }) : post(path, options);
+		const result = await moveSession(input);
+
+		expect(result.transferId).toBe("tr-earlier");
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ transferId: "tr-earlier" });
+	});
+
+	it("reports a move that started from a summary", async () => {
+		const { input } = hosts(undefined, () => ({ data: { ...received.data, resumed: false } }));
+		expect((await moveSession(input)).resumed).toBe(false);
 	});
 
 	it("leaves a busy agent alone when the source refuses to prepare", async () => {
@@ -89,7 +130,6 @@ describe("moveSession", () => {
 		expect(error).toBeInstanceOf(MoveError);
 		expect(error.resumedSource).toBe(true);
 		expect(error.message).toContain("middle of a turn");
-		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
 	it("retries a dropped receive once instead of resuming the source", async () => {
@@ -97,7 +137,7 @@ describe("moveSession", () => {
 		const { source, input } = hosts(undefined, () => {
 			attempts++;
 			if (attempts === 1) throw new TypeError("Failed to fetch");
-			return { data: { session: { id: "web-9" }, warnings: ["Could not claim a PR"] } };
+			return { data: { ...received.data, warnings: ["Could not claim a PR"] } };
 		});
 		const result = await moveSession(input);
 
