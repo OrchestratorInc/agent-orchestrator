@@ -29,6 +29,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		SessionOptions:       sessionOptions,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
+		PromptErrorFailure:   promptErrorFailure,
 		EncodeProviderConversationID: func(providerID string) string {
 			return opencodeidentity.Encode(domain.HarnessOpenCodeV2, providerID)
 		},
