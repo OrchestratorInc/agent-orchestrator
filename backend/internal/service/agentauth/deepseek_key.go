@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -132,6 +135,7 @@ func lockDeepSeekStore(ctx context.Context, path string) (func(), error) {
 	lock := path + ".lock"
 	deadline := time.Now().Add(dshLockWait)
 	delay := dshLockRetryFirst
+	retriedPermission := false
 	for {
 		file, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the Harness lock beside its store
 		if err == nil {
@@ -143,14 +147,17 @@ func lockDeepSeekStore(ctx context.Context, path string) (func(), error) {
 			}
 			return func() { _ = os.Remove(lock) }, nil
 		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential file could not be locked.")
-		}
-		if record, readErr := os.ReadFile(lock); readErr == nil && dshLockRecord.Match(record) { //nolint:gosec // the Harness lock beside its store
-			if pid, convErr := strconv.Atoi(string(bytes.TrimSpace(record))); convErr == nil && pid != os.Getpid() && !processalive.Alive(pid) {
-				_ = os.Remove(lock)
+		switch {
+		case dshLockContention(err, lock):
+			// Continue at once only when the exited holder's lock is gone.
+			if dshTakeOverExitedLock(lock) {
 				continue
 			}
+		case runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission) && !retriedPermission:
+			// A lock just removed can stay "delete pending" for a moment.
+			retriedPermission = true
+		default:
+			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential file could not be locked.")
 		}
 		if time.Now().After(deadline) {
 			return nil, apierr.Conflict("AGENT_AUTH_STORE_BUSY", "DeepSeek Harness is saving its credentials. Try again in a moment.", nil)
@@ -160,6 +167,77 @@ func lockDeepSeekStore(ctx context.Context, path string) (func(), error) {
 			return nil, ctx.Err()
 		case <-time.After(delay):
 		}
+		delay = min(delay*2, dshLockRetryMax)
+	}
+}
+
+// dshLockContention reports that err means another writer holds lock, as
+// Harness's isLockContention: EEXIST, or EPERM while the lock exists.
+func dshLockContention(err error, lock string) bool {
+	if errors.Is(err, os.ErrExist) {
+		return true
+	}
+	if errors.Is(err, os.ErrPermission) {
+		_, statErr := os.Lstat(lock)
+		return statErr == nil
+	}
+	return false
+}
+
+// dshHolderExited reports that record names a holder proven gone, as
+// Harness's holderExited: a well-formed record for a PID other than 0 and this
+// process, and signal 0 reporting no such process. A partial record, a live
+// or zombie process, or one owned by another user keeps the lock.
+func dshHolderExited(record []byte) bool {
+	if !dshLockRecord.Match(record) {
+		return false
+	}
+	pid, err := strconv.Atoi(string(bytes.TrimSpace(record)))
+	if err != nil || pid == 0 || pid > 2147483647 || pid == os.Getpid() {
+		return false
+	}
+	return processalive.Exited(pid)
+}
+
+// dshTakeOverExitedLock removes lock when its holder has exited, as Harness's
+// takeOverExitedLock: contenders that read the same record race for one
+// exclusive "<lock>.takeover-<sha256(record)[:16]>" claim, and the winner
+// removes the lock only if it still holds that record and the holder is
+// still gone. It reports whether the lock was removed.
+func dshTakeOverExitedLock(lock string) bool {
+	record, err := os.ReadFile(lock) //nolint:gosec // the Harness lock beside its store
+	if err != nil || !dshHolderExited(record) {
+		return false
+	}
+	sum := sha256.Sum256(record)
+	claim := lock + ".takeover-" + hex.EncodeToString(sum[:])[:16]
+	file, err := os.OpenFile(claim, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the takeover claim beside the Harness lock
+	if err != nil {
+		return false
+	}
+	_, _ = file.WriteString(strconv.Itoa(os.Getpid()) + "\n")
+	_ = file.Close()
+	defer func() { _ = os.Remove(claim) }()
+	current, err := os.ReadFile(lock) //nolint:gosec // the Harness lock beside its store
+	if err != nil || !bytes.Equal(current, record) || !dshHolderExited(record) {
+		return false
+	}
+	if err := os.Remove(lock); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return true
+}
+
+// dshRename is os.Rename with Harness's Windows retry: a file another process
+// has open (a scanner, an editor) can refuse the rename for a moment.
+func dshRename(from, to string) error {
+	delay := dshLockRetryFirst
+	for attempt := 0; ; attempt++ {
+		err := os.Rename(from, to)
+		if err == nil || runtime.GOOS != "windows" || attempt == 8 || !dshTransientWindowsError(err) {
+			return err
+		}
+		time.Sleep(delay)
 		delay = min(delay*2, dshLockRetryMax)
 	}
 }
@@ -184,8 +262,19 @@ func writeDeepSeekStore(path string, data []byte) error {
 	if closeErr := file.Close(); writeErr != nil || closeErr != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential file could not be written.")
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := dshRename(tmp, path); err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential file could not be replaced.")
 	}
 	return nil
+}
+
+// dshTransientWindowsError matches the rename failures Harness retries on
+// Windows: EPERM and EACCES (access denied) and EBUSY (sharing or lock
+// violation).
+func dshTransientWindowsError(err error) bool {
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == 32 || errno == 33) // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
 }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeOpenCodeCatalog(t *testing.T) (dataDir string) {
@@ -83,6 +84,48 @@ func TestOpenCodeCatalogKeyIsSavedInNativeStore(t *testing.T) {
 	}
 	if _, err := svc.StartLoginWithOptions(t.Context(), "opencode", "native", "", LoginOptions{Provider: "zeta"}); err == nil {
 		t.Fatal("accepted a provider for a native login")
+	}
+}
+
+func TestPiLockGivesUpOnAStaleLockItCannotRemove(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	lock := path + ".lock"
+	// A stale lock that is not empty can't be removed, so it can't be taken over.
+	if err := os.MkdirAll(filepath.Join(lock, "held"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := lockPiAuth(ctx, path)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("locked over a lock it could not remove")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the lock wait never ended")
+	}
+}
+
+func TestPiAgentDirExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "~/pi-agent")
+	if dir, err := piAgentDir(); err != nil || dir != filepath.Join(home, "pi-agent") {
+		t.Fatalf("piAgentDir = %q, %v", dir, err)
+	}
+	t.Setenv("PI_CODING_AGENT_DIR", "relative/pi")
+	if _, err := piAgentDir(); err == nil {
+		t.Fatal("accepted a relative Pi directory")
 	}
 }
 

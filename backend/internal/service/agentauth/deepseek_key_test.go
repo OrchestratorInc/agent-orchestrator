@@ -1,12 +1,15 @@
 package agentauth
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -91,5 +94,56 @@ func TestDeepSeekHarnessKeyWaitsForALiveLock(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("created the store without the lock")
+	}
+}
+
+func TestDeepSeekHarnessLockTakesOverOnlyAnExitedHolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell child and directory permissions")
+	}
+	exited := exec.Command("sh", "-c", "exit 0")
+	if err := exited.Run(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".credentials.yaml")
+	record := []byte(strconv.Itoa(exited.Process.Pid) + "\n")
+	if err := os.WriteFile(path+".lock", record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockDeepSeekStore(t.Context(), path)
+	if err != nil {
+		t.Fatalf("did not take over an exited holder's lock: %v", err)
+	}
+	unlock()
+	if claims, _ := filepath.Glob(path + ".lock.takeover-*"); len(claims) != 0 {
+		t.Fatalf("takeover claim left behind: %v", claims)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove the lock regardless of permissions")
+	}
+	// An exited holder's lock that can't be removed waits out the deadline
+	// instead of spinning.
+	if err := os.WriteFile(path+".lock", record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := lockDeepSeekStore(ctx, path)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("locked without removing the earlier lock")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the lock wait never ended")
 	}
 }
