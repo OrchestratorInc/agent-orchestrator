@@ -7111,6 +7111,7 @@ export interface components {
             path: string;
             previewUrl?: string;
             rawUrl?: string;
+            shareUrl?: string;
             /** Format: int64 */
             size: number;
             /** Format: date-time */
