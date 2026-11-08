@@ -51,15 +51,28 @@ type AgentAuthController struct {
 	Svc AgentAuthService
 }
 
-// Register mounts the agent authentication routes.
+// Register mounts the agent authentication routes. The /agents prefix is
+// shared with other controllers, so routes are registered individually rather
+// than through a chi sub-router.
 func (c *AgentAuthController) Register(r chi.Router) {
 	r.Get("/agents/auth-plans", c.list)
+	c.registerProviderKeys(r)
+	r.Post("/agents/{agent}/auth", c.start)
+	r.Post("/agents/{agent}/logout", c.logout)
+	c.registerUILogin(r)
+}
+
+// registerProviderKeys mounts the AO-saved provider key routes.
+func (c *AgentAuthController) registerProviderKeys(r chi.Router) {
 	r.Get("/agents/provider-keys", c.listProviderKeys)
 	r.Put("/agents/provider-keys/{name}", c.saveProviderKey)
 	r.Delete("/agents/provider-keys/{name}", c.removeProviderKey)
 	r.Post("/agents/provider-keys/{name}/check", c.checkProviderKey)
-	r.Post("/agents/{agent}/auth", c.start)
-	r.Post("/agents/{agent}/logout", c.logout)
+}
+
+// registerUILogin mounts the in-app sign-in routes: operations, the
+// harness's provider catalog, and its guided menu.
+func (c *AgentAuthController) registerUILogin(r chi.Router) {
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
 	r.Get("/agents/{agent}/auth/providers", c.catalogProviders)
 	r.Get("/agents/{agent}/auth/providers/{provider}/models", c.catalogModels)
