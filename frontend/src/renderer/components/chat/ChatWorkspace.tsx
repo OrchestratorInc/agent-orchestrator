@@ -1063,6 +1063,8 @@ function ChatWorkspaceContent({
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
+	const [steeringQueuedTurnIds, setSteeringQueuedTurnIds] = useState<ReadonlySet<string>>(() => new Set());
+	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1101,11 +1103,35 @@ function ChatWorkspaceContent({
 	);
 	const visibleQueuedMessages = useMemo(
 		() => [
-			...queuedMessages.filter((message) => !backgroundWakeQueuedTurnIds.has(message.turnId)),
+			...queuedMessages.filter(
+				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steeringQueuedTurnIds.has(message.turnId),
+			),
 			...pendingQueuedMessages,
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steeringQueuedTurnIds],
 	);
+	const timelineSnapshot = useMemo(() => {
+		const steering = queuedMessages.filter(({ turnId }) => steeringQueuedTurnIds.has(turnId));
+		if (turn?.state !== "running" || steering.length === 0) return snapshot;
+		return {
+			...snapshot,
+			items: [
+				...snapshot.items,
+				...steering.map(({ turnId, message }, index): ConversationActivity => ({
+					kind: "activity",
+					id: `steering:${turnId}`,
+					turnId: turn.id,
+					sequence: snapshot.latestSequence + 0.5 + index / 100,
+					revision: 0,
+					activityKind: "system",
+					status: "completed",
+					summary: message.text,
+					detail: { event: "steer", text: message.text, origin: message.origin, clientMessageId: message.clientMessageId },
+					createdAt: message.createdAt,
+				})),
+			],
+		};
+	}, [queuedMessages, snapshot, steeringQueuedTurnIds, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1264,7 +1290,23 @@ function ChatWorkspaceContent({
 		if (current && !current.clientMessageId) updateQueueDraft(undefined, current.revision);
 	}, [updateQueueDraft]);
 	const promoteQueuedTurn = useCallback(
-		async (turnId: string) => stablePromoteQueuedTurn(turnId),
+		async (turnId: string) => {
+			setSteerErrors(({ [turnId]: _retried, ...rest }) => rest);
+			setSteeringQueuedTurnIds((current) => new Set(current).add(turnId));
+			try {
+				await stablePromoteQueuedTurn(turnId);
+			} catch (error) {
+				setSteeringQueuedTurnIds((current) => {
+					const next = new Set(current);
+					next.delete(turnId);
+					return next;
+				});
+				setSteerErrors((current) => ({
+					...current,
+					[turnId]: error instanceof Error ? error.message : "That action failed.",
+				}));
+			}
+		},
 		[stablePromoteQueuedTurn],
 	);
 	const steer = useCallback(
@@ -1626,6 +1668,7 @@ function ChatWorkspaceContent({
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
+					steerErrors={steerErrors}
 				/>
 			) : null,
 		[
@@ -1642,6 +1685,7 @@ function ChatWorkspaceContent({
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
+			steerErrors,
 			visibleQueuedMessages,
 		],
 	);
@@ -1952,7 +1996,7 @@ function ChatWorkspaceContent({
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
-									snapshot={snapshot}
+									snapshot={timelineSnapshot}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
 									draftScope={draftScope}
