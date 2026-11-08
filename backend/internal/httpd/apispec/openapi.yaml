@@ -16187,6 +16187,8 @@ components:
       type: object
     ControllersKillSessionRequest:
       properties:
+        callerSessionId:
+          type: string
         deleteArtifacts:
           type: boolean
       type: object
@@ -21750,6 +21752,8 @@ components:
           - auto
           - bypass-permissions
           type: string
+        async:
+          type: boolean
         attachments:
           items:
             $ref: '#/components/schemas/AttachmentInput'
