@@ -1063,7 +1063,7 @@ function ChatWorkspaceContent({
 		});
 	}, [auxiliaryTabOrder, availableTabKeys, onAuxiliaryTabOrderChange, uiSessionId]);
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
-	const [steeringQueuedTurnIds, setSteeringQueuedTurnIds] = useState<ReadonlySet<string>>(() => new Set());
+	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
@@ -1104,14 +1104,14 @@ function ChatWorkspaceContent({
 	const visibleQueuedMessages = useMemo(
 		() => [
 			...queuedMessages.filter(
-				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steeringQueuedTurnIds.has(message.turnId),
+				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steerStartedAt.has(message.turnId),
 			),
 			...pendingQueuedMessages,
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steeringQueuedTurnIds],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
 	);
 	const timelineSnapshot = useMemo(() => {
-		const steering = queuedMessages.filter(({ turnId }) => steeringQueuedTurnIds.has(turnId));
+		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
 		if (turn?.state !== "running" || steering.length === 0) return snapshot;
 		return {
 			...snapshot,
@@ -1127,11 +1127,11 @@ function ChatWorkspaceContent({
 					status: "completed",
 					summary: message.text,
 					detail: { event: "steer", text: message.text, origin: message.origin, clientMessageId: message.clientMessageId },
-					createdAt: message.createdAt,
+					createdAt: steerStartedAt.get(turnId)!,
 				})),
 			],
 		};
-	}, [queuedMessages, snapshot, steeringQueuedTurnIds, turn]);
+	}, [queuedMessages, snapshot, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1292,12 +1292,12 @@ function ChatWorkspaceContent({
 	const promoteQueuedTurn = useCallback(
 		async (turnId: string) => {
 			setSteerErrors(({ [turnId]: _retried, ...rest }) => rest);
-			setSteeringQueuedTurnIds((current) => new Set(current).add(turnId));
+			setSteerStartedAt((current) => new Map(current).set(turnId, new Date().toISOString()));
 			try {
 				await stablePromoteQueuedTurn(turnId);
 			} catch (error) {
-				setSteeringQueuedTurnIds((current) => {
-					const next = new Set(current);
+				setSteerStartedAt((current) => {
+					const next = new Map(current);
 					next.delete(turnId);
 					return next;
 				});

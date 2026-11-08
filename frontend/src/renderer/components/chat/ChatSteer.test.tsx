@@ -691,6 +691,32 @@ describe("ChatWorkspace steering", () => {
 		expect(within(row).getByText("The running turn cannot take guidance.")).toBeVisible();
 	});
 
+	it("starts the steered segment at the click, not when the message was queued", async () => {
+		const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+		const queued = withQueuedMessages();
+		const snapshot = {
+			...queued,
+			turns: queued.turns
+				.filter((turn) => turn.id !== "queued-2")
+				.map((turn) => (turn.state === "running" ? { ...turn, requestedAt: minutesAgo(7), startedAt: minutesAgo(7) } : turn)),
+			items: queued.items
+				.filter((item) => item.turnId !== "queued-2" && item.id !== "a-steer-1")
+				.map((item) => (item.id === "queued-message-1" ? { ...item, createdAt: minutesAgo(3) } : item)),
+		};
+		render(
+			<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={vi.fn(() => new Promise<void>(() => {}))} />,
+		);
+
+		await userEvent.click(
+			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			}),
+		);
+		const worked = [...document.querySelectorAll("[data-turn-worked]")].map((row) => row.textContent);
+		expect(worked).toEqual(expect.arrayContaining([expect.stringContaining("Worked for 7m")]));
+		expect(worked).not.toEqual(expect.arrayContaining([expect.stringContaining("Worked for 4m")]));
+	});
+
 	it("shows the queued dock while messages are still queued between turns", () => {
 		const snapshot = {
 			...withQueuedMessages(),
