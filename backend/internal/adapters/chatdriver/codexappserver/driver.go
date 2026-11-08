@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,11 @@ const (
 // handshakeTimeout bounds initialize and thread open. These are local IPC calls
 // that normally settle in well under a second.
 const handshakeTimeout = 60 * time.Second
+
+// sandboxProbeTimeout bounds the read-only sandbox probe. A host that denies
+// the sandbox fails this command almost immediately; the timeout only exists
+// so a wedged provider cannot hold the review trigger open.
+const sandboxProbeTimeout = 20 * time.Second
 
 // codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
 // driver reuses. Binary resolution and local auth probing already live there and
@@ -216,6 +222,80 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 
 	return capabilities(), nil
+}
+
+// ProbeSandbox proves the read-only sandbox a reviewer runs in can start on
+// this host.
+//
+// Reviewers cannot fall back to a looser posture: approvals are disabled and
+// every read and every submit is a sandboxed shell command. A host whose
+// seccomp, AppArmor, or user-namespace policy denies the sandbox (the reported
+// symptom is `bwrap: setting up uid map: Permission denied`) would otherwise
+// spend a whole model turn on commands that never start, then report only
+// "reviewer Chat turn ended without submitting a result".
+func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	workdir := strings.TrimSpace(cfg.WorkspacePath)
+	if !filepath.IsAbs(workdir) {
+		workdir = ""
+	}
+	if workdir == "" {
+		workdir = os.TempDir()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
+	defer cancel()
+	conv, err := d.connect(probeCtx, workdir, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conv.Close() }()
+
+	var resp struct {
+		ExitCode int64  `json:"exitCode"`
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+	}
+	params := map[string]any{
+		"command":       sandboxProbeCommand(),
+		"cwd":           workdir,
+		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": false},
+		"timeoutMs":     int64(10_000),
+	}
+	if err := conv.conn.request(probeCtx, "command/exec", params, &resp); err != nil {
+		var refused *rpcError
+		if errors.As(err, &refused) && refused.Code == -32601 {
+			// This provider predates command/exec. Leave the launch as it was
+			// rather than turning an unsupported probe into a hard failure.
+			return nil
+		}
+		return fmt.Errorf("%w: %w", ports.ErrChatSandboxUnavailable, err)
+	}
+	if resp.ExitCode != 0 {
+		return fmt.Errorf("%w: %s", ports.ErrChatSandboxUnavailable, sandboxProbeFailure(resp.ExitCode, resp.Stdout, resp.Stderr))
+	}
+	return nil
+}
+
+// sandboxProbeCommand is a no-op that still has to be spawned inside the
+// provider sandbox. Setup failures happen before it runs, which is the point.
+func sandboxProbeCommand() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd.exe", "/c", "exit", "0"}
+	}
+	return []string{"/bin/sh", "-c", "exit 0"}
+}
+
+func sandboxProbeFailure(exitCode int64, stdout, stderr string) string {
+	output := strings.TrimSpace(stderr)
+	if output == "" {
+		output = strings.TrimSpace(stdout)
+	}
+	if len(output) > 500 {
+		output = output[:500] + "..."
+	}
+	if output == "" {
+		return fmt.Sprintf("probe command exited %d", exitCode)
+	}
+	return fmt.Sprintf("probe command exited %d: %s", exitCode, output)
 }
 
 // DiscoverModels reads the account's current provider catalog without opening

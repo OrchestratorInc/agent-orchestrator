@@ -376,7 +376,7 @@ type sqliteReviewChatController struct {
 }
 
 func (c sqliteReviewChatController) SupportsReviewChat(domain.AgentHarness) bool { return true }
-func (c sqliteReviewChatController) PreflightReviewChat(context.Context, domain.AgentHarness) error {
+func (c sqliteReviewChatController) PreflightReviewChat(context.Context, domain.AgentHarness, string) error {
 	return nil
 }
 func (c sqliteReviewChatController) StartReviewChat(ctx context.Context, cfg ReviewerChatStart) (string, error) {

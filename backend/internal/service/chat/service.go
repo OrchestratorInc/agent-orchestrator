@@ -2297,6 +2297,33 @@ func (s *Service) PreflightChat(
 	return chatAdmissionError(driver, harness, caps, permissions)
 }
 
+// PreflightReviewChat admits a Chat reviewer and proves the provider's
+// read-only sandbox can actually start in the worker's checkout.
+//
+// A reviewer runs read-only with approvals disabled, so the sandbox is its only
+// route to read the pinned diff and to submit the result. A host that cannot
+// start that sandbox (for example a container whose seccomp profile or an
+// AppArmor policy denies user namespaces) would otherwise launch a turn that
+// cannot run a single command and fail with a generic "turn ended without
+// submitting a result" instead of the provider's real error.
+func (s *Service) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	if err := s.PreflightChat(ctx, harness, ports.PermissionModeAuto); err != nil {
+		return err
+	}
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	prober, ok := driver.(ports.ChatSandboxProber)
+	if !ok {
+		return nil
+	}
+	if err := prober.ProbeSandbox(ctx, ports.ChatSandboxProbeConfig{WorkspacePath: workspacePath}); err != nil {
+		return fmt.Errorf("reviewer read-only sandbox: %w", err)
+	}
+	return nil
+}
+
 // PermissionModes lists, strictest first, the permission modes harness can run a
 // chat in: the ones its capabilities admit (Pi cannot ask, so only bypass) and
 // its agent accepts (Kimi runs only in its default). It starts nothing.
