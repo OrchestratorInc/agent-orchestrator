@@ -230,6 +230,10 @@ func TestNativePromptIgnoresAnsweredMenusInScrollback(t *testing.T) {
 		// Typed but not yet submitted: still the prompt, so Enter stays on offer.
 		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\n", "menu"},
 		{"Select a provider\n1) Anthropic\n2) OpenAI\n(Use number keys, Enter to confirm)\n", "menu"},
+		// A gutter-drawn picker (cliclack's Windows fallback, as in goose
+		// configure) is read past its gutter: an unreviewed label hands off.
+		{"T  goose-configure\n|\n*  What would you like to configure?\n|  > Configure Providers (Change provider or update credentials)\n|    Custom Providers\n|    goose settings\n—\n", "terminal_required"},
+		{"◆  Select provider\n│  ● OpenAI\n│  ○ Anthropic\n└\n", "menu"},
 	} {
 		if kind, _, _, _ := nativePrompt(tc.output); kind != tc.kind {
 			t.Errorf("nativePrompt(%q) = %q, want %q", tc.output, kind, tc.kind)

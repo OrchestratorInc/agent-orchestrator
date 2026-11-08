@@ -563,10 +563,14 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 	if len(plain) > 16*1024 {
 		plain = plain[len(plain)-16*1024:]
 	}
+	// Prompt libraries such as clack and cliclack draw a gutter before each
+	// line ("│  ● OpenAI", or "|  > OpenAI" on Windows consoles); the line
+	// itself starts after it.
 	var lines []string
 	for _, line := range strings.Split(plain, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, strings.TrimRight(line, " \t\r"))
+		line = strings.TrimRight(strings.TrimLeft(line, " \t|│┃║"), " \t\r")
+		if line != "" {
+			lines = append(lines, line)
 		}
 	}
 	// A numbered picker with at least two entries is drivable from the UI only
