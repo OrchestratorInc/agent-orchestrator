@@ -6,7 +6,7 @@ import { agentTone } from "../../lib/agent-tone";
 import { DAY_MINUTES, formatCountdown, PROVIDER_HARNESS, spanPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
-import { formatPlanName } from "../settings/CodexAccountDetails";
+import { formatPlanName } from "../settings/AgentAccountsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const HOUR_MS = 3_600_000;

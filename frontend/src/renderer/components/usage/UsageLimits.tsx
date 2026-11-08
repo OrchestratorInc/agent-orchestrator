@@ -8,7 +8,7 @@ import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
-import { formatPlanName } from "../settings/CodexAccountDetails";
+import { formatPlanName } from "../settings/AgentAccountsSection";
 import { Button } from "../ui/button";
 
 function remainingTone(remaining: number): string | null {

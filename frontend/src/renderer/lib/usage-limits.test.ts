@@ -3,7 +3,7 @@ import type { AgentAccount } from "../hooks/useAgentAccounts";
 import { formatCountdown, groupAccounts, limitWindowPace, remainingPercent, spanPace, type UsageLimitSpan } from "./usage-limits";
 
 function account(overrides: Partial<AgentAccount>): AgentAccount {
-	return { id: "a", provider: "codex", default: false, device: false, signedIn: true, ...overrides };
+	return { id: "a", provider: "codex", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
 }
 
 describe("groupAccounts", () => {
