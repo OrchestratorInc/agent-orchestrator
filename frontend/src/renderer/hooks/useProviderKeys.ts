@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 
 export type ProviderKey = components["schemas"]["ProviderKey"];
@@ -10,7 +10,7 @@ export const providerKeysQueryKey = (hostId?: string) => hostId ? ["provider-key
 
 async function fetchProviderKeys(hostId?: string): Promise<ProviderKey[]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/provider-keys");
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not load API keys."));
+	if (error || !data) throw apiErrorException(error, "Could not load API keys.");
 	return data.keys;
 }
 
@@ -31,13 +31,13 @@ export async function saveProviderKey(name: string, secret: string, device: bool
 	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/agents/provider-keys/{name}", {
 		params: { path: { name } }, body: { ...(secret ? { secret } : {}), device },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not save the key."));
+	if (error || !data) throw apiErrorException(error, "Could not save the key.");
 	return data;
 }
 
 export async function removeProviderKey(name: string, hostId?: string): Promise<ProviderKey> {
 	const { data, error } = await clientForSessionHost(hostId).DELETE("/api/v1/agents/provider-keys/{name}", { params: { path: { name } } });
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not remove the key."));
+	if (error || !data) throw apiErrorException(error, "Could not remove the key.");
 	return data;
 }
 
@@ -46,7 +46,7 @@ export async function checkProviderKey(name: string, secret: string, hostId?: st
 	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/provider-keys/{name}/check", {
 		params: { path: { name } }, body: secret ? { secret } : {},
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not check the key."));
+	if (error || !data) throw apiErrorException(error, "Could not check the key.");
 	return data;
 }
 

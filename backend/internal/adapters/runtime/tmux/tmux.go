@@ -1796,7 +1796,7 @@ func (r *Runtime) writeLaunchEnv(cfg ports.RuntimeConfig) (string, error) {
 		return "", errors.New("tmux runtime: launch environment directory is not a directory")
 	}
 	if info.Mode().Perm() != 0o700 {
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory needs its search bit; 0700 is owner-only
 			return "", fmt.Errorf("tmux runtime: restrict launch environment directory: %w", err)
 		}
 	}

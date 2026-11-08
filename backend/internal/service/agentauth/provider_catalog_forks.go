@@ -83,7 +83,7 @@ func saveMiMoProviderKey(ctx context.Context, harness catalogHarness, providerID
 // crushDataDir mirrors Crush's GlobalConfigData: CRUSH_GLOBAL_DATA, then
 // XDG_DATA_HOME (on Windows too), then %LOCALAPPDATA% or ~/.local/share.
 func crushDataDir() (string, error) {
-	dir := ""
+	var dir string
 	switch {
 	case os.Getenv("CRUSH_GLOBAL_DATA") != "":
 		dir = os.Getenv("CRUSH_GLOBAL_DATA")

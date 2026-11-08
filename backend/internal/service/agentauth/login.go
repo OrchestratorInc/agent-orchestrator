@@ -619,7 +619,7 @@ func currentNumberedMenu(lines []string) (options, digits []string, entries int)
 	}
 	first := 0
 	for i := last; i >= 0; i-- {
-		if match := nativeNumberedLine.FindStringSubmatch(lines[i]); match != nil && match[1] == "1" {
+		if match := nativeNumberedLine.FindStringSubmatch(lines[i]); len(match) > 1 && match[1] == "1" {
 			first = i
 			break
 		}
@@ -627,7 +627,7 @@ func currentNumberedMenu(lines []string) (options, digits []string, entries int)
 	seen := map[string]bool{}
 	for _, line := range lines[first : last+1] {
 		match := nativeNumberedLine.FindStringSubmatch(line)
-		if match == nil || seen[match[1]] {
+		if len(match) < 3 || seen[match[1]] {
 			continue
 		}
 		seen[match[1]] = true
