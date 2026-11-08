@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import { BrowserChromeSection, openChromeAgentsSettings } from "./BrowserChromeSection";
 
@@ -62,6 +63,9 @@ describe("BrowserChromeSection", () => {
 	it("sets up Chrome mode and shows how to load the extension", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: notSetUp } as never);
 		const post = vi.spyOn(apiClient, "POST").mockResolvedValue({ data: setUp } as never);
+		const openChrome = vi.spyOn(aoBridge.app, "openChromeExtensions").mockResolvedValue(undefined);
+		const writeText = vi.fn(async () => undefined);
+		Object.assign(navigator, { clipboard: { writeText } });
 		renderSection();
 
 		expect(await screen.findByText("Not set up")).toBeInTheDocument();
@@ -69,11 +73,23 @@ describe("BrowserChromeSection", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Set up" }));
 
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/browser/chrome"));
+		await waitFor(() => expect(openChrome).toHaveBeenCalledOnce());
+		expect(writeText).toHaveBeenCalledWith(base.extensionPath);
 		expect(await screen.findByText("Set up · extension not connected")).toBeInTheDocument();
 		expect(screen.getByText("Google Chrome")).toBeInTheDocument();
 		expect(screen.getByText(base.extensionPath)).toBeInTheDocument();
 		expect(screen.getByText(base.extensionId)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+	});
+
+	it("shows what to do when Chrome cannot be opened, and can retry", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: setUp } as never);
+		const openChrome = vi.spyOn(aoBridge.app, "openChromeExtensions").mockRejectedValue(new Error("no Chrome"));
+		Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => undefined) } });
+		renderSection();
+		fireEvent.click(await screen.findByRole("button", { name: "Open Chrome" }));
+		expect(await screen.findByText(/Couldn't open Chrome/)).toBeInTheDocument();
+		expect(openChrome).toHaveBeenCalledOnce();
 	});
 
 	it("reports a connected extension without load instructions", async () => {

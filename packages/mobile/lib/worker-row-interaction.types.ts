@@ -8,13 +8,13 @@ export type WorkerRowInteractionProps = {
 	enabled: boolean;
 	activeSwipeId?: string;
 	children: ReactNode;
+	/** The swipe rail's controls. Built only while the row is off its resting position. */
 	rightActions: ReactNode;
 	shellStyle: StyleProp<ViewStyle>;
 	foregroundStyle: StyleProp<ViewStyle>;
-	rowStyle: ViewStyle;
-	pressedStyle: ViewStyle;
+	rowStyle: StyleProp<ViewStyle>;
 	accessibilityLabel: string;
-	accessibilityHint: string;
+	accessibilityHint?: string;
 	onPress(): void;
 	/**
 	 * The long-press menu's contents, decided by workerContextActions so the rules
@@ -26,3 +26,9 @@ export type WorkerRowInteractionProps = {
 	onSwipeClose(id: string): void;
 	onReady?(close: () => void): void;
 };
+
+/** The pressable row inside the swipe container, with each platform's own long-press menu. */
+export type WorkerRowContextMenuProps = Pick<
+	WorkerRowInteractionProps,
+	"children" | "onPress" | "actions" | "onAction" | "accessibilityLabel" | "accessibilityHint"
+> & { style: StyleProp<ViewStyle> };

@@ -37,6 +37,33 @@ type ClonePreparationResult struct {
 	PreparationID string `json:"preparationId"`
 }
 
+// CloneProgressPhase names the git clone step a checkout is in.
+type CloneProgressPhase string
+
+// The steps a clone reports, in the order git reaches them.
+const (
+	ClonePhaseEnumeratingObjects CloneProgressPhase = "enumerating_objects"
+	ClonePhaseCountingObjects    CloneProgressPhase = "counting_objects"
+	ClonePhaseCompressingObjects CloneProgressPhase = "compressing_objects"
+	ClonePhaseReceivingObjects   CloneProgressPhase = "receiving_objects"
+	ClonePhaseResolvingDeltas    CloneProgressPhase = "resolving_deltas"
+	ClonePhaseUpdatingFiles      CloneProgressPhase = "updating_files"
+	ClonePhaseFilteringContent   CloneProgressPhase = "filtering_content"
+	// ClonePhaseRetrying starts another attempt after a temporary connection failure.
+	ClonePhaseRetrying CloneProgressPhase = "retrying"
+)
+
+// CloneProgress reports the step a running clone has reached. It never
+// carries git's own output: git can print the remote URL, which may hold
+// credentials.
+type CloneProgress struct {
+	Phase CloneProgressPhase `json:"phase" enum:"enumerating_objects,counting_objects,compressing_objects,receiving_objects,resolving_deltas,updating_files,filtering_content,retrying"`
+	// Attempt is the 1-based clone attempt the phase belongs to.
+	Attempt int `json:"attempt" minimum:"1"`
+	// Percent is how far git says the phase is, when it reports one.
+	Percent *int `json:"percent,omitempty" minimum:"0" maximum:"100"`
+}
+
 // CloneDestination reports local destination readiness without contacting the remote.
 type CloneDestination struct {
 	RemoteURL      string `json:"remoteUrl"`

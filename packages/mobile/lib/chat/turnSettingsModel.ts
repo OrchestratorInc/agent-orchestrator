@@ -6,6 +6,8 @@ export type TurnSettingChoice = {
 	label: string;
 	description?: string;
 	selected: boolean;
+	/** The AO approval mode a permissions choice applies, when it maps to one. */
+	permissionMode?: ApprovalMode;
 };
 
 export type TurnSettingRow = {
@@ -22,6 +24,12 @@ export type TurnSettingRow = {
 	 * editing the provider's.
 	 */
 	providerKind?: ProviderTurnControlKind;
+	/**
+	 * The choice the agent runs with when none is picked. Picking it clears the
+	 * pick rather than saving it, so the conversation follows the agent's
+	 * default again, even after that default changes.
+	 */
+	defaultValue?: string;
 	choices: TurnSettingChoice[];
 	target:
 		| { kind: "settings"; key: keyof TurnSettings }
@@ -99,8 +107,8 @@ export function providerTurnControlKind(option: ChatConfigOption): ProviderTurnC
  *
  * Model and effort follow desktop's `resolveImplicitChoice` (TurnSettingsBar,
  * #5849): when the choice's description names another choice ("Opus 5.5"), it
- * takes that name and the duplicate goes, unless that model is the explicit
- * pick, when it reads "Use agent model (Opus 5.5)". Otherwise "Use agent
+ * takes that name and every copy of it goes, even while that model is the
+ * explicit pick, so the menu never lists a model twice. Otherwise "Use agent
  * model" / "Use agent effort" rather than a level we would have to guess.
  *
  * Permission modes: see `namePermissionChoice`. A provider's own names stay,
@@ -116,37 +124,70 @@ export function resolveDefaultChoices(options: ChatConfigOption[]): ChatConfigOp
 function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 	if (option.type !== "select") return option;
 	const kind = providerTurnControlKind(option);
-	// Fast mode is a toggle, and fastControlValue reads a "default" choice as Off.
+	// Fast mode is a toggle, which reads a "default" choice as Off.
 	if (kind === "fast") return option;
 	if (kind === "permissions") {
 		const choices = option.choices.map(namePermissionChoice);
 		return choices.every((choice, index) => choice === option.choices[index]) ? option : { ...option, choices };
 	}
+	const resolved = resolveImplicitChoice(option);
+	return isModelOption(resolved) ? withoutDuplicateNames(resolved) : resolved;
+}
+
+function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const implicit = option.choices.find((choice) => choice.value === "default");
 	if (!implicit) return option;
 	const named = implicit.description?.trim().toLowerCase();
-	const concrete = named
-		? option.choices.find((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
-		: undefined;
-	if (concrete && option.currentValue !== concrete.value) {
-		// The row that stays reads exactly like the one it replaces.
+	// The running model when it is one of the models so named: Claude lists a
+	// model twice, by alias and by id, and the other copy goes as a duplicate.
+	const namedChoices = named
+		? option.choices.filter((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
+		: [];
+	const concrete = namedChoices.find((choice) => choice.value === option.currentValue) ?? namedChoices[0];
+	if (concrete) {
+		// One row per model: the agent's own choice takes the name of every copy
+		// it stands for, and is the one ticked while one of them runs. The row
+		// that stays reads exactly like the ones it replaces.
 		const name = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
+		const running = namedChoices.some((choice) => choice.value === option.currentValue);
 		return {
 			...option,
+			currentValue: running ? implicit.value : option.currentValue,
 			choices: option.choices
-				.filter((choice) => choice !== concrete)
+				.filter((choice) => !namedChoices.includes(choice))
 				.map((choice) => choice === implicit ? { ...choice, name, description: concrete.description } : choice),
 		};
 	}
 	if (!isDefaultPlaceholderLabel(implicit.name)) return option;
-	// An `agent` option is classed with models here, but it picks an agent.
-	const isModel = option.category === "model" || option.id.toLowerCase() === "model";
-	const follow = isModel ? FOLLOW_AGENT.model : kind === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
+	const follow = isModelOption(option) ? FOLLOW_AGENT.model : providerTurnControlKind(option) === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
 	return {
 		...option,
 		choices: option.choices.map((choice) =>
-			choice === implicit ? { ...choice, name: concrete ? `${follow} (${concrete.name})` : follow, description: undefined } : choice),
+			choice === implicit ? { ...choice, name: follow, description: undefined } : choice),
 	};
+}
+
+/** A model picker. An `agent` option is classed with models elsewhere, but it picks an agent. */
+function isModelOption(option: ChatConfigOption): boolean {
+	return option.category === "model" || option.id.toLowerCase() === "model";
+}
+
+/**
+ * One row per model name. AO hands Claude Code its catalog's full ids on top
+ * of the aliases it lists by itself, so "opus" and "claude-opus-5-5" both
+ * arrive as "Opus 5.5". The running one stays, else the first, which is the
+ * alias: it follows the family's newest model.
+ */
+function withoutDuplicateNames(option: ChatConfigOption): ChatConfigOption {
+	const kept = new Map<string, ChatConfigChoice>();
+	for (const choice of option.choices) {
+		const name = choice.name.trim().toLowerCase();
+		const first = kept.get(name);
+		if (!first || (choice.value === option.currentValue && first.value !== option.currentValue)) kept.set(name, choice);
+	}
+	if (kept.size === option.choices.length) return option;
+	const keep = new Set(kept.values());
+	return { ...option, choices: option.choices.filter((choice) => keep.has(choice)) };
 }
 
 /** "Default", "Default (recommended)": a label that names no model, level or mode. */
@@ -188,68 +229,25 @@ export function providerChoiceLabel(option: ChatConfigOption): string {
  * the setting itself is sent unchanged.
  */
 export function nativeModelLabel(model: ChatModel | undefined, setting: string | undefined): string {
-	return model?.displayName ?? sentValue(setting) ?? NOT_REPORTED;
+	const sent = sentValue(setting);
+	return model?.displayName ?? (sent ? readableModelId(sent) : undefined) ?? NOT_REPORTED;
+}
+
+/**
+ * A Claude model id as its name, for when the catalog that names it is not
+ * there (a stopped session reports none): "claude-opus-5-5" reads "Opus 5.5",
+ * and a dated snapshot drops its date. Any other id is shown as sent.
+ */
+export function readableModelId(id: string): string {
+	const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id);
+	if (!claude) return id;
+	const [, family, major, minor] = claude;
+	return `${capitalize(family)} ${minor ? `${major}.${minor}` : major}`;
 }
 
 /** A value as sent, or undefined when there is none or it is "default", which names nothing. */
 function sentValue(value: string | undefined): string | undefined {
 	return value && !isDefaultValue(value) ? value : undefined;
-}
-
-/**
- * Where an effort slider sits for `selected`: the index of that level, or -1
- * when the effort is none of the slider's levels (not reported, or a level this
- * model does not list). -1 must not be clamped to the first level: the slider
- * saves the level it sits on, so a clamp saved a level nobody picked.
- */
-export function effortSliderIndex(levels: ReadonlyArray<{ value: string }>, selected: string): number {
-	return levels.findIndex((level) => level.value === selected);
-}
-
-/** The level a slider sitting at `index` should save: none while it is unplaced (-1) or on `selected` already. */
-export function effortSliderWrite(levels: ReadonlyArray<{ value: string }>, selected: string, index: number): string | undefined {
-	const next = index < 0 ? undefined : levels[index]?.value;
-	return next && next !== selected ? next : undefined;
-}
-
-/** Providers encode Fast mode as either a boolean or an On/Off select. */
-export function fastControlEnabled(option: ChatConfigOption): boolean {
-	if (option.type === "boolean") return Boolean(option.currentBoolean);
-	const current = option.choices.find((choice) => choice.value === option.currentValue);
-	return fastChoiceMatches(current, true) || fastChoiceMatches({ value: option.currentValue ?? "", name: option.currentValue ?? "" }, true);
-}
-
-/** Returns the provider-owned value for an On/Off Fast mode select. */
-export function fastControlValue(option: ChatConfigOption, enabled: boolean): string | undefined {
-	if (option.type !== "select") return undefined;
-	const direct = option.choices.find((choice) => fastChoiceMatches(choice, enabled));
-	if (direct) return direct.value;
-	if (option.choices.length === 2) {
-		const current = option.choices.find((choice) => choice.value === option.currentValue);
-		if (current) return option.choices.find((choice) => choice.value !== current.value)?.value;
-	}
-	return undefined;
-}
-
-function fastChoiceMatches(choice: { value: string; name: string } | undefined, enabled: boolean): boolean {
-	if (!choice) return false;
-	const text = `${choice.value} ${choice.name}`.toLowerCase();
-	const words = text.split(/[^a-z]+/).filter(Boolean);
-	return enabled
-		? words.some((word) => ["on", "true", "fast", "enabled", "enable"].includes(word))
-		: words.some((word) => ["off", "false", "normal", "standard", "disabled", "disable", "default"].includes(word));
-}
-
-/** The mobile form starts with the controls people actively tune each turn. */
-export function orderedProviderControls(options: ChatConfigOption[]): ChatConfigOption[] {
-	const priority: Record<ProviderTurnControlKind, number> = {
-		fast: 0,
-		model: 1,
-		effort: 2,
-		permissions: 3,
-		other: 4,
-	};
-	return options.sort((a, b) => priority[providerTurnControlKind(a)] - priority[providerTurnControlKind(b)]);
 }
 
 /**
@@ -303,6 +301,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				label: "Effort",
 				value: effort ? effortChoiceLabel(effort) : NOT_REPORTED,
 				kind: "select",
+				defaultValue: selectedModel.defaultEffort,
 				choices: selectedModel.efforts.map((value) => ({ value, label: effortChoiceLabel(value), selected: value === effort })),
 				target: { kind: "settings", key: "reasoningEffort" },
 			});
@@ -321,40 +320,39 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				label: approvalLabel(item.value, snapshot.harness),
 				description: item.description,
 				selected: item.value === approval,
+				permissionMode: item.value,
 			})),
 			target: { kind: "settings", key: "approvalMode" },
 		});
 	}
 
-	rows.push(...options.map(providerRow));
+	// Nothing picked: the provider's model is the agent's own, whatever it
+	// reports running, so the choice that follows the agent is the one ticked.
+	const followsAgentModel = !sentValue(snapshot.settings.model);
+	rows.push(...options.map((option) => providerRow(option, followsAgentModel)));
 	return rows.sort((a, b) => controlPriority(a) - controlPriority(b));
 }
 
-export function turnSettingsSummary(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): string {
+/**
+ * The summary's parts, for a control that shows the approval mode apart from
+ * the model. Effort is the setting people change most after the model, and it
+ * was the one this line never mentioned. A value that names nothing is "":
+ * saying it spends the row's width on nothing (#5834).
+ */
+export function turnSettingsParts(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): { model: string; effort: string; approval: string } {
 	const rows = turnSettingsRows(snapshot, models, options);
 	const effort = rows.find(isEffortRow);
 	const permissions = rows.find(isPermissionRow);
-	// Effort is the setting people change most after the model, and it was the
-	// one this line never mentioned. A value that names nothing is dropped:
-	// saying it spends the row's width on nothing (#5834).
-	return [
-		modelLabel(rows, snapshot),
-		named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
-		named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
-	].filter(Boolean).join(" · ");
-}
-
-/**
- * The model the next turn runs on, as the turn-settings control names it.
- * Empty when nothing names one (#5834).
- */
-export function turnSettingsModelLabel(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): string {
-	return modelLabel(turnSettingsRows(snapshot, models, options), snapshot);
+	return {
+		model: modelLabel(rows, snapshot),
+		effort: named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
+		approval: named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
+	};
 }
 
 function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot): string {
 	const model = rows.find(isModelRow);
-	return named(model ? model.value : snapshot.settings.model ?? "");
+	return named(model ? model.value : readableModelId(snapshot.settings.model ?? ""));
 }
 
 /** The value, or "" when it names nothing: unreported, a bare "default", or "Use agent …". */
@@ -381,7 +379,15 @@ function isPermissionRow(row: TurnSettingRow): boolean {
 	return row.providerKind === "permissions";
 }
 
-function providerRow(option: ChatConfigOption): TurnSettingRow {
+/**
+ * `followsAgentModel`: no model was picked in AO (the daemon saves every pick),
+ * so a model row ticks its "Use agent model" choice even while the provider
+ * reports the model that resolves to. Claude Code reports "opus" for a session
+ * nobody pointed at Opus when its own settings name it.
+ */
+function providerRow(option: ChatConfigOption, followsAgentModel: boolean): TurnSettingRow {
+	const model = isModelOption(option);
+	const follows = followsAgentModel && model && option.choices.some((choice) => choice.value === "default");
 	return {
 		id: `option:${option.id}`,
 		label: option.name,
@@ -391,13 +397,23 @@ function providerRow(option: ChatConfigOption): TurnSettingRow {
 		enabled: Boolean(option.currentBoolean),
 		choices: option.choices.map((choice) => ({
 			value: choice.value,
-			label: choice.name,
+			label: model ? modelChoiceLabel(choice) : choice.name,
 			description: choice.description,
-			selected: choice.value === option.currentValue,
+			selected: follows ? choice.value === "default" : choice.value === option.currentValue,
+			permissionMode: choice.permissionMode,
 		})),
 		target: { kind: "option", optionId: option.id },
 		providerKind: providerTurnControlKind(option),
 	};
+}
+
+/**
+ * A model menu's row. The agent's own choice stands in for the model it names
+ * (see `resolveDefaultChoices`) and is tagged as the default, so following the
+ * agent reads apart from a pinned model; the capsule shows the name alone.
+ */
+function modelChoiceLabel(choice: ChatConfigChoice): string {
+	return choice.value === "default" && !followsAgentLabel(choice.name) ? `${choice.name} · Default` : choice.name;
 }
 
 function controlPriority(row: TurnSettingRow): number {
@@ -411,10 +427,66 @@ function controlPriority(row: TurnSettingRow): number {
 	return 10;
 }
 
-export function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
+/** What a turn-settings row adjusts, for the glyph the menus draw beside it. */
+export type TurnSettingTopic = "model" | "effort" | "fast" | "permissions" | "setting";
+
+/**
+ * The row's topic, or none for an agent picker: providers class an `agent`
+ * option with models, but no glyph says "agent" without saying "model".
+ */
+export function turnSettingTopic(row: TurnSettingRow): TurnSettingTopic | undefined {
+	const id = row.id.toLowerCase();
+	if (id.includes("agent")) return undefined;
+	if (row.providerKind === "model" || id.includes("model")) return "model";
+	if (row.providerKind === "permissions" || id.includes("mode") || id.includes("approval")) return "permissions";
+	if (id.includes("effort") || id.includes("thought") || id.includes("reason")) return "effort";
+	if (id.includes("fast")) return "fast";
+	return "setting";
+}
+
+/** What picking in a row saves: a provider option by its id, or AO's own settings. */
+export type TurnSettingWrite =
+	| { kind: "option"; id: string; value: { value: string } | { enabled: boolean } }
+	| { kind: "settings"; settings: TurnSettings };
+
+/** The write for a row's choice: a select's value, or a boolean row's new state. */
+export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, choice: string | boolean): TurnSettingWrite {
+	if (row.target.kind === "option") {
+		return { kind: "option", id: row.target.optionId, value: typeof choice === "boolean" ? { enabled: choice } : { value: choice } };
+	}
+	return { kind: "settings", settings: applyTurnSettingChoice(settings, row, String(choice)) };
+}
+
+function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
 	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };
+	if (row.defaultValue !== undefined && value === row.defaultValue) return { ...settings, [row.target.key]: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;
+}
+
+/** A model menu shorter than this is listed whole: there is nothing to tuck away. */
+const SPLIT_MODEL_MENU_OVER = 6;
+
+/**
+ * A model menu's choices in two parts: the newest of each family first, in the
+ * provider's order, and the rest, older versions, to open one level down.
+ * Providers list their newest model of a family before its older ones (Claude:
+ * "Opus 5.5" before "Opus 4.8"), so the first of each family by the name's
+ * first word is its newest. The running model stays on top wherever it is
+ * listed. A short menu, or one with no older versions, is left whole.
+ */
+export function splitModelChoices(choices: readonly TurnSettingChoice[]): { latest: TurnSettingChoice[]; older: TurnSettingChoice[] } {
+	if (choices.length <= SPLIT_MODEL_MENU_OVER) return { latest: [...choices], older: [] };
+	const families = new Set<string>();
+	const latest: TurnSettingChoice[] = [];
+	const older: TurnSettingChoice[] = [];
+	for (const choice of choices) {
+		const family = choice.label.trim().split(/\s+/)[0].toLowerCase();
+		if (!families.has(family) || choice.selected) latest.push(choice);
+		else older.push(choice);
+		families.add(family);
+	}
+	return older.length ? { latest, older } : { latest: [...choices], older: [] };
 }
 
 function capitalize(value: string): string {

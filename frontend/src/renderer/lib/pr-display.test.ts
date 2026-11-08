@@ -295,6 +295,20 @@ describe("prCardPresentation", () => {
 		expect(presentation.readiness?.label).toBe("Not mergeable yet");
 	});
 
+	it.each([
+		["review_required", "A required review must be completed before this PR can merge."],
+		["approved", "The review requirement is satisfied, but failing checks still block this PR."],
+	] as const)("only says the review is satisfied on a failing %s PR when it is", (decision, detail) => {
+		const presentation = prCardPresentation(
+			summary({
+				ci: { autoInjectCI: true, state: "failing", failingChecks: [] },
+				review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			}),
+		);
+
+		expect(presentation.readiness).toMatchObject({ label: "Not mergeable yet", detail });
+	});
+
 	it.each(["blocked", "unstable"] as const)("does not call a %s PR mergeable", (state) => {
 		const presentation = prCardPresentation(
 			summary({ mergeability: { state, reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } }),

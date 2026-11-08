@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { createLocalHostIdentity } from "./remote-request";
+import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -61,6 +62,36 @@ describe("computerName", () => {
 });
 
 describe("registerRemotesIpc", () => {
+	it.each(["offline", "unauthorized", "signed-out", "account-gate", "unexpected"])("classifies %s IPC rejection without changing it", async (state) => {
+		resetMainErrorCaptureForTests();
+		try {
+			const ipc = fakeIpc();
+			installIpcErrorCapture(ipc.ipcMain as never);
+			const capture = vi.fn();
+			setMainErrorSink(capture);
+			const unexpected = new TypeError("unexpected probe failure");
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				requireAccount: async () => { if (state === "account-gate") throw new ExpectedIpcError("Sign in to AO Cloud to use remote hosts."); },
+				getAccountId: async () => state === "signed-out" ? "" : TEST_ACCOUNT,
+				identity: async () => "h_workbox",
+				probe: async () => {
+					if (state === "unexpected") throw unexpected;
+					return state === "unauthorized" ? "unauthorized" : "offline";
+				},
+			});
+			const result = ipc.invoke("remotes:connect", "http://192.0.2.1:1", "h_workbox");
+			if (state === "unexpected") {
+				await expect(result).rejects.toBe(unexpected);
+				expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ category: "ipc", reason: "handler", error: unexpected }));
+			} else {
+				await expect(result).rejects.toThrow(state === "signed-out" || state === "account-gate" ? "Sign in to AO Cloud" : `is ${state}`);
+				expect(capture).not.toHaveBeenCalled();
+			}
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
 	it("hides this installation without deleting its account record or original password", async () => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");

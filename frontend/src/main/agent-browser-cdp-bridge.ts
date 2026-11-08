@@ -59,7 +59,23 @@ type PhysicalTargetAttachment = {
 	messageListener: (...args: unknown[]) => void;
 	detachListener: (...args: unknown[]) => void;
 	ownedDebugger: boolean;
+	/** Chromium sessions ("" is the page) whose Runtime domain a client enabled. */
+	runtimeSessions: Set<string>;
+	/** Runtime is disabled between AO commands; the next command re-enables it. */
+	quiet: boolean;
+	waking?: Promise<void>;
 };
+
+// An enabled Runtime domain is visible to pages (console serialization makes
+// heavy logging measurably slower), and bot managers such as Cloudflare
+// Turnstile score it as automation. Keep it on only while an AO command runs.
+// Emulated viewports are visible too (innerWidth no longer matches the window),
+// and AO's own live viewport must not be cleared by a client.
+const IDLE_QUIET_DELAY_MS = 250;
+const SWALLOWED_TARGET_METHODS = new Set([
+	"Emulation.setDeviceMetricsOverride",
+	"Emulation.clearDeviceMetricsOverride",
+]);
 
 export class AgentBrowserCDPBridge {
 	private readonly server: WebSocketServer;
@@ -67,6 +83,9 @@ export class AgentBrowserCDPBridge {
 	private readonly attached = new Map<string, AttachedTarget>();
 	private readonly physical = new Map<string, PhysicalTargetAttachment>();
 	private readonly connections = new Set<ConnectionContext>();
+	private activeCommands = 0;
+	private seenCommand = false;
+	private idleQuietTimer?: ReturnType<typeof setTimeout>;
 	private endpoint = "";
 
 	constructor(private readonly targets: AgentBrowserTargetProvider) {
@@ -96,12 +115,79 @@ export class AgentBrowserCDPBridge {
 	}
 
 	async close(): Promise<void> {
+		clearTimeout(this.idleQuietTimer);
 		for (const sessionId of [...this.attached.keys()]) this.detachTarget(sessionId);
 		for (const socket of this.server.clients) socket.close(1001, "AO browser session closed");
 		await new Promise<void>((resolve) => this.server.close(() => resolve()));
 		this.physical.clear();
 		this.connections.clear();
 		this.endpoint = "";
+	}
+
+	/** An AO command is about to run: re-enable Runtime where clients want it. */
+	async beginCommand(): Promise<void> {
+		this.seenCommand = true;
+		this.activeCommands += 1;
+		clearTimeout(this.idleQuietTimer);
+		await Promise.all([...this.physical.values()].map((physical) => this.wake(physical)));
+	}
+
+	/** An AO command finished: once none remain, hide Runtime from pages. */
+	async endCommand(): Promise<void> {
+		this.activeCommands = Math.max(0, this.activeCommands - 1);
+		if (this.activeCommands > 0) return;
+		await Promise.all([...this.physical.values()].map((physical) => this.quiet(physical)));
+	}
+
+	/**
+	 * The native daemon can also talk between AO commands, for example to attach
+	 * to a new popup. Anything that turned Runtime on then goes quiet again.
+	 */
+	private scheduleIdleQuiet(): void {
+		if (!this.seenCommand || this.activeCommands > 0) return;
+		clearTimeout(this.idleQuietTimer);
+		this.idleQuietTimer = setTimeout(() => {
+			for (const physical of this.physical.values()) void this.quiet(physical);
+		}, IDLE_QUIET_DELAY_MS);
+	}
+
+	private async quiet(physical: PhysicalTargetAttachment): Promise<void> {
+		await physical.waking;
+		if (physical.quiet || physical.runtimeSessions.size === 0 || this.activeCommands > 0) return;
+		physical.quiet = true;
+		await Promise.all(
+			[...physical.runtimeSessions].map((sessionId) =>
+				Promise.resolve(
+					sessionId
+						? physical.debugger.sendCommand("Runtime.disable", {}, sessionId)
+						: physical.debugger.sendCommand("Runtime.disable"),
+				).catch(() => physical.runtimeSessions.delete(sessionId)),
+			),
+		);
+	}
+
+	private wake(physical: PhysicalTargetAttachment): Promise<void> {
+		if (!physical.quiet) return physical.waking ?? Promise.resolve();
+		physical.quiet = false;
+		physical.waking = (async () => {
+			for (const sessionId of [...physical.runtimeSessions]) {
+				// Contexts created or destroyed while Runtime was off were never
+				// reported. Clear them the way a navigation does; enabling Runtime
+				// then reports every live context afresh.
+				physical.messageListener(undefined, "Runtime.executionContextsCleared", {}, sessionId || undefined);
+				try {
+					await (sessionId
+						? physical.debugger.sendCommand("Runtime.enable", {}, sessionId)
+						: physical.debugger.sendCommand("Runtime.enable"));
+				} catch {
+					// The child frame went away while Runtime was off.
+					physical.runtimeSessions.delete(sessionId);
+				}
+			}
+		})().finally(() => {
+			physical.waking = undefined;
+		});
+		return physical.waking;
 	}
 
 	reconcileTargets(): void {
@@ -310,9 +396,19 @@ export class AgentBrowserCDPBridge {
 		if (!attached) throw new Error("Unknown or expired target session");
 		const target = this.requireTarget(attached.targetId);
 		assertSafeTargetMethod(request.method, request.params);
-		return chromiumSessionId
-			? target.debugger.sendCommand(request.method, request.params, chromiumSessionId)
-			: target.debugger.sendCommand(request.method, request.params);
+		if (SWALLOWED_TARGET_METHODS.has(request.method)) return {};
+		const physical = this.physical.get(target.id);
+		if (physical) await this.wake(physical);
+		try {
+			const result = await (chromiumSessionId
+				? target.debugger.sendCommand(request.method, request.params, chromiumSessionId)
+				: target.debugger.sendCommand(request.method, request.params));
+			if (physical && request.method === "Runtime.enable") physical.runtimeSessions.add(chromiumSessionId ?? "");
+			if (physical && request.method === "Runtime.disable") physical.runtimeSessions.delete(chromiumSessionId ?? "");
+			return result;
+		} finally {
+			this.scheduleIdleQuiet();
+		}
 	}
 
 	private ensurePhysical(target: AgentBrowserTarget): PhysicalTargetAttachment {
@@ -327,12 +423,16 @@ export class AgentBrowserCDPBridge {
 			messageListener: () => undefined,
 			detachListener: () => undefined,
 			ownedDebugger,
+			runtimeSessions: new Set(),
+			quiet: false,
 		};
 		physical.messageListener = (...args: unknown[]) => {
 			const method = typeof args[1] === "string" ? args[1] : "";
 			if (!method) return;
 			const params = isRecord(args[2]) ? args[2] : {};
 			const chromiumSessionId = optionalString(args[3]);
+			const detachedSessionId = optionalString(params.sessionId);
+			if (method === "Target.detachedFromTarget" && detachedSessionId) physical.runtimeSessions.delete(detachedSessionId);
 			for (const client of physical.clients.values()) {
 				const eventSessionId = client.protocolSessionId
 					? chromiumSessionId && client.chromiumChildSessionIds.has(chromiumSessionId)

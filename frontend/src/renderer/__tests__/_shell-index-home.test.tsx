@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -12,6 +13,10 @@ vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <
 
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
+		firstRunClone?: boolean;
+		onFirstRunDismiss?: (action?: "local_folder" | "standalone" | "dismissed") => void;
+		onFirstRunProgress?: () => void;
+		onCreateProject?: (input: never) => Promise<void>;
 		existingProjectPaths?: readonly string[];
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
 		sourceSignal?: { source: string; nonce: number } | null;
@@ -23,8 +28,13 @@ const routeMocks = vi.hoisted(() => ({
 	startGitHubAuth: vi.fn(),
 	markAutoLoginOffered: vi.fn(),
 	closeTerminal: vi.fn(),
+	createProject: vi.fn(),
 	cloudEnabled: false,
+	migrationOfferShown: false,
+	captureRendererEvent: vi.fn().mockResolvedValue(true),
 }));
+
+vi.mock("../lib/telemetry", () => ({ captureRendererEvent: routeMocks.captureRendererEvent }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -37,6 +47,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: routeMocks.cloudEnabled }),
+}));
+
+vi.mock("../hooks/useMigrationOffer", () => ({
+	useMigrationOffer: () => ({ isPending: false, data: { show: routeMocks.migrationOfferShown } }),
 }));
 
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
@@ -56,7 +70,7 @@ vi.mock("../lib/shell-context", () => ({
 		daemonStatus: { state: "ready" },
 		workspaceStartupState: "ready",
 		cloneProject: vi.fn(),
-		createProject: vi.fn(),
+		createProject: routeMocks.createProject,
 		initializeProjectRepository: vi.fn(),
 	}),
 	useShellMaybe: () => ({ daemonStatus: { state: "ready" } }),
@@ -85,6 +99,7 @@ const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSessi
 });
 
 beforeEach(() => {
+	vi.restoreAllMocks();
 	useUiStore.setState({ developerMode: false, newTaskRequest: null });
 	routeMocks.navigate.mockReset();
 	routeMocks.workspaces = [];
@@ -94,7 +109,12 @@ beforeEach(() => {
 	routeMocks.startGitHubAuth.mockReset();
 	routeMocks.markAutoLoginOffered.mockReset();
 	routeMocks.closeTerminal.mockReset();
+	routeMocks.createProject.mockReset().mockResolvedValue(undefined);
 	routeMocks.cloudEnabled = false;
+	routeMocks.migrationOfferShown = false;
+	routeMocks.captureRendererEvent.mockClear();
+	vi.spyOn(aoBridge.appState, "getExperimentCohort").mockResolvedValue(0);
+	vi.spyOn(aoBridge.appState, "claimFirstRunExperimentExposure").mockResolvedValue(true);
 });
 
 describe("shell index route", () => {
@@ -174,26 +194,6 @@ describe("shell index route", () => {
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Connect mobile" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
-	});
-
-	it("surfaces missing GitHub authentication on the seeded first-run home page", () => {
-		routeMocks.workspaces = [
-			{ id: "scratch", name: "Scratch", kind: "scratch", path: "/scratch", sessions: [] },
-		];
-		routeMocks.requirements = [
-			{ id: "gh", label: "gh", satisfied: true, required: false, detail: "/usr/bin/gh" },
-		];
-		routeMocks.authRequirement = { id: "github-auth", label: "GitHub access", satisfied: false, required: false, detail: "Sign in." };
-
-		render(<HomePage />);
-
-		expect(screen.getByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: /Scratch/ }).compareDocumentPosition(
-				screen.getByText("Connect GitHub for pull requests"),
-			) & Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
 	});
 
 	it("opens a project from the recent-project list", async () => {

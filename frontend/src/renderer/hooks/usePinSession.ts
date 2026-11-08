@@ -1,7 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -52,7 +53,7 @@ export function usePinSession() {
 			});
 			if (error) {
 				const fallback = response ? `Failed to pin session (${response.status})` : "Failed to pin session";
-				throw new Error(apiErrorMessage(error, fallback));
+				throw apiErrorException(error, fallback);
 			}
 		},
 		onMutate: (session) => markCloudPinned(queryClient, session, true),
@@ -77,7 +78,7 @@ export function useUnpinSession() {
 			});
 			if (error) {
 				const fallback = response ? `Failed to unpin session (${response.status})` : "Failed to unpin session";
-				throw new Error(apiErrorMessage(error, fallback));
+				throw apiErrorException(error, fallback);
 			}
 		},
 		onMutate: (session) => markCloudPinned(queryClient, session, false),

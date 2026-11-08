@@ -75,10 +75,10 @@ describe("AppLink", () => {
 		fireEvent.contextMenu(screen.getByRole("link", { name: "Report" }));
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
 			"Open in ao browser",
-			"Open in Files",
+			"Open in AO",
 			"Copy link",
 		]);
-		await user.click(screen.getByRole("menuitem", { name: "Open in Files" }));
+		await user.click(screen.getByRole("menuitem", { name: "Open in AO" }));
 		expect(openFile).toHaveBeenCalledExactlyOnceWith(path);
 		expect(open).not.toHaveBeenCalled();
 	});

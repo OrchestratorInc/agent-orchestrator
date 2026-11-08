@@ -209,3 +209,16 @@ func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.
 	}
 	return r.legacy, handle
 }
+
+var _ ports.TerminalForegroundWatcher = (*hybridRuntime)(nil)
+
+// WatchTerminalForeground routes to the backend that owns the handle; tmux
+// handles cannot name their foreground program.
+func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	backend, raw := r.route(handle)
+	watcher, ok := backend.(ports.TerminalForegroundWatcher)
+	if !ok {
+		return ports.ErrTerminalForegroundUnavailable
+	}
+	return watcher.WatchTerminalForeground(ctx, raw, fn)
+}

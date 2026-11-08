@@ -12,6 +12,9 @@ import { SessionTabRegistry } from "./sessions";
 import { TrustedInput } from "./trusted-input";
 
 const MAX_BACKOFF_MS = 60_000;
+const RECONNECT_ALARM = "ao-reconnect";
+// Chrome's minimum alarm period.
+const RECONNECT_ALARM_MINUTES = 0.5;
 
 export type BridgeStatus = {
 	state: "connecting" | "connected" | "disconnected";
@@ -54,6 +57,16 @@ export class Bridge {
 			this.handleUi(message).then(sendResponse, (error) => sendResponse({ error: String(error) }));
 			return true as unknown as void;
 		});
+		// Chrome suspends an idle MV3 service worker, which also drops the
+		// reconnect timer, and only an extension event starts it again. These
+		// events reconnect after AO restarts or Chrome starts. An open native
+		// port keeps the worker alive, so connect() is a no-op while connected.
+		this.chrome.alarms.onAlarm.addListener((alarm) => {
+			if (alarm.name === RECONNECT_ALARM) this.connect();
+		});
+		this.chrome.runtime.onStartup.addListener(() => this.connect());
+		this.chrome.runtime.onInstalled.addListener(() => this.connect());
+		void this.chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_ALARM_MINUTES }).catch(() => undefined);
 		void this.updateBadge();
 		this.connect();
 	}
@@ -169,8 +182,8 @@ export class Bridge {
 					sessions: sessions.map((session) => ({
 						sessionId: session.sessionId,
 						tabs: Object.keys(session.tabs).length,
-						approved: Boolean(approvals[session.sessionId]),
-						trusted: approvals[session.sessionId]?.trusted ?? false,
+						approved: Boolean(this.consent.approvalFor(approvals, session.sessionId)),
+						trusted: this.consent.approvalFor(approvals, session.sessionId)?.trusted ?? false,
 					})),
 				};
 			}
@@ -182,7 +195,7 @@ export class Bridge {
 				for (const entry of this.inFlight.values()) {
 					if (entry.sessionId === sessionId) entry.controller.abort();
 				}
-				await this.consent.revoke(sessionId);
+				await this.consent.revoke(sessionId, true);
 				return { revoked: true };
 			}
 			case "ao-ui-reconnect":

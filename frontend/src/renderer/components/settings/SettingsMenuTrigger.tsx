@@ -14,6 +14,7 @@ import { ChevronDown } from "lucide-react";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { Pressable } from "../ui/pressable";
 
 /**
  * The panel. bg-settings-menu / border-settings-menu / the panel radius have to
@@ -51,7 +52,7 @@ export const SettingsMenuTrigger = forwardRef<
 	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
 >(function SettingsMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
 	return (
-		<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
+		<Pressable ref={ref} className={cn(TRIGGER, className)} {...props}>
 			{children}
 			{showCaret ? (
 				<ChevronDown
@@ -59,6 +60,6 @@ export const SettingsMenuTrigger = forwardRef<
 					aria-hidden="true"
 				/>
 			) : null}
-		</button>
+		</Pressable>
 	);
 });

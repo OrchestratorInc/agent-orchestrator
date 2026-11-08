@@ -306,6 +306,13 @@ export class UnreachableError extends Error {
 export const UNREACHABLE_ACTION_COPY =
 	"Couldn't reach your machine. Make sure Orchestrator is running there, then try again.";
 
+/**
+ * Shown for an action taken while a paired machine's connection is being
+ * re-established: after an app switch, or while its endpoints are raced.
+ */
+export const RECONNECTING_ACTION_COPY =
+	"Still reconnecting to your machine. Try again in a moment.";
+
 /** Shown in place of a missing server config ("No AO server configured"). */
 export const NOT_PAIRED_ACTION_COPY =
 	"This phone isn't paired with a machine. Scan its Orchestrator pairing code.";

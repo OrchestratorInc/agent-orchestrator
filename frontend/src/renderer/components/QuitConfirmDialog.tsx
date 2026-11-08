@@ -53,7 +53,7 @@ export function QuitConfirmDialog({
 
 				<div className={cn(settingsDialogFooterClass, "gap-1.5 px-3 py-2.5")}>
 					<DialogClose asChild>
-						<Button type="button" variant="ghost" aria-keyshortcuts="Escape" className={cn(actionClass, "font-normal")}>
+						<Button type="button" variant="ghost" aria-keyshortcuts="Escape" className={actionClass}>
 							{t("confirm.cancel")}
 							<kbd aria-hidden="true" className="font-sans text-caption text-muted-foreground">Esc</kbd>
 						</Button>

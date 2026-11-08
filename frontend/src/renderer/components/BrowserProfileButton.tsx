@@ -48,7 +48,7 @@ export function BrowserProfileButton({
 		<Button
 			aria-haspopup="menu"
 			aria-label={t("browser.profile.select", { profile: label })}
-			className="browser-profile-button max-w-36 min-w-0 gap-1 px-1.5 text-xs"
+			className="browser-profile-button max-w-36 min-w-0 gap-1 px-1.5"
 			onClick={openMenu}
 			ref={buttonRef}
 			size="sm"

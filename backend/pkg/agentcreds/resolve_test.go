@@ -171,7 +171,7 @@ func TestKeychainSuccessIsSourceFive(t *testing.T) {
 // the probe sends x-api-key, not Bearer.
 func TestKeychainManagedKeyResolvesAsAPIKey(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
-		Env: envFrom(nil), ConfigDir: t.TempDir(), GOOS: "darwin", AllowKeychain: true,
+		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
 		Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			if len(args) >= 3 && args[2] == "Claude Code" {
 				return []byte("sk-ant-api03-managed-key"), nil
@@ -198,7 +198,7 @@ func TestKeychainManagedKeyResolvesAsAPIKey(t *testing.T) {
 // "Claude Code" managed-key service rather than report no credential.
 func TestKeychainEmptyCredentialsFallsThroughToManagedKey(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
-		Env: envFrom(nil), ConfigDir: t.TempDir(), GOOS: "darwin", AllowKeychain: true,
+		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
 		Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			switch {
 			case len(args) >= 3 && args[2] == "Claude Code-credentials":
@@ -227,7 +227,7 @@ func TestKeychainEmptyCredentialsFallsThroughToManagedKey(t *testing.T) {
 // key even though the credential is valid.
 func TestKeychainSetupTokenFromClassifiedAsOAuth(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
-		Env: envFrom(nil), ConfigDir: t.TempDir(), GOOS: "darwin", AllowKeychain: true,
+		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
 		Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			switch {
 			case len(args) >= 3 && args[2] == "Claude Code-credentials":

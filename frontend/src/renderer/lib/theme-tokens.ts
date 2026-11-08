@@ -28,6 +28,10 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
+	// Pink, as in Orchestrate: a red/purple mix stays apart from Building, Ready
+	// and In review. Palettes have no pink role, and `p.cyan` would not do: it
+	// equals blue in Dracula and Monokai and green in Rosé Pine.
+	const validating = mixColor(p.red, p.purple, 0.5);
 
 	return {
 		"--background": p.bg,
@@ -71,7 +75,9 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 
 		"--color-status-working": p.blue,
 		"--color-status-needs-you": p.orange,
-		"--color-status-validating": p.yellow,
+		// tokens.css picks between these by the new sidebar design flag.
+		"--color-status-validating-new": validating,
+		"--color-status-validating-legacy": p.yellow,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
 		"--color-status-merged": p.purple,

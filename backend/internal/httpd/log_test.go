@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -255,3 +256,59 @@ func (s *captureSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 }
 
 func (s *captureSink) Close(context.Context) error { return nil }
+
+// TestRequestLoggerCapturesRegisteredFaultCodes: a registered daemon fault is
+// captured even though it answers with a 4xx, while an ordinary 4xx, the
+// user's own setup script failing, and lock contention stay out of Sentry.
+func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
+	type captured struct{ category, status, code string }
+	var got []captured
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil, func(_ context.Context, _ error, tags map[string]string, fingerprint string, _ telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		if len(fingerprint) != 16 {
+			t.Fatalf("fingerprint = %q, want a 16-char digest", fingerprint)
+		}
+		got = append(got, captured{tags["category"], tags["status"], tags["error_code"]})
+	}))
+	router.Post("/fault", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out", nil))
+	})
+	router.Post("/git", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize", nil))
+	})
+	router.Post("/provision", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Conflict("WORKSPACE_PROVISION_FAILED", "setup script exited 1", nil))
+	})
+	router.Get("/missing", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session"))
+	})
+	router.Get("/hang", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, fmt.Errorf("git status: %w", context.DeadlineExceeded))
+	})
+	router.Get("/busy", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Unavailable("SERVICE_UNAVAILABLE", "busy"))
+	})
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/fault", nil),
+		httptest.NewRequest(http.MethodPost, "/git", nil),
+		httptest.NewRequest(http.MethodPost, "/provision", nil),
+		httptest.NewRequest(http.MethodGet, "/missing", nil),
+		httptest.NewRequest(http.MethodGet, "/hang", nil),
+		httptest.NewRequest(http.MethodGet, "/busy", nil),
+	} {
+		router.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	want := []captured{
+		{"http_fault", "409", "SPAWN_TIMEOUT"},
+		{"http_fault", "400", "GIT_INIT_FAILED"},
+		{"http_timeout", "503", ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("captures = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("capture %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}

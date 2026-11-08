@@ -577,6 +577,16 @@ func (l *fakeLCM) CommitControllerEpoch(
 	return l.changeControllerEpoch(id, source, target, nativeConversationID, false)
 }
 
+func (l *fakeLCM) CommitControllerEpochArchivedChat(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	_ bool,
+) (bool, error) {
+	return l.changeControllerEpoch(id, source, target, nativeConversationID, false)
+}
+
 func (l *fakeLCM) RestoreControllerEpoch(
 	_ context.Context,
 	id domain.SessionID,

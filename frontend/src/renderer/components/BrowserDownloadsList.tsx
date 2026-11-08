@@ -84,7 +84,7 @@ export function BrowserDownloadsList({
 							</div>
 							<div className="flex shrink-0 items-center gap-0.5">
 								{blocked ? (
-									<Button aria-label={t("browser.downloads.allow", { file: download.fileName })} className="text-settings-muted hover:text-settings-label" onClick={() => onAction(download.id, "allow")} size="sm" type="button" variant="ghost">{t("browser.downloads.allowAction")}</Button>
+									<Button aria-label={t("browser.downloads.allow", { file: download.fileName })} onClick={() => onAction(download.id, "allow")} size="sm" type="button" variant="quiet">{t("browser.downloads.allowAction")}</Button>
 								) : download.status === "progressing" ? (
 									<Button aria-label={t("browser.downloads.pause", { file: download.fileName })} onClick={() => onAction(download.id, "pause")} size="icon-sm" type="button" variant="ghost"><Pause aria-hidden="true" className="size-3.5" /></Button>
 								) : download.status === "paused" || resumableInterrupted ? (

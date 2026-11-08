@@ -45,7 +45,7 @@ surface (`npm run sqlc`, `npm run api`).
   message outbox preserve the one-controller invariant.
 - Codex and registered ACP Chat providers are
   owned by authenticated, detached
-  per-session hosts. Desktop close, full quit, and updater daemon replacement
+  per-session hosts. Desktop close and updater daemon replacement
   detach and reconnect without relaunching the provider or interrupting an
   in-flight turn; explicit session termination destroys the host. ACP reconnect
   restores the initialized session snapshot, JSON-RPC correlation, pending
@@ -135,15 +135,14 @@ surface (`npm run sqlc`, `npm run api`).
   installation/authentication observations, purpose-specific freshness,
   single-flight checks, bounded warm-up/retries, launch-time validation, and
   compatibility projections for older agent inventory/probe clients.
-- Codex account management under Settings → Agents. AO reconciles the current
-  device-global Codex identity, adds file-backed accounts through an inline
-  native login terminal, and shows structured authentication, capacity, usage,
-  and confirmed reset-credit facts without parsing credentials. A manual global
-  switch atomically changes the device credential while briefly fencing new
-  Codex mutations. Running AO Codex controllers and reviewers are never
-  interrupted or restarted by account switching; new controllers use the
-  selected account, and an existing session can be resumed manually when the
-  user wants it relaunched. Native history remains in the normal Codex home.
+- Claude Code and Codex subscription accounts on each harness's Settings →
+  Harness → Account tab. An account is a CLI config folder (`CLAUDE_CONFIG_DIR`
+  or `CODEX_HOME`) signed in by the CLI's own login; history stays shared, AO
+  never reads a token, and new tasks start on the provider's default account.
+  A session's Summary shows its account and moves the session to another one
+  (restart plus native resume, rolled back on failure).
+  The older device-global Codex switcher has no UI; its daemon API
+  (`/api/v1/agents/codex/accounts*`) remains.
   Users can sign accounts out and delete inactive signed-out accounts.
 - OpenAPI spec generated from Go DTOs; frontend TS types generated from it and
   drift-checked in CI.
@@ -197,7 +196,10 @@ surface (`npm run sqlc`, `npm run api`).
 - On macOS, window close and desktop Quit/Cmd+Q destroy the window while the
   Dock, menu-bar tray, app-owned daemon, and enabled mobile access remain alive.
   Reopening creates a fresh window; **Quit AO Completely** in the tray performs
-  a full exit. Desktop browser targets stop with the window. Updates and system
+  a full exit and stops agents owned by that desktop's daemon, keeping session
+  history and worktrees available for resume. Unexpected desktop exit also stops
+  those agents after the supervisor grace period. Planned updates and restarts
+  preserve them. Desktop browser targets stop with the window. Updates and system
   shutdown still exit the app; Windows/Linux quit behavior is unchanged.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,

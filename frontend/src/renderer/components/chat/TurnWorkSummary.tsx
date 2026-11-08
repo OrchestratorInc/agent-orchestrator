@@ -4,7 +4,11 @@ import { ChevronRight } from "lucide-react";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "../ui/accordion";
 import { TurnDuration } from "./ChatTimelineItems";
 
-/** The fold for a settled turn's work: "Worked for 12s ›", opening onto the steps. */
+/**
+ * The head of a settled turn: "Worked for 12s". With work to fold it is the fold,
+ * "Worked for 12s ›", opening onto the steps; a turn that went straight to its
+ * answer has nothing to open, so the same words sit there as plain text.
+ */
 export function TurnWorkSummary({
 	durationMs,
 	children,
@@ -12,7 +16,8 @@ export function TurnWorkSummary({
 	onOpenChange: controlledChange,
 }: {
 	durationMs?: number;
-	children: ReactNode;
+	/** The turn's folded steps. Without any, the summary is a label, not a control. */
+	children?: ReactNode;
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 }) {
@@ -20,6 +25,23 @@ export function TurnWorkSummary({
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = controlledOpen ?? localOpen;
 	const onOpenChange = controlledChange ?? setLocalOpen;
+	// The flex gap draws the space between the words and the time; the space itself is
+	// for the text a screen reader or a copy reads, "Worked for 12s".
+	const label = (
+		<>
+			{t("chat.workedFor")}
+			{durationMs !== undefined ? <>{" "}<TurnDuration durationMs={durationMs} /></> : null}
+		</>
+	);
+	if (children === undefined || children === null) {
+		// Same box and text edge as the fold's trigger below, so a turn with work and
+		// one without line up, and nothing moves if a turn gains steps to fold.
+		return (
+			<div className="flex h-7 items-center gap-1 text-sm text-muted-foreground" data-turn-worked-label="">
+				{label}
+			</div>
+		);
+	}
 	return (
 		<Accordion
 			type="single"
@@ -30,13 +52,12 @@ export function TurnWorkSummary({
 		>
 			<AccordionItem value="worked" className="border-0">
 				<AccordionTrigger
-					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
+					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground hover:text-foreground"
 					headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
 					trailing={null}
 				>
 					<span className="inline-flex w-fit items-center gap-1">
-						{t("chat.workedFor")}
-						{durationMs !== undefined ? <TurnDuration durationMs={durationMs} inline /> : null}
+						{label}
 						<ChevronRight
 							aria-hidden="true"
 							className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90"

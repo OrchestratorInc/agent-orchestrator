@@ -8,6 +8,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -427,6 +428,14 @@ describe("render activity", () => {
 			open.mockRestore();
 		}
 	});
+
+	it("opens the page in the session's Browser panel straight from the inline frame", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
+		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
+	});
 });
 
 describe("artifact activity", () => {
@@ -540,12 +549,43 @@ describe("artifact activity", () => {
 	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
 		const { dialog } = await expandArtifact([sessionArtifact("other.html")]);
 		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
+		for (const name of ["View source", "Save page", "Close"]) {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
-		// The session lists no preview for this path.
+		// The session lists no preview for this path, so it opens nowhere outside the chat:
+		// its artifact-files route serves only the app's own frames.
 		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
+		expect(within(dialog).queryByRole("button", { name: "Open in external browser" })).toBeNull();
+	});
+
+	it("opens the artifact in the external browser from its preview origin, not the app-only artifact route", async () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		try {
+			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
+			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
+			// No #ao-theme: that fragment is the chat frame's own hand-off.
+			expect(open).toHaveBeenCalledExactlyOnceWith(previewUrl, "_blank", "noopener,noreferrer");
+		} finally {
+			open.mockRestore();
+		}
+	});
+
+	it("opens the artifact in the session's Browser panel from its preview origin", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatLinkProvider onLinkOpen={onLinkOpen}>
+					<ChatImageSourceProvider sessionId="proj-1" artifacts={[sessionArtifact("q3/Q3 (final).html")]}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</ChatLinkProvider>
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(previewUrl);
 	});
 
 	it("opens the artifact in the Artifacts tab and closes the dialog", async () => {

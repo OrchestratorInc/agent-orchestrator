@@ -31,15 +31,18 @@ describe("ChatImage copy and save", () => {
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy image", "Save image"]);
 	});
 
-	it("copies the image bytes fetched by the main process", async () => {
+	it("copies the image bytes fetched by the main process without a toast", async () => {
 		const user = userEvent.setup();
 		const fetchImage = vi.spyOn(aoBridge.chatImage, "fetch").mockResolvedValue({ bytes: png, mimeType: "image/png" });
 		const writeImage = vi.spyOn(aoBridge.clipboard, "writeImage").mockResolvedValue(undefined);
+		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast");
+		useUiStore.setState({ showGlobalToast: toast });
 		render(<ChatImage src={url} alt="Image 1" />);
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));
 		await user.click(screen.getByRole("menuitem", { name: "Copy image" }));
 		await waitFor(() => expect(writeImage).toHaveBeenCalledExactlyOnceWith(png));
 		expect(fetchImage).toHaveBeenCalledExactlyOnceWith(url);
+		expect(toast).not.toHaveBeenCalled();
 	});
 
 	it("saves under the attachment's own file name", async () => {

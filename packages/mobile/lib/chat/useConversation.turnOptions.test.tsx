@@ -25,7 +25,7 @@ const modelOption = {
 };
 let renderer: ReactTestRenderer | undefined;
 let conversation: MobileConversation;
-function Harness({ id }: { id: string }) { conversation = useMobileConversation(config, id); return null; }
+function Harness({ id }: { id: string }) { conversation = useMobileConversation(config, "qa-host", id); return null; }
 function paths() { return fixture.request.mock.calls.map(([, path]) => String(path).replace(/\?.*$/, "").replace(/^.*\/conversation/, "")); }
 async function open(id: string) {
 	await act(async () => { renderer = create(<Harness id={id} />); });
@@ -109,8 +109,8 @@ it("retries a catalog that failed while the chat woke, and only then", async () 
 it("shows the remembered catalog on a screen that mounted before it was remembered", async () => {
 	const screens: Record<string, MobileConversation> = {};
 	function Pair() {
-		screens.first = useMobileConversation(config, "pair");
-		screens.second = useMobileConversation(config, "pair");
+		screens.first = useMobileConversation(config, "qa-host", "pair");
+		screens.second = useMobileConversation(config, "qa-host", "pair");
 		return null;
 	}
 	await act(async () => { renderer = create(<Pair />); });

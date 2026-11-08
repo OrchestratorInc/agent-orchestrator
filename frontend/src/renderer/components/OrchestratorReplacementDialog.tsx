@@ -1,11 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, RotateCw, X } from "lucide-react";
+import { AlertTriangle, RotateCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { canBypassOrchestratorApprovals, isChatPreflightCode } from "../lib/spawn-orchestrator";
 import type { OrchestratorReplacementFailure } from "../stores/ui-store";
 import { findProjectOrchestrator, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogContentClass,
 	settingsDialogFooterClass,
@@ -67,14 +68,7 @@ export function OrchestratorReplacementDialog({
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-orchestrator -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
 					<Dialog.Close asChild>
-						<button
-							type="button"
-							className="settings-dialog-close-button settings-close-button"
-							disabled={pending}
-							aria-label={t("orchestratorReplacement.close")}
-						>
-							<X className="size-5" aria-hidden="true" />
-						</button>
+						<CloseButton floating disabled={pending} aria-label={t("orchestratorReplacement.close")} />
 					</Dialog.Close>
 					<div className={settingsDialogHeaderClass}>
 						<div className="flex items-start gap-3">

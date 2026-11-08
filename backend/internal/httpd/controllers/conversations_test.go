@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -281,6 +282,11 @@ func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]p
 // way a client sees it.
 func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[string]any {
 	t.Helper()
+	return conversationSnapshotBodyQuery(t, snapshot, "")
+}
+
+func conversationSnapshotBodyQuery(t *testing.T, snapshot chatsvc.Snapshot, query string) map[string]any {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
 		Sessions:      newFakeSessionService(),
@@ -288,7 +294,7 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation")
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + query)
 	if err != nil {
 		t.Fatalf("GET conversation: %v", err)
 	}
@@ -767,6 +773,49 @@ func TestSnapshotPrefersStreamedOutputOverAggregate(t *testing.T) {
 	// Fields the aggregate carried are untouched.
 	if detail["command"] != "go test ./..." {
 		t.Errorf("command = %#v", detail["command"])
+	}
+}
+
+// outputLimit keeps the head and tail of a long output on rune boundaries and
+// reports the full size; a short output is untouched.
+func TestSnapshotOutputLimitKeepsHeadAndTail(t *testing.T) {
+	long := "spawned session w-1\n" + strings.Repeat("é", 100) + "\nresult: ok\n"
+	body := conversationSnapshotBodyQuery(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"),
+		Mode:      domain.SessionModeChat,
+		Activities: []domain.ConversationActivity{
+			{ID: "long", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: long, CreatedAt: time.Now().UTC()},
+			{ID: "short", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, CommandOutput: "ok\n", CreatedAt: time.Now().UTC()},
+		},
+	}, "?outputLimit=64")
+	activities := body["activities"].([]any)
+	cut := activities[0].(map[string]any)["detail"].(map[string]any)
+	output, _ := cut["output"].(string)
+	if !utf8.ValidString(output) || !strings.HasPrefix(output, "spawned session w-1\n") || !strings.HasSuffix(output, "\nresult: ok\n") || !strings.Contains(output, "\n…\n") {
+		t.Fatalf("cut output = %q", output)
+	}
+	if len(output) > 64+len("\n…\n") || cut["outputBytes"] != float64(len(long)) {
+		t.Fatalf("cut output is %d bytes, outputBytes = %#v, want <= 64 and %d", len(output), cut["outputBytes"], len(long))
+	}
+	short := activities[1].(map[string]any)["detail"].(map[string]any)
+	if short["output"] != "ok\n" || short["outputBytes"] != nil {
+		t.Fatalf("short detail = %#v", short)
+	}
+
+	for _, bad := range []string{"?outputLimit=1", "?afterSequence=0"} {
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+			Sessions: newFakeSessionService(), Conversations: &fakeConversationService{},
+		}, httpd.ControlDeps{}))
+		resp, err := http.Get(srv.URL + "/api/v1/sessions/p1-1/conversation" + bad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400", bad, resp.StatusCode)
+		}
 	}
 }
 

@@ -300,8 +300,8 @@ function IntakeSettingsFields({
 								<Button
 									type="button"
 									size="sm"
-									variant="ghost"
-									className="shrink-0 text-settings-muted hover:text-settings-label"
+									variant="quiet"
+									className="shrink-0"
 									aria-label={t("settings.field.edit", { label: t("settings.project.assignee") })}
 									onClick={() => setAssigneeEditing(true)}
 								>
@@ -310,7 +310,7 @@ function IntakeSettingsFields({
 								</Button>
 							</div>
 						) : (
-							<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => setAssigneeEditing(true)}>
+							<Button type="button" variant="quiet" size="sm" onClick={() => setAssigneeEditing(true)}>
 								<Plus className="size-3.5" aria-hidden="true" />
 								{t("settings.project.addAssignee")}
 							</Button>

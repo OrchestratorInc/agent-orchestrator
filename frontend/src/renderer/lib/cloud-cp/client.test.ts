@@ -528,3 +528,33 @@ describe("Cloud control-plane rate limits", () => {
 		expect(retryAfterMs("soon", now)).toBeUndefined();
 	});
 });
+
+describe("Cloud control-plane share links", () => {
+	const ORG = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+	const LINK = "0c927f48-7214-4fb1-833a-7c1af5b7bf80";
+	const client = (response: () => Response) => {
+		const fetchImpl = vi.fn().mockImplementation(async () => response());
+		return { fetchImpl, client: createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl }) };
+	};
+
+	it("says how many grants removing who joined by a link changed", async () => {
+		const { fetchImpl, client: cp } = client(() => new Response(JSON.stringify({ removedGrants: 3 }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		expect(await cp.revokeShareLink(ORG, "project", LINK, { removeJoined: true })).toEqual({ removedGrants: 3 });
+		const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain(`/orgs/${ORG}/projects/project/shares/${LINK}/revoke`);
+		expect(init).toMatchObject({ method: "POST", body: JSON.stringify({ removeJoined: true }) });
+	});
+
+	it("takes a plain revoke's 204, or an older control plane's, with no body", async () => {
+		const { fetchImpl, client: cp } = client(() => new Response(null, { status: 204 }));
+		expect(await cp.revokeShareLink(ORG, "project", LINK)).toEqual({});
+		expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).body).toBeUndefined();
+		// An older control plane ignores removeJoined and answers the same way.
+		expect(await cp.revokeShareLink(ORG, "project", LINK, { removeJoined: true })).toEqual({});
+	});
+
+	it("reports a link already revoked as a 404", async () => {
+		const { client: cp } = client(() => new Response(JSON.stringify({ code: "not_found", message: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
+		await expect(cp.revokeShareLink(ORG, "project", LINK)).rejects.toMatchObject({ status: 404 });
+	});
+});

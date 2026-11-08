@@ -495,6 +495,10 @@ type ConversationPlan struct {
 	// list, rather than one plan per turn. A turn ending says nothing about its
 	// steps, and the copy each later turn receives is the same list, not a new plan.
 	SpansTurns bool `json:"spansTurns,omitempty"`
+	// Superseded marks a copy of a list that spans turns which a later copy has
+	// replaced. The daemon sets it as it writes the newer copy, so a client shows
+	// the list once without dating copies itself.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.

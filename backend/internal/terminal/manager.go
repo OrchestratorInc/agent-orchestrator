@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"regexp"
 	"sync"
@@ -73,6 +74,9 @@ type Manager struct {
 	inputLeaseMu sync.RWMutex
 	inputLease   sessionguard.InputLease
 
+	shellAgentsMu sync.Mutex
+	shellAgents   ShellAgentSource
+
 	// inputMu guards inputBlocked and lastInputAt. It is held only briefly, never
 	// across a pane write.
 	inputMu      sync.Mutex
@@ -117,6 +121,21 @@ type termMember struct {
 
 // Option configures a Manager.
 type Option func(*Manager)
+
+// ShellAgentSource streams the agents running in shell terminals as JSON
+// snapshots. fn gets the current snapshot at once and every later one; it is
+// called with the source's lock held, so it must not block.
+type ShellAgentSource interface {
+	SubscribeShellAgents(fn func(snapshot json.RawMessage)) (unsubscribe func())
+}
+
+// SetShellAgents late-binds the shell agent source; the manager is built
+// before it during daemon boot.
+func (m *Manager) SetShellAgents(src ShellAgentSource) {
+	m.shellAgentsMu.Lock()
+	m.shellAgents = src
+	m.shellAgentsMu.Unlock()
+}
 
 // WithHeartbeat overrides the ping interval.
 func WithHeartbeat(d time.Duration) Option { return func(m *Manager) { m.heartbeat = d } }
@@ -493,10 +512,11 @@ type connState struct {
 	cancel context.CancelFunc
 	out    *outQueue
 
-	mu        sync.Mutex
-	terms     map[string]*attachment // terminal id -> this conn's own attach PTY
-	unsubEvts func()
-	closed    bool
+	mu          sync.Mutex
+	terms       map[string]*attachment // terminal id -> this conn's own attach PTY
+	unsubEvts   func()
+	unsubAgents func()
+	closed      bool
 
 	// writers holds each terminal's newest writer. It is only touched by the
 	// read loop and, once it has returned, by cleanup, so it needs no lock.
@@ -594,6 +614,8 @@ func (c *connState) handle(msg clientMsg) {
 		c.handleTerminal(msg)
 	case chSubscribe:
 		c.handleSubscribe(msg)
+	case chShellAgents:
+		c.handleShellAgents(msg)
 	case chSystem:
 		if msg.Type == msgPing {
 			c.enqueue(serverMsg{Ch: chSystem, Type: msgPong})
@@ -738,6 +760,32 @@ func (c *connState) handleSubscribe(msg clientMsg) {
 	})
 	c.mu.Lock()
 	c.unsubEvts = unsub
+	c.mu.Unlock()
+}
+
+func (c *connState) handleShellAgents(msg clientMsg) {
+	c.mgr.shellAgentsMu.Lock()
+	src := c.mgr.shellAgents
+	c.mgr.shellAgentsMu.Unlock()
+	if msg.Type != msgSubscribe || src == nil {
+		return
+	}
+	c.mu.Lock()
+	subscribed := c.unsubAgents != nil || c.closed
+	c.mu.Unlock()
+	if subscribed {
+		return
+	}
+	unsub := src.SubscribeShellAgents(func(snapshot json.RawMessage) {
+		c.enqueue(serverMsg{Ch: chShellAgents, Type: msgSnapshot, Agents: snapshot})
+	})
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		unsub()
+		return
+	}
+	c.unsubAgents = unsub
 	c.mu.Unlock()
 }
 
@@ -915,6 +963,8 @@ func (c *connState) cleanup() {
 	c.terms = map[string]*attachment{}
 	unsubEvts := c.unsubEvts
 	c.unsubEvts = nil
+	unsubAgents := c.unsubAgents
+	c.unsubAgents = nil
 	c.mu.Unlock()
 
 	// Drop this connection from every shared terminal so the grid follows the
@@ -935,6 +985,9 @@ func (c *connState) cleanup() {
 	}
 	if unsubEvts != nil {
 		unsubEvts()
+	}
+	if unsubAgents != nil {
+		unsubAgents()
 	}
 	_ = c.conn.Close("server: connection closed")
 }

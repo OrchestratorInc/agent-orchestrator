@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
 import { LiveStatus } from "./LiveStatus";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Pressable } from "./ui/pressable";
 
 
 /** Lists with more options than this get a search box. */
@@ -99,22 +100,21 @@ export function SearchablePicker({
 			}}
 		>
 			<PopoverTrigger asChild>
-				<button
-					type="button"
+				<Pressable
 					role="combobox"
 					aria-label={ariaLabel}
 					aria-expanded={open}
 					aria-controls={open ? `${ariaLabel.replace(/\W+/g, "-").toLowerCase()}-options` : undefined}
 					disabled={disabled}
 					className={cn(
-						"flex h-control-form w-full items-center gap-2 rounded-md border border-border bg-[var(--color-bg-import-card)] px-3 text-left text-[13px] text-foreground outline-none transition-colors hover:border-foreground/30 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+						"flex h-control-form w-full items-center gap-2 rounded-md border border-border bg-[var(--color-bg-import-card)] px-3 text-[13px] text-foreground transition-colors hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-50",
 						className,
 					)}
 				>
 					{selected?.private ? <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : null}
 					<span className={cn("min-w-0 flex-1 truncate", !selected && "text-muted-foreground")}>{selected?.label ?? placeholder}</span>
 					<ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-				</button>
+				</Pressable>
 			</PopoverTrigger>
 			{/* Mounted with the picker, so the list saying it is loading is heard. */}
 			<LiveStatus text={open && filtered.length === 0 && loading ? loadingText ?? t("common.loading") : ""} />
@@ -149,14 +149,13 @@ export function SearchablePicker({
 						</p>
 					) : filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}
 					{filtered.map((option) => (
-						<button
+						<Pressable
 							key={option.value}
-							type="button"
 							role="option"
 							aria-selected={option.value === value}
 							aria-label={option.label}
 							onClick={() => { onChange(option.value); setOpen(false); }}
-							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-foreground outline-none hover:bg-accent focus-visible:bg-accent"
+							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-[13px] text-foreground hover:bg-accent focus-visible:bg-accent"
 						>
 							{option.private ? <Lock className="lucide-lock size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" /> : <span className="w-3.5 shrink-0" />}
 							<span className="min-w-0 flex-1">
@@ -164,20 +163,19 @@ export function SearchablePicker({
 								{option.description ? <span className="block truncate text-[11px] text-muted-foreground">{option.description}</span> : null}
 							</span>
 							{option.value === value ? <Check className="size-3.5 shrink-0 text-primary" aria-hidden="true" /> : null}
-						</button>
+						</Pressable>
 					))}
 				</div>
 				{action ? (
 					<div className="border-t border-border p-1">
-						<button
-							type="button"
+						<Pressable
 							disabled={action.disabled}
 							onClick={() => { setOpen(false); action.onSelect(); }}
-							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[13px] text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:opacity-60"
+							className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-[13px] text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:opacity-60"
 						>
 							<Plus className="size-3.5 shrink-0" aria-hidden="true" />
 							<span className="min-w-0 flex-1 truncate">{action.label}</span>
-						</button>
+						</Pressable>
 					</div>
 				) : null}
 			</PopoverContent>

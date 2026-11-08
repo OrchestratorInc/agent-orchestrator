@@ -41,9 +41,9 @@ func (q *Queries) DeleteShellTerminalsFromPreviousAppRuns(ctx context.Context, a
 
 const insertShellTerminal = `-- name: InsertShellTerminal :one
 INSERT INTO shell_terminals (
-    handle_id, project_id, session_id, working_dir, title, app_run_id, created_at, transient, preview_capability_verifier
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+    handle_id, project_id, session_id, working_dir, title, app_run_id, created_at, transient, preview_capability_verifier, command_owner
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 `
 
 type InsertShellTerminalParams struct {
@@ -56,6 +56,7 @@ type InsertShellTerminalParams struct {
 	CreatedAt                 time.Time
 	Transient                 bool
 	PreviewCapabilityVerifier string
+	CommandOwner              string
 }
 
 func (q *Queries) InsertShellTerminal(ctx context.Context, arg InsertShellTerminalParams) (ShellTerminal, error) {
@@ -69,6 +70,7 @@ func (q *Queries) InsertShellTerminal(ctx context.Context, arg InsertShellTermin
 		arg.CreatedAt,
 		arg.Transient,
 		arg.PreviewCapabilityVerifier,
+		arg.CommandOwner,
 	)
 	var i ShellTerminal
 	err := row.Scan(
@@ -81,12 +83,13 @@ func (q *Queries) InsertShellTerminal(ctx context.Context, arg InsertShellTermin
 		&i.SessionID,
 		&i.Transient,
 		&i.PreviewCapabilityVerifier,
+		&i.CommandOwner,
 	)
 	return i, err
 }
 
 const selectRestorableShellTerminals = `-- name: SelectRestorableShellTerminals :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier FROM shell_terminals
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner FROM shell_terminals
 WHERE transient = FALSE OR app_run_id = ?
 ORDER BY created_at
 `
@@ -110,6 +113,7 @@ func (q *Queries) SelectRestorableShellTerminals(ctx context.Context, appRunID s
 			&i.SessionID,
 			&i.Transient,
 			&i.PreviewCapabilityVerifier,
+			&i.CommandOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -125,7 +129,7 @@ func (q *Queries) SelectRestorableShellTerminals(ctx context.Context, appRunID s
 }
 
 const selectShellTerminalByHandleID = `-- name: SelectShellTerminalByHandleID :one
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 FROM shell_terminals
 WHERE handle_id = ?
 `
@@ -143,12 +147,13 @@ func (q *Queries) SelectShellTerminalByHandleID(ctx context.Context, handleID st
 		&i.SessionID,
 		&i.Transient,
 		&i.PreviewCapabilityVerifier,
+		&i.CommandOwner,
 	)
 	return i, err
 }
 
 const selectShellTerminalsByAppRunID = `-- name: SelectShellTerminalsByAppRunID :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 FROM shell_terminals
 WHERE app_run_id = ?
 ORDER BY created_at
@@ -173,6 +178,7 @@ func (q *Queries) SelectShellTerminalsByAppRunID(ctx context.Context, appRunID s
 			&i.SessionID,
 			&i.Transient,
 			&i.PreviewCapabilityVerifier,
+			&i.CommandOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -188,7 +194,7 @@ func (q *Queries) SelectShellTerminalsByAppRunID(ctx context.Context, appRunID s
 }
 
 const selectShellTerminalsBySessionID = `-- name: SelectShellTerminalsBySessionID :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 FROM shell_terminals
 WHERE session_id = ?
 ORDER BY created_at
@@ -213,6 +219,7 @@ func (q *Queries) SelectShellTerminalsBySessionID(ctx context.Context, sessionID
 			&i.SessionID,
 			&i.Transient,
 			&i.PreviewCapabilityVerifier,
+			&i.CommandOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -228,7 +235,7 @@ func (q *Queries) SelectShellTerminalsBySessionID(ctx context.Context, sessionID
 }
 
 const selectShellTerminalsFromPreviousAppRuns = `-- name: SelectShellTerminalsFromPreviousAppRuns :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 FROM shell_terminals
 WHERE app_run_id <> ?
 ORDER BY created_at
@@ -253,6 +260,7 @@ func (q *Queries) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, a
 			&i.SessionID,
 			&i.Transient,
 			&i.PreviewCapabilityVerifier,
+			&i.CommandOwner,
 		); err != nil {
 			return nil, err
 		}
@@ -271,7 +279,7 @@ const updateShellTerminalTitle = `-- name: UpdateShellTerminalTitle :one
 UPDATE shell_terminals
 SET title = ?
 WHERE handle_id = ?
-RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier
+RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner
 `
 
 type UpdateShellTerminalTitleParams struct {
@@ -292,6 +300,7 @@ func (q *Queries) UpdateShellTerminalTitle(ctx context.Context, arg UpdateShellT
 		&i.SessionID,
 		&i.Transient,
 		&i.PreviewCapabilityVerifier,
+		&i.CommandOwner,
 	)
 	return i, err
 }

@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 import { parseDelimitedText } from "../lib/delimited-text";
 import { cn } from "../lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
+import { Pressable } from "./ui/pressable";
 import { PanelMessage } from "./WorkspaceDiffView";
 
 type Sort = { column: number; direction: "ascending" | "descending" };
@@ -64,14 +65,13 @@ export function TableFileView({ content, path }: { content: string; path: string
 							const SortIcon = sorted === "descending" ? ArrowDown : ArrowUp;
 							return (
 								<TableHead aria-sort={sorted ?? "none"} className={cn("px-0", numeric[column] && "text-right")} key={column}>
-									<button
-										className={cn("inline-flex h-full w-full items-center gap-1 rounded-xs px-2 text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring", numeric[column] && "flex-row-reverse text-right", !sorted && "text-muted-foreground")}
+									<Pressable
+										className={cn("inline-flex h-full w-full items-center gap-1 rounded-xs px-2 hover:text-foreground", numeric[column] && "flex-row-reverse text-right", !sorted && "text-muted-foreground")}
 										onClick={() => toggleSort(column)}
-										type="button"
 									>
 										<span className="truncate">{label}</span>
 										<SortIcon aria-hidden="true" className={cn("size-icon-xs shrink-0", !sorted && "invisible")} />
-									</button>
+									</Pressable>
 								</TableHead>
 							);
 						})}

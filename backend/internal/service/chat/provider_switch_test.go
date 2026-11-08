@@ -371,6 +371,7 @@ func TestProviderSwitchTargetPermissionMode(t *testing.T) {
 	}{
 		{"under the chat's mode", domain.HarnessClaudeCode, "", "", ports.PermissionModeBypassPermissions},
 		{"default when it refuses the chat's", domain.HarnessKimi, ports.PermissionModeBypassPermissions, "", ports.PermissionModeDefault},
+		{"stale auto pick", domain.HarnessKimi, ports.PermissionModeAuto, domain.PermissionModeAuto, ports.PermissionModeDefault},
 		{"the mode picked for it", domain.HarnessClaudeCode, "", domain.PermissionModeAcceptEdits, ports.PermissionModeAcceptEdits},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

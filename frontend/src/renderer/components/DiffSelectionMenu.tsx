@@ -11,6 +11,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 
 export type DiffSelectionMenuProps = {
 	sessionId: string;
@@ -170,7 +171,7 @@ export function DiffSelectionMenu({
 	return (
 		<DropdownMenu modal={false} open={open} onOpenChange={onOpenChange}>
 			<DropdownMenuTrigger asChild>
-				<button
+				<Pressable
 					aria-hidden="true"
 					style={{
 						border: 0,
@@ -184,7 +185,6 @@ export function DiffSelectionMenu({
 						width: 0,
 					}}
 					tabIndex={-1}
-					type="button"
 				/>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent

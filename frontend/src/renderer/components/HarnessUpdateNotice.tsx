@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle, X } from "lucide-react";
+import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -16,6 +16,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const DISMISSED_KEY = "ao.harness-update-dismissals.v1";
@@ -383,10 +384,7 @@ function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDi
 		<div className="flex items-center gap-2">
 			{icon}
 			<p className="min-w-0 flex-1 truncate text-control font-medium">{title}</p>
-			<button type="button" aria-label={dismissLabel} onClick={leave}
-				className="-mr-1 grid size-control-xs shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-				<X className="size-icon-2xs" aria-hidden="true" />
-			</button>
+			<CloseButton aria-label={dismissLabel} className="-mr-1" onClick={leave} size="icon-xs" />
 		</div>
 		{help ? <p aria-live="polite" className="mt-0.5 text-caption text-muted-foreground">{help}</p> : null}
 		{children}

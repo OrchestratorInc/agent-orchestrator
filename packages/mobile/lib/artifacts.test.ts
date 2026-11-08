@@ -5,6 +5,7 @@ import {
 	artifactExtensionLabel,
 	artifactFilePath,
 	artifactMenuActions,
+	artifactPageAt,
 	artifactFilesPath,
 	artifactViewKind,
 	resolveArtifactAssetPath,
@@ -18,6 +19,7 @@ import {
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
+	stableArtifactOrder,
 } from "./artifacts";
 
 describe("parseArtifacts", () => {
@@ -196,5 +198,46 @@ describe("artifactFilesPath", () => {
 	it("names the route that serves an HTML artifact with AO's theme written in", () => {
 		expect(artifactFilesPath("ao-1", "deck/my page.html")).toBe("/api/v1/sessions/ao-1/artifact-files/deck/my%20page.html");
 		expect(artifactFilesPath("ao-1", "../x.html")).toBeUndefined();
+	});
+});
+
+describe("artifactPageAt", () => {
+	const pages = ["a.png", "b.md", "c.html"].map((path) => ({ path }));
+
+	it("picks the page a swipe settled on", () => {
+		expect(artifactPageAt(pages, 0, 390)?.path).toBe("a.png");
+		expect(artifactPageAt(pages, 390, 390)?.path).toBe("b.md");
+		// A fractional offset (rounding on Android) still lands on the nearest page.
+		expect(artifactPageAt(pages, 779.6, 390)?.path).toBe("c.html");
+	});
+
+	it("stays inside the list when the scroll overshoots", () => {
+		expect(artifactPageAt(pages, -40, 390)?.path).toBe("a.png");
+		expect(artifactPageAt(pages, 5_000, 390)?.path).toBe("c.html");
+	});
+
+	it("has no page before the pager is measured or when it is empty", () => {
+		expect(artifactPageAt(pages, 390, 0)).toBeUndefined();
+		expect(artifactPageAt([], 0, 390)).toBeUndefined();
+	});
+});
+
+describe("stableArtifactOrder", () => {
+	const files = (...paths: string[]) => paths.map((path) => ({ path, updatedAt: "" }));
+
+	it("starts in the list's order", () => {
+		expect(stableArtifactOrder(undefined, files("c", "b", "a")).map((f) => f.path)).toEqual(["c", "b", "a"]);
+	});
+
+	it("keeps a rewritten file's page when it moves to the front of the list", () => {
+		const rewritten = { path: "a", updatedAt: "later" };
+		const order = stableArtifactOrder(["c", "b", "a"], [rewritten, ...files("c", "b")]);
+		expect(order.map((f) => f.path)).toEqual(["c", "b", "a"]);
+		// The page carries the file's new version.
+		expect(order[2]).toBe(rewritten);
+	});
+
+	it("puts a new file at the end and drops a removed one", () => {
+		expect(stableArtifactOrder(["c", "b", "a"], files("new", "c", "a")).map((f) => f.path)).toEqual(["c", "a", "new"]);
 	});
 });

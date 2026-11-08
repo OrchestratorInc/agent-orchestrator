@@ -97,7 +97,13 @@ type parserStateEnvelope struct {
 type parserIntegrityStateV1 struct {
 	Checkpoint                *parserCheckpointV1 `json:"checkpoint,omitempty"`
 	StableTail                *stableTailStateV1  `json:"stable_tail,omitempty"`
+	ConflictSnapshot          *conflictSnapshotV1 `json:"conflict_snapshot,omitempty"`
 	DiscardingOversizedRecord bool                `json:"discarding_oversized_record,omitempty"`
+}
+
+type conflictSnapshotV1 struct {
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mod_time"`
 }
 
 type parserCheckpointV1 struct {
@@ -243,6 +249,11 @@ func validateParserIntegrityState(source domain.UsageSourceRecord, state *parser
 		if tail.Offset != source.ByteOffset || tail.ByteCount <= 0 ||
 			tail.QuietObservations < 0 || tail.QuietObservations > 1 || !validSHA256Digest(tail.SHA256) {
 			return errors.New("invalid stable tail state")
+		}
+	}
+	if conflict := state.ConflictSnapshot; conflict != nil {
+		if conflict.Size < source.ByteOffset || conflict.ModTime.IsZero() {
+			return errors.New("invalid conflict snapshot")
 		}
 	}
 	return nil

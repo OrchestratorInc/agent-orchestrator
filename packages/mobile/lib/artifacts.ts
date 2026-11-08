@@ -241,3 +241,27 @@ function timeOf(value: string): number {
 	const time = Date.parse(value);
 	return Number.isNaN(time) ? 0 : time;
 }
+
+/** The page a horizontal pager of artifacts rests on at a scroll offset. */
+export function artifactPageAt<T>(pages: readonly T[], offsetX: number, pageWidth: number): T | undefined {
+	if (pageWidth <= 0 || pages.length === 0) return undefined;
+	const index = Math.min(pages.length - 1, Math.max(0, Math.round(offsetX / pageWidth)));
+	return pages[index];
+}
+
+/**
+ * The viewer's page order. It is the list's order when the viewer opened, so a
+ * file the agent rewrites (which moves to the front of the newest-first list)
+ * keeps its page. Files that appear later go at the end, in list order, and
+ * removed ones drop out.
+ */
+export function stableArtifactOrder<T extends { path: string }>(previous: readonly string[] | undefined, artifacts: readonly T[]): T[] {
+	if (!previous) return [...artifacts];
+	const byPath = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
+	const kept = previous.flatMap((path) => {
+		const artifact = byPath.get(path);
+		return artifact ? [artifact] : [];
+	});
+	const known = new Set(previous);
+	return [...kept, ...artifacts.filter((artifact) => !known.has(artifact.path))];
+}

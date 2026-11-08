@@ -639,6 +639,7 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		if resultErr != nil {
 			s.log.Warn("chat wake failed", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+			captureChatFault(ctx, resultErr, "", "chat_wake", "wake")
 		} else {
 			s.log.Info("chat wake finished", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond))
@@ -700,6 +701,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 		}
 		if err := s.DrainQueued(ctx, id); err != nil {
 			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
+			captureChatFault(ctx, err, "", "chat_wake", "drain")
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()

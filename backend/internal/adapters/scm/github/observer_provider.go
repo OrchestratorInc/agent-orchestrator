@@ -427,7 +427,7 @@ author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
   __typename
-  ... on CheckRun { name status conclusion detailsUrl url databaseId }
+  ... on CheckRun { `+checkRunFields+` }
   ... on StatusContext { context state targetUrl }
 } pageInfo{ hasNextPage endCursor } } } } } }
 `, "CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit))
@@ -474,7 +474,7 @@ func buildCheckContextsQuery(ref ports.SCMPRRef, cursor string) string {
 repo: repository(owner:%s,name:%s){ pullRequest(number:%d){
   commits(last:1){ nodes{ commit{ statusCheckRollup{ contexts(first:%d, after:%s){ nodes{
     __typename
-    ... on CheckRun { name status conclusion detailsUrl url databaseId }
+    ... on CheckRun { `+checkRunFields+` }
     ... on StatusContext { context state targetUrl }
   } pageInfo{ hasNextPage endCursor } } } } } }
 } }
@@ -510,7 +510,7 @@ func pageInfoEndCursor(connection map[string]any) string {
 func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMObservation {
 	checks := scmChecksFromGraphQL(pr)
 	failed := failedSCMChecks(checks)
-	ci := string(ciSummaryFromRollupState(pr))
+	ci := string(scmCISummary(pr))
 	prURL := firstNonEmpty(str(pr["url"]), ref.URL)
 	review := string(reviewDecisionFromGraphQL(pr))
 	providerMergeable := str(pr["mergeable"])
@@ -581,6 +581,20 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	return mapRollupState(str(roll["state"]))
 }
 
+// scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
+// check runs cause: rollup state counts every run on the commit, so with the
+// full context list in hand the verdict comes from the newest run per check.
+func scmCISummary(pr map[string]any) domain.CIState {
+	ci := ciSummaryFromRollupState(pr)
+	if ci != domain.CIFailing || scmContextsPaginated(pr) {
+		return ci
+	}
+	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown {
+		return latest
+	}
+	return ci
+}
+
 func scmContextsPaginated(pr map[string]any) bool {
 	return pageInfoHasMore(statusContexts(pr))
 }
@@ -588,7 +602,7 @@ func scmContextsPaginated(pr map[string]any) bool {
 func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
+	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	out := make([]ports.SCMCheckObservation, 0, len(rawNodes))
 	for _, n := range rawNodes {
 		typ := str(n["__typename"])

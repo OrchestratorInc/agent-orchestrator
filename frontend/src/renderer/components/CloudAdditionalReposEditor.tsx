@@ -131,7 +131,7 @@ export function CloudAdditionalReposEditor({
 					) : null}
 					<Button
 						type="button"
-						variant="ghost"
+						variant="destructive-ghost"
 						size="icon-sm"
 						disabled={disabled}
 						aria-label={t("cloudRepos.remove", { defaultValue: "Remove {{name}}", name: gitHubFullName(url) ?? t("cloudRepos.additionalRepository", { defaultValue: "Additional repository {{number}}", number: index + 1 }) })}
@@ -141,7 +141,7 @@ export function CloudAdditionalReposEditor({
 					</Button>
 				</div>
 			))}
-			<Button ref={addButtonRef} type="button" variant="outline" size="sm" className="gap-1.5" disabled={!canAdd} onClick={add}>
+			<Button ref={addButtonRef} type="button" variant="outline" size="sm" disabled={!canAdd} onClick={add}>
 				<Plus aria-hidden="true" className="size-icon-sm" />
 				{t("cloudRepos.add", { defaultValue: "Add a repository" })}
 			</Button>

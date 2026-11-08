@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -202,16 +203,21 @@ func copyTree(ctx context.Context, source, destination string) error {
 	if err != nil {
 		return errors.Join(err, sourceRoot.Close())
 	}
+	var vanished vanishedLegacyEntries
 	walkErr := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if walkErr != nil {
-			return walkErr
-		}
 		relative, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
+		}
+		if walkErr != nil {
+			if relative != "." && errors.Is(walkErr, os.ErrNotExist) {
+				vanished.add(relative)
+				return nil
+			}
+			return walkErr
 		}
 		if info.IsDir() {
 			if relative == "." {
@@ -230,6 +236,10 @@ func copyTree(ctx context.Context, source, destination string) error {
 			return fmt.Errorf("unsupported legacy data entry %q", path)
 		}
 		input, err := sourceRoot.Open(relative)
+		if errors.Is(err, os.ErrNotExist) {
+			vanished.add(relative)
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -249,9 +259,15 @@ func copyTree(ctx context.Context, source, destination string) error {
 		}
 		return closeErr
 	})
+	vanished.log(ctx)
 	closeErr := errors.Join(sourceRoot.Close(), destinationRoot.Close())
 	if walkErr != nil || closeErr != nil {
 		return errors.Join(walkErr, closeErr)
+	}
+	// Every entry of a store deleted mid-walk is skipped as vanished. Don't let
+	// that near-empty copy become the permanent OpenCode 2 store.
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("legacy data store vanished during migration: %w", err)
 	}
 	databasePath := filepath.Join(source, "opencode.db")
 	if _, err := os.Stat(databasePath); errors.Is(err, os.ErrNotExist) {
@@ -260,6 +276,33 @@ func copyTree(ctx context.Context, source, destination string) error {
 		return err
 	}
 	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
+}
+
+// maxVanishedLegacyExamples bounds the paths in the summary: OpenCode can prune
+// thousands of expired shell output files during one copy.
+const maxVanishedLegacyExamples = 5
+
+// vanishedLegacyEntries tallies entries that disappeared after they were listed.
+// The legacy store stays live during the migration: OpenCode prunes its own shell
+// output, so one deleted file must not abort the copy and block every OpenCode 2
+// start. The migration runs once, so a skipped entry stays out of the new store.
+type vanishedLegacyEntries struct {
+	count    int
+	examples []string
+}
+
+func (v *vanishedLegacyEntries) add(relative string) {
+	v.count++
+	if len(v.examples) < maxVanishedLegacyExamples {
+		v.examples = append(v.examples, relative)
+	}
+}
+
+func (v *vanishedLegacyEntries) log(ctx context.Context) {
+	if v.count == 0 {
+		return
+	}
+	slog.Default().WarnContext(ctx, "opencode: legacy data entries vanished during migration; skipped them", "count", v.count, "examples", v.examples)
 }
 
 func copyFileContext(ctx context.Context, destination io.Writer, source io.Reader) error {

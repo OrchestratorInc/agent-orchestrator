@@ -526,6 +526,30 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
 	});
 
+	it("lists the shells the daemon detected outside Windows and stores the picked path", async () => {
+		isWindowsPlatform.mockReturnValue(false);
+		const user = userEvent.setup();
+		const qc = renderForm();
+		qc.setQueryData(["terminal-shells"], {
+			default: { id: "auto", name: "zsh", path: "/bin/zsh" },
+			shells: [
+				{ id: "/opt/homebrew/bin/fish", name: "fish", path: "/opt/homebrew/bin/fish" },
+				{ id: "/bin/zsh", name: "zsh", path: "/bin/zsh" },
+			],
+		});
+
+		expect(await screen.findByText("Applies to new terminals. Open terminals keep their shell.")).toBeInTheDocument();
+		await user.click(await screen.findByLabelText("Terminal shell"));
+		expect(await screen.findByRole("menuitem", { name: /System default/ })).toHaveTextContent("/bin/zsh");
+		expect(screen.queryByRole("menuitem", { name: "Git Bash" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: /fish/ }));
+
+		await waitFor(() =>
+			expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom", path: "/opt/homebrew/bin/fish" } }),
+		);
+		await waitFor(() => expect(screen.getByLabelText("Terminal shell")).toHaveTextContent("fish"));
+	});
+
 	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
 		const user = userEvent.setup();
 		const qc = renderForm("general");
@@ -570,11 +594,9 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		await user.click(await screen.findByLabelText("Terminal shell"));
-		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
-		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
+		await user.click(await screen.findByRole("menuitem", { name: "Custom…" }));
 
-		setUiSettings.mockClear();
-		await user.click(screen.getByRole("button", { name: "Edit Shell executable" }));
+		await user.click(await screen.findByRole("button", { name: "Edit Shell executable" }));
 		const input = screen.getByLabelText("Shell executable");
 		await user.type(input, "C:\\Tools\\bash.exe");
 		await user.keyboard("{Escape}");

@@ -120,7 +120,7 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 		dispatchText(text, from, to, { anchor: from + 2, head: from + 10 });
 	}, [dispatchText]);
 	const action = (label: string, icon: React.ReactNode, onClick: () => void) => (
-		<Button aria-label={label} className="text-muted-foreground hover:text-foreground" onMouseDown={(event) => event.preventDefault()} onClick={onClick} size="icon-sm" type="button" variant="ghost">{icon}</Button>
+		<Button aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick} size="icon-sm" type="button" variant="quiet">{icon}</Button>
 	);
 	return (
 		<div className="flex h-full min-h-64 flex-col">

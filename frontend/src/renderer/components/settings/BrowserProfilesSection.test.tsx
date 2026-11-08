@@ -157,6 +157,41 @@ describe("BrowserProfilesSection", () => {
 		await waitFor(() => expect(bridge.setDefault).toHaveBeenCalledWith(null));
 	});
 
+	it("shows the first profile as the default and promotes the next one when the default is deleted", async () => {
+		let nextId = 1;
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
+			create: vi.fn(async (name: string) => ({ ...profile, id: `${nextId++}1111111-1111-4111-8111-111111111111`, name })),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			usage: vi.fn(async () => ({ sessions: [] })),
+			delete: vi.fn(async () => ({})),
+			setDefault: vi.fn(async () => undefined),
+			discoverImportSources: vi.fn(async () => ({ sources: [] })),
+			import: vi.fn(async () => ({ sourceName: "", entries: [] })),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		originalBridge = window.ao!.browserProfiles;
+		window.ao!.browserProfiles = bridge;
+
+		render(<BrowserProfilesSection />);
+		const createInput = await screen.findByRole("textbox", { name: "Profile name" });
+		await waitFor(() => expect(createInput).toBeEnabled());
+		await userEvent.type(createInput, "Work");
+		await userEvent.click(screen.getByRole("button", { name: "Create profile" }));
+		expect(await screen.findByText("Work (Default)")).toBeInTheDocument();
+		await userEvent.type(createInput, "Personal");
+		await userEvent.click(screen.getByRole("button", { name: "Create profile" }));
+		expect(await screen.findByText("Personal")).toBeInTheDocument();
+		expect(screen.queryByText("Personal (Default)")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Actions for Work" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Delete profile" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Delete profile" })).toBeEnabled());
+		await userEvent.click(screen.getByRole("button", { name: "Delete profile" }));
+		expect(await screen.findByText("Personal (Default)")).toBeInTheDocument();
+	});
+
 	it("cancels an inline rename with Escape and keeps the saved name", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
 			list: vi.fn(async () => ({ profiles: [profile], defaultProfileId: null })),
