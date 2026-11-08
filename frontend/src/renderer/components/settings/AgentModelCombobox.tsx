@@ -605,10 +605,11 @@ export function AgentModelCombobox({
 	const effortRoleLabel = tuning?.roleLabel ? `${tuning.roleLabel} ` : "";
 	return (
 		<>
-			{effortChip && tuning && effortOptions.length > 0 ? (
+			{/* The wrapper stays put while the catalog loads, so the model trigger is never remounted. */}
+			{effortPlacement === "chip" ? (
 				<div className="flex min-w-0 flex-wrap items-center gap-2">
 					{menu}
-					<EffortPicker
+					{effortChip && tuning && effortOptions.length > 0 && <EffortPicker
 						label={`${effortRoleLabel}${t("settings.models.effort")}`}
 						value={effectiveEffort}
 						choices={effortOptions.map((effort) => ({ value: effort }))}
@@ -616,7 +617,7 @@ export function AgentModelCombobox({
 						disabled={disabled}
 						triggerClassName="w-fit"
 						onChange={tuning.onEffortChange}
-					/>
+					/>}
 				</div>
 			) : menu}
 			{tuning && invalidEffort && <p role="alert" className="px-1 text-xs leading-row text-warning">
