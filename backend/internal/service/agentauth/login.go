@@ -223,8 +223,9 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, err
 		}
 		// A key in the harness's own store replaces an AO-saved key that
-		// would override it; an env_ method is that AO-saved key itself.
-		if !strings.HasPrefix(method, "env_") {
+		// would override it; an env_ method is that AO-saved key itself, and
+		// Gemini's API key method saves that same key for Gemini's sessions.
+		if !strings.HasPrefix(method, "env_") && (agentID != "gemini" || method != "gemini_api_key") {
 			if _, err := s.releaseSubscriptionKey(ctx, agentID); err != nil {
 				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The key was saved, but AO could not stop passing this harness its earlier API key. Try again.")
 			}

@@ -99,8 +99,8 @@ func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "crush.json"))
 	var config struct {
-		RecentModels map[string]string            `json:"recent_models"`
-		Providers    map[string]map[string]string `json:"providers"`
+		RecentModels map[string]string         `json:"recent_models"`
+		Providers    map[string]map[string]any `json:"providers"`
 	}
 	if err != nil || json.Unmarshal(raw, &config) != nil || config.RecentModels["large"] != "x" ||
 		config.Providers["openrouter"]["api_key"] != "sk-or" || config.Providers["openrouter"]["base_url"] != "https://example.test" {
