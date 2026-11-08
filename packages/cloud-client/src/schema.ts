@@ -2979,6 +2979,8 @@ export interface components {
             /** Format: uuid */
             asideId?: string;
             text: string;
+            /** @description The aside's mentions, with the names they had, exactly as on its chat.aside event; empty when it named nobody. */
+            mentions: components["schemas"]["Mention"][];
             suggestedBy: components["schemas"]["NotificationPerson"];
             author: components["schemas"]["NotificationPerson"];
             /** @enum {string} */

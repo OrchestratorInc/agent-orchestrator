@@ -5023,7 +5023,7 @@ components:
     Suggestion:
       type: object
       additionalProperties: false
-      required: [id, orgId, sessionId, kind, text, suggestedBy, author, status, createdAt, updatedAt]
+      required: [id, orgId, sessionId, kind, text, mentions, suggestedBy, author, status, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -5043,6 +5043,11 @@ components:
           format: uuid
         text:
           type: string
+        mentions:
+          type: array
+          description: The aside's mentions, with the names they had, exactly as on its chat.aside event; empty when it named nobody.
+          items:
+            $ref: "#/components/schemas/Mention"
         suggestedBy:
           $ref: "#/components/schemas/NotificationPerson"
         author:
