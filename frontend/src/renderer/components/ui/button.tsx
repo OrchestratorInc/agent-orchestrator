@@ -6,7 +6,8 @@ import { cn } from "../../lib/utils";
 // The app's one action button. Rows, cards and tabs use `Pressable` instead.
 // See DESIGN.md → Buttons.
 //
-// - No press motion: buttons never scale or shift when clicked.
+// - No press motion: buttons never scale or shift when clicked. Pressing only
+//   deepens the fill, so every variant still has a visible press state.
 // - Ghost-family variants (ghost, quiet, destructive-ghost) share the sidebar
 //   row's hover pill: a fill inset 4px that grows to the button's edge on hover
 //   or keyboard focus. Opacity snaps; only the inset animates. While the button
@@ -19,6 +20,7 @@ export const GHOST_PILL_CLASS = [
 	"before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-[inherit] before:bg-interactive-hover before:opacity-0",
 	"before:transition-[inset] before:duration-normal before:ease-[var(--ease-out)] motion-reduce:before:inset-0 motion-reduce:before:transition-none",
 	"hover:before:inset-0 hover:before:opacity-100 focus-visible:before:inset-0 focus-visible:before:opacity-100",
+	"active:before:inset-0 active:before:opacity-100 active:before:bg-interactive-active",
 	"aria-pressed:before:inset-0 aria-pressed:before:opacity-100 aria-pressed:before:bg-interactive-active aria-pressed:text-foreground",
 	"data-[state=open]:before:inset-0 data-[state=open]:before:opacity-100 data-[state=open]:before:bg-interactive-active data-[state=open]:text-foreground",
 	"data-[active=true]:before:inset-0 data-[active=true]:before:opacity-100 data-[active=true]:before:bg-interactive-active data-[active=true]:text-foreground",
@@ -32,21 +34,21 @@ const buttonVariants = cva(
 		variants: {
 			variant: {
 				/** The one main action in a region. Accent fill. */
-				primary: "bg-primary text-primary-foreground hover:bg-primary/80",
+				primary: "bg-primary text-primary-foreground hover:bg-primary/80 active:bg-primary/70",
 				/** Brand-blue fill for a decision the turn is waiting on (approve, open link). */
-				accent: "bg-logo-accent text-logo-accent-foreground hover:bg-logo-accent-bright",
+				accent: "bg-logo-accent text-logo-accent-foreground hover:bg-logo-accent-bright active:bg-logo-accent/80",
 				/** Quiet filled surface for secondary actions. */
 				secondary:
-					"bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-pressed:bg-interactive-active",
+					"bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] active:bg-interactive-active aria-pressed:bg-interactive-active",
 				/** Contrast fallback only — prefer secondary. */
 				outline:
-					"border-border bg-background text-foreground hover:bg-muted aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-transparent dark:hover:bg-input/30",
+					"border-border bg-background text-foreground hover:bg-muted aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-transparent dark:hover:bg-input/30 active:bg-interactive-active dark:active:bg-interactive-active",
 				/** Transparent, foreground text, growing hover pill. */
 				ghost: `text-foreground ${GHOST_PILL_CLASS}`,
 				/** Ghost that rests muted and brightens on hover — toolbar and row actions. */
 				quiet: `text-muted-foreground hover:text-foreground focus-visible:text-foreground ${GHOST_PILL_CLASS}`,
 				/** Danger fill for irreversible actions. */
-				destructive: "bg-danger-strong text-white hover:bg-danger-strong/85",
+				destructive: "bg-danger-strong text-white hover:bg-danger-strong/85 active:bg-danger-strong/70",
 				/** Quiet action that turns red on hover — remove, delete, kill. */
 				"destructive-ghost": `text-muted-foreground hover:text-destructive focus-visible:text-destructive ${GHOST_PILL_CLASS}`,
 				/** Inline text action. Inherits color and font size; ignores size. */
