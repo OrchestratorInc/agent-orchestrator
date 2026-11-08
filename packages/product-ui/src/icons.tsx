@@ -6,14 +6,26 @@ type IconProps = SVGProps<SVGSVGElement>;
 // Myna UI drawings (MIT, @mynaui/icons-react) inlined so this package needs
 // no icon dependency. Bot, FileCode and the closed/draft PR glyphs have no Myna
 // counterpart and keep their lucide drawings at Myna's 1.5 stroke.
+//
+// Myna draws inside an 18-unit frame (3-21) while lucide uses 20 (2-22), so a
+// Myna glyph reads about 10% smaller at the same CSS size. `frame: "crop"`
+// (the default) crops the viewBox to Myna's frame and thins the stroke by the
+// same ratio so both sets render at one optical size. Drawings that already
+// match lucide's size (chevrons, X, the lucide fallbacks) keep the full frame:
+// cropping them would oversize them, and it moves their integer coordinates
+// onto fractional device pixels, which rasterizes unstably under transforms.
+const CROP_VIEWBOX = "1.2 1.2 21.6 21.6";
+const CROP_STROKE = "1.35";
 
 function Icon({
 	children,
 	className,
+	frame = "crop",
 	name,
 	...props
 }: IconProps & {
 	children: ReactNode;
+	frame?: "crop" | "full";
 	name: string;
 }) {
 	return (
@@ -25,8 +37,8 @@ function Icon({
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			strokeWidth="1.35"
-			viewBox="1.2 1.2 21.6 21.6"
+			strokeWidth={frame === "crop" ? CROP_STROKE : "1.5"}
+			viewBox={frame === "crop" ? CROP_VIEWBOX : "0 0 24 24"}
 			width="24"
 			xmlns="http://www.w3.org/2000/svg"
 			{...props}
@@ -38,7 +50,7 @@ function Icon({
 
 export function ArrowUpRightIcon(props: IconProps) {
 	return (
-		<Icon name="arrow-up-right" {...props}>
+		<Icon frame="full" name="arrow-up-right" {...props}>
 			<path d="m6.5 17.5 11-11m0 9v-9h-9" />
 		</Icon>
 	);
@@ -51,7 +63,7 @@ export function ChevronIcon({
 	direction: "down" | "right" | "up";
 }) {
 	return (
-		<Icon name={`chevron-${direction}`} {...props}>
+		<Icon frame="full" name={`chevron-${direction}`} {...props}>
 			{direction === "down" ? (
 				<path d="m6 9 6 6 6-6" />
 			) : direction === "up" ? (
@@ -65,7 +77,7 @@ export function ChevronIcon({
 
 export function BotIcon(props: IconProps) {
 	return (
-		<Icon name="bot" {...props}>
+		<Icon frame="full" name="bot" {...props}>
 			<path d="M12 8V4H8" />
 			<rect width="16" height="12" x="4" y="8" rx="2" />
 			<path d="M2 14h2" />
@@ -78,7 +90,7 @@ export function BotIcon(props: IconProps) {
 
 export function CheckIcon(props: IconProps) {
 	return (
-		<Icon name="check" {...props}>
+		<Icon frame="full" name="check" {...props}>
 			<path d="M20 6 9 17l-5-5" />
 		</Icon>
 	);
@@ -86,7 +98,7 @@ export function CheckIcon(props: IconProps) {
 
 export function FileCodeIcon(props: IconProps) {
 	return (
-		<Icon name="file-code-2" {...props}>
+		<Icon frame="full" name="file-code-2" {...props}>
 			<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
 			<polyline points="14 2 14 8 20 8" />
 			<path d="m10 13-2 2 2 2" />
@@ -139,7 +151,7 @@ export function GitMergeIcon(props: IconProps) {
 
 export function GitPullRequestClosedIcon(props: IconProps) {
 	return (
-		<Icon name="git-pull-request-closed" {...props}>
+		<Icon frame="full" name="git-pull-request-closed" {...props}>
 			<circle cx="6" cy="6" r="3" />
 			<path d="M6 9v12" />
 			<path d="m15 9 6 6" />
@@ -150,7 +162,7 @@ export function GitPullRequestClosedIcon(props: IconProps) {
 
 export function GitPullRequestDraftIcon(props: IconProps) {
 	return (
-		<Icon name="git-pull-request-draft" {...props}>
+		<Icon frame="full" name="git-pull-request-draft" {...props}>
 			<circle cx="6" cy="6" r="3" />
 			<path d="M6 9v12" />
 			<path d="M18 6h.01" />
@@ -169,7 +181,7 @@ export function LoaderCircleIcon(props: IconProps) {
 
 export function MessageSquareIcon(props: IconProps) {
 	return (
-		<Icon name="message-square" {...props}>
+		<Icon frame="full" name="message-square" {...props}>
 			<path d="M3.464 16.828C2 15.657 2 14.771 2 11s0-5.657 1.464-6.828C4.93 3 7.286 3 12 3s7.071 0 8.535 1.172S22 7.229 22 11s0 4.657-1.465 5.828C19.072 18 16.714 18 12 18c-2.51 0-3.8 1.738-6 3v-3.212c-1.094-.163-1.899-.45-2.536-.96" />
 		</Icon>
 	);
@@ -177,7 +189,7 @@ export function MessageSquareIcon(props: IconProps) {
 
 export function MoreHorizontalIcon(props: IconProps) {
 	return (
-		<Icon name="more-horizontal" {...props}>
+		<Icon frame="full" name="more-horizontal" {...props}>
 			<circle cx="12" cy="12" r="1" />
 			<circle cx="19" cy="12" r="1" />
 			<circle cx="5" cy="12" r="1" />
@@ -195,7 +207,7 @@ export function PaperclipIcon(props: IconProps) {
 
 export function XIcon(props: IconProps) {
 	return (
-		<Icon name="x" {...props}>
+		<Icon frame="full" name="x" {...props}>
 			<path d="M18 6 6 18M6 6l12 12" />
 		</Icon>
 	);
