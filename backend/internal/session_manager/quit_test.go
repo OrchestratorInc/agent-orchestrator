@@ -52,41 +52,46 @@ func (l *quitStopLauncher) StopChat(ctx context.Context, id domain.SessionID) er
 }
 
 func TestStopAgentsForQuitLeavesChatsAsleep(t *testing.T) {
-	manager, store, _, _ := newManager()
-	launcher := &quitStopLauncher{store: store}
-	manager.chat = launcher
 	asleepSince := time.Unix(100, 0)
-	seed := func(id domain.SessionID, kind domain.SessionKind, state domain.ActivityState, hibernatedAt *time.Time) {
-		store.sessions[id] = domain.SessionRecord{
-			ID: id, ProjectID: "mer", Kind: kind, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
-			Activity: domain.Activity{State: state}, HibernatedAt: hibernatedAt,
-			Metadata: domain.SessionMetadata{
-				WorkspacePath: "/ws/" + string(id), Branch: "ao/" + string(id),
-				ProviderConversationID: "native-" + string(id), ControllerGeneration: "gen-1",
-			},
-		}
-	}
-	seed("mer-busy", domain.KindWorker, domain.ActivityActive, nil)
-	seed("mer-asleep", domain.KindWorker, domain.ActivityIdle, &asleepSince)
-	seed("mer-exited", domain.KindWorker, domain.ActivityExited, nil)
-	seed("mer-orchestrator", domain.KindOrchestrator, domain.ActivityIdle, nil)
+	for _, tc := range []struct {
+		id           domain.SessionID
+		kind         domain.SessionKind
+		state        domain.ActivityState
+		hibernatedAt *time.Time
+		asleep       bool
+	}{
+		{"mer-busy", domain.KindWorker, domain.ActivityActive, nil, true},
+		{"mer-asleep", domain.KindWorker, domain.ActivityIdle, &asleepSince, true},
+		{"mer-exited", domain.KindWorker, domain.ActivityExited, nil, false},
+		{"mer-orchestrator", domain.KindOrchestrator, domain.ActivityIdle, nil, false},
+	} {
+		t.Run(string(tc.id), func(t *testing.T) {
+			manager, store, _, _ := newManager()
+			launcher := &quitStopLauncher{store: store}
+			manager.chat = launcher
+			store.sessions[tc.id] = domain.SessionRecord{
+				ID: tc.id, ProjectID: "mer", Kind: tc.kind, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+				Activity: domain.Activity{State: tc.state}, HibernatedAt: tc.hibernatedAt,
+				Metadata: domain.SessionMetadata{
+					WorkspacePath: "/ws/" + string(tc.id), Branch: "ao/" + string(tc.id),
+					ProviderConversationID: "native-" + string(tc.id), ControllerGeneration: "gen-1",
+				},
+			}
 
-	if err := manager.StopAgentsForQuit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(launcher.stopped) != 4 {
-		t.Fatalf("quit must still stop every chat provider: %v", launcher.stopped)
-	}
-	for _, id := range []domain.SessionID{"mer-busy", "mer-asleep"} {
-		got := store.sessions[id]
-		if got.HibernatedAt == nil || got.Activity.State != domain.ActivityIdle || got.IsTerminated {
-			t.Fatalf("%s must be asleep so opening it wakes it: %+v", id, got)
-		}
-	}
-	for _, id := range []domain.SessionID{"mer-exited", "mer-orchestrator"} {
-		got := store.sessions[id]
-		if got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited || got.IsTerminated {
-			t.Fatalf("%s must stay stopped: %+v", id, got)
-		}
+			if err := manager.StopAgentsForQuit(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(launcher.stopped) != 1 {
+				t.Fatalf("quit must still stop the chat provider: %v", launcher.stopped)
+			}
+			got := store.sessions[tc.id]
+			if tc.asleep {
+				if got.HibernatedAt == nil || got.Activity.State != domain.ActivityIdle || got.IsTerminated {
+					t.Fatalf("must be asleep so opening it wakes it: %+v", got)
+				}
+			} else if got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited || got.IsTerminated {
+				t.Fatalf("must stay stopped: %+v", got)
+			}
+		})
 	}
 }
