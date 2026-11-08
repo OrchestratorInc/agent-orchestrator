@@ -44,7 +44,6 @@ import {
 	Cog as MynaCog,
 	Columns as MynaColumns,
 	Cookie as MynaCookie,
-	Copy as MynaCopy,
 	CornerDownLeft as MynaCornerDownLeft,
 	CornerDownRight as MynaCornerDownRight,
 	CornerUpRight as MynaCornerUpRight,
@@ -137,7 +136,6 @@ import {
 	Trash as MynaTrash,
 	TypeBold as MynaTypeBold,
 	TypeItalic as MynaTypeItalic,
-	Undo as MynaUndo,
 	Upload as MynaUpload,
 	User as MynaUser,
 	Users as MynaUsers,
@@ -206,6 +204,8 @@ import {
 	Workflow as LucideWorkflow,
 	WrapText as LucideWrapText,
 	Ungroup as LucideUngroup,
+	Copy as LucideCopy,
+	Undo2 as LucideUndo2,
 	type LucideIcon as LucideComponent,
 } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -300,7 +300,7 @@ export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
 export const Cookie = fromMyna(MynaCookie, "cookie");
-export const Copy = fromMyna(MynaCopy, "copy");
+export const Copy = fromLucide(LucideCopy, "copy");
 export const CornerDownLeft = fromMyna(MynaCornerDownLeft, "corner-down-left");
 export const CornerDownRight = fromMyna(MynaCornerDownRight, "corner-down-right");
 export const CornerUpRight = fromMyna(MynaCornerUpRight, "corner-up-right");
@@ -443,7 +443,7 @@ export const Tag = fromMyna(MynaTag, "tag");
 export const TerminalSquare = fromMyna(MynaTerminal, "square-terminal");
 export const Trash2 = fromMyna(MynaTrash, "trash-2");
 export const TriangleAlert = fromMyna(MynaDangerTriangle, "triangle-alert");
-export const Undo2 = fromMyna(MynaUndo, "undo-2");
+export const Undo2 = fromLucide(LucideUndo2, "undo-2");
 export const User = fromMyna(MynaUser, "user");
 export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
