@@ -2054,6 +2054,8 @@
 	"settings.replayOnboarding.label": "オンボーディングを再生",
 	"settings.replayOnboarding.hint": "初回セットアップを最初からもう一度開きます。",
 	"settings.replayOnboarding.open": "開く",
+	"settings.simulateNewMachine.label": "新しいマシンをシミュレート",
+	"settings.simulateNewMachine.hint": "オンボーディングで git、GitHub CLI、エージェントが未インストール扱いになり、インストールは見せかけだけになります。アプリを閉じるまで有効です。",
 	"startup.blockedBodyShort": "エージェントを実行するには、不足しているものをインストールしてください。",
 	"startup.gitPurpose": "各エージェントに専用のワークツリーを用意します。",
 	"startup.ghPurpose": "任意。エージェントがプルリクエストを作成できるようになります。",

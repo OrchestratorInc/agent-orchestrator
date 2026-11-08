@@ -2538,6 +2538,8 @@
 	"settings.replayOnboarding.label": "Повторить знакомство",
 	"settings.replayOnboarding.hint": "Снова открывает первоначальную настройку с самого начала.",
 	"settings.replayOnboarding.open": "Открыть",
+	"settings.simulateNewMachine.label": "Имитировать новый компьютер",
+	"settings.simulateNewMachine.hint": "Онбординг считает git, GitHub CLI и агентов отсутствующими, а установки только имитируются. Действует до закрытия приложения.",
 	"startup.blockedBodyShort": "Установите недостающее, чтобы запускать агентов.",
 	"startup.gitPurpose": "Даёт каждому агенту собственный worktree.",
 	"startup.ghPurpose": "Необязательно. Позволяет агентам открывать pull request.",
