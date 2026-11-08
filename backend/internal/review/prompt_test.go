@@ -31,6 +31,8 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"do not use a heredoc",
 		"ao review submit --session mer-1 --reviews -",
 		`"reviews": [`,
+		"If the step 2 command exits non-zero, AO has not recorded the result",
+		"Never report the bookkeeping as submitted unless the command succeeded.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
