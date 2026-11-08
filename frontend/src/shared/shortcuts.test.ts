@@ -13,9 +13,12 @@ import {
 	matchesPreviousTabShortcut,
 	defaultShortcutBindings,
 	matchesShortcutBinding,
+	shortcutBindingAccelerator,
 	shortcutBindingKeys,
 	shortcutBindingLabel,
 	shortcutBindingValidationError,
+	type AppShortcutId,
+	type ShortcutBinding,
 	type ShortcutChord,
 } from "./shortcuts";
 
@@ -377,5 +380,33 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutBindingValidationError(chord({ key: "q", meta: true }), true)).not.toBeNull();
 		expect(shortcutBindingValidationError(chord({ key: "F4", alt: true }), false)).not.toBeNull();
 		expect(shortcutBindingValidationError(chord({ key: "j", meta: true }), true)).toBeNull();
+	});
+});
+
+describe("shortcutBindingAccelerator", () => {
+	const bound = (key: string, modifiers: Partial<ShortcutBinding> = {}): ShortcutBinding => ({
+		key, ctrl: false, meta: false, shift: false, alt: false, ...modifiers,
+	});
+
+	it("uses the macOS default bindings of the menu commands", () => {
+		const accelerator = (id: AppShortcutId) => shortcutBindingAccelerator(defaultShortcutBindings(id, true)[0]);
+		expect(accelerator("toggle-sidebar")).toBe("Command+B");
+		expect(accelerator("toggle-inspector")).toBe("Shift+Command+B");
+		expect(accelerator("open-orchestrator")).toBe("Shift+Command+O");
+		expect(accelerator("history-back")).toBe("Command+[");
+	});
+
+	it("names special keys the way Electron spells them", () => {
+		expect(shortcutBindingAccelerator(bound("ArrowUp", { meta: true, alt: true }))).toBe("Alt+Command+Up");
+		expect(shortcutBindingAccelerator(bound("+", { meta: true }))).toBe("Command+Plus");
+	});
+
+	it("falls back to the physical key for a character Option typed", () => {
+		expect(shortcutBindingAccelerator(bound("∫", { alt: true, code: "KeyB" }))).toBe("Alt+B");
+	});
+
+	it("has no accelerator for the 1-9 family or an unnameable key", () => {
+		expect(shortcutBindingAccelerator(bound("1-9", { meta: true }))).toBeUndefined();
+		expect(shortcutBindingAccelerator(bound("∫", { alt: true }))).toBeUndefined();
 	});
 });

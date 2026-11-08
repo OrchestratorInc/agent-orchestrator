@@ -86,6 +86,7 @@ import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
@@ -1289,6 +1290,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
+	// The shell is mounted on every route, so these menu items always apply.
+	useAppMenuAvailable("new-session", true);
+	useAppMenuAvailable("toggle-sidebar", true);
+	useAppMenuAvailable("history-back", true);
+	useAppMenuAvailable("history-forward", true);
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native

@@ -172,6 +172,8 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
