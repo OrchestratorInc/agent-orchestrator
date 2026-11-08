@@ -1,0 +1,860 @@
+package lifecycle
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// noticeStore adds the durable "review done" queue to the lifecycle fake.
+type noticeStore struct {
+	*fakeStore
+	runs []domain.ReviewRun
+}
+
+func (s *noticeStore) ListPendingReviewRunNotices(_ context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	var out []domain.ReviewRun
+	for _, run := range s.runs {
+		if run.SessionID == id && run.WorkerNotice == domain.ReviewWorkerNoticePending && run.WorkerNoticeAttempts < domain.ReviewWorkerNoticeMaxAttempts {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+func (s *noticeStore) ListSessionsWithPendingReviewRunNotices(context.Context) ([]domain.SessionID, error) {
+	seen := map[domain.SessionID]bool{}
+	var out []domain.SessionID
+	for _, run := range s.runs {
+		if run.WorkerNotice == domain.ReviewWorkerNoticePending && run.WorkerNoticeAttempts < domain.ReviewWorkerNoticeMaxAttempts && !seen[run.SessionID] {
+			seen[run.SessionID] = true
+			out = append(out, run.SessionID)
+		}
+	}
+	return out, nil
+}
+
+func (s *noticeStore) MarkReviewRunNoticeSent(_ context.Context, id string) (bool, error) {
+	for i := range s.runs {
+		if s.runs[i].ID == id && s.runs[i].WorkerNotice == domain.ReviewWorkerNoticePending {
+			s.runs[i].WorkerNotice = domain.ReviewWorkerNoticeSent
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *noticeStore) RecordReviewRunNoticeFailure(_ context.Context, id, sendErr string, at time.Time) (bool, error) {
+	for i := range s.runs {
+		if s.runs[i].ID == id && s.runs[i].WorkerNotice == domain.ReviewWorkerNoticePending {
+			s.runs[i].WorkerNoticeAttempts++
+			s.runs[i].WorkerNoticeError = sendErr
+			s.runs[i].WorkerNoticeAttemptedAt = &at
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *noticeStore) ListReviewRunsBySession(_ context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	var out []domain.ReviewRun
+	for _, run := range s.runs {
+		if run.SessionID == id {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+func (s *noticeStore) run(id string) domain.ReviewRun {
+	for _, run := range s.runs {
+		if run.ID == id {
+			return run
+		}
+	}
+	return domain.ReviewRun{}
+}
+
+func (s *noticeStore) notice(id string) domain.ReviewWorkerNotice {
+	for _, run := range s.runs {
+		if run.ID == id {
+			return run.WorkerNotice
+		}
+	}
+	return ""
+}
+
+const donePR = "https://github.com/o/r/pull/7"
+
+func newNoticeManager(t *testing.T) (*Manager, *noticeStore, *fakeMessenger) {
+	t.Helper()
+	st := &noticeStore{fakeStore: newFakeStore()}
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	st.sessions["w-1"] = working("w-1")
+	return m, st, msg
+}
+
+func doneRun(id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, githubReviewID, body string) domain.ReviewRun {
+	return domain.ReviewRun{
+		ID: id, SessionID: "w-1", Harness: "codex", ReviewerModel: "gpt-5.5",
+		PRURL: donePR, TargetSHA: "abc123", Status: status, Verdict: verdict,
+		GithubReviewID: githubReviewID, Body: body, AutoInjectReview: true,
+		WorkerNotice: domain.ReviewWorkerNoticePending,
+	}
+}
+
+func observedReview(githubReviewID string) domain.PullRequestReview {
+	return domain.PullRequestReview{ID: "PRR_node", Author: "me", URL: donePR + "#pullrequestreview-" + githubReviewID, AutoInjectReview: true}
+}
+
+func assertContains(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Fatalf("message missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The reported case: a reviewer approves with only a summary (no inline
+// comments), so nothing was forwarded. The worker gets one done message.
+func TestReviewDoneNotice_ApprovedWithoutInlineComments(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "Looks good. Optional: rename x.")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one done message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	assertContains(t, msg.msgs[0],
+		"AO review done: approved",
+		"PR: "+donePR,
+		"Reviewed commit: abc123",
+		"Reviewer: codex (model gpt-5.5)",
+		"Run: run-1",
+		"Review: "+donePR+"#pullrequestreview-555",
+		"Inline comments: 0",
+		"Looks good. Optional: rename x.",
+		"not a GitHub approval",
+	)
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q, want sent", got)
+	}
+
+	// Another delivery pass, and a restarted daemon over the same store, must
+	// not repeat it.
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(st, msg)
+	restarted.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 {
+		t.Fatalf("done message repeated: %v", msg.msgs)
+	}
+}
+
+// The reviewer submits before the SCM observer sees its review: the notice
+// waits, then goes out from the PR observation that records the review.
+func TestReviewDoneNotice_WaitsForObservedReview(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("notice sent before the review was observed: %v", msg.msgs)
+	}
+
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want done message from the PR observation, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: approved", "Inline comments: 0")
+}
+
+func changesRequestedComments() []domain.PullRequestComment {
+	return []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "777", Author: "me", File: "a.go", Line: 3, Body: "nil check", AutoInjectReview: true},
+		{ID: "c2", ThreadID: "T2", ReviewID: "777", Author: "me", File: "b.go", Line: 9, Body: "missing test", AutoInjectReview: true},
+	}
+}
+
+func countDoneNotices(msgs []string) int {
+	n := 0
+	for _, m := range msgs {
+		if strings.Contains(m, "AO review done") {
+			n++
+		}
+	}
+	return n
+}
+
+// Changes requested with inline comments: the forwarded comments are the
+// result. Once every comment of the review reached the worker, the notice is
+// marked sent without being delivered, so the worker does not get a second
+// message that reads as "nothing new". Later passes and a restarted daemon do
+// not send it either.
+func TestReviewDoneNotice_ChangesRequestedSkippedOnceAllCommentsForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, strings.Join(msg.msgs, "\n"), "nil check", "missing test")
+	if n := countDoneNotices(msg.msgs); n != 0 {
+		t.Fatalf("done message sent after every comment was forwarded: %v", msg.msgs)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q, want sent", got)
+	}
+
+	sent := len(msg.msgs)
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != sent {
+		t.Fatalf("messages after another pass and a restart: %v", msg.msgs[sent:])
+	}
+}
+
+// A comment of the review that was not forwarded (here: delivery was off when
+// it was observed) keeps the notice: it comes after the forwarded comments,
+// names how many there are, and does not repeat the summary.
+func TestReviewDoneNotice_ChangesRequestedSentWhileACommentWasNotForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	st.comments[donePR][1].AutoInjectReview = false
+
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) < 2 || countDoneNotices(msg.msgs) != 1 {
+		t.Fatalf("want the forwarded comment then the done message, got %v", msg.msgs)
+	}
+	assertContains(t, strings.Join(msg.msgs[:len(msg.msgs)-1], "\n"), "nil check")
+	last := msg.msgs[len(msg.msgs)-1]
+	assertContains(t, last, "AO review done: changes requested", "Inline comments: 2", "This review round is complete")
+	if strings.Contains(last, "optional ideas") {
+		t.Fatalf("done message repeated the review summary:\n%s", last)
+	}
+}
+
+// Without any forwarded comment (the worker was busy, or the sweep ran before
+// the observation forwarded them), the notice goes out as before.
+func TestReviewDoneNotice_ChangesRequestedSentWhenNothingWasForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want the done message, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: changes requested", "Inline comments: 2", "delivered as separate review-feedback messages")
+}
+
+// The forwarding ledger is persisted on the PR row: comments forwarded before
+// a daemon restart still count, so the restarted daemon skips the notice.
+func TestReviewDoneNotice_SkipReadsPersistedLedgerAfterRestart(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	// The comments are forwarded while the pass has not recorded its result.
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, strings.Join(msg.msgs, "\n"), "nil check", "missing test")
+
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if n := countDoneNotices(msg.msgs); n != 0 {
+		t.Fatalf("restarted daemon sent the notice anyway: %v", msg.msgs)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q, want sent", got)
+	}
+
+	// A fresh PR row without the ledger still gets the notice.
+	st.signatures = nil
+	st.runs = []domain.ReviewRun{doneRun("run-2", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if n := countDoneNotices(msg.msgs); n != 1 {
+		t.Fatalf("want the notice without a persisted ledger, got %v", msg.msgs)
+	}
+}
+
+// Only a current changes-requested review is skipped. An approval, and a
+// changes-requested pass about an earlier commit or with a newer pass, still
+// get their notice after the forwarded comments.
+func TestReviewDoneNotice_OtherOutcomesStillSentAfterForwardedComments(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(st *noticeStore)
+		want  []string
+	}{
+		{
+			name: "approved",
+			setup: func(st *noticeStore) {
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "777", "LGTM")}
+			},
+			want: []string{"AO review done: approved", "Inline comments: 2"},
+		},
+		{
+			name: "head moved",
+			setup: func(st *noticeStore) {
+				st.prs["w-1"] = []domain.PullRequest{{URL: donePR, HeadSHA: "def4567890"}}
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+			},
+			want: []string{"AO review done: changes requested", "about an earlier commit"},
+		},
+		{
+			name: "newer pass",
+			setup: func(st *noticeStore) {
+				old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")
+				old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+				newer := doneRun("run-2", domain.ReviewRunRunning, domain.VerdictNone, "", "")
+				newer.CreatedAt = old.CreatedAt.Add(time.Minute)
+				newer.WorkerNotice = domain.ReviewWorkerNoticeNone
+				st.runs = []domain.ReviewRun{old, newer}
+			},
+			want: []string{"AO review done: changes requested", "A newer review of this PR (run run-2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, msg := newNoticeManager(t)
+			st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+			st.comments[donePR] = changesRequestedComments()
+			tc.setup(st)
+
+			if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) < 2 || countDoneNotices(msg.msgs) != 1 {
+				t.Fatalf("want the forwarded comments then the done message, got %v", msg.msgs)
+			}
+			assertContains(t, strings.Join(msg.msgs[:len(msg.msgs)-1], "\n"), "nil check", "missing test")
+			assertContains(t, msg.msgs[len(msg.msgs)-1], tc.want...)
+			if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+				t.Fatalf("notice = %q, want sent", got)
+			}
+		})
+	}
+}
+
+func TestReviewDoneNotice_FailedAndCancelledSendImmediately(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{
+		doneRun("run-f", domain.ReviewRunFailed, domain.VerdictNone, "", "reviewer exited before submitting a result"),
+		doneRun("run-c", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"),
+	}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want two done messages, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: failed", "Run: run-f", "Reason: reviewer exited before submitting a result")
+	assertContains(t, msg.msgs[1], "AO review done: cancelled", "Run: run-c", "Reason: cancelled by user")
+	for _, m := range msg.msgs {
+		if strings.Contains(m, "Inline comments") {
+			t.Fatalf("failed/cancelled notice reported inline comments:\n%s", m)
+		}
+	}
+}
+
+// A provider review AO never observes (observer off, provider lag) must not
+// hold the notice forever.
+func TestReviewDoneNotice_SendsAfterGraceWhenReviewNotObserved(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Fix the nil check")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(reviewNoticeObserveGrace - time.Second)
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("notice sent inside the grace: %v", msg.msgs)
+	}
+	now = now.Add(2 * time.Second)
+	m.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want notice after the grace, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: changes requested", "Review ID: 777", "has not observed this review", "Fix the nil check")
+	if strings.Contains(msg.msgs[0], "Inline comments:") {
+		t.Fatalf("unobserved review reported an inline count:\n%s", msg.msgs[0])
+	}
+}
+
+// A worker waiting on the user is not interrupted; the notice stays owed and
+// goes out once the worker can take it.
+func TestReviewDoneNotice_SuppressedSendStaysPending(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	rec := st.sessions["w-1"]
+	rec.Activity.State = domain.ActivityWaitingInput
+	st.sessions["w-1"] = rec
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 || st.notice("run-1") != domain.ReviewWorkerNoticePending {
+		t.Fatalf("suppressed notice: msgs=%v notice=%q", msg.msgs, st.notice("run-1"))
+	}
+	rec.Activity.State = domain.ActivityIdle
+	st.sessions["w-1"] = rec
+	m.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 || st.notice("run-1") != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice not delivered after resume: msgs=%v notice=%q", msg.msgs, st.notice("run-1"))
+	}
+}
+
+// --rerun records a second pass on the same head; each pass gets its own
+// message, in the order the passes were requested.
+func TestReviewDoneNotice_RerunGetsItsOwnMessage(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	first := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "first pass")
+	first.WorkerNotice = domain.ReviewWorkerNoticeSent
+	st.runs = []domain.ReviewRun{first, doneRun("run-2", domain.ReviewRunComplete, domain.VerdictApproved, "556", "second pass")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555"), observedReview("556")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want only the rerun's message, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "Run: run-2", "second pass")
+}
+
+// No pending notice (feedback delivery off, --no-inject on such a session, or
+// a pass from before notices existed) means no message.
+func TestReviewDoneNotice_NothingOwedSendsNothing(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	run := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	run.WorkerNotice = domain.ReviewWorkerNoticeNone
+	st.runs = []domain.ReviewRun{run}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+
+	m.SweepReviewDoneNotices(ctx)
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("message sent for a pass that owes none: %v", msg.msgs)
+	}
+}
+
+// A pass replaced by a newer head's trigger, or stopped by the user, must not
+// send the worker off to request another review: the newer pass is already
+// running, and the user's stop was deliberate.
+func TestReviewDoneNotice_SupersededAndUserCancelledDoNotAskForAnotherReview(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{
+		doneRun("run-s", domain.ReviewRunFailed, domain.VerdictNone, "", domain.ReviewRunSupersededReason),
+		doneRun("run-u", domain.ReviewRunCancelled, domain.VerdictNone, "", domain.ReviewRunCancelledByUserReason),
+		doneRun("run-x", domain.ReviewRunFailed, domain.VerdictNone, "", "reviewer exited before submitting a result"),
+	}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 3 {
+		t.Fatalf("want three done messages, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: failed", "already under way", "instead of requesting another review")
+	assertContains(t, msg.msgs[1], "AO review done: cancelled", "stopped this review on purpose", "do not request another unless they ask")
+	for _, m := range msg.msgs[:2] {
+		if strings.Contains(m, "Request another review if you still need one") {
+			t.Fatalf("superseded/user-cancelled notice asks for another review:\n%s", m)
+		}
+	}
+	assertContains(t, msg.msgs[2], "Request another review if you still need one")
+}
+
+// Notices go out oldest first: a later pass is not announced while an
+// earlier one still waits for its provider review to be observed.
+func TestReviewDoneNotice_KeepsOldestFirstOrder(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{
+		doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "first"),
+		doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"),
+	}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("later notice sent ahead of a waiting earlier one: %v", msg.msgs)
+	}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 || !strings.Contains(msg.msgs[0], "Run: run-1") || !strings.Contains(msg.msgs[1], "Run: run-2") {
+		t.Fatalf("want run-1 then run-2, got %v", msg.msgs)
+	}
+}
+
+// A worker that ends while a pass waits for its review to be observed does
+// not leave the wait behind.
+func TestReviewDoneNotice_ForgetsWaitsOfEndedWorkers(t *testing.T) {
+	m, st, _ := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")}
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.reviewNoticeSeen) != 1 {
+		t.Fatalf("waits = %v, want the run waiting", m.reviewNoticeSeen)
+	}
+	rec := st.sessions["w-1"]
+	rec.IsTerminated = true
+	st.sessions["w-1"] = rec
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.reviewNoticeSeen) != 0 {
+		t.Fatalf("waits = %v, want none after the worker ended", m.reviewNoticeSeen)
+	}
+}
+
+// A send that fails (the guard reports the messenger error as Sent plus an
+// error) did not reach the worker: the notice stays pending, the error is kept
+// on the run, and the sweep retries it after a doubling backoff.
+func TestReviewDoneNotice_FailedSendStaysPendingAndRetriesWithBackoff(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")}
+	msg.err = errors.New("no chat controller")
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	got := st.run("run-1")
+	if got.WorkerNotice != domain.ReviewWorkerNoticePending || got.WorkerNoticeAttempts != 1 || !strings.Contains(got.WorkerNoticeError, "no chat controller") || got.WorkerNoticeAttemptedAt == nil || !got.WorkerNoticeAttemptedAt.Equal(now) {
+		t.Fatalf("after a failed send: %+v", got)
+	}
+
+	// Inside the first backoff nothing is tried.
+	now = now.Add(reviewNoticeRetryBase - time.Second)
+	m.SweepReviewDoneNotices(ctx)
+	if got := st.run("run-1"); got.WorkerNoticeAttempts != 1 {
+		t.Fatalf("retried inside the backoff: attempts=%d", got.WorkerNoticeAttempts)
+	}
+	// After it, the retry fails again and the next wait doubles.
+	now = now.Add(2 * time.Second)
+	m.SweepReviewDoneNotices(ctx)
+	if got := st.run("run-1"); got.WorkerNoticeAttempts != 2 {
+		t.Fatalf("attempts = %d, want a second try after the backoff", got.WorkerNoticeAttempts)
+	}
+	now = now.Add(reviewNoticeRetryBase + time.Second)
+	msg.err = nil
+	m.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 0 {
+		t.Fatalf("retried before the doubled backoff: %v", msg.msgs)
+	}
+	now = now.Add(reviewNoticeRetryBase)
+	m.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 || st.notice("run-1") != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("want the notice sent once the send works: msgs=%v notice=%q", msg.msgs, st.notice("run-1"))
+	}
+	if got := st.run("run-1"); got.WorkerNoticeAttempts != 2 || got.WorkerNoticeError == "" {
+		t.Fatalf("the last failure should stay visible after delivery: %+v", got)
+	}
+}
+
+func TestReviewDoneNotice_RetryBackoffIsCapped(t *testing.T) {
+	m, _, _ := newNoticeManager(t)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	at := now.Add(-reviewNoticeRetryMax)
+	run := domain.ReviewRun{WorkerNoticeAttempts: 40, WorkerNoticeAttemptedAt: &at}
+	if !m.reviewNoticeRetryDue(run) {
+		t.Fatal("backoff should be capped at reviewNoticeRetryMax")
+	}
+	at = now.Add(-reviewNoticeRetryMax + time.Second)
+	if m.reviewNoticeRetryDue(run) {
+		t.Fatal("retried before the capped backoff")
+	}
+}
+
+// A changes-requested notice for a commit the PR has moved past names both
+// commits and does not present its findings as new work.
+func TestReviewDoneNotice_EarlierCommitIsNotNewWork(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.prs["w-1"] = []domain.PullRequest{{URL: donePR, HeadSHA: "def4567890"}}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = []domain.PullRequestComment{{ID: "c1", ThreadID: "T1", ReviewID: "777", File: "a.go", Line: 3, Body: "nil check", AutoInjectReview: true}}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one notice, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "Reviewed commit: abc123", "PR head now: def4567890", "about an earlier commit (abc123); the PR head is now def4567", "still apply to the current head")
+	if strings.Contains(msg.msgs[0], "This review round is complete") {
+		t.Fatalf("stale notice asked for the round's work:\n%s", msg.msgs[0])
+	}
+}
+
+// A notice for a pass that already has a newer pass on the PR says so.
+func TestReviewDoneNotice_NamesANewerPass(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	newer := doneRun("run-2", domain.ReviewRunRunning, domain.VerdictNone, "", "")
+	newer.TargetSHA = "def4567890"
+	newer.CreatedAt = time.Date(2026, 10, 22, 12, 5, 0, 0, time.UTC)
+	newer.WorkerNotice = domain.ReviewWorkerNoticeNone
+	old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	st.runs = []domain.ReviewRun{old, newer}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one notice, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: approved", "A newer review of this PR (run run-2, head def4567) is running.", "covers the reviewed commit only", "LGTM")
+}
+
+// sendCountingMessenger fails every send and counts the attempts that reached it.
+type sendCountingMessenger struct{ sends int }
+
+func (f *sendCountingMessenger) Send(context.Context, domain.SessionID, string) error {
+	f.sends++
+	return errors.New("no chat controller")
+}
+
+// A send that keeps failing is retried at most ReviewWorkerNoticeMaxAttempts
+// times: a failed send may still have landed, so it must not re-paste
+// forever. After the cap the notice keeps its last error, stops retrying, and
+// no longer holds back the worker's later notices.
+func TestReviewDoneNotice_GivesUpAfterMaxAttempts(t *testing.T) {
+	st := &noticeStore{fakeStore: newFakeStore()}
+	st.sessions["w-1"] = working("w-1")
+	counting := &sendCountingMessenger{}
+	m := New(st, counting)
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	first := doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")
+	first.CreatedAt = now.Add(-time.Hour)
+	st.runs = []domain.ReviewRun{first}
+
+	for i := 0; i < 2*domain.ReviewWorkerNoticeMaxAttempts; i++ {
+		m.SweepReviewDoneNotices(ctx)
+		now = now.Add(reviewNoticeRetryMax)
+	}
+	got := st.run("run-1")
+	if counting.sends != domain.ReviewWorkerNoticeMaxAttempts || got.WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts {
+		t.Fatalf("sends=%d attempts=%d, want both capped at %d", counting.sends, got.WorkerNoticeAttempts, domain.ReviewWorkerNoticeMaxAttempts)
+	}
+	if !strings.Contains(got.WorkerNoticeError, "no chat controller") {
+		t.Fatalf("last error not kept: %+v", got)
+	}
+
+	// A later pass is not blocked by the notice that gave up.
+	msg := &fakeMessenger{}
+	m2 := New(st, msg)
+	m2.clock = m.clock
+	st.runs = append(st.runs, doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"))
+	m2.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "Run: run-2") {
+		t.Fatalf("later notice blocked by a notice that gave up: %v", msg.msgs)
+	}
+}
+
+// A newer pass that the user cancelled is named as such, not as "ended".
+func TestReviewDoneNotice_NamesAUserCancelledNewerPass(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	newer := doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", domain.ReviewRunCancelledByUserReason)
+	newer.CreatedAt = time.Date(2026, 10, 22, 12, 5, 0, 0, time.UTC)
+	newer.WorkerNotice = domain.ReviewWorkerNoticeSent
+	old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	st.runs = []domain.ReviewRun{old, newer}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one notice, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "A newer review of this PR (run run-2, head abc123) was cancelled by the user.")
+}
+
+// unconfirmedMessenger writes the message but cannot confirm the agent
+// accepted it (the session manager's ErrDeliveryUnconfirmed).
+type unconfirmedMessenger struct{ sends int }
+
+func (f *unconfirmedMessenger) Send(_ context.Context, id domain.SessionID, _ string) error {
+	f.sends++
+	return fmt.Errorf("send %s: %w", id, ports.ErrDeliveryUnconfirmed)
+}
+
+// An unconfirmed delivery reached the worker's pane, so the notice counts as
+// sent and is not pasted again; the warning stays on the run.
+func TestReviewDoneNotice_UnconfirmedDeliveryIsNotResent(t *testing.T) {
+	st := &noticeStore{fakeStore: newFakeStore()}
+	st.sessions["w-1"] = working("w-1")
+	unconfirmed := &unconfirmedMessenger{}
+	m := New(st, unconfirmed)
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")}
+
+	for i := 0; i < 3; i++ {
+		m.SweepReviewDoneNotices(ctx)
+		now = now.Add(reviewNoticeRetryMax)
+	}
+	got := st.run("run-1")
+	if unconfirmed.sends != 1 || got.WorkerNotice != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("sends=%d notice=%q, want one send and the notice sent", unconfirmed.sends, got.WorkerNotice)
+	}
+	if got.WorkerNoticeAttempts != 1 || !strings.Contains(got.WorkerNoticeError, "not acknowledged") {
+		t.Fatalf("warning not kept on the run: %+v", got)
+	}
+}
+
+// chatNoticeStore adds the Chat turn lookup: the client message id of each
+// relayed message and its turn state.
+type chatNoticeStore struct {
+	*noticeStore
+	turns map[string]domain.TurnState
+	errs  map[string]string
+}
+
+func (s *chatNoticeStore) ReviewNoticeChatDelivery(_ context.Context, _ domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error) {
+	state, ok := s.turns[clientMessageID]
+	return state, s.errs[clientMessageID], ok, nil
+}
+
+// chatRelay records each relay under its client message id with the turn
+// state a Chat session would give it: queued while the session sleeps.
+type chatRelay struct {
+	store *chatNoticeStore
+	state domain.TurnState
+	ids   []string
+}
+
+func (r *chatRelay) Send(ctx context.Context, _ domain.SessionID, _ string) error {
+	id := ports.ClientMessageIDFromContext(ctx)
+	r.ids = append(r.ids, id)
+	r.store.turns[id] = r.state
+	return nil
+}
+
+func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, *chatNoticeStore, *chatRelay, *time.Time) {
+	t.Helper()
+	st := &chatNoticeStore{noticeStore: &noticeStore{fakeStore: newFakeStore()}, turns: map[string]domain.TurnState{}, errs: map[string]string{}}
+	rec := working("w-1")
+	rec.Mode = domain.SessionModeChat
+	rec.Activity.State = domain.ActivityIdle
+	st.sessions["w-1"] = rec
+	relay := &chatRelay{store: st, state: relayState}
+	m := New(st, relay)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")}
+	return m, st, relay, &now
+}
+
+// A relay into a sleeping Chat session is queued until a background wake
+// drains it. The notice counts as delivered only then, and is sent once.
+func TestReviewDoneNotice_SleepingChatCountsOnceDrained(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
+
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 || relay.ids[0] != "review-done:run-1:0" {
+		t.Fatalf("relays = %v, want one under the run's first attempt id", relay.ids)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticePending {
+		t.Fatalf("notice = %q while the relay is queued, want pending", got)
+	}
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 {
+		t.Fatalf("resent while the first relay was still queued: %v", relay.ids)
+	}
+
+	st.turns["review-done:run-1:0"] = domain.TurnStateCompleted
+	m.SweepReviewDoneNotices(ctx)
+	if got := st.run("run-1"); got.WorkerNotice != domain.ReviewWorkerNoticeSent || got.WorkerNoticeAttempts != 0 {
+		t.Fatalf("after the drain: %+v, want sent with no failed attempts", got)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("relays = %v, want exactly one", relay.ids)
+	}
+}
+
+// When the background wake fails, the queued relay is failed. The notice
+// records that failure and is retried under a new attempt id after the
+// backoff, so the failed message is not duplicated.
+func TestReviewDoneNotice_SleepingChatWakeFailureRetries(t *testing.T) {
+	m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
+
+	m.SweepReviewDoneNotices(ctx)
+	st.turns["review-done:run-1:0"] = domain.TurnStateFailed
+	st.errs["review-done:run-1:0"] = "could not wake the agent: provider exited"
+	m.SweepReviewDoneNotices(ctx)
+	got := st.run("run-1")
+	if got.WorkerNotice != domain.ReviewWorkerNoticePending || got.WorkerNoticeAttempts != 1 || !strings.Contains(got.WorkerNoticeError, "could not wake the agent") {
+		t.Fatalf("after the failed wake: %+v", got)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("resent inside the backoff: %v", relay.ids)
+	}
+
+	*now = now.Add(reviewNoticeRetryBase)
+	relay.state = domain.TurnStateRunning
+	m.SweepReviewDoneNotices(ctx)
+	if strings.Join(relay.ids, ",") != "review-done:run-1:0,review-done:run-1:1" {
+		t.Fatalf("relays = %v, want the retry under a new attempt id", relay.ids)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q after the retry reached the agent, want sent", got)
+	}
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 2 {
+		t.Fatalf("relays = %v after delivery, want no more", relay.ids)
+	}
+}
+
+// An awake Chat session takes the relay at once; the notice is sent as before.
+func TestReviewDoneNotice_AwakeChatIsSentAtOnce(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateRunning)
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 || st.notice("run-1") != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("relays=%v notice=%q, want one relay and the notice sent", relay.ids, st.notice("run-1"))
+	}
+}

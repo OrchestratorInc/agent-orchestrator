@@ -952,10 +952,34 @@ type fakeSessionLifecycle struct {
 	restoreAllCalled          bool
 	reconcileErr              error
 	restoreErr                error
+	sends                     []string
 }
 
-func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
+func (f *fakeSessionLifecycle) Send(_ context.Context, _ domain.SessionID, message string, _ *ports.SpawnAttachment) error {
+	f.sends = append(f.sends, "plain:"+message)
 	return nil
+}
+
+func (f *fakeSessionLifecycle) SendWithClientMessageID(_ context.Context, _ domain.SessionID, message, clientMessageID string) error {
+	f.sends = append(f.sends, clientMessageID+":"+message)
+	return nil
+}
+
+// A lifecycle send that names a client message id on its context reaches the
+// session manager with that id, so Chat records it with the message; other
+// sends are unchanged.
+func TestSessionLifecycleMessengerCarriesClientMessageID(t *testing.T) {
+	fake := &fakeSessionLifecycle{}
+	messenger := sessionLifecycleMessenger{fake}
+	if err := messenger.Send(context.Background(), "w-1", "nudge"); err != nil {
+		t.Fatal(err)
+	}
+	if err := messenger.Send(ports.WithClientMessageID(context.Background(), "review-done:run-1:0"), "w-1", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(fake.sends, ","); got != "plain:nudge,review-done:run-1:0:done" {
+		t.Fatalf("sends = %q", got)
+	}
 }
 
 func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool, error) {
