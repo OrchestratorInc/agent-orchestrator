@@ -1348,10 +1348,10 @@ async function fetchDesktopSessionPath(
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
 			if (error instanceof Error && error.name === "AbortError") throw error;
-			throw workspaceCheckUnavailable("Orchestrator daemon is not reachable.");
+			throw workspaceCheckUnavailable("Daemon is not reachable.");
 		});
 		const body = await response.json().catch((error: unknown) => {
-			if (response.status >= 500) throw workspaceCheckUnavailable("Orchestrator daemon is not ready.");
+			if (response.status >= 500) throw workspaceCheckUnavailable("Daemon is not ready.");
 			throw error;
 		}) as Record<string, unknown>;
 		if (!response.ok) {

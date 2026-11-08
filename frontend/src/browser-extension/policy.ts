@@ -56,7 +56,7 @@ export function evaluateUrl(policy: SitePolicy, rawUrl: string | undefined): Pol
 		return { allowed: false, reason: "The page address is not a web URL" };
 	}
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return { allowed: false, reason: `Orchestrator agents cannot act on ${url.protocol} pages` };
+		return { allowed: false, reason: `Agents from Orchestrator cannot act on ${url.protocol} pages` };
 	}
 	const host = url.hostname;
 	if (policy.deny.some((pattern) => hostMatches(host, pattern))) {

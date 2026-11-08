@@ -313,7 +313,7 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 - Do not invent issue, PR, or MR requirements when no remote or SCM provider is available.
 - Clearly report what changed, what was verified, and any remaining risks.`
 	}
-	parallelHelpRules := "- If parallel help is needed for CI or review follow-up and an orchestrator is attached to this project, ask it to spawn additional worker sessions instead of delegating inside the runtime.\n- If no orchestrator is attached, continue serially and report the need for additional AO workers to the human."
+	parallelHelpRules := "- If parallel help is needed for CI or review follow-up and an orchestrator is attached to this project, ask it to spawn additional worker sessions instead of delegating inside the runtime.\n- If no orchestrator is attached, continue serially and report the need for additional workers to the human."
 	if hasOrchestrator {
 		parallelHelpRules = "- If parallel help is needed for CI or review follow-up, ask the orchestrator to spawn additional worker sessions instead of using the agent runtime's built-in subagent or task-delegation tools."
 	}

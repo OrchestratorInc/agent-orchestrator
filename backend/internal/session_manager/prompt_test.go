@@ -139,7 +139,7 @@ func TestBuildSystemPrompt_WorkerHandlesTaskSourcesAndProviderPRRules(t *testing
 		"Orchestrator resolves this session from `AO_SESSION_ID`",
 		"do not invent issue, PR, or MR requirements",
 		"Do not use the agent runtime's built-in subagent or task-delegation tools",
-		"If no orchestrator is attached, continue serially and report the need for additional AO workers to the human",
+		"If no orchestrator is attached, continue serially and report the need for additional workers to the human",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("worker prompt missing %q:\n%s", want, got)
