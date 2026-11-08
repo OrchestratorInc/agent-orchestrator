@@ -177,7 +177,7 @@ test("@P0 collapsed files keep feedback usable and toggle the all-files icon", a
 });
 
 for (const width of [1200, 1800]) {
-	test(`inspector tabs keep their left edge across views at ${width}px`, async ({ page }) => {
+	test(`@P0 inspector tabs keep their left edge across views at ${width}px`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 900 });
 		await stubWorkspaceFiles(page);
 		await page.addInitScript(() => {
