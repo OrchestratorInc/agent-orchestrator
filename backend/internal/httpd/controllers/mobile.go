@@ -295,6 +295,12 @@ type BridgeService struct {
 
 	// Guards Tunnel, which ensureTunnel may replace while HTTP handlers read it.
 	tunnelMu sync.RWMutex
+
+	// unlistedAccountHash is the account token digest AO Cloud last refused
+	// the machine's address publish for: no account lists the machine under
+	// it. Empty once a publish is accepted.
+	unlistedMu          sync.Mutex
+	unlistedAccountHash string
 	// tunnelResolving is closed once ResolveTunnelInBackground's lookup ends.
 	// Nil when no background lookup was started.
 	tunnelResolving chan struct{}
@@ -329,6 +335,27 @@ func first(hosts []string) string {
 	return hosts[0]
 }
 
+// NoteAccountListing records whether AO Cloud accepted the machine's address
+// publish under the account token digest hash, so Status can tell a link AO
+// Cloud lists from a token no account lists.
+func (b *BridgeService) NoteAccountListing(hash string, listed bool) {
+	b.unlistedMu.Lock()
+	defer b.unlistedMu.Unlock()
+	if listed {
+		if b.unlistedAccountHash == hash {
+			b.unlistedAccountHash = ""
+		}
+		return
+	}
+	b.unlistedAccountHash = hash
+}
+
+func (b *BridgeService) accountUnlisted(hash string) bool {
+	b.unlistedMu.Lock()
+	defer b.unlistedMu.Unlock()
+	return hash != "" && b.unlistedAccountHash == hash
+}
+
 // Status reports the current bridge state, host, and port. The plaintext
 // password is included only while the bridge is enabled (loopback route only).
 func (b *BridgeService) Status() MobileStatusResponse {
@@ -342,6 +369,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	res := MobileStatusResponse{
 		Enabled:             enabled,
 		AccountLinked:       st.AccountTokenHash != "",
+		AccountUnlisted:     b.accountUnlisted(st.AccountTokenHash),
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),

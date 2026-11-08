@@ -18972,6 +18972,8 @@ components:
       properties:
         accountLinked:
           type: boolean
+        accountUnlisted:
+          type: boolean
         browserRemoteAccess:
           type: boolean
         enabled:
@@ -19005,6 +19007,7 @@ components:
       required:
       - enabled
       - accountLinked
+      - accountUnlisted
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel

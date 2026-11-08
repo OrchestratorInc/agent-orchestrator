@@ -1157,3 +1157,30 @@ func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
 		t.Fatalf("not installing: %+v", st)
 	}
 }
+
+// A held account token is not a listing: once AO Cloud refuses the machine's
+// address under it, status says no account lists the machine (#7976).
+func TestStatusReportsAnAccountTokenAOCloudDoesNotList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", AccountTokenHash: "hash-a"}); err != nil {
+		t.Fatal(err)
+	}
+	bridge := &BridgeService{LAN: &fakeLAN{running: true}, ConfigPath: path, HostID: "h_test"}
+	if st := bridge.Status(); !st.AccountLinked || st.AccountUnlisted {
+		t.Fatalf("before any publish: linked=%v unlisted=%v, want linked and not known unlisted", st.AccountLinked, st.AccountUnlisted)
+	}
+	bridge.NoteAccountListing("hash-a", false)
+	if st := bridge.Status(); !st.AccountUnlisted {
+		t.Fatal("a refused publish under the current token was not reported as unlisted")
+	}
+	// A refusal of an earlier token says nothing about the current one.
+	bridge.NoteAccountListing("hash-old", false)
+	if bridge.Status().AccountUnlisted {
+		t.Fatal("a refusal of another token marked the current one unlisted")
+	}
+	bridge.NoteAccountListing("hash-a", false)
+	bridge.NoteAccountListing("hash-a", true)
+	if bridge.Status().AccountUnlisted {
+		t.Fatal("an accepted publish left the machine unlisted")
+	}
+}

@@ -291,3 +291,20 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 		t.Fatalf("fixed address status = %q, %v", out, err)
 	}
 }
+
+// A machine holding an account token that AO Cloud never listed must not
+// claim the account's devices list it (#7976).
+func TestRemoteHostCLISaysAnUnlistedMachineIsNotListed(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"accountLinked":true,"accountUnlisted":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"quick.trycloudflare.com","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || strings.Contains(out, "devices list this machine") ||
+		!strings.Contains(out, "Not listed in any AO account") || !strings.Contains(out, "ao remote-host link") {
+		t.Fatalf("unlisted status = %q, %v", out, err)
+	}
+}

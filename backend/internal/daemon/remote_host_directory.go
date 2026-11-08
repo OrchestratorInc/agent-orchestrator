@@ -31,6 +31,9 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 			return
 		}
 		err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash, bridge.ConfigPath)
+		if err == nil || errors.Is(err, errAddressRefused) {
+			bridge.NoteAccountListing(hash, err == nil)
+		}
 		switch {
 		case errors.Is(err, errAddressRefused):
 			// No account lists this link yet: a device that just took the
