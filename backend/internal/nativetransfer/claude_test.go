@@ -293,3 +293,27 @@ func TestExportClaudePrefersTheSessionFolder(t *testing.T) {
 		t.Fatalf("without cwd, exported %s, want the newest copy %s", got, filepath.Dir(stale))
 	}
 }
+
+func TestExportImportClaudeLongLineAndNoTrailingNewline(t *testing.T) {
+	f := newClaudeFixture(t)
+	big := strings.Repeat("x", 12<<20)
+	lines := []string{
+		`{"type":"user","cwd":"` + f.cwdA + `","message":{"role":"user","content":"start"}}`,
+		`{"type":"user","cwd":"` + f.cwdA + `","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"` + big + ` ` + f.cwdA + `/big.txt"}]}}`,
+		`{"type":"assistant","cwd":"` + f.cwdA + `","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`,
+	}
+	writeFile(t, filepath.Join(f.projA, testID+".jsonl"), strings.Join(lines, "\n"))
+	buf, _ := exportFixture(t, f)
+	res, err := ImportClaude(context.Background(), buf, ClaudeImportOptions{ConfigDir: f.cfgB, LaunchCwd: f.cwdB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readLines(t, res.TranscriptPath)
+	// The fixture's subagent transcript adds one rewritten line.
+	if len(got) != 3 || res.RewrittenLines != 4 {
+		t.Fatalf("got %d lines, %d rewritten; want 3 and 4", len(got), res.RewrittenLines)
+	}
+	if !strings.Contains(got[1], big+" "+f.cwdB+"/big.txt") || strings.Contains(got[2], f.cwdA) {
+		t.Fatalf("long line or last line was not rewritten (line lengths %d, %d)", len(got[1]), len(got[2]))
+	}
+}
