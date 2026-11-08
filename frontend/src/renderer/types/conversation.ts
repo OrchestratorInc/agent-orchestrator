@@ -296,6 +296,8 @@ export interface CommandDetail {
 	outputSource?: "stream" | "aggregate";
 	/** Accumulation stopped at the daemon's cap; the command printed more. */
 	outputTruncated?: boolean;
+	/** The page carries only the head and tail of the output; this is its full size in bytes. */
+	outputBytes?: number;
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
@@ -490,7 +492,9 @@ export interface SystemEventDetail {
 		| "workspace.script.run"
 		| "account.switched"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
-		| "approval_mode.substituted";
+		| "approval_mode.substituted"
+		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
+		| "session.model_unavailable";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
@@ -720,6 +724,8 @@ export interface ChatModel {
 	supportsFast?: boolean;
 	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator". */
+	hint?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -747,6 +753,8 @@ export interface ChatConfigChoice {
 	groupName?: string;
 	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator"; the provider never sends it. */
+	hint?: string;
 }
 
 /** The two value shapes ACP session config supports. */

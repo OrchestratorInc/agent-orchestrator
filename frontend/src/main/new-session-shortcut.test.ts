@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL } from "../shared/shortcuts";
 import { attachAppShortcuts, attachShellReloadGuard } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
@@ -212,7 +212,7 @@ describe("attachAppShortcuts", () => {
 		["macOS", true, "toggle-sidebar", { key: "b", meta: true }],
 		["macOS", true, "toggle-terminal", { key: "`", code: "Backquote", control: true }],
 		["macOS", true, "toggle-terminal", { key: "j", meta: true }],
-		["macOS", true, "toggle-diff", { key: "D", meta: true, shift: true }],
+		["macOS", true, "toggle-diff", { key: "Î", code: "KeyD", alt: true, shift: true }],
 		["macOS", true, "toggle-inspector", { key: "B", meta: true, shift: true }],
 		["macOS", true, "toggle-inspector", { key: "b", code: "KeyB", meta: true, alt: true }],
 		["macOS", true, "command-palette", { key: "k", meta: true }],
@@ -438,6 +438,34 @@ describe("attachAppShortcuts", () => {
 				: { key: "-", code: "Minus", control: true },
 		);
 
+		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["macOS", true, "meta"],
+		["Windows/Linux", false, "control"],
+	] as const)("claims zoom chords for an engaged artifact viewer on %s, ahead of the app's View zoom", (_platform, isMac, modifier) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		const primary = modifier === "meta" ? { meta: true } : { control: true };
+		let engaged = true;
+		attachAppShortcuts(source, isMac, target, false, () => ({}), () => false, () => true, undefined, () => false, () => false, () => engaged);
+
+		for (const [input, action] of [
+			[{ key: "=", code: "Equal" }, "in"],
+			[{ key: "-", code: "Minus" }, "out"],
+			[{ key: "0", code: "Digit0" }, "reset"],
+		] as const) {
+			const event = source.emit({ ...input, ...primary });
+			expect(event.preventDefault).toHaveBeenCalledOnce();
+			expect(target.send).toHaveBeenLastCalledWith(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, action);
+		}
+
+		// Not engaged, the chord is the app's View zoom again.
+		target.send.mockClear();
+		engaged = false;
+		const appZoomEvent = source.emit({ key: "=", code: "Equal", ...primary });
 		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
 	});

@@ -46,10 +46,12 @@ export function useCanGoForward(): boolean {
 }
 
 export function TitlebarNav({
+  onBack,
   historyLocked = false,
   isFullScreen = false,
   zoomFactor = 1,
 }: {
+  onBack?: () => void;
   historyLocked?: boolean;
   isFullScreen?: boolean;
   zoomFactor?: number;
@@ -174,9 +176,9 @@ export function TitlebarNav({
         >
           <div className="flex items-center gap-1">
             <TitlebarButton
-              disabled={historyLocked || !canGoBack}
+              disabled={!onBack && (historyLocked || !canGoBack)}
               label={t("titlebar.goBack")}
-              onClick={() => router.history.back()}
+              onClick={onBack ?? (() => router.history.back())}
               shortcut="history-back"
             >
               <ArrowLeft className="size-icon-lg" aria-hidden="true" />

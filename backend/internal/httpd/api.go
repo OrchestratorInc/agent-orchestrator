@@ -280,7 +280,7 @@ func (a *API) Register(root chi.Router) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
-						pattern == "/api/v1/projects/clone/prepare" {
+						pattern == "/api/v1/projects/clone/prepare" || pattern == "/api/v1/projects/clone/prepare/stream" {
 						clone.ServeHTTP(w, req)
 						return
 					}

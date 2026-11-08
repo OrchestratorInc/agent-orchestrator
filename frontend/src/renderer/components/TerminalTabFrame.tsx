@@ -4,6 +4,7 @@ import { Pressable } from "./ui/pressable";
 
 type TerminalTabFrameProps = {
 	active: boolean;
+	wide?: boolean;
 	icon: ReactNode;
 	label: string;
 	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
@@ -14,6 +15,8 @@ type TerminalTabFrameProps = {
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 	/** Replaces the label while the tab is renamed. */
 	editingContent?: ReactNode;
+	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
+	trailing?: ReactNode;
 };
 
 /** The control in a tab's icon slot, shared so close buttons and menus match. */
@@ -25,6 +28,7 @@ export const terminalTabActionClassName =
 // control that replaces the icon on hover, so they cannot drift apart.
 export function TerminalTabFrame({
 	active,
+	wide = false,
 	icon,
 	label,
 	action,
@@ -32,16 +36,19 @@ export function TerminalTabFrame({
 	buttonRef,
 	buttonProps,
 	editingContent,
+	trailing,
 }: TerminalTabFrameProps) {
 	return (
 		<span
 			className={cn(
-				"group relative inline-flex h-full min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch items-center border-r border-border",
+				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center border-r border-border",
+				wide ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"
 					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
+			data-active={active || undefined}
 			data-terminal-tab-frame
 			onClick={(event) => {
 				if (event.target !== event.currentTarget) return;
@@ -71,6 +78,7 @@ export function TerminalTabFrame({
 						{icon}
 					</span>
 					<span className="truncate">{label}</span>
+					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
 			{action ? (

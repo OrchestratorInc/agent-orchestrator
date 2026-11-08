@@ -315,9 +315,9 @@ export function shouldHandleAppShortcutInBrowserContext(
   isMac: boolean,
 ): boolean {
   if (id === "find-in-chat") return false;
-  if (id === "new-shell-terminal" || id === "close-shell-terminal")
+  if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
-  // Dictation types into the chat composer, never a page; ⌘D belongs to the page.
+  // Dictation types into the chat composer, never a page.
   if (id === "dictate") return false;
   return (
     browserShortcutAction(
@@ -559,6 +559,8 @@ export type BrowserViewHost = {
   clearProfileData: (profileId: BrowserProfileId) => Promise<void>;
   // Whether browser-owned UI was the most recently used application surface.
   isLastUsedBrowser: () => boolean;
+  // Whether any Browser panel is on screen with a page in it.
+  hasVisiblePanel: () => boolean;
   // Refresh the live page after raising the transparent shell for an overlay.
   // Hide immediately, then restore visibility with the bounds nudge on the next
   // tick — a same-turn hide/show can coalesce into a no-op on macOS and leave
@@ -967,8 +969,9 @@ export function createBrowserViewHost(
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
 
-  // A worker without a durable binding starts in the first configured profile;
-  // temporary is used only when no profile exists or the human picked it.
+  // Prefer the worker's choice, then the global default, then Temporary. The
+  // store makes the first profile the default; an explicit Temporary choice
+  // bypasses it.
   const initialProfileIdForSession = (
     sessionId: string,
   ): BrowserProfileId | null => {
@@ -5015,6 +5018,8 @@ export function createBrowserViewHost(
     clearProfileData,
     isLastUsedBrowser: () =>
       lastUsedViewId !== null && entries.has(lastUsedViewId),
+    hasVisiblePanel: () =>
+      [...entries.values()].some((session) => session.visible && session.tabs.size > 0),
     // Reordering the transparent shell above a live page can leave either
     // WebContentsView showing a stale compositor surface on macOS. A one-pixel
     // bounds nudge alone is insufficient: Electron also needs a visibility
@@ -6135,7 +6140,8 @@ async function ensureDebugger(entry: BrowserEntry): Promise<void> {
       );
     }
   }
-  await debug.sendCommand("Runtime.enable");
+  // No Runtime.enable: none of these callers needs it, and an enabled Runtime
+  // is visible to pages and scored as automation by bot managers.
   await debug.sendCommand("DOM.enable");
 }
 

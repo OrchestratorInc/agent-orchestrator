@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
@@ -15,7 +16,6 @@ import {
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -51,6 +51,7 @@ type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind
 
 export function SessionBranchSummary({
 	hostId,
+	merged = false,
 	onOpenFiles,
 	openPRNumber,
 	pullRequests,
@@ -58,6 +59,7 @@ export function SessionBranchSummary({
 	title,
 }: {
 	hostId?: string;
+	merged?: boolean;
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
@@ -85,7 +87,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const plan = gitActionPlan(facts, openPRNumber, merged);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
@@ -94,7 +96,7 @@ export function SessionBranchSummary({
 				params: { path: { sessionId: session.id } },
 				body: { message: gitActionMessage(kind, facts.base, openPRNumber) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.git.actionFailed")));
+			if (error) throw apiErrorException(error, t("inspector.git.actionFailed"));
 		},
 		onMutate: (kind) => startPending(key, kind),
 		onError: () => clearPending(key),
@@ -315,7 +317,7 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, merged = false): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
@@ -326,7 +328,7 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined)
 	}
 	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
 	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
+	if (!merged && facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
 

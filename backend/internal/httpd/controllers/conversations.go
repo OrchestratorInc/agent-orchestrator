@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -65,7 +66,7 @@ type ConversationService interface {
 }
 
 type pagedConversationService interface {
-	SnapshotPage(ctx context.Context, session domain.SessionID, beforeSequence, limit int64) (chatsvc.Snapshot, error)
+	SnapshotPage(ctx context.Context, session domain.SessionID, beforeSequence, afterSequence, limit int64) (chatsvc.Snapshot, error)
 }
 
 type reviewerConversationService interface {
@@ -900,22 +901,36 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	session := domain.SessionID(chi.URLParam(r, "sessionId"))
-	before, err := optionalPositiveInt64(r.URL.Query().Get("beforeSequence"))
+	query := r.URL.Query()
+	before, err := optionalPositiveInt64(query.Get("beforeSequence"))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", err.Error(), nil)
 		return
 	}
+	after, err := optionalPositiveInt64(query.Get("afterSequence"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", "afterSequence must be a positive integer", nil)
+		return
+	}
 	limit := int64(200)
-	if raw := r.URL.Query().Get("limit"); raw != "" {
+	if raw := query.Get("limit"); raw != "" {
 		limit, err = strconv.ParseInt(raw, 10, 64)
 		if err != nil || limit < 1 || limit > 500 {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_LIMIT_INVALID", "limit must be between 1 and 500", nil)
 			return
 		}
 	}
+	var outputLimit int64
+	if raw := query.Get("outputLimit"); raw != "" {
+		outputLimit, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || outputLimit < 64 || outputLimit > 65536 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_OUTPUT_LIMIT_INVALID", "outputLimit must be between 64 and 65536", nil)
+			return
+		}
+	}
 	var snapshot chatsvc.Snapshot
 	if paged, ok := c.Svc.(pagedConversationService); ok {
-		snapshot, err = paged.SnapshotPage(r.Context(), session, before, limit)
+		snapshot, err = paged.SnapshotPage(r.Context(), session, before, after, limit)
 	} else {
 		snapshot, err = c.Svc.Snapshot(r.Context(), session)
 	}
@@ -924,11 +939,40 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	response := conversationSnapshotResponse(snapshot)
+	if outputLimit > 0 {
+		for _, activity := range response.Activities {
+			capActivityOutput(activity.Detail, int(outputLimit))
+		}
+	}
 	// Excerpt verification is owned by AO, independently of provider capabilities.
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
 	response.SupportsFileReferences = true
 	envelope.WriteJSON(w, http.StatusOK, response)
+}
+
+// outputElision joins the head and tail of a cut command output.
+const outputElision = "\n…\n"
+
+// capActivityOutput keeps the head and tail of a long command output, so a page
+// stays small while the first lines and the result line both stay readable.
+// outputBytes is the full size; a client reads the whole output with a page that
+// holds only this activity and no outputLimit.
+func capActivityOutput(detail map[string]any, limit int) {
+	output, ok := detail["output"].(string)
+	if !ok || len(output) <= limit {
+		return
+	}
+	head := limit / 2
+	for head > 0 && !utf8.RuneStart(output[head]) {
+		head--
+	}
+	tail := len(output) - (limit - head)
+	for tail < len(output) && !utf8.RuneStart(output[tail]) {
+		tail++
+	}
+	detail["output"] = output[:head] + outputElision + output[tail:]
+	detail["outputBytes"] = len(output)
 }
 
 func optionalPositiveInt64(raw string) (int64, error) {
@@ -1374,6 +1418,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		LatestSequence:                   s.Conversation.LatestSequence,
 		OldestSequence:                   s.OldestSequence,
 		HasMoreBefore:                    s.HasMoreBefore,
+		AfterSequence:                    s.AfterSequence,
 		NativeForkAvailableAfterSequence: s.NativeForkAvailableAfterSequence,
 		Turns:                            make([]ConversationTurnResponse, 0, len(s.Turns)),
 		Messages:                         make([]ConversationMessageResponse, 0, len(s.Messages)),

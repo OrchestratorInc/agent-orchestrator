@@ -334,6 +334,9 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 					if (match.left < bounds.left || match.right > bounds.right) code.scrollLeft += match.left + match.width / 2 - bounds.left - bounds.width / 2;
 				}
 				const rect = selected[0].getBoundingClientRect(), scroll = viewport.current;
+				// A long user prompt folds to ten lines; open it when the match is under the fold.
+				const fold = selected[0].startContainer.parentElement?.closest<HTMLElement>(".chat-human-fold[data-folded]");
+				if (fold?.id && rect.bottom > fold.getBoundingClientRect().bottom) surface.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(fold.id)}"]`)?.click();
 				if (scroll) { const bounds = scroll.getBoundingClientRect(); scroll.scrollTo({ top: scroll.scrollTop + rect.top + rect.height / 2 - bounds.top - bounds.height / 2, behavior: "auto" }); writtenRef.current?.(scroll.scrollTop); }
 				requestedScroll.current = undefined;
 			}

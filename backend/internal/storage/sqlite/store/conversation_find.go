@@ -70,7 +70,7 @@ func (s *Store) ConversationFindWindow(ctx context.Context, id string, sequence 
 	} else {
 		before += 51
 	}
-	page, err := view.loadConversationSnapshotPage(ctx, id, before, 100, false)
+	page, err := view.loadConversationSnapshotRange(ctx, id, before, 0, 100, false)
 	if err != nil {
 		return domain.ConversationFindWindow{}, err
 	}

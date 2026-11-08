@@ -21,10 +21,6 @@ Orchestrator performs bounded installation and authentication probes before spaw
 
 ## Accounts
 
-Open **Settings → Subscriptions** to view the current Codex account, add another account through Codex's login terminal, or switch to a verified account. Orchestrator uses the verified account name as the card label. Supported Codex builds also show plan and usage details.
+Open **Settings → Harness → Codex → Account** to see Codex's own login and the accounts you add in Orchestrator, each with its plan, usage limits, and reset credits. **Add account** runs Codex's device-code sign-in in a terminal, inside a separate Codex home for that account. Orchestrator never reads or stores the token. An account keeps only its own sign-in: conversations and history stay shared, so every account sees the same sessions.
 
-Exactly one account is active for Orchestrator Codex launches on this device. Switching updates and verifies the device's Codex credential; new Orchestrator launches wait for the switch to finish.
-
-Running Orchestrator Codex sessions and reviewers are not switched. Existing turns continue best-effort, while newly launched controllers use the selected account. Resume or restart a session to relaunch its controller under that account.
-
-Orchestrator does not control how other Codex clients on this device use authentication, or how switching an account affects them. Orchestrator never parses or exposes `auth.json`, and it does not scrape billing information. Sign out an account; you can delete it once it is inactive. Per-session account selection, rename, reorder, and in-place replacement are not available.
+New tasks start on the account marked **Default for new tasks**; **Make default** changes it. Sessions on different accounts run side by side. A session's Summary shows its account: choosing another restarts the agent on that account in the same conversation, and Orchestrator asks before it stops a turn that is still running. Adding, removing, or choosing a default account in Orchestrator never changes the login Codex uses outside Orchestrator.

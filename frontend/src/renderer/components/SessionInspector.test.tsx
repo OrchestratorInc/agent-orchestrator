@@ -26,6 +26,7 @@ import type {
   PRState,
   PullRequestFacts,
   SessionArtifact,
+  SessionBranchState,
   WorkspaceSession,
   WorkspaceSummary,
 } from "../types/workspace";
@@ -4403,6 +4404,61 @@ describe("SessionInspector Cloud reviews", () => {
     expect(screen.queryByText("make old")).not.toBeInTheDocument();
     expect(screen.queryByText("make teardown")).not.toBeInTheDocument();
   });
+  it.each([
+    { who: "the owner", shared: false },
+    { who: "a guest", shared: true },
+  ])("shows $who a shared session's pull request, leaving managing it to the owner", async ({ shared }) => {
+    const readyPR = prSummary(7, "open", { headSha: "abc123" });
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({
+      sessionId: "sess-1",
+      pullRequests: [{ url: readyPR.url, number: 7, state: "open", updatedAt: "2026-06-15T00:00:00Z" }],
+    });
+    cloudCpMock.getSessionReviewState.mockResolvedValue({
+      sessionId: "sess-1",
+      reviewerHarness: "claude-code",
+      availableReviewerHarnesses: ["claude-code"],
+      reviews: [{ pullRequestUrl: readyPR.url, pullRequestNumber: 7, title: "PR 7", targetSha: "abc123", status: "needs_review" }],
+      runs: [],
+    });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { cloud: { orgId: "cloud-org-1", ...(shared ? { shared: true } : {}) } })} />,
+      undefined,
+      (client) => {
+        client.setQueryData(settingsQueryKey, {
+          defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+          cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+        });
+        client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
+      },
+    );
+
+    // Everyone sees the pull request.
+    expect(screen.getByText("PR 7")).toBeInTheDocument();
+    if (shared) {
+      expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Ask the owner to merge #7" })).toBeInTheDocument();
+      expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Ask the owner to merge #7" })).not.toBeInTheDocument();
+      expect(screen.getByText("Session controls")).toBeInTheDocument();
+    }
+
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await waitFor(() => expect(cloudCpMock.getSessionReviewState).toHaveBeenCalled());
+    await screen.findByText("Review controls");
+    if (shared) {
+      await waitFor(() => expect(screen.queryByText("Loading reviews...")).not.toBeInTheDocument());
+      expect(screen.queryByRole("switch", { name: "Auto review" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Select reviewer agent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^(run review|review latest commit)$/i })).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByRole("switch", { name: "Auto review" })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Select reviewer agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^(run review|review latest commit)$/i })).toBeInTheDocument();
+    }
+    expect(cloudCpMock.triggerSessionReviews).not.toHaveBeenCalled();
+  });
   it("does not report an already-reviewed commit while a cloud review handle is pending", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
       sessionId: "sess-1",
@@ -4792,9 +4848,11 @@ describe("SessionInspector branch summary", () => {
   function mockGitState({
     uncommitted = [],
     committed = [],
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
+    prs,
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; prs?: SessionPRSummary[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
+      if (prs && path === "/api/v1/sessions/{sessionId}/pr") return { data: { prs, linkedPrs: [] }, error: undefined };
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: {
@@ -4956,6 +5014,37 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByText("pushed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
+  });
+
+  const mergedHead = "a".repeat(40);
+  const mergedPR = () => prSummary(7, "merged", { url: "https://example.com/pr/7", headSha: mergedHead });
+  const renderMerged = (branchState: SessionBranchState) =>
+    renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState })} />, undefined, (client) =>
+      seedPRSummaries(client, [mergedPR()]),
+    );
+
+  it("offers no Create PR once the merged PR has the pushed head", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+
+    expect(await branch().findByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("4 commits")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
+  });
+
+  it("offers a new PR for commits pushed after the merge", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(5), remoteHead: "b".repeat(40) });
+
+    expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+  });
+
+  it("offers a new PR for work made after the merge", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+
+    expect(await screen.findByRole("button", { name: "Commit & create PR" })).toBeInTheDocument();
   });
 
   it("leaves the loading state once the PR appears", async () => {
