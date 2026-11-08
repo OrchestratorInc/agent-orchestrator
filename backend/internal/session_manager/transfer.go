@@ -147,18 +147,29 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 		return domain.SessionTransfer{}, fmt.Errorf("transfer %s: stop agent: %w", id, err)
 	}
 
-	ws := workspaceInfo(rec)
-	localRef, err := m.workspace.StashUncommitted(ctx, ws)
+	var head, remoteRef string
+	err = func() error {
+		// A new session's branch is renamed under this gate once its title is
+		// generated; read the branch and push it without a rename in between.
+		defer m.acquireWorkspaceGate(rec.ProjectID)()
+		if rec, err = m.getRecord(ctx, id); err != nil {
+			return err
+		}
+		ws := workspaceInfo(rec)
+		localRef, err := m.workspace.StashUncommitted(ctx, ws)
+		if err != nil {
+			return fmt.Errorf("transfer %s: capture uncommitted work: %w", id, err)
+		}
+		if localRef != "" {
+			remoteRef = "refs/ao/preserved/" + transferID
+		}
+		if head, err = git.PushTransfer(ctx, ws, localRef, remoteRef); err != nil {
+			return fmt.Errorf("transfer %s: push: %w", id, err)
+		}
+		return nil
+	}()
 	if err != nil {
-		return domain.SessionTransfer{}, fmt.Errorf("transfer %s: capture uncommitted work: %w", id, err)
-	}
-	remoteRef := ""
-	if localRef != "" {
-		remoteRef = "refs/ao/preserved/" + transferID
-	}
-	head, err := git.PushTransfer(ctx, ws, localRef, remoteRef)
-	if err != nil {
-		return domain.SessionTransfer{}, fmt.Errorf("transfer %s: push: %w", id, err)
+		return domain.SessionTransfer{}, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return domain.SessionTransfer{}, err

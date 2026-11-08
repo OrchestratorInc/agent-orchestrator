@@ -7,7 +7,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { cancelWaitingMove, clearMove, moveKey, runMove, useMoveStore } from "../lib/move-runner";
-import { commitMove, type MoveResult, type MoveStep } from "../lib/move-session";
+import { commitMove, MOVE_PART_BYTES, type MoveResult, type MoveStep } from "../lib/move-session";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { hostsWithRepo } from "../lib/repo-hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -92,7 +92,7 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 					return;
 				}
 				clearMove(key);
-				const body = result.resumed ? undefined : t("moveSession.summaryBody", { source: source.label });
+				const body = result.resumed ? undefined : t("moveSession.summaryBody");
 				const title = t("moveSession.toastDone", { host: dest.label });
 				// Success moves the person along: to the session if they waited, a toast with Open if they left.
 				if (dialogOpen()) {
@@ -191,9 +191,9 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 								ariaLabel={t("moveSession.title")}
 								className="w-full max-w-none"
 								activeIndex={Math.max(0, STEPS.indexOf(move?.step ?? "prepare"))}
-								steps={STEPS.map((step) => t(`moveSession.step.${step}`, { host: step === "prepare" ? source.label : destination.label }))}
+								steps={STEPS.map((step) => t(`moveSession.step.${step}`, { host: destination.label }))}
 								stepAccessories={STEPS.map((_, index) =>
-									index === copyIndex && progress ? (
+									index === copyIndex && progress && progress.total > MOVE_PART_BYTES ? (
 										<span className="pl-3 text-xs tabular-nums text-muted-foreground">
 											{t("moveSession.progress", { sent: Math.round(progress.sent / MB), total: Math.max(1, Math.round(progress.total / MB)) })}
 										</span>
@@ -215,7 +215,7 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 
 					{view === "commitFailed" && move?.result ? (
 						<p role="alert" className="text-xs leading-5 text-destructive">
-							{t("moveSession.commitFailed", { target: destination?.label ?? "", source: source.label, message: move.result.commitError ?? "" })}
+							{t("moveSession.commitFailed", { target: destination?.label ?? "", message: move.result.commitError ?? "" })}
 						</p>
 					) : null}
 				</div>
