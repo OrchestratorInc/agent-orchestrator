@@ -59,8 +59,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const { t, i18n } = useTranslation();
 	const queryClient = useQueryClient();
 	const remotes = useConnectedHosts();
-	// This computer first, then each connected remote in the order it connected.
-	const hostIds = useMemo(() => [LOCAL_HOST, ...remotes.filter((hostId) => !isLocal(hostId))], [remotes]);
+	// Each connected remote in the order it connected, then this computer: a
+	// long local list would otherwise bury the remotes at the bottom of the stack.
+	const hostIds = useMemo(() => [...remotes.filter((hostId) => !isLocal(hostId)), LOCAL_HOST], [remotes]);
 	const ensured = useEnsuredReadinessHosts(hostIds, { enabled, retryOnError: true });
 	const readinessQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...agentReadinessQueryOptionsForHost(apiHost(hostId)), enabled })) });
 	const installerQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...installersQueryOptions(apiHost(hostId)), enabled })) });

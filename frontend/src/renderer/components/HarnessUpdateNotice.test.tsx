@@ -815,13 +815,15 @@ describe("harness updates on remote hosts", () => {
 		expect(await within(card).findByRole("button", { name: "Updating…" })).toBeDisabled();
 	});
 
-	it("groups a stack that spans hosts under each host's name", async () => {
+	it("groups a stack that spans hosts under each host's name, remotes first", async () => {
 		localAdvisory = behind("2.1.291", "2.1.292");
 		mountNotice();
 		const stack = await screen.findByRole("group", { name: "Agent updates available" });
 		expect(within(stack).getByText("2 agent updates")).toBeInTheDocument();
 		expect(within(stack).getByText("2 machines")).toBeInTheDocument();
 		await userEvent.click(within(stack).getByRole("button", { name: "Show all (2)" }));
+		// A long local list must not bury a remote's updates at the bottom.
+		expect(within(stack).getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["my-vm", "This computer"]);
 		const here = within(stack).getByRole("region", { name: "This computer" });
 		const vm = within(stack).getByRole("region", { name: "my-vm" });
 		expect(within(here).getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
