@@ -9,8 +9,7 @@ import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant, type ModelVariant } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
 import { ToggleRow } from "../chat/AgentSwitchPicker";
-import { EffortChip } from "./EffortChip";
-import { formatEffortLabel } from "./EffortPicker";
+import { EffortPicker, formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import { Pressable } from "../ui/pressable";
@@ -609,12 +608,14 @@ export function AgentModelCombobox({
 			{effortChip && tuning && effortOptions.length > 0 ? (
 				<div className="flex min-w-0 flex-wrap items-center gap-2">
 					{menu}
-					<EffortChip
-						aria-label={`${effortRoleLabel}${t("settings.models.effort")}`}
+					<EffortPicker
+						label={`${effortRoleLabel}${t("settings.models.effort")}`}
 						value={effectiveEffort}
-						levels={effortOptions.map((effort) => ({ value: effort }))}
+						choices={effortOptions.map((effort) => ({ value: effort }))}
+						defaultEffort={defaultEffort || undefined}
 						disabled={disabled}
-						onChange={(effort) => tuning.onEffortChange(effort === defaultEffort ? "" : effort)}
+						triggerClassName="w-fit"
+						onChange={tuning.onEffortChange}
 					/>
 				</div>
 			) : menu}

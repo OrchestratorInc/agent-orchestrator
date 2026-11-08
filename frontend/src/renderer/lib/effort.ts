@@ -14,18 +14,10 @@ export function fallbackEffort(levels: string[], providerDefault?: string): stri
 	const concrete = levels.filter((level) => level && level.toLowerCase() !== "default");
 	if (concrete.length === 0) return undefined;
 	if (providerDefault && concrete.includes(providerDefault)) return undefined;
-	const ordered = orderEffortLevels(concrete);
+	const ordered = concrete.every((level) => KNOWN_LEVEL_ORDER.includes(level))
+		? [...concrete].sort((a, b) => KNOWN_LEVEL_ORDER.indexOf(a) - KNOWN_LEVEL_ORDER.indexOf(b))
+		: concrete;
 	return ordered[Math.floor((ordered.length - 1) / 2)];
-}
-
-/**
- * Effort levels from lowest to highest. Known level names are sorted; a list
- * with any name AO does not know keeps the provider's own order.
- */
-export function orderEffortLevels(levels: string[]): string[] {
-	return levels.every((level) => KNOWN_LEVEL_ORDER.includes(level))
-		? [...levels].sort((a, b) => KNOWN_LEVEL_ORDER.indexOf(a) - KNOWN_LEVEL_ORDER.indexOf(b))
-		: levels;
 }
 
 /**

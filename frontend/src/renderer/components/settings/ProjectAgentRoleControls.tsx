@@ -11,7 +11,7 @@ import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../hooks/us
 import { LOCAL_HOST } from "../../lib/hosts";
 import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
-import { EffortChip } from "./EffortChip";
+import { EffortPicker } from "./EffortPicker";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
@@ -139,7 +139,7 @@ export function AgentModelField({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
-		const chipMode = selectedMode || (options.some((option) => option.value === defaultMode) ? defaultMode : "") || "";
+		const shownMode = selectedMode || (options.some((option) => option.value === defaultMode) ? defaultMode : "") || "";
 		const selectMode = (value: string) => {
 			onModeChange(value === defaultMode ? "" : value);
 			onModelChange("");
@@ -151,7 +151,7 @@ export function AgentModelField({
 				<>
 					<div className="flex min-w-0 flex-wrap items-center gap-2">
 						<span className="text-settings-muted">{t("settings.models.autoRouteLabel")}</span>
-						<EffortChip aria-label={label} value={chipMode} levels={options} onChange={selectMode} />
+						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName="w-fit" onChange={selectMode} />
 					</div>
 					{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 				</>

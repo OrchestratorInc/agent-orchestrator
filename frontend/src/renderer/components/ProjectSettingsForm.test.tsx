@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -495,7 +495,6 @@ describe("ProjectSettingsForm", () => {
 		expect(picker).not.toHaveTextContent("High");
 		const effort = screen.getByRole("button", { name: "Worker Effort" });
 		expect(effort).toHaveTextContent("High");
-		expect(within(effort).getByTestId("effort-meter")).toHaveAttribute("data-filled", "2");
 		await userEvent.click(effort);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		submitSettings();
