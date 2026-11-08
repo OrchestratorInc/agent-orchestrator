@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"crypto/sha256"
 	"regexp"
 	"strings"
 	"sync"
@@ -14,20 +15,14 @@ var findInlineImage = regexp.MustCompile(`\.ao/attachments/(?:attachment|image)-
 
 const maxFindBlockCacheBytes = 16 << 20
 
-type findBlockKey struct {
-	id       string
-	revision int64
-	size     int
-}
-
 // findBlockCache keeps parsed settled replies, so a re-search of a long
-// transcript does not run Markdown over all of it again. Cached slices are shared
-// and read-only.
+// transcript does not run Markdown over all of it again. Blocks depend only on
+// the text, so its hash is the key. Cached slices are shared and read-only.
 var findBlockCache = struct {
 	sync.Mutex
-	blocks map[findBlockKey][]string
+	blocks map[[sha256.Size]byte][]string
 	bytes  int
-}{blocks: map[findBlockKey][]string{}}
+}{blocks: map[[sha256.Size]byte][]string{}}
 
 func findMessageBlocks(message domain.ConversationMessage) []string {
 	source := findMessageText(message)
@@ -35,7 +30,7 @@ func findMessageBlocks(message domain.ConversationMessage) []string {
 	if !markdown || message.Streaming {
 		return FindBlocks(source, markdown)
 	}
-	key := findBlockKey{id: message.ID, revision: message.Revision, size: len(source)}
+	key := sha256.Sum256([]byte(source))
 	findBlockCache.Lock()
 	blocks, ok := findBlockCache.blocks[key]
 	findBlockCache.Unlock()
@@ -43,14 +38,14 @@ func findMessageBlocks(message domain.ConversationMessage) []string {
 		return blocks
 	}
 	blocks = FindBlocks(source, true)
-	size := len(key.id)
+	size := 0
 	for _, block := range blocks {
 		size += len(block)
 	}
 	if size <= maxFindBlockCacheBytes {
 		findBlockCache.Lock()
 		if findBlockCache.bytes+size > maxFindBlockCacheBytes {
-			findBlockCache.blocks, findBlockCache.bytes = map[findBlockKey][]string{}, 0
+			findBlockCache.blocks, findBlockCache.bytes = map[[sha256.Size]byte][]string{}, 0
 		}
 		if _, exists := findBlockCache.blocks[key]; !exists {
 			findBlockCache.blocks[key] = blocks
