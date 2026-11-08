@@ -206,6 +206,34 @@ describe("HumanMessageEditor", () => {
 		expect(onSend).toHaveBeenCalledWith("prompt");
 	});
 
+	it("counts leading whitespace as a change, since it is sent", async () => {
+		const user = userEvent.setup();
+		const onSend = vi.fn();
+		render(
+			<TooltipProvider>
+				<HumanMessageEditor
+					text="prompt"
+					originalText="prompt"
+					content={[]}
+					sessionId="session-1"
+					apiBaseUrl={null}
+					pending={false}
+					busy={false}
+					onCancel={vi.fn()}
+					onSend={onSend}
+				/>
+			</TooltipProvider>,
+		);
+		const editor = screen.getByRole("textbox", { name: "Edit message" });
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		fireEvent.change(editor, { target: { value: "prompt  \n" } });
+		expect(send).toBeDisabled();
+		fireEvent.change(editor, { target: { value: "\n\n  prompt" } });
+		expect(send).toBeEnabled();
+		await user.click(send);
+		expect(onSend).toHaveBeenCalledWith("\n\n  prompt");
+	});
+
 	it("never offers to remove an image, even when it shows as a file chip", () => {
 		render(
 			<TooltipProvider>

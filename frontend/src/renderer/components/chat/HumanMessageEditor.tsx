@@ -82,7 +82,7 @@ export function HumanMessageEditor({
 	const unchanged =
 		original !== undefined &&
 		!recoveryLabel &&
-		draft.trim() === original.body.trim() &&
+		draft.trimEnd() === original.body.trimEnd() &&
 		attachments.join("\n") === original.attachments.join("\n");
 	const sendDisabled =
 		pending || sendBlocked || busy || unchanged || composed.trim().length === 0 || (locked && !recoveryLabel);
