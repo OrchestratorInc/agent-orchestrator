@@ -10,6 +10,7 @@ import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTar
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
+import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
@@ -1123,8 +1124,11 @@ export function CloudSessionChatSurface({
 	reviewerChat,
 	onOpenReviewerChat,
 	reviewerChatSelected,
+	onOpenLinkInBrowser,
 }: {
 	session: WorkspaceSession;
+	/** Opens a web link in this session's Browser tab on this computer. */
+	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	/** The session's reviewer, when it runs as a chat: a tab beside the chat, as in a local session. */
 	reviewerChat?: { reviewId: string; harness: string };
 	onOpenReviewerChat?: (target: { reviewId: string; harness: string }) => void;
@@ -1167,6 +1171,7 @@ export function CloudSessionChatSurface({
 }) {
 	const cloud = session.cloud;
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
+	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
@@ -2046,6 +2051,7 @@ export function CloudSessionChatSurface({
 			snapshot={snapshot}
 			localEchos={openingEchos}
 			openingStartedAt={opening?.createdAt}
+			onLinkOpen={openLinkInBrowser}
 			onSessionLinkOpen={openSessionLink}
 			agentSwitch={agentSwitch}
 			models={models}

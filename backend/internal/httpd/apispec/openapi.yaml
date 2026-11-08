@@ -7077,6 +7077,32 @@ paths:
           type:
           - "null"
           - integer
+      - description: Read only items newer than this conversation sequence. The response
+          echoes afterSequence when it applied the floor. Omit for a whole page.
+        in: query
+        name: afterSequence
+        schema:
+          description: Read only items newer than this conversation sequence. The
+            response echoes afterSequence when it applied the floor. Omit for a whole
+            page.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: 'Keep at most this many bytes of each command output: its head
+          and tail. A cut output carries outputBytes, the full size. Omit for whole
+          outputs.'
+        in: query
+        name: outputLimit
+        schema:
+          description: 'Keep at most this many bytes of each command output: its head
+            and tail. A cut output carries outputBytes, the full size. Omit for whole
+            outputs.'
+          maximum: 65536
+          minimum: 64
+          type:
+          - "null"
+          - integer
       responses:
         "200":
           content:
@@ -17189,6 +17215,9 @@ components:
           items:
             $ref: '#/components/schemas/ConversationActivityResponse'
           type: array
+        afterSequence:
+          format: int64
+          type: integer
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
@@ -20295,6 +20324,8 @@ components:
         commits:
           type: integer
         remoteBranch:
+          type: string
+        remoteHead:
           type: string
         unpushed:
           type: integer
