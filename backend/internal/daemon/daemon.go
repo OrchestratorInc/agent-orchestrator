@@ -722,6 +722,9 @@ func Run(buildVersion string) error {
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	githubRepos := newGitHubRepoResolver(log)
+	if githubRepos != nil {
+		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
+	}
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
