@@ -23,6 +23,7 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
+import { MoveSessionDialog } from "../components/MoveSessionDialog";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
@@ -1585,6 +1586,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				) : null}
 				<NewTaskNavigator />
 				<ArchiveModalHost />
+				<MoveSessionDialog />
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<SessionImportDialog />

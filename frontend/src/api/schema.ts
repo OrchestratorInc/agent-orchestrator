@@ -4403,6 +4403,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/transfer/{transferId}/native": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a prepared transfer's conversation archive */
+        get: operations["getSessionTransferArchive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/transfer/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a session as moved to another machine and end it here */
+        post: operations["commitSessionTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/transfer/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop a session's agent and hand over its branch, uncommitted work and conversation for another machine */
+        post: operations["prepareSessionTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/branches": {
         parameters: {
             query?: never;
@@ -4653,6 +4704,40 @@ export interface paths {
         put?: never;
         /** Clean up terminated session workspaces */
         post: operations["cleanupSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/transfer/{transferId}/native/{part}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upload one part of a transfer's conversation archive; the body is the part's bytes */
+        put: operations["putSessionTransferArchivePart"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/transfer/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a session here that continues one moved from another machine */
+        post: operations["receiveSessionTransfer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6112,6 +6197,13 @@ export interface components {
             availableCount: number;
             /** Format: date-time */
             nearestExpiresAt?: null | string;
+        };
+        CommitTransferRequest: {
+            destination: components["schemas"]["SessionTransferDestination"];
+            transferId: string;
+        };
+        CommitTransferResponse: {
+            movedTo: components["schemas"]["SessionMovedTo"];
         };
         CompactConversationResponse: {
             /** Format: int64 */
@@ -7693,6 +7785,11 @@ export interface components {
             ok: boolean;
             taskPreparation?: string;
         };
+        PrepareTransferRequest: {
+            /** @description This machine's name as the user sees it, for the destination's note. */
+            sourceLabel: string;
+            transferId: string;
+        };
         PreviewServerStatusResponse: {
             configuration?: string;
             error?: string;
@@ -7777,6 +7874,8 @@ export interface components {
             name: string;
             orchestratorAgent?: string;
             path: string;
+            repo: string;
+            repoKey: string;
             resolveError?: string;
             sessionPrefix: string;
         };
@@ -7854,6 +7953,16 @@ export interface components {
             pat: string;
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
+        };
+        ReceiveTransferRequest: {
+            projectId: string;
+            transfer: components["schemas"]["SessionTransfer"];
+        };
+        ReceiveTransferResponse: {
+            /** @description This machine's hostname, for the source's moved marker. */
+            hostLabel: string;
+            session: components["schemas"]["ControllersSessionView"];
+            warnings: string[];
         };
         RecordAgentSignInResponse: {
             releasedKey?: string;
@@ -8278,6 +8387,12 @@ export interface components {
             sampledAt: string;
             sessionId: string;
         };
+        SessionMovedTo: {
+            hostId: string;
+            label: string;
+            sessionId: string;
+            transferId: string;
+        };
         SessionPRCISummary: {
             autoInjectCI: boolean;
             checks: components["schemas"]["SessionPRCheck"][];
@@ -8543,6 +8658,44 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             tool: string;
+        };
+        SessionTransfer: {
+            branch: string;
+            displayName?: string;
+            effort?: string;
+            handoffNote: string;
+            harness: string;
+            headSha: string;
+            issueId?: string;
+            model?: string;
+            native?: components["schemas"]["SessionTransferNative"];
+            permissions?: string;
+            preservedRef?: string;
+            pullRequests?: string[];
+            repoKey: string;
+            requestedOutput?: string;
+            source: components["schemas"]["SessionTransferSource"];
+            transferId: string;
+        };
+        SessionTransferDestination: {
+            hostId: string;
+            label: string;
+            sessionId: string;
+        };
+        SessionTransferNative: {
+            cliVersion?: string;
+            nativeId: string;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            sourceCwd: string;
+        };
+        SessionTransferResponse: {
+            transfer: components["schemas"]["SessionTransfer"];
+        };
+        SessionTransferSource: {
+            label: string;
+            sessionId: string;
         };
         SessionWait: {
             /** @enum {string} */
@@ -26057,6 +26210,184 @@ export interface operations {
             };
         };
     };
+    getSessionTransferArchive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Transfer identifier chosen by the client. */
+                transferId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    commitSessionTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommitTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitTransferResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prepareSessionTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTransferResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listSessionWorkspaceBranches: {
         parameters: {
             query?: never;
@@ -27116,6 +27447,127 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putSessionTransferArchivePart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Transfer identifier chosen by the client. */
+                transferId: string;
+                /** @description Part number, from 0. */
+                part: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    receiveSessionTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiveTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiveTransferResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

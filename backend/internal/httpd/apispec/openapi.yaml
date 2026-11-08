@@ -13239,6 +13239,155 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/transfer/{transferId}/native:
+    get:
+      operationId: getSessionTransferArchive
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Transfer identifier chosen by the client.
+        in: path
+        name: transferId
+        required: true
+        schema:
+          description: Transfer identifier chosen by the client.
+          type: string
+      responses:
+        "200":
+          content:
+            application/gzip:
+              schema:
+                type: string
+          description: OK
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Download a prepared transfer's conversation archive
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/transfer/commit:
+    post:
+      operationId: commitSessionTransfer
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommitTransferRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitTransferResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Mark a session as moved to another machine and end it here
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/transfer/prepare:
+    post:
+      operationId: prepareSessionTransfer
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrepareTransferRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTransferResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop a session's agent and hand over its branch, uncommitted work and
+        conversation for another machine
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/branches:
     get:
       operationId: listSessionWorkspaceBranches
@@ -14365,6 +14514,102 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Clean up terminated session workspaces
+      tags:
+      - sessions
+  /api/v1/sessions/transfer/{transferId}/native/{part}:
+    put:
+      operationId: putSessionTransferArchivePart
+      parameters:
+      - description: Transfer identifier chosen by the client.
+        in: path
+        name: transferId
+        required: true
+        schema:
+          description: Transfer identifier chosen by the client.
+          type: string
+      - description: Part number, from 0.
+        in: path
+        name: part
+        required: true
+        schema:
+          description: Part number, from 0.
+          type: integer
+      responses:
+        "204":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Upload one part of a transfer's conversation archive; the body is the
+        part's bytes
+      tags:
+      - sessions
+  /api/v1/sessions/transfer/receive:
+    post:
+      operationId: receiveSessionTransfer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiveTransferRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiveTransferResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start a session here that continues one moved from another machine
       tags:
       - sessions
   /api/v1/settings:
@@ -18081,6 +18326,25 @@ components:
           - string
       required:
       - availableCount
+      type: object
+    CommitTransferRequest:
+      properties:
+        destination:
+          $ref: '#/components/schemas/SessionTransferDestination'
+        transferId:
+          maxLength: 64
+          minLength: 8
+          type: string
+      required:
+      - transferId
+      - destination
+      type: object
+    CommitTransferResponse:
+      properties:
+        movedTo:
+          $ref: '#/components/schemas/SessionMovedTo'
+      required:
+      - movedTo
       type: object
     CompactConversationResponse:
       properties:
@@ -22185,6 +22449,21 @@ components:
       required:
       - ok
       type: object
+    PrepareTransferRequest:
+      properties:
+        sourceLabel:
+          description: This machine's name as the user sees it, for the destination's
+            note.
+          maxLength: 200
+          type: string
+        transferId:
+          maxLength: 64
+          minLength: 8
+          type: string
+      required:
+      - transferId
+      - sourceLabel
+      type: object
     PreviewServerStatusResponse:
       properties:
         configuration:
@@ -22396,6 +22675,10 @@ components:
           type: string
         path:
           type: string
+        repo:
+          type: string
+        repoKey:
+          type: string
         resolveError:
           type: string
         sessionPrefix:
@@ -22407,6 +22690,8 @@ components:
       - kind
       - sessionPrefix
       - folderMissing
+      - repo
+      - repoKey
       type: object
     PromoteQueuedTurnResponse:
       properties:
@@ -22587,6 +22872,32 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    ReceiveTransferRequest:
+      properties:
+        projectId:
+          type: string
+        transfer:
+          $ref: '#/components/schemas/SessionTransfer'
+      required:
+      - projectId
+      - transfer
+      type: object
+    ReceiveTransferResponse:
+      properties:
+        hostLabel:
+          description: This machine's hostname, for the source's moved marker.
+          type: string
+        session:
+          $ref: '#/components/schemas/ControllersSessionView'
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - session
+      - warnings
+      - hostLabel
       type: object
     RecordAgentSignInResponse:
       properties:
@@ -23643,6 +23954,22 @@ components:
       - sampledAt
       - processes
       type: object
+    SessionMovedTo:
+      properties:
+        hostId:
+          type: string
+        label:
+          type: string
+        sessionId:
+          type: string
+        transferId:
+          type: string
+      required:
+      - transferId
+      - hostId
+      - label
+      - sessionId
+      type: object
     SessionPRCISummary:
       properties:
         autoInjectCI:
@@ -24349,6 +24676,100 @@ components:
       - tool
       - startedAt
       - failed
+      type: object
+    SessionTransfer:
+      properties:
+        branch:
+          type: string
+        displayName:
+          type: string
+        effort:
+          type: string
+        handoffNote:
+          type: string
+        harness:
+          type: string
+        headSha:
+          type: string
+        issueId:
+          type: string
+        model:
+          type: string
+        native:
+          $ref: '#/components/schemas/SessionTransferNative'
+        permissions:
+          type: string
+        preservedRef:
+          type: string
+        pullRequests:
+          items:
+            type: string
+          type: array
+        repoKey:
+          type: string
+        requestedOutput:
+          type: string
+        source:
+          $ref: '#/components/schemas/SessionTransferSource'
+        transferId:
+          type: string
+      required:
+      - transferId
+      - source
+      - repoKey
+      - branch
+      - headSha
+      - handoffNote
+      - harness
+      type: object
+    SessionTransferDestination:
+      properties:
+        hostId:
+          type: string
+        label:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - hostId
+      - label
+      - sessionId
+      type: object
+    SessionTransferNative:
+      properties:
+        cliVersion:
+          type: string
+        nativeId:
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        sourceCwd:
+          type: string
+      required:
+      - nativeId
+      - sourceCwd
+      - size
+      - sha256
+      type: object
+    SessionTransferResponse:
+      properties:
+        transfer:
+          $ref: '#/components/schemas/SessionTransfer'
+      required:
+      - transfer
+      type: object
+    SessionTransferSource:
+      properties:
+        label:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - label
+      - sessionId
       type: object
     SessionWait:
       properties:

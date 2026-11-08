@@ -550,6 +550,10 @@ export type WorkspaceSummary = {
 	standaloneAgent?: boolean;
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
+	/** Identifies the repository across machines; absent for workspace, scratch and Cloud projects. */
+	repoKey?: string;
+	/** The checkout's origin URL, for cloning the same repository elsewhere. */
+	repo?: string;
 	folderMissing?: boolean;
 	/** Automatic starts (tracker intake, schedules) the daemon paused after repeated identical failures. */
 	autoSpawnPauses?: import("../hooks/useAutoSpawnPauseNotice").AutoSpawnPause[];

@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, ArrowRightLeft, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { conversationQueryKey } from "../hooks/useConversation";
@@ -11,7 +11,7 @@ import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, primaryPR, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
 import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
@@ -53,6 +53,7 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	const copyToClipboard = useCopyToClipboard();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
+	const requestMoveSession = useUiStore((state) => state.requestMoveSession);
 	// A local worker whose agent exited and that is not switching interfaces;
 	// orchestrators and remote sessions resume elsewhere, so they skip the check.
 	const canResume = useCanResumeAgent(!session || session.hostId || isOrchestratorSession(session) ? undefined : session);
@@ -73,6 +74,9 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	// Moving resumes the agent's own conversation, which AO can do for Claude Code workers in a project.
+	const canMove = session.provider === "claude-code" && !isOrchestratorSession(session) && !session.isTerminated && !session.cloud &&
+		Boolean(session.workspaceId) && session.workspaceId !== STANDALONE_WORKSPACE_ID;
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
 			.catch((error: unknown) => {
@@ -127,6 +131,15 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 			disabled: Boolean(refused),
 			description: refused?.refusal?.message,
 			onSelect: () => forkSession(session),
+		});
+	}
+	if (canMove) {
+		entries.push({
+			kind: "item",
+			id: "session-move",
+			icon: <ArrowRightLeft aria-hidden="true" />,
+			label: t("moveSession.menu"),
+			onSelect: () => requestMoveSession({ sessionId: session.id, hostId: session.hostId, projectId: session.workspaceId, title: session.title }),
 		});
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });
