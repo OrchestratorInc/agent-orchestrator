@@ -2966,6 +2966,8 @@
 	"chat.edit.send": "Bearbeitete Nachricht senden",
 	"chat.edit.sendShortcut": "Bearbeitete Nachricht senden (⌘/Strg+Enter)",
 	"pr.card.reviewStatus": "Review status",
+	"pr.card.checksCancelled": "Checks cancelled",
+	"pr.merge.checksCancelledDetail": "A check was cancelled and nothing replaced it. Re-run it to get a result.",
 	"pr.card.checksUnavailable": "Checks unavailable",
 	"pr.merge.checksUnavailableDetail": "GitHub did not return complete CI status. Verify the GitHub App has Checks and Commit statuses read access.",
 	"pr.merge.accessLost": "Status unavailable",

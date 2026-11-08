@@ -1242,6 +1242,8 @@
 	"pr.merge.checking": "Проверка",
 	"pr.merge.checkingDetail": "Ожидание последних проверок и состояния ревью.",
 	"pr.merge.checkingReadiness": "Проверка готовности к слиянию",
+	"pr.card.checksCancelled": "Checks cancelled",
+	"pr.merge.checksCancelledDetail": "A check was cancelled and nothing replaced it. Re-run it to get a result.",
 	"pr.card.checksUnavailable": "Проверки недоступны",
 	"pr.merge.checksUnavailableDetail": "GitHub не вернул полный статус CI. Убедитесь, что GitHub App имеет доступ на чтение Checks и Commit statuses.",
 	"pr.merge.accessLost": "Статус недоступен",
