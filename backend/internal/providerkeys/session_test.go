@@ -2,6 +2,8 @@ package providerkeys
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -75,5 +77,60 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 	// Releasing again is a no-op, and says nothing was released.
 	if released, err := ReleaseHarness(ctx, dir, "claude-code"); err != nil || released != "" {
 		t.Fatalf("second release released=%q err=%v", released, err)
+	}
+}
+
+func TestWithheldKeepsTheUsersValueAndFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	t.Setenv("ANTHROPIC_API_KEY", "users-own")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Cleanup(func() {
+		_ = RestoreInherited("ANTHROPIC_API_KEY")
+		_ = RestoreInherited("OPENAI_API_KEY")
+	})
+	for name, value := range map[string]string{"ANTHROPIC_API_KEY": "ao-ant", "OPENAI_API_KEY": "ao-oai"} {
+		if err := Save(ctx, dir, name, value); err != nil {
+			t.Fatal(err)
+		}
+		if err := ExportForProbes(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Claude Code gets back the key the user exported before AO replaced it.
+	if got := Withheld(dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": "users-own"}) {
+		t.Fatalf("Withheld(claude-code) = %v", got)
+	}
+	// Codex had none of its own, so AO's copy is blanked; other harnesses
+	// receive every key.
+	if got := Withheld(dir, "codex"); !reflect.DeepEqual(got, map[string]string{"OPENAI_API_KEY": ""}) {
+		t.Fatalf("Withheld(codex) = %v", got)
+	}
+	if got := Withheld(dir, "goose"); len(got) != 0 {
+		t.Fatalf("Withheld(goose) = %v", got)
+	}
+	// A claimed key reaches its harness's sessions, but never its sign-in.
+	if err := ClaimForHarness(ctx, dir, "OPENAI_API_KEY", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if got := Withheld(dir, "codex"); len(got) != 0 {
+		t.Fatalf("claimed key withheld: %v", got)
+	}
+	if got := WithheldForSignIn("codex"); !reflect.DeepEqual(got, map[string]string{"OPENAI_API_KEY": ""}) {
+		t.Fatalf("WithheldForSignIn(codex) = %v", got)
+	}
+	// An unreadable claim list withholds rather than handing over AO's key.
+	if err := os.WriteFile(filepath.Join(dir, harnessFilename), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Withheld(dir, "codex"); !reflect.DeepEqual(got, map[string]string{"OPENAI_API_KEY": ""}) {
+		t.Fatalf("Withheld with an unreadable store = %v", got)
+	}
+}
+
+func TestEnvListReplacesEarlierEntries(t *testing.T) {
+	got := EnvList([]string{"PATH=/bin", "OPENAI_API_KEY=ao", "TERM=dumb"}, map[string]string{"OPENAI_API_KEY": ""})
+	if !reflect.DeepEqual(got, []string{"PATH=/bin", "TERM=dumb", "OPENAI_API_KEY="}) {
+		t.Fatalf("EnvList = %q", got)
 	}
 }

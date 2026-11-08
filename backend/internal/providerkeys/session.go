@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // harnessFilename records, per variable, the harnesses whose own Account
@@ -158,6 +159,89 @@ func ForSession(dataDir, harness string) (inject map[string]string, withhold []s
 	}
 	sort.Strings(withhold)
 	return inject, withhold, nil
+}
+
+// Withheld maps each key a process run for harness must not receive from AO
+// to what it should see instead: the value the user exported before AO
+// replaced it in the daemon's environment, or "" to blank AO's copy. The
+// daemon exports every stored key to itself for authentication probes, and
+// sessions, reviewers, login commands and probes start from its environment,
+// so each of them applies this on top of it. A value AO never touched is left
+// out. When AO's store can't be read, every key harness's own sign-in would
+// yield to is withheld, so a failure never hands a harness an override it did
+// not choose.
+func Withheld(dataDir, harness string) map[string]string {
+	stored, storeErr := Load(dataDir)
+	_, withhold, err := ForSession(dataDir, harness)
+	if err != nil {
+		withhold = SubscriptionKeys(harness)
+	}
+	out := make(map[string]string, len(withhold))
+	for _, name := range withhold {
+		if value, set, exported := Inherited(name); exported {
+			if !set {
+				value = ""
+			}
+			out[name] = value
+		} else if storeErr == nil && stored[name] != "" && os.Getenv(name) == stored[name] {
+			out[name] = ""
+		}
+	}
+	return out
+}
+
+// WithheldForSignIn is Withheld for a sign-in command of harness itself. It
+// never receives AO's copy of a key that would override that sign-in, even one
+// harness's own panel saved: the newest sign-in replaces the key, and with it
+// present the CLI would ask about it mid-login or sign in with it instead.
+func WithheldForSignIn(harness string) map[string]string {
+	out := map[string]string{}
+	for _, name := range SubscriptionKeys(harness) {
+		if value, set, exported := Inherited(name); exported {
+			if !set {
+				value = ""
+			}
+			out[name] = value
+		}
+	}
+	return out
+}
+
+// EnvList applies overrides to a KEY=VALUE process environment, replacing
+// any earlier entry for the same name.
+func EnvList(env []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, ok := overrides[name]; !ok {
+			out = append(out, entry)
+		}
+	}
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, name+"="+overrides[name])
+	}
+	return out
+}
+
+// SubscriptionKeys lists the variables that would override harness's own
+// sign-in (ANTHROPIC_API_KEY for Claude Code, and so on).
+func SubscriptionKeys(harness string) []string {
+	var names []string
+	for name, owner := range subscriptionKeys {
+		if owner == harness {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func claimed(harnesses []string, harness string) bool {

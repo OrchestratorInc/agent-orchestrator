@@ -6362,41 +6362,32 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	if m.dataDir != "" {
-		if keys, withhold, err := providerkeys.ForSession(m.dataDir, string(harness)); err == nil {
-			overridden := func(key string) bool {
-				for configured := range projectEnv {
-					if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
-						return true
-					}
-				}
-				return false
-			}
-			for key, value := range keys {
-				if !overridden(key) {
-					setProtectedEnv(env, key, value, caseInsensitive)
+		overridden := func(key string) bool {
+			for configured := range projectEnv {
+				if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
+					return true
 				}
 			}
-			// The daemon exports stored keys to itself for auth probes, and
-			// runtimes start from its environment. A withheld key gets back
-			// what the user exported before AO replaced it, or is blanked
-			// when they exported nothing; a value AO never touched is kept.
-			stored, loadErr := providerkeys.Load(m.dataDir)
-			for _, key := range withhold {
-				if overridden(key) {
-					continue
-				}
-				if value, set, exported := providerkeys.Inherited(key); exported {
-					if set {
-						setProtectedEnv(env, key, value, caseInsensitive)
-					} else {
-						setProtectedEnv(env, key, "", caseInsensitive)
-					}
-				} else if loadErr == nil && os.Getenv(key) == stored[key] {
-					setProtectedEnv(env, key, "", caseInsensitive)
-				}
-			}
-		} else {
+			return false
+		}
+		keys, _, err := providerkeys.ForSession(m.dataDir, string(harness))
+		if err != nil {
 			m.logger.Warn("provider environment unavailable", "error", err)
+		}
+		for key, value := range keys {
+			if !overridden(key) {
+				setProtectedEnv(env, key, value, caseInsensitive)
+			}
+		}
+		// The daemon exports stored keys to itself for auth probes, and
+		// runtimes start from its environment. A withheld key gets back what
+		// the user exported before AO replaced it, or is blanked when they
+		// exported nothing; a value AO never touched is kept. An unreadable
+		// store withholds the harness's subscription keys rather than none.
+		for key, value := range providerkeys.Withheld(m.dataDir, string(harness)) {
+			if !overridden(key) {
+				setProtectedEnv(env, key, value, caseInsensitive)
+			}
 		}
 	}
 	// Project configuration must never redirect AO-owned hook callbacks to a

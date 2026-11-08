@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
@@ -157,6 +158,26 @@ func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	}
 	if got := New().RuntimeCredentialEnv(t.TempDir()); got != nil {
 		t.Fatalf("RuntimeCredentialEnv without a saved token = %v, want nil", got)
+	}
+}
+
+// The daemon exports AO's saved keys to itself, so its probes and account
+// checks would otherwise see an Anthropic key Claude Code's sessions never get.
+func TestRuntimeCredentialEnvHoldsBackAnAnthropicKeyClaudeDidNotChoose(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ANTHROPIC_API_KEY", "ao-saved-key")
+	if err := providerkeys.Save(context.Background(), dataDir, "ANTHROPIC_API_KEY", "ao-saved-key"); err != nil {
+		t.Fatal(err)
+	}
+	got := New().RuntimeCredentialEnv(dataDir)
+	if value, ok := got["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("RuntimeCredentialEnv = %v, want ANTHROPIC_API_KEY blanked", got)
+	}
+	if err := providerkeys.ClaimForHarness(context.Background(), dataDir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if got := New().RuntimeCredentialEnv(dataDir); got != nil {
+		t.Fatalf("RuntimeCredentialEnv with Claude Code's own key = %v, want nil", got)
 	}
 }
 
