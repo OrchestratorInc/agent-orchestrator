@@ -329,6 +329,12 @@ func (a *API) Register(root chi.Router) {
 						clone.ServeHTTP(w, req)
 						return
 					}
+					// Moving a session pushes, fetches, copies its conversation and
+					// starts the agent inside one request.
+					if transferRoute(req) {
+						upload.ServeHTTP(w, req)
+						return
+					}
 					// A run_steps batch may run for the driver's full 60 s before
 					// its step report and closing window read, and an action is
 					// followed by its own read: either outlasts the REST budget.
@@ -504,4 +510,16 @@ func agentBrowserURL(raw string) *url.URL {
 func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 	recorder, _ := sessions.(controllers.UserMessageRecorder)
 	return recorder
+}
+
+func transferRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/transfer/prepare",
+		"/api/v1/sessions/{sessionId}/transfer/{transferId}/native",
+		"/api/v1/sessions/transfer/{transferId}/native/{part}",
+		"/api/v1/sessions/transfer/receive",
+		"/api/v1/sessions/{sessionId}/transfer/commit":
+		return true
+	}
+	return false
 }

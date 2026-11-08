@@ -114,6 +114,40 @@ func TestPollRespawnsIssueAfterTerminatedSession(t *testing.T) {
 	}
 }
 
+type movedFakeStore struct {
+	*fakeStore
+	moved map[domain.SessionID]bool
+}
+
+func (s movedFakeStore) ListMovedSessionIDs(context.Context) (map[domain.SessionID]bool, error) {
+	return s.moved, nil
+}
+
+func TestPollKeepsIssueOfSessionMovedToAnotherMachine(t *testing.T) {
+	store := movedFakeStore{fakeStore: &fakeStore{
+		projects: []domain.ProjectRecord{{
+			ID:            "demo",
+			RepoOriginURL: "https://github.com/acme/demo.git",
+			Config:        domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
+		}},
+		sessions: []domain.SessionRecord{{ID: "demo-1", ProjectID: "demo", IssueID: "github:acme/demo#12", IsTerminated: true}},
+	}, moved: map[domain.SessionID]bool{"demo-1": true}}
+	tracker := &fakeTracker{issues: []domain.Issue{{
+		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#12"},
+		Title:     "Moved session keeps its issue",
+		State:     domain.IssueOpen,
+		Assignees: []string{"alice"},
+	}}}
+	spawner := &fakeSpawner{}
+
+	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("spawn calls = %+v, want none: the issue continues on another machine", spawner.calls)
+	}
+}
+
 func TestSeenIssueIDsExcludesTerminatedSessions(t *testing.T) {
 	sessions := []domain.SessionRecord{
 		{ID: "demo-1", IssueID: "github:acme/demo#12", IsTerminated: true},

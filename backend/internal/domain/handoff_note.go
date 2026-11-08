@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/handoffnote"
@@ -66,6 +67,9 @@ type HandoffNoteInput struct {
 	// fork given its conversation as text: the conversation from before it,
 	// which its own turns don't hold.
 	Inherited string
+	// RemoteSource names the machine a moved session came from. The note then
+	// leaves out the workspace, artifact and history paths, which exist only there.
+	RemoteSource string
 }
 
 // HandoffFork names the session a text-handoff fork was copied from.
@@ -128,12 +132,18 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		fork = &handoffnote.Fork{SourceSessionID: string(in.Fork.SourceSessionID), SourceTitle: in.Fork.SourceTitle}
 		fullHistory = fmt.Sprintf(handoffForkFullHistory, in.Fork.SourceSessionID)
 	}
+	workspace := in.WorkspacePath
+	movedFrom := strings.Join(strings.Fields(in.RemoteSource), " ")
+	if movedFrom != "" {
+		workspace, artifacts, history = "", nil, nil
+		fullHistory = fmt.Sprintf("The full history stays on %s.", movedFrom)
+	}
 	return handoffnote.Build(handoffnote.Input{
 		SwitchID: in.SwitchID, SourceHarness: string(in.SourceHarness), TargetHarness: string(in.TargetHarness),
-		SessionTitle: in.SessionTitle, Project: in.Project, WorkspacePath: in.WorkspacePath, Branch: in.Branch,
+		SessionTitle: in.SessionTitle, Project: in.Project, WorkspacePath: workspace, Branch: in.Branch,
 		At: in.At, OriginalTask: in.OriginalTask, ChangedFiles: in.ChangedFiles,
 		ArtifactDir: in.ArtifactDir, Artifacts: artifacts, Turns: turns, Terminal: in.Terminal,
 		HistoryFiles: history, Fork: fork, TerminalOutput: in.TerminalOutput, Inherited: in.Inherited,
-		FullHistory: fullHistory, MaxChars: handoffNoteMaxChars,
+		FullHistory: fullHistory, MovedFrom: movedFrom, MaxChars: handoffNoteMaxChars,
 	})
 }
