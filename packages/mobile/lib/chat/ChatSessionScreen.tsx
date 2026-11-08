@@ -13,6 +13,7 @@ import {
 	mobileInterfaceTransitionIsBusy,
 	mobileInterfaceTransitionIsCancellable,
 	mobileInterfaceTransitionRecoveryMessage,
+	mobileInterfaceTransitionStoppingSource,
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
@@ -64,6 +65,9 @@ import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
+
+/** What the card says once a finished switch has waited too long for the route. */
+const HANDOFF_STALLED_COPY = "This screen hasn't switched over yet. Retry, or go back and open the session again.";
 
 /** How long the composer's height holds still before the timeline takes it: past its spring. */
 const COMPOSER_SETTLE_MS = 120;
@@ -165,8 +169,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The switch has finished but the route still shows Chat until the board's
 	// next poll; the card stays up through that gap instead of showing the
 	// stopped controller.
-	const handoffPending = useInterfaceHandoff(interfaceSwitch.transition, "chat");
-	const switchingToTerminal = interfaceTransitionActive || handoffPending;
+	const handoff = useInterfaceHandoff(interfaceSwitch.transition, "chat");
+	const switchingToTerminal = interfaceTransitionActive || handoff.pending;
+	// The card covers the conversation only once the Chat controller starts
+	// stopping. Until then (`draining` lasts as long as the agent's turn) the
+	// conversation stays readable behind a banner, dismissed requests included.
+	const switchCardShown = mobileInterfaceTransitionStoppingSource(interfaceSwitch.transition) || handoff.pending;
 	// The usage sheet follows the conversation while it is up: the numbers move
 	// with every turn.
 	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);
@@ -580,6 +588,33 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
+	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
+	const interfaceTransitionBanner = {
+		text: interfaceSwitch.fetchFailed
+			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
+			: interfaceTransitionPhaseText,
+		// Cancel stays put while a check is failing: the phase the hook holds is
+		// still cancellable and the cancel is its own request, so a user who wants
+		// out should not have to prove the link first. Retry rides alongside it,
+		// which is also how the terminal card lays the two out.
+		action: mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition) ? (interfaceSwitch.cancelling ? "Cancelling…" : "Cancel") : undefined,
+		onPress: interfaceSwitch.cancelling ? undefined : () => void interfaceSwitch.cancel().catch(() => {}),
+		secondary: interfaceSwitch.fetchFailed || interfaceRecoveryMessage ? (recheckingTransition ? "Retrying…" : "Retry") : undefined,
+		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
+	};
+	// A finished switch the route has not caught up with: ask the board again,
+	// which is what moves the route on to the terminal.
+	const [refreshingBoard, setRefreshingBoard] = useState(false);
+	const retryHandoff = useCallback(async () => {
+		setRefreshingBoard(true);
+		try {
+			await refreshBoard();
+		} catch {
+			// The card stays up with Retry; the board's own poll reports the link.
+		} finally {
+			setRefreshingBoard(false);
+		}
+	}, [refreshBoard]);
 
 	if (failedStart && !conversation.snapshot) {
 		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
@@ -625,9 +660,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Held back while the switch card is up: what they report (a stopped
 	// controller above all) is the handoff itself, not something to act on.
-	const banners = switchingToTerminal ? null : (
+	const banners = switchCardShown ? null : (
 		<>
-			{interfaceTransitionNotice ? (
+			{interfaceTransitionActive ? (
+				<InlineBanner
+					tone="warning"
+					icon="busy"
+					title={interfaceTransitionBanner.text}
+					action={interfaceTransitionBanner.action}
+					secondary={interfaceTransitionBanner.secondary}
+					onPress={interfaceTransitionBanner.onPress}
+					onSecondary={interfaceTransitionBanner.onSecondary}
+				/>
+			) : interfaceTransitionNotice ? (
 				<InlineBanner
 					tone={interfaceTransitionRecovered ? "warning" : "danger"}
 					icon={interfaceTransitionRecovered ? "checkCircle" : "warning"}
@@ -712,19 +757,30 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			{switchingToTerminal ? (
-				<InterfaceSwitchCard
-					title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
-					message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
-					blocked={Boolean(interfaceRecoveryMessage)}
-					cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
-					cancelling={interfaceSwitch.cancelling}
-					onCancel={() => void interfaceSwitch.cancel().catch(() => {})}
-					error={interfaceSwitch.error}
-					retryable={interfaceSwitch.fetchFailed || Boolean(interfaceRecoveryMessage)}
-					retrying={recheckingTransition}
-					onRetry={() => void retryInterfaceCheck()}
-				/>
+			{switchCardShown ? (
+				handoff.stalled ? (
+					<InterfaceSwitchCard
+						title="Terminal UI is ready"
+						message={HANDOFF_STALLED_COPY}
+						ready
+						retryable
+						retrying={refreshingBoard}
+						onRetry={() => void retryHandoff()}
+					/>
+				) : (
+					<InterfaceSwitchCard
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
+						message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						blocked={Boolean(interfaceRecoveryMessage)}
+						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
+						cancelling={interfaceSwitch.cancelling}
+						onCancel={() => void interfaceSwitch.cancel().catch(() => {})}
+						error={interfaceSwitch.error}
+						retryable={interfaceSwitch.fetchFailed || Boolean(interfaceRecoveryMessage)}
+						retrying={recheckingTransition}
+						onRetry={() => void retryInterfaceCheck()}
+					/>
+				)
 			) : null}
 			{/* Android's frost behind the clear bar: solid under the title, then
 			    dissolving into the page, so the conversation frosts out as it
@@ -837,9 +893,17 @@ function useGlassHeaderOverlap(): number {
 }
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
+/** The banner's phase, while the conversation stays readable under it. */
+function interfacePhaseShortLabel(phase?: string): string {
+	switch (phase) {
+		case "draining": return "finishing current work";
+		default: return "preparing native handoff";
+	}
+}
+/** The card's phase, from the moment the Chat controller starts stopping. */
 function interfacePhaseLabel(phase?: string): string {
 	switch (phase) {
-		case "draining": return "Waiting for the current turn to finish. New messages are queued safely.";
+		case "draining": return "Waiting for the current turn to finish.";
 		case "source_stopping": return "Stopping the Chat controller before the terminal starts.";
 		case "source_stopped": return "Chat controller stopped. The worktree and native conversation are unchanged.";
 		case "target_starting": return "Resuming the same native conversation in the terminal.";

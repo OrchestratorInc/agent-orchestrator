@@ -55,7 +55,7 @@ import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 import { useTerminalMux } from "./useTerminalMux";
 import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
-import { createPaintDetector } from "./terminalPaint";
+import { createPaintDetector, TERMINAL_PAINT_WAIT_MS } from "./terminalPaint";
 import { useInterfaceHandoff } from "./useInterfaceHandoff";
 
 const FONT_SIZE = 12;
@@ -549,9 +549,6 @@ true;
 `;
 
 
-/** How long the start loader waits for a first paint before showing the grid anyway. */
-const TERMINAL_PAINT_WAIT_MS = 15_000;
-
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining":
@@ -644,7 +641,17 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const [painted, setPainted] = useState(false);
 	const [paintWaitOver, setPaintWaitOver] = useState(false);
 	const paintedRef = useRef(false);
-	const [detectPaint] = useState(createPaintDetector);
+	const detectPaintRef = useRef(createPaintDetector());
+	// Bumped whenever a fresh PTY is about to attach (Restore, another handle),
+	// which restarts the wait below: the new agent boots onto an empty grid too.
+	const [paintEpoch, setPaintEpoch] = useState(0);
+	const restartPaintWait = useCallback(() => {
+		paintedRef.current = false;
+		detectPaintRef.current = createPaintDetector();
+		setPainted(false);
+		setPaintWaitOver(false);
+		setPaintEpoch((epoch) => epoch + 1);
+	}, []);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
 	const known =
@@ -671,7 +678,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				setNotFound(true);
 			},
 			onOutput: (bytes) => {
-				if (paintedRef.current || !detectPaint(bytes)) return;
+				if (paintedRef.current || !detectPaintRef.current(bytes)) return;
 				paintedRef.current = true;
 				setPainted(true);
 			},
@@ -713,8 +720,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
 	// The switch has finished but the route still shows this screen until the
 	// board's next poll; the card stays up through that gap.
-	const handoffPending = useInterfaceHandoff(interfaceSwitch.transition, "tui");
-	const switchCardShown = interfaceTransitionActive || handoffPending;
+	const handoff = useInterfaceHandoff(interfaceSwitch.transition, "tui");
+	const switchCardShown = interfaceTransitionActive || handoff.pending;
 	switchingRef.current = switchCardShown || interfaceSwitch.starting;
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
 	const interfaceTransitionNotice =
@@ -850,7 +857,14 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	useEffect(() => {
 		const timer = setTimeout(() => setPaintWaitOver(true), TERMINAL_PAINT_WAIT_MS);
 		return () => clearTimeout(timer);
-	}, []);
+	}, [paintEpoch]);
+	// A different PTY (the board reported a new handle) attaches empty as well.
+	const paintHandleRef = useRef(terminalHandleId);
+	useEffect(() => {
+		if (paintHandleRef.current === terminalHandleId) return;
+		paintHandleRef.current = terminalHandleId;
+		restartPaintWait();
+	}, [restartPaintWait, terminalHandleId]);
 	const startLoaderShown = !painted && !paintWaitOver && !dead && !viewGone && !switchCardShown && status !== "error";
 
 	useLayoutEffect(() => {
@@ -1120,6 +1134,20 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		}
 	}, [interfaceSwitch]);
 
+	// A finished switch the route has not caught up with: ask the board again,
+	// which is what moves the route on to Chat.
+	const [refreshingBoard, setRefreshingBoard] = useState(false);
+	const retryHandoff = useCallback(async () => {
+		setRefreshingBoard(true);
+		try {
+			await refresh();
+		} catch {
+			// The card stays up with Retry; the board's own poll reports the link.
+		} finally {
+			if (mountedRef.current) setRefreshingBoard(false);
+		}
+	}, [refresh]);
+
 	const requestInterfaceFailureRecovery = useCallback(() => {
 		if (!interfaceFailureRecovery) return;
 		interfaceFailureRecovery.confirm((policy) => void startInterfaceSwitch(policy));
@@ -1170,6 +1198,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			await restore(id);
 			clearNotice();
 			setNotFound(false);
+			restartPaintWait();
 			openedRef.current = false;
 			// Give the daemon a moment to bring the PTY up, then re-attach.
 			setTimeout(openTerminal, 1200);
@@ -1178,7 +1207,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		} finally {
 			setRestoring(false);
 		}
-	}, [restore, id, openTerminal, clearNotice, showNotice]);
+	}, [restore, id, openTerminal, clearNotice, showNotice, restartPaintWait]);
 
 	const xtermOptions = useMemo(
 		() => ({
@@ -1407,7 +1436,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						</Text>
 					</View>
 				) : null}
-				{switchCardShown ? (
+				{switchCardShown && handoff.stalled ? (
+					<InterfaceSwitchCard
+						title="Chat is ready"
+						message="This screen hasn't switched over yet. Retry, or go back and open the session again."
+						ready
+						retryable
+						retrying={refreshingBoard}
+						onRetry={() => void retryHandoff()}
+					/>
+				) : switchCardShown ? (
 					<InterfaceSwitchCard
 						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}
 						message={interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}

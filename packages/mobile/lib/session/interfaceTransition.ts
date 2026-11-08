@@ -84,6 +84,17 @@ export function mobileInterfaceTransitionIsCancellable(transition?: InterfaceTra
 	);
 }
 
+/**
+ * The switch has begun stopping the source controller. Before this
+ * (`requested`, `preflighting`, `draining`) the source keeps working, and
+ * `draining` lasts as long as the agent's current turn, so the source screen
+ * stays readable behind a banner. From here on its controller is going away,
+ * and the screen holds the switch card until the route swaps it out.
+ */
+export function mobileInterfaceTransitionStoppingSource(transition?: InterfaceTransition): boolean {
+	return mobileInterfaceTransitionIsActive(transition) && !mobileInterfaceTransitionIsCancellable(transition);
+}
+
 function nativeSessionReadinessPending(status?: InterfaceTransitionStatus): boolean {
 	return Boolean(status?.reasonCode && nativeSessionReadinessCodes.has(status.reasonCode));
 }

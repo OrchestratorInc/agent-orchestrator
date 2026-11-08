@@ -11,6 +11,11 @@ export type InterfaceSwitchCardProps = {
 	message: string;
 	/** Recovery is blocked: a warning glyph instead of the spinner. */
 	blocked?: boolean;
+	/**
+	 * The switch finished but this screen has not been swapped out: a check
+	 * instead of the spinner, since nothing is running any more.
+	 */
+	ready?: boolean;
 	cancellable?: boolean;
 	cancelling?: boolean;
 	onCancel?(): void;
@@ -26,7 +31,7 @@ export type InterfaceSwitchCardProps = {
  * floats over the screen rather than replacing it, so the content underneath
  * keeps its place if the switch is cancelled or fails.
  */
-export function InterfaceSwitchCard({ title, message, blocked, cancellable, cancelling, onCancel, error, retryable, retrying, onRetry }: InterfaceSwitchCardProps) {
+export function InterfaceSwitchCard({ title, message, blocked, ready, cancellable, cancelling, onCancel, error, retryable, retrying, onRetry }: InterfaceSwitchCardProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
@@ -34,7 +39,13 @@ export function InterfaceSwitchCard({ title, message, blocked, cancellable, canc
 			<View style={styles.card}>
 				{/* The system's own indicator while the switch runs: a turning
 				    glyph that never turned read as frozen. */}
-				{blocked ? <AppSymbol name="warning" size={iconSize.xl} color={t.red} /> : <Spinner size="large" />}
+				{blocked ? (
+					<AppSymbol name="warning" size={iconSize.xl} color={t.red} />
+				) : ready ? (
+					<AppSymbol name="checkCircle" size={iconSize.xl} color={t.green} />
+				) : (
+					<Spinner size="large" />
+				)}
 				<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} style={styles.title}>
 					{title}
 				</Text>

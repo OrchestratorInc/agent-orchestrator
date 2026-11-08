@@ -40,6 +40,8 @@ const fixtures = vi.hoisted(() => {
 		backOr: vi.fn(),
 		getPreview: vi.fn(async (): Promise<{ entry: string; url: string } | null> => null),
 		killSession: vi.fn(async () => {}),
+		restore: vi.fn(async (_id: string) => {}),
+		refresh: vi.fn(async () => {}),
 	};
 });
 
@@ -116,8 +118,8 @@ vi.mock("../store", () => ({
 	useApp: () => ({
 		sessions: fixtures.sessions,
 		orchestrators: [],
-		restore: vi.fn(async () => {}),
-		refresh: vi.fn(async () => {}),
+		restore: fixtures.restore,
+		refresh: fixtures.refresh,
 		config: fixtures.config,
 	}),
 }));
@@ -181,6 +183,8 @@ vi.mock("./NoticeDismissButton", async () => {
 
 import TerminalScreen from "./TerminalSessionScreen";
 import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
+import { INTERFACE_HANDOFF_WAIT_MS } from "./useInterfaceHandoff";
+import { TERMINAL_PAINT_WAIT_MS } from "./terminalPaint";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 
 let renderer: ReactTestRenderer | undefined;
@@ -195,6 +199,8 @@ beforeEach(() => {
 	fixtures.mux = undefined;
 	fixtures.getPreview.mockReset().mockResolvedValue(null);
 	fixtures.killSession.mockReset().mockResolvedValue(undefined);
+	fixtures.restore.mockReset().mockResolvedValue(undefined);
+	fixtures.refresh.mockReset().mockResolvedValue(undefined);
 	for (const fn of [fixtures.alert, fixtures.backOr, fixtures.xterm.injectJavaScript, fixtures.navigation.setOptions, fixtures.router.push]) fn.mockReset();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
@@ -206,6 +212,7 @@ beforeEach(() => {
 afterEach(async () => {
 	if (renderer) await act(async () => renderer?.unmount());
 	renderer = undefined;
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
@@ -395,6 +402,44 @@ describe("opening and leaving the terminal", () => {
 		expect(card).toHaveLength(1);
 		expect(card[0].props.message).toBe("Chat is ready. Opening it now.");
 		expect(titles()).not.toContain("Session terminated");
+	});
+
+	it("offers Retry once a finished switch has waited too long for the route", async () => {
+		vi.useFakeTimers();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "activating", targetMode: "chat" };
+		await mount();
+		fixtures.interfaceSwitch.transition = { id: "t-1", phase: "completed", targetMode: "chat" };
+		await act(async () => renderer!.update(<TerminalScreen />));
+		expect(find(InterfaceSwitchCard as never)[0].props).toMatchObject({ title: "Switching to Chat", retryable: false });
+
+		await act(async () => { vi.advanceTimersByTime(INTERFACE_HANDOFF_WAIT_MS); });
+		const card = find(InterfaceSwitchCard as never);
+		expect(card).toHaveLength(1);
+		expect(card[0].props).toMatchObject({ title: "Chat is ready", ready: true, retryable: true });
+		expect(titles()).not.toContain("Session terminated");
+		await act(async () => (card[0].props.onRetry as () => void)());
+		expect(fixtures.refresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("holds the loader again for the agent a Restore brings back", async () => {
+		vi.useFakeTimers();
+		await mount();
+		await act(async () => fixtures.mux!.handlers.onStatus("open"));
+		await output("> ready");
+		expect(texts()).not.toContain("Starting terminal…");
+		await act(async () => { vi.advanceTimersByTime(TERMINAL_PAINT_WAIT_MS - 1_000); });
+		await act(async () => fixtures.mux!.handlers.onTerminalExited("worker-1", 1));
+		const restore = find("EmptyState").find((state) => state.props.title === "Session terminated")!;
+		await act(async () => (restore.props.action as ReactElement<{ onPress: () => void }>).props.onPress());
+		expect(fixtures.restore).toHaveBeenCalledWith("worker-1");
+		expect(texts()).toContain("Starting terminal…");
+		// The wait restarts with the restore, rather than running out from mount.
+		await act(async () => { vi.advanceTimersByTime(TERMINAL_PAINT_WAIT_MS - 1); });
+		expect(texts()).toContain("Starting terminal…");
+		await output("\x1b(B\x1b[m");
+		expect(texts()).toContain("Starting terminal…");
+		await output("> back");
+		expect(texts()).not.toContain("Starting terminal…");
 	});
 
 	it("still reports a terminal that exited on its own", async () => {

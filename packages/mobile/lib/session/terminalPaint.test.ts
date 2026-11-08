@@ -26,4 +26,19 @@ describe("createPaintDetector", () => {
 		expect(paints(bytes("tle\x07"))).toBe(false);
 		expect(paints(bytes("$"))).toBe(true);
 	});
+
+	it("treats escapes with intermediate bytes as escapes, not text", () => {
+		const paints = createPaintDetector();
+		// xterm-256color's sgr0, which ncurses apps and tmux redraws emit.
+		expect(paints(bytes("\x1b(B\x1b[m"))).toBe(false);
+		expect(paints(bytes("\x1b)0\x1b#8\x1b%G"))).toBe(false);
+		expect(paints(bytes("x"))).toBe(true);
+	});
+
+	it("keeps an intermediate escape split across chunks", () => {
+		const paints = createPaintDetector();
+		expect(paints(bytes("\x1b("))).toBe(false);
+		expect(paints(bytes("B"))).toBe(false);
+		expect(paints(bytes("A"))).toBe(true);
+	});
 });
