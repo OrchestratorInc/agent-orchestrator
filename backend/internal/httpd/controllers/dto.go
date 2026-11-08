@@ -538,6 +538,7 @@ type SessionArtifactView struct {
 	// its files load same-origin there, but the daemon refuses that origin, so
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
+	ShareURL  string `json:"shareUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.

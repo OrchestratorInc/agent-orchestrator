@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Globe, Share } from "lucide-react";
-import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
@@ -371,7 +371,7 @@ function SharePanel({
 		}
 		case "published": {
 			const { share, outdated } = phase;
-			const link = share.viewerUrl ?? share.contentUrl;
+			const link = artifactShareUrl(share);
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
 				return (

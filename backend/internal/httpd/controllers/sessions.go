@@ -3024,6 +3024,7 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 			Kind:      artifact.Kind,
 			Size:      artifact.Size,
 			UpdatedAt: artifact.UpdatedAt,
+			ShareURL:  artifact.ShareURL,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide

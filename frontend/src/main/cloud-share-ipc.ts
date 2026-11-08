@@ -10,6 +10,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
+	artifactShareUrl,
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
 	type CloudShareInspection,
@@ -147,7 +148,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// request, so there is nothing to cancel: stopping the wait could
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
-			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint);
+			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint, artifactShareUrl(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
@@ -180,8 +181,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	deps.ipcMain.handle("cloudShare:available", async (_event, value: unknown): Promise<boolean | null> =>
 		shareLinksAvailable(deps, baseUrlArgument(value)));
 
-	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> =>
-		listShareLinks(deps, baseUrlArgument(value)));
+	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> => {
+		const links = await listShareLinks(deps, baseUrlArgument(value));
+		await deps.records.syncLinks(links.shares);
+		return links;
+	});
 
 	deps.ipcMain.handle("cloudShare:unpublish", async (event, value: unknown): Promise<void> => {
 		requireMainFrame(event);
@@ -254,7 +258,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
 				shareId: file.shareId,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id, taken.fingerprint);
+			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id, taken.fingerprint, artifactShareUrl(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

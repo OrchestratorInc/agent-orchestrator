@@ -20222,6 +20222,8 @@ components:
           type: string
         rawUrl:
           type: string
+        shareUrl:
+          type: string
         size:
           format: int64
           type: integer
