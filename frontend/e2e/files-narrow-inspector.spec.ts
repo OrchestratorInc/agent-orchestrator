@@ -182,6 +182,7 @@ for (const width of [1200, 1800]) {
 		await stubWorkspaceFiles(page);
 		await page.addInitScript(() => {
 			Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
+			Object.defineProperty(navigator, "userAgentData", { get: () => ({ platform: "macOS" }), configurable: true });
 			localStorage.setItem("ao.developerMode", "true");
 		});
 		await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
