@@ -221,11 +221,14 @@ jobs:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
           VITEST_FILES: ${{ inputs.vitest }}
         run: |
+          mapfile -t always < scripts/ci-vitest-always-run.txt
+          for f in "${always[@]}"; do
+            test -f "$f" || { echo "::error::$f is in scripts/ci-vitest-always-run.txt but does not exist"; exit 1; }
+          done
           if [ "$VITEST_FILES" = all ]; then
             npx vitest run --shard=${{ matrix.shard }}/2
           else
             read -ra related <<< "$VITEST_FILES"
-            mapfile -t always < scripts/ci-vitest-always-run.txt
             npx vitest related --run --passWithNoTests --shard=${{ matrix.shard }}/2 "${related[@]}" "${always[@]}"
           fi
 
