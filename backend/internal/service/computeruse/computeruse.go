@@ -161,7 +161,9 @@ type Service struct {
 	// sessionless are tools the driver refused a `session` argument for.
 	sessionless map[string]bool
 	snapshots   snapshotWindows
+	frames      map[string]frame
 	agentTools  agentToolCache
+	ownApp      OwnApp
 	// enabled reports "Let agents use this computer"; nil is off.
 	enabled func(context.Context) bool
 }
@@ -192,6 +194,7 @@ func New(driver Driver, dataDir string) *Service {
 		stop:        stop,
 		sessionless: map[string]bool{},
 		snapshots:   snapshotWindows{windows: map[string]window{}},
+		frames:      map[string]frame{},
 	}
 }
 
@@ -361,6 +364,20 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		arguments["session"] = driverSession(request.SessionID)
 	}
 	if tool == "run_steps" {
+		drags, app, err := s.ownWindowDrags(arguments)
+		if err != nil {
+			return CallResult{}, err
+		}
+		if drags != nil {
+			result, err := s.runOwnWindowDrags(ctx, request.SessionID, arguments["session"], drags, app)
+			if err != nil {
+				return CallResult{}, err
+			}
+			last := drags[len(drags)-1]
+			observed := s.observeAfter(ctx, binary, saved, map[string]any{"pid": last.pid, "window_id": last.windowID, "session": arguments["session"]}, result)
+			s.images.prune(scope)
+			return CallResult{Tool: tool, Result: observed, Images: saved.images}, nil
+		}
 		if observed := s.prepareObserve(saved, arguments); observed != "" {
 			screenshot = observed
 		}

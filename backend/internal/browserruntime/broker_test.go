@@ -469,12 +469,13 @@ func TestBrokerPeerVerifierRejectsBeforeHello(t *testing.T) {
 		Version:       ProtocolVersion,
 		Client:        "ao-chrome-extension",
 		ClientVersion: "1.2.3",
+		PID:           4242,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	waitConnected(t, broker)
 	status := broker.Status()
-	if status.Transport != "chrome-extension" || status.Client != "ao-chrome-extension" || status.ClientVersion != "1.2.3" {
+	if status.Transport != "chrome-extension" || status.Client != "ao-chrome-extension" || status.ClientVersion != "1.2.3" || status.ClientPID != 4242 {
 		t.Fatalf("status = %#v", status)
 	}
 	_ = accepted.Close()
@@ -485,7 +486,7 @@ func TestBrokerPeerVerifierRejectsBeforeHello(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if status := broker.Status(); status.Client != "" || status.ClientVersion != "" {
+	if status := broker.Status(); status.Client != "" || status.ClientVersion != "" || status.ClientPID != 0 {
 		t.Fatalf("client metadata survived disconnect: %#v", status)
 	}
 }
