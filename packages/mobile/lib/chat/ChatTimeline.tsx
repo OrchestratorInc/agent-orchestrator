@@ -19,7 +19,6 @@ import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
-import { ContentScrollView } from "../ContentScrollView";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
@@ -364,11 +363,6 @@ export const ChatTimeline = memo(function ChatTimeline({
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
 					<View style={styles.timelineWrap}>
-						{/* Under iOS 26's glass bar the list is named as the scroll view the
-						    bar observes, so the bar blurs it all the way down to the title's
-						    lower edge. Left to UIKit, a list mounted after the page appeared
-						    was blurred under the status bar alone. */}
-						<ContentScrollView enabled={underHeader > 0} style={styles.listFrame}>
 						<FlatList<ConversationGroup>
 							ref={listRef}
 							data={groups}
@@ -450,7 +444,6 @@ export const ChatTimeline = memo(function ChatTimeline({
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 							/>}
 						/>
-						</ContentScrollView>
 						{/* An unresolved edit whose prompt left the conversation keeps its Retry and
 						    Abandon controls here, apart from the list, as the desktop does. */}
 						{detached && editDraft ? <View style={styles.detachedEditor}>
@@ -1345,7 +1338,6 @@ const makeStyles = (t: Theme) => {
 		timelineWrap: { flex: 1, position: "relative", backgroundColor: t.bgBase },
 		detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
 		emptySurface: { flex: 1, justifyContent: "center" },
-		listFrame: { flex: 1 },
 		list: { flex: 1, backgroundColor: t.bgBase },
 		opening: { opacity: 0 },
 		content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },
