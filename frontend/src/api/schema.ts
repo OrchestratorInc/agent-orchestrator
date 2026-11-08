@@ -3797,6 +3797,40 @@ export interface paths {
         patch: operations["setSessionMergePolicy"];
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/move/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a session as moved to AO Cloud and archive it here */
+        post: operations["completeSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/move/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Push a stopped session's branch and return its settings and handoff note to move it to AO Cloud */
+        post: operations["exportSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/pin": {
         parameters: {
             query?: never;
@@ -4567,6 +4601,23 @@ export interface paths {
         put?: never;
         /** Clean up terminated session workspaces */
         post: operations["cleanupSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/move/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a session moved from AO Cloud */
+        post: operations["importSessionMove"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6297,6 +6348,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            movedTo?: components["schemas"]["SessionMove"];
             needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
@@ -7384,6 +7436,55 @@ export interface components {
             running: boolean;
             supported: boolean;
         };
+        MoveCompleteRequest: {
+            moveId: string;
+            orgId: string;
+            sessionId: string;
+        };
+        MoveCompleteResponse: {
+            session: components["schemas"]["ControllersSessionView"];
+        };
+        MoveExportRequest: {
+            moveId: string;
+            sourceLabel?: string;
+        };
+        MoveExportResponse: {
+            changes: number;
+            handoffNote: string;
+            manifest: components["schemas"]["MoveManifest"];
+            submodules?: string[];
+        };
+        MoveImportRequest: {
+            handoffNote?: string;
+            manifest: components["schemas"]["MoveManifest"];
+            moveId: string;
+            projectId: string;
+        };
+        MoveImportResponse: {
+            session: components["schemas"]["ControllersSessionView"];
+            warnings?: string[];
+        };
+        MoveManifest: {
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            autoReview: boolean;
+            branch: string;
+            displayName?: string;
+            effort?: string;
+            harness: string;
+            issueId?: string;
+            mode?: string;
+            model?: string;
+            permissions?: string;
+            pullRequests?: string[];
+            repoKey: string;
+            requestedOutput?: string;
+            sourceLabel: string;
+            sourceSessionId: string;
+            terminateOnPrMerge: boolean;
+            tip: string;
+            wip: boolean;
+        };
         NotificationEnvelope: {
             notification: components["schemas"]["NotificationResponse"];
         };
@@ -8089,6 +8190,13 @@ export interface components {
             rssBytes: number;
             /** Format: date-time */
             sampledAt: string;
+            sessionId: string;
+        };
+        SessionMove: {
+            /** Format: date-time */
+            at: string;
+            moveId: string;
+            orgId: string;
             sessionId: string;
         };
         SessionPRCISummary: {
@@ -23014,6 +23122,132 @@ export interface operations {
             };
         };
     };
+    completeSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveCompleteResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    exportSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveExportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveExportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     pinSession: {
         parameters: {
             query?: never;
@@ -26413,6 +26647,66 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoveImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

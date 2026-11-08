@@ -286,6 +286,8 @@ type Service struct {
 	// githubRepos lets ClaimPR accept a PR on the repository a github.com
 	// origin was renamed or transferred to. Nil keeps exact origin matching.
 	githubRepos ports.GitHubRepositoryResolver
+	// moveNotes renders the handoff note of a session moved to AO Cloud.
+	moveNotes MoveNoter
 }
 
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
@@ -1936,6 +1938,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
 			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+	case errors.Is(err, sessionmanager.ErrSessionMoved):
+		return apierr.Conflict("SESSION_MOVED", "This session moved to AO Cloud. Open it there.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

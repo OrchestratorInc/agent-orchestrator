@@ -43,9 +43,11 @@ var (
 	ErrNotRestorable                 = errors.New("session: not restorable (not terminal)")
 	ErrTerminated                    = errors.New("session: terminated")
 	ErrAgentExited                   = errors.New("session: agent exited")
-	ErrAgentNotExited                = errors.New("session: agent has not exited")
-	ErrAgentExitInProgress           = errors.New("session: agent exit is already in progress")
-	ErrIncompleteHandle              = errors.New("session: incomplete teardown handle")
+	// ErrSessionMoved refuses to run a session that moved to AO Cloud.
+	ErrSessionMoved        = errors.New("session: moved to AO Cloud")
+	ErrAgentNotExited      = errors.New("session: agent has not exited")
+	ErrAgentExitInProgress = errors.New("session: agent exit is already in progress")
+	ErrIncompleteHandle    = errors.New("session: incomplete teardown handle")
 	// ErrProjectNotResolvable means the spawn's project has no usable repo
 	// (unregistered, archived, or missing a path). The API maps it to a 400.
 	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
@@ -3283,6 +3285,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
 	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionMoved)
+	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
@@ -3627,6 +3632,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrNotFound)
+	}
+	if rec.MovedTo != nil {
+		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrSessionMoved)
 	}
 	if rec.HibernatedAt != nil && m.persistentHostReconcileDone != nil {
 		select {

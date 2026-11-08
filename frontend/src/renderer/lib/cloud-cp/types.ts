@@ -452,6 +452,12 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
 }
 
 export interface CloudCpSessionRepo {

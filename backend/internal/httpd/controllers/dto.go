@@ -4708,3 +4708,51 @@ type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
 }
+
+// MoveExportRequest asks this machine to push a stopped session for a move to
+// AO Cloud.
+type MoveExportRequest struct {
+	// MoveID identifies one move across every call; the app reuses it on retry.
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	// SourceLabel is this machine's name as the user knows it, for the note
+	// and the WIP commit.
+	SourceLabel string `json:"sourceLabel,omitempty" maxLength:"100"`
+}
+
+// MoveExportResponse is the pushed session: the manifest and handoff note
+// AO Cloud starts it from.
+type MoveExportResponse struct {
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote"`
+	Changes     int                     `json:"changes"`
+	Submodules  []string                `json:"submodules,omitempty"`
+}
+
+// MoveImportRequest starts a session AO Cloud pushed in one of this machine's
+// projects. Its body is the control plane's move/export response plus the
+// project and move id.
+type MoveImportRequest struct {
+	ProjectID   string                  `json:"projectId" minLength:"1"`
+	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote,omitempty"`
+}
+
+// MoveImportResponse is the new session. Warnings list what did not carry
+// over, such as a pull request this machine could not claim.
+type MoveImportResponse struct {
+	Session  SessionView `json:"session"`
+	Warnings []string    `json:"warnings,omitempty"`
+}
+
+// MoveCompleteRequest records the AO Cloud session the session moved to.
+type MoveCompleteRequest struct {
+	MoveID    string `json:"moveId" minLength:"1" maxLength:"64"`
+	OrgID     string `json:"orgId" minLength:"1"`
+	SessionID string `json:"sessionId" minLength:"1"`
+}
+
+// MoveCompleteResponse is the archived source session with its movedTo set.
+type MoveCompleteResponse struct {
+	Session SessionView `json:"session"`
+}

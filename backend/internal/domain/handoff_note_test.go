@@ -219,3 +219,47 @@ func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
 			len(note), utf8.RuneCountInString(note), handoffNoteMaxBytes, handoffNoteMaxChars)
 	}
 }
+
+func TestBuildHandoffNoteForAMovedSession(t *testing.T) {
+	got := BuildHandoffNote(HandoffNoteInput{
+		SourceHarness: HarnessClaudeCode, TargetHarness: HarnessClaudeCode,
+		SessionTitle: "Importer", Project: "proj-a", WorkspacePath: "/Users/me/.ao/worktrees/proj-a/s-1",
+		Branch: "feature/importer", ArtifactDir: "/Users/me/.ao/artifacts/s-1",
+		Artifacts:    []SessionArtifactFile{{Path: "report.md", Size: 10}},
+		HistoryFiles: []HandoffHistoryFile{{Harness: HarnessCodex, Path: "/Users/me/.codex/sessions/x.jsonl"}},
+		Turns:        handoffTestTurns(3), MovedFrom: "MacBook A", MovedWIP: true,
+	})
+	for _, want := range []string{
+		"moved here from MacBook A", "Moved from: MacBook A", `"WIP: uncommitted changes from MacBook A"`,
+		"stayed in the session's artifact directory on MacBook A", "- report.md", "The full conversation stays on MacBook A.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note is missing %q", want)
+		}
+	}
+	for _, leak := range []string{"/Users/me", "proj-a", "ao session history"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("moved note mentions %q, which only exists on the source:\n%s", leak, got)
+		}
+	}
+}
+
+// Cloud counts its 65,536-byte prompt cap in bytes; text in a three-byte
+// script would otherwise reach the 96,000-byte default.
+func TestBuildHandoffNoteKeepsUnderAByteCap(t *testing.T) {
+	turns := handoffTestTurns(20)
+	for i := range turns {
+		turns[i].UserRequest = strings.Repeat("移動", 1500)
+		turns[i].AgentResponse = strings.Repeat("対応", 1500)
+	}
+	note := BuildHandoffNote(HandoffNoteInput{
+		SourceHarness: HarnessClaudeCode, TargetHarness: HarnessClaudeCode,
+		Turns: turns, MovedFrom: "MacBook A", MaxBytes: 65_536,
+	})
+	if len(note) > 65_536 {
+		t.Fatalf("note is %d bytes, want at most 65536", len(note))
+	}
+	if !strings.Contains(note, "## Latest turn") {
+		t.Fatal("the latest turn was dropped")
+	}
+}

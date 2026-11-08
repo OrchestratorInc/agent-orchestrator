@@ -1495,6 +1495,48 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: exportSessionMove
+      tags: [Sessions]
+      description: >-
+        Commits the session's uncommitted work, ignored files aside, as one
+        commit on its branch and pushes the branch, so an AO daemon's
+        move/import can continue the session from it. The session keeps
+        running; delete it once the import succeeds. Viewers get 403. A branch
+        the remote has commits for that the session lacks fails the push.
+      responses:
+        "200":
+          description: The pushed branch, in the shape an AO daemon's move/import takes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [manifest, handoffNote]
+                properties:
+                  manifest:
+                    type: object
+                    required: [sourceSessionId, sourceLabel, repoKey, branch, tip, wip, harness]
+                    properties:
+                      sourceSessionId: { type: string, format: uuid }
+                      sourceLabel: { type: string }
+                      repoKey:
+                        type: string
+                        description: Lower-case github.com/<owner>/<name>.
+                      branch: { type: string }
+                      tip: { type: string, description: The pushed commit. }
+                      wip:
+                        type: boolean
+                        description: The tip is the commit of the uncommitted work.
+                      harness: { type: string }
+                      model: { type: string }
+                      displayName: { type: string }
+                  handoffNote: { type: string }
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -9273,6 +9315,18 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Git branch to continue. A branch that exists on the repository is
+            checked out from its commits; any other name starts a new branch
+            from the default branch. The default branch, the session prefix
+            and a name git refuses get 422 invalid_branch; a branch a live
+            session of the project holds gets 409 branch_in_use. Send it only
+            when /me offering.features lists session.branch: an older control
+            plane rejects the whole create.
     CreateStandaloneAgentInput:
       type: object
       additionalProperties: false

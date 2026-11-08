@@ -94,6 +94,15 @@ type HandoffNoteInput struct {
 	// fork given its conversation as text: the conversation from before it,
 	// which its own turns don't hold.
 	Inherited string
+	// MovedFrom names the machine a moved session came from. Its note leaves
+	// out paths and commands that only work on that machine.
+	MovedFrom string
+	// MovedWIP says the branch's top commit holds the work that was not
+	// committed on MovedFrom.
+	MovedWIP bool
+	// MaxBytes lowers the byte cap for a destination with a smaller prompt
+	// limit; AO Cloud takes 65,536 bytes. Zero keeps the default.
+	MaxBytes int
 }
 
 // HandoffFork names the session a text-handoff fork was copied from.
@@ -139,19 +148,23 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	if inherited == "" {
 		inheritedCap = 0
 	}
+	maxBytes := handoffNoteMaxBytes
+	if in.MaxBytes > 0 && in.MaxBytes < maxBytes {
+		maxBytes = in.MaxBytes
+	}
 
 	// Drop material until the whole note fits: the conversation inherited
 	// from before the session, being the oldest, then older turns, the last
 	// listed artifacts, and previous turns. The latest turn is never dropped.
 	for {
 		note := renderHandoffNote(in, older, recent, artifacts, inheritedCap)
-		if handoffNoteFits(note) {
+		if handoffNoteFits(note, maxBytes) {
 			return note
 		}
 		switch {
 		case inheritedCap > 0:
 			// Shorten it by what the note is over; a rune is at most four bytes.
-			over := max(utf8.RuneCountInString(note)-handoffNoteMaxChars, (len(note)-handoffNoteMaxBytes+3)/4, 1)
+			over := max(utf8.RuneCountInString(note)-handoffNoteMaxChars, (len(note)-maxBytes+3)/4, 1)
 			inheritedCap = utf8.RuneCountInString(quoteHandoffText(inherited, inheritedCap, handoffClipMarker)) - over
 			if inheritedCap < handoffInheritedMin {
 				inheritedCap = 0
@@ -163,25 +176,29 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		case len(recent) > 1:
 			recent = recent[1:]
 		default:
-			return clipHandoffNote(note)
+			return clipHandoffNoteTo(note, maxBytes)
 		}
 	}
 }
 
-func handoffNoteFits(note string) bool {
-	return utf8.RuneCountInString(note) <= handoffNoteMaxChars && len(note) <= handoffNoteMaxBytes
+func handoffNoteFits(note string, maxBytes int) bool {
+	return utf8.RuneCountInString(note) <= handoffNoteMaxChars && len(note) <= maxBytes
 }
 
 // clipHandoffNote clips a note to both the character and the byte cap.
 func clipHandoffNote(note string) string {
+	return clipHandoffNoteTo(note, handoffNoteMaxBytes)
+}
+
+func clipHandoffNoteTo(note string, maxBytes int) string {
 	limit := handoffNoteMaxChars
 	for {
 		clipped := clipHandoffText(note, limit, handoffClipMarker)
-		if len(clipped) <= handoffNoteMaxBytes {
+		if len(clipped) <= maxBytes {
 			return clipped
 		}
 		// A rune is at most four bytes.
-		limit -= max(1, (len(clipped)-handoffNoteMaxBytes)/4)
+		limit -= max(1, (len(clipped)-maxBytes)/4)
 	}
 }
 
@@ -205,6 +222,9 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		}
 		fmt.Fprintf(&b, "You are %s in a new Orchestrator session forked from Orchestrator session %s%s. %s can't copy that session's conversation itself, so the conversation is copied as text below. The conversation really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 			handoffHarnessLabel(in.TargetHarness), fork.SourceSessionID, title, handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness))
+	} else if in.MovedFrom != "" {
+		fmt.Fprintf(&b, "You are %s, continuing this Orchestrator-managed session after it moved here from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+			handoffHarnessLabel(in.TargetHarness), in.MovedFrom, handoffHarnessLabel(in.SourceHarness))
 	} else {
 		fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 			handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
@@ -215,8 +235,12 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 
 	b.WriteString("\n## Session\n")
 	writeHandoffNoteField(&b, "Title", in.SessionTitle)
-	writeHandoffNoteField(&b, "Project", in.Project)
-	writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	if in.MovedFrom != "" {
+		writeHandoffNoteField(&b, "Moved from", in.MovedFrom)
+	} else {
+		writeHandoffNoteField(&b, "Project", in.Project)
+		writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	}
 	writeHandoffNoteField(&b, "Git branch", in.Branch)
 	if in.Fork != nil {
 		writeHandoffNoteField(&b, "Forked at", in.At.UTC().Format(time.RFC3339))
@@ -241,7 +265,16 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		}
 	}
 
-	if len(in.Artifacts) > 0 {
+	if in.MovedWIP {
+		fmt.Fprintf(&b, "\n## Code\nThe branch's top commit, \"WIP: uncommitted changes from %s\", holds the work that was not committed there. Keep it, amend it, or squash it.\n", in.MovedFrom)
+	}
+
+	if len(in.Artifacts) > 0 && in.MovedFrom != "" {
+		fmt.Fprintf(&b, "\n## Session artifacts\n%d files stayed in the session's artifact directory on %s and were not copied:\n", len(in.Artifacts), in.MovedFrom)
+		for _, file := range in.Artifacts[:artifacts] {
+			fmt.Fprintf(&b, "- %s\n", quoteHandoffLine(file.Path, handoffChangedFileCap))
+		}
+	} else if len(in.Artifacts) > 0 {
 		fmt.Fprintf(&b, "\n## Session artifacts\nFiles already in the session artifact directory `%s` (%d). Read the one a request is about before writing it again, and update it instead of starting over:\n",
 			quoteHandoffLine(in.ArtifactDir, handoffHistoryPathCap), len(in.Artifacts))
 		for _, file := range in.Artifacts[:artifacts] {
@@ -284,7 +317,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		b.WriteByte('\n')
 	}
 
-	if len(in.HistoryFiles) > 0 {
+	if len(in.HistoryFiles) > 0 && in.MovedFrom == "" {
 		b.WriteString("\n## Earlier agents' own history\n")
 		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
 		for _, file := range in.HistoryFiles {
@@ -303,6 +336,8 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	}
 	if in.Fork != nil {
 		fmt.Fprintf(&b, "Run `ao session history %s` to read the original session's conversation in full when you need something this note does not show.\n", in.Fork.SourceSessionID)
+	} else if in.MovedFrom != "" {
+		fmt.Fprintf(&b, "The full conversation stays on %s.\n", in.MovedFrom)
 	} else {
 		b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")
 	}
