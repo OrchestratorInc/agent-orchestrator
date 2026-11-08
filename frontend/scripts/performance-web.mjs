@@ -22,7 +22,7 @@ const config = mergeConfig(loaded.config, {
 	root,
 	build: {
 		outDir,
-		rollupOptions: { input: join(root, "e2e/performance/harness.html") },
+		rollupOptions: { input: join(root, process.env.AO_PERF_APP === "1" ? "index.html" : "e2e/performance/harness.html") },
 	},
 });
 await build(config);

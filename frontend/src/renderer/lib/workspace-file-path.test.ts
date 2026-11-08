@@ -41,6 +41,42 @@ describe("workspace file lookup for a catalog", () => {
 		for (let i = 0; i < 1100; i++) expect(find(`missing${i}.ts`)).toBeUndefined();
 		expect(find("a.ts")).toBe("src/a.ts");
 	});
+
+	it("preserves exact precedence, suffix disambiguation, and duplicate ambiguity", () => {
+		const find = createWorkspaceFileLookup([
+			" ./src/index.ts ", "src/index.ts", "lib/index.ts", "src/only.ts", "copies/only.ts",
+			"src/duplicate.ts", "src/duplicate.ts", "windows\\unique.ts", "notes/",
+		]);
+		expect(find("src/index.ts")).toBe(" ./src/index.ts ");
+		expect(find("index.ts")).toBeUndefined();
+		expect(find("/repo/src/only.ts:12")).toBe("src/only.ts");
+		expect(find("elsewhere/only.ts")).toBeUndefined();
+		expect(find("duplicate.ts")).toBeUndefined();
+		expect(find("src/duplicate.ts")).toBe("src/duplicate.ts");
+		expect(find("unique.ts")).toBe("windows\\unique.ts");
+		expect(find("/repo/notes/")).toBe("notes/");
+	});
+
+	it("matches the linear resolver across path forms and catalog collisions", () => {
+		const catalogs = [
+			[], [""], ["/", ""], ["src/a.ts", "b.ts", "dir/", " spaced/file.ts "],
+			["a.ts", "lib/a.ts", "./src/a.ts", "other\\a.ts", "./src/a.ts"],
+			["C:\\repo\\src\\a.ts", "src/b.ts", "./percent%20name.ts", "docs/hello world.md"],
+		];
+		for (const paths of catalogs) {
+			const find = createWorkspaceFileLookup(paths);
+			const references = ["", "./", "/", "missing.ts", "https://host/a.ts", "//host/a.ts", "file://[", ...paths];
+			for (const path of paths) {
+				const normalized = normalizeWorkspaceFileReference(path);
+				const base = normalized.split("/").at(-1) ?? "";
+				references.push(normalized, base, `./${normalized}`, `/repo/${normalized}`, `${normalized}:12:3`,
+					`${normalized}#L2-L9`, `file:///repo/${encodeURI(normalized)}`, `C:\\repo\\${normalized.replaceAll("/", "\\")}`);
+			}
+			for (const reference of references) {
+				expect(find(reference), `${JSON.stringify(paths)}: ${reference}`).toBe(findWorkspaceFilePath(reference, paths));
+			}
+		}
+	});
 });
 
 describe("matchWorkspaceFilePath", () => {
