@@ -33,6 +33,7 @@ import { sessionInterfaceTransitionStatus } from "../test/interface-transition-f
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
@@ -512,6 +513,7 @@ function fireDrag(
 beforeEach(() => {
 	window.localStorage.clear();
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
+	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -3357,6 +3359,17 @@ describe("Sidebar", () => {
 			"aria-expanded",
 			"false",
 		);
+	});
+
+	it("expands a project once chats are imported into it", () => {
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [session] }],
+		});
+		act(() => useSessionImportStore.getState().recordImport(workspace.id, 1));
+
+		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
+		expect(window.localStorage.getItem("ao.sidebar.expanded-projects")).toBe(JSON.stringify([workspace.id]));
 	});
 
 	it("reveals the active project when opening a worker-session deep link", async () => {

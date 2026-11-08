@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { agentLabel } from "../lib/agent-options";
 import { cn } from "../lib/utils";
-import { importableProject, importChats, projectChats, sessionImportPreviewQuery } from "../lib/session-import";
+import { countBy, importableProject, importChats, projectChats, sessionImportPreviewQuery } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
@@ -40,8 +40,7 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 	}
 	const chats = projectChats(preview.data?.candidates, projectId);
 	if (!chats.length) return null;
-	const perAgent = new Map<string, number>();
-	for (const chat of chats) perAgent.set(chat.harness, (perAgent.get(chat.harness) ?? 0) + 1);
+	const perAgent = countBy(chats.map((chat) => chat.harness));
 	const importAll = async () => {
 		setImporting(true);
 		setError(undefined);

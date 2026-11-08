@@ -46,6 +46,11 @@ it("does not offer imports when only deferred harnesses are configured", () => {
 	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
 });
 
+it("counts an agent whose sign-in check was inconclusive", () => {
+	renderOffer(agent("claude-code", true, "unauthorized"), agent("codex", true, "unknown"));
+	expect(screen.getByRole("img", { name: "Codex" })).toBeInTheDocument();
+});
+
 it("shows nothing when no importable agent is configured", () => {
 	renderOffer(agent("claude-code", false, "authorized"), agent("codex", true, "unauthorized"));
 	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();

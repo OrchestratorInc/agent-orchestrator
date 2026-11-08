@@ -14,6 +14,11 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: () => "Import failed",
 }));
+const openSession = vi.hoisted(() => vi.fn());
+vi.mock("../lib/navigate-to-session", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/navigate-to-session")>()),
+	useNavigateToSession: () => openSession,
+}));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	workspaceQueryOptions: {
@@ -47,6 +52,7 @@ function renderWith(node: ReactNode, candidates: unknown[], agents = [{ id: "cla
 beforeEach(() => {
 	api.GET.mockReset();
 	api.POST.mockReset();
+	openSession.mockReset();
 	window.localStorage.clear();
 	useSessionImportStore.setState({ dialog: null, dismissedProjects: [], importedCounts: {} });
 	useUiStore.setState({ sessionImportOfferClosed: false, globalToasts: [] });
@@ -108,11 +114,16 @@ it("preselects busy folders, folds the rest and adds the picked ones as projects
 	fireEvent.click(within(dialog).getByRole("button", { name: "Other folders (1)" }));
 	expect(within(dialog).getByRole("checkbox", { name: "Import beta" })).not.toBeChecked();
 	api.POST.mockResolvedValueOnce({ data: {} });
-	api.POST.mockResolvedValueOnce({ data: { results: ["a", "bb", "ccc"].map((id) => ({ id, status: "created", sessionId: id })) } });
+	api.GET.mockResolvedValueOnce({ data: { candidates: ["a", "bb", "ccc"].map((id) => chat(id, "claude-code", { projectId: "alpha" })) } });
+	api.POST.mockResolvedValueOnce({ data: { results: ["a", "bb", "ccc"].map((id) => ({ id, status: "created", sessionId: `s-${id}` })) } });
 	fireEvent.click(within(dialog).getByRole("button", { name: "Import 1 folder" }));
 	await waitFor(() => expect(useSessionImportStore.getState().dialog).toBeNull());
 	expect(api.POST).toHaveBeenNthCalledWith(1, "/api/v1/projects", { body: { path: "/code/alpha" } });
 	expect(api.POST).toHaveBeenNthCalledWith(2, "/api/v1/session-import", { body: { ids: ["a", "bb", "ccc"] } });
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
-	expect(useUiStore.getState().globalToasts.map((toast) => toast.title)).toEqual(["Imported 3 chats"]);
+	const [toast] = useUiStore.getState().globalToasts;
+	expect(toast?.title).toBe("Imported 3 chats");
+	toast?.action?.run();
+	expect(openSession).toHaveBeenCalledWith("alpha", "s-ccc");
+	expect(useSessionImportStore.getState().importedCounts).toEqual({ alpha: 3 });
 });

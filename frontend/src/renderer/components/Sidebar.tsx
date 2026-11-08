@@ -811,6 +811,18 @@ export function Sidebar({
 			return next;
 		});
 	}, [dismissedInitialActiveProjectIds, expandedIds, initialActiveSessionProjectId]);
+	const importedProjects = useSessionImportStore((state) => state.importedCounts);
+	const revealedImports = useRef(new Set<string>());
+	useEffect(() => {
+		const fresh = Object.keys(importedProjects).filter((id) => !revealedImports.current.has(id));
+		if (!fresh.length) return;
+		for (const id of fresh) revealedImports.current.add(id);
+		setExpandedIds((prev) => {
+			const next = new Set([...prev, ...fresh]);
+			window.localStorage?.setItem(expandedProjectsStorageKey, JSON.stringify([...next]));
+			return next;
+		});
+	}, [importedProjects]);
 	// Section disclosure: every section header collapses its own body.
 	// Header clicks are saved. Opening a section to reveal the active session is not.
 	const [pinnedOpen, setPinnedOpen] = useState(() => readSectionsOpen().pinned);

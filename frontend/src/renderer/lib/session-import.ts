@@ -25,6 +25,12 @@ export const sessionImportPreviewQuery = queryOptions({
 	},
 });
 
+export function countBy(keys: string[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+	return counts;
+}
+
 export function folderName(path: string): string {
 	return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }

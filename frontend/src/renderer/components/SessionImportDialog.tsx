@@ -6,8 +6,10 @@ import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { agentLabel } from "../lib/agent-options";
 import { formatTimeCompact } from "../lib/format-time";
+import { useNavigateToSession } from "../lib/navigate-to-session";
 import {
 	agentBlock,
+	countBy,
 	folderName,
 	importChats,
 	projectChats,
@@ -154,11 +156,14 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 
 function Folders({ onClose }: { onClose: () => void }) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const navigateToSession = useNavigateToSession();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
 	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const [picked, setPicked] = useState<Set<string>>();
 	const [showOther, setShowOther] = useState(false);
 	const byKey = new Map<string, Folder>();
@@ -197,10 +202,20 @@ function Folders({ onClose }: { onClose: () => void }) {
 			return next;
 		});
 	const { importing, error, run } = useImportRun((results) => {
-		const created = results.filter((result) => result.status === "created").length;
-		if (created) {
+		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
+		if (created.size) {
 			closeSessionImportOffer();
-			showGlobalToast(t("sessionImport.foldersImported", { count: created }), undefined, "success");
+			const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
+				.filter((chat) => chat.sessionId && created.has(chat.id))
+				.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+			for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
+			const latest = imported[0];
+			const sessionId = latest?.sessionId;
+			showGlobalToast(t("sessionImport.foldersImported", { count: created.size }), undefined, {
+				tone: "success",
+				durationMs: 10_000,
+				action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
+			});
 		}
 		if (!results.some((result) => result.status === "failed")) onClose();
 	});
@@ -349,7 +364,7 @@ function FolderRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{folder.name}</span>
 				<span className="block truncate text-xs text-muted-foreground" title={folder.path}>
-					{folder.path}
+					{folder.path.replace(/^\/(?:Users|home)\/[^/]+/, "~")}
 				</span>
 			</span>
 			<span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
