@@ -297,3 +297,50 @@ func TestAddRefusesASignedOutAccountsEmailWhenItsOrganizationIsUnknown(t *testin
 		t.Fatalf("add = %q %+v, want duplicate of acct-a", status, view)
 	}
 }
+
+func TestSignInAgainAfterRestartIgnoresSignedOutAccountsOfUnknownOrganization(t *testing.T) {
+	ctx := context.Background()
+	svc, claude, store, root := newDuplicateFixture(t, "")
+	claude.orgOf = map[string]string{}
+	_, a := startAdd(t, svc, claude, root, "a@example.com", "org-1")
+	_, b := startAdd(t, svc, claude, root, "a@example.com", "org-2")
+	if a == nil || b == nil || len(store.accounts) != 2 {
+		t.Fatalf("setup: a=%+v b=%+v accounts=%+v", a, b, store.accounts)
+	}
+	for _, home := range []string{a.Account.Home, b.Account.Home} {
+		delete(claude.signedInAs, home)
+		delete(claude.orgOf, home)
+	}
+
+	restarted := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	if _, err := restarted.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	signInAgain := func(account domain.AgentAccount, org string) (LoginStatus, *AccountView) {
+		t.Helper()
+		start, err := restarted.StartSignInAgain(ctx, account.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claude.signedInAs[account.Home] = "a@example.com"
+		claude.orgOf[account.Home] = org
+		status, view, err := restarted.VerifyLogin(ctx, start.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return status, view
+	}
+
+	if status, view := signInAgain(a.Account, "org-1"); status != LoginComplete || view == nil || view.Account.ID != a.Account.ID || !view.SignedIn {
+		t.Fatalf("sign A in again = %q %+v", status, view)
+	}
+	if _, signedIn := claude.signedInAs[a.Account.Home]; !signedIn {
+		t.Fatal("A's fresh sign-in was logged out")
+	}
+	if status, view := signInAgain(b.Account, "org-1"); status != LoginDuplicate || view == nil || view.Account.ID != a.Account.ID {
+		t.Fatalf("sign B in again to A's organization = %q %+v, want duplicate of A", status, view)
+	}
+	if status, view := signInAgain(b.Account, "org-2"); status != LoginComplete || view == nil || view.Account.ID != b.Account.ID {
+		t.Fatalf("sign B in again to its own organization = %q %+v", status, view)
+	}
+}

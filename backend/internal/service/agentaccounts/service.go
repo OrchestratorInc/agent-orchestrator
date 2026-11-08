@@ -709,7 +709,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		if op.account != nil && view.Account.ID == op.account.ID {
 			continue
 		}
-		heldBy := view.SignedIn || (!view.Account.Device() && view.Account.Email != "")
+		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
 		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
