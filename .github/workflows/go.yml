@@ -1,28 +1,17 @@
 name: Go
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
-    paths:
-      - "backend/**"
-      - "pricing/**"
-      - "frontend/src/api/schema.ts"
-      - "package.json"
-      - ".github/workflows/go.yml"
+  workflow_call:
+    inputs:
+      windows:
+        type: boolean
+        required: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: go-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  # Coalesce pending main runs, but let the active run finish for a main signal.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   backend-core:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     strategy:
@@ -87,7 +76,6 @@ jobs:
           printf '%s\n' "$packages" | xargs go test -race -count=1 -timeout=40m
 
   chat-race:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     strategy:
@@ -110,7 +98,6 @@ jobs:
         run: go test -race -count=1 -timeout=40m ./internal/service/chat
 
   session-store-race:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -128,7 +115,6 @@ jobs:
         run: go test -race -count=1 -timeout=20m ./internal/session_manager ./internal/storage/sqlite/store
 
   sqlite-race:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     strategy:
@@ -153,28 +139,13 @@ jobs:
           test -n "$selected"
           go test -race -count=1 -timeout=40m -run "^($selected)$" ./internal/storage/sqlite
 
-  # Keep the existing required check as the gate for every backend race test.
-  build-test:
-    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
-    needs: [backend-core, chat-race, session-store-race, sqlite-race]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Check backend results
-        run: |
-          # This gate is skipped with draft/stacked jobs, never for a failed dependency.
-          test '${{ needs.backend-core.result }}' = success
-          test '${{ needs.chat-race.result }}' = success
-          test '${{ needs.session-store-race.result }}' = success
-          test '${{ needs.sqlite-race.result }}' = success
-
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree
   # teardown renames and unlinks directories, and Windows is the platform where
   # an open handle makes both fail. Scoped to those packages rather than the
   # whole suite to keep the matrix cheap.
   windows-workspace:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    if: inputs.windows
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
@@ -235,7 +206,6 @@ jobs:
         run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
 
   lint:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -261,7 +231,6 @@ jobs:
           # any new issue fails CI rather than being grandfathered.
 
   sqlc-drift:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -285,7 +254,6 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- backend/internal/storage/sqlite/gen)"
 
   api-drift:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -307,6 +275,6 @@ jobs:
         run: npm run api
 
       # openapi.yaml drift is already caught by TestBuild_MatchesEmbedded in
-      # the build-test job (go test -race ./...). Only schema.ts needs checking here.
+      # the backend-core job (go test -race). Only schema.ts needs checking here.
       - name: Check for schema.ts drift
         run: git diff --exit-code -- frontend/src/api/schema.ts
