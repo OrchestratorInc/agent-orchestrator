@@ -194,10 +194,10 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 			return nil // Without an id a record cannot take its place in the tree.
 		}
 		node := kimchiNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
-		switch {
-		case r.Type == "session_info":
+		switch r.Type {
+		case "session_info":
 			node.name = strings.TrimSpace(r.Name)
-		case r.Type == "context_edit":
+		case "context_edit":
 			node.editTarget = r.TargetID
 			if r.Replacement != nil {
 				node.text = string(r.Replacement.Content)
