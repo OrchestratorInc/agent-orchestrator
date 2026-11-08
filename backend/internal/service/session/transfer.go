@@ -17,7 +17,7 @@ import (
 // transferCommander moves sessions between machines. Production delegates to
 // Session Manager; focused fakes need not implement it.
 type transferCommander interface {
-	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error)
+	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error)
 	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
 	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
 	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
@@ -44,12 +44,13 @@ func (s *Service) transfers() (transferCommander, error) {
 // work, exports its conversation, and returns what the destination needs.
 // sourceLabel names this machine as the user sees it; empty uses MachineName.
 // dest names the machine the session is moving to, for the pending marker.
-func (s *Service) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
+// stopTurn ends a turn in progress instead of refusing.
+func (s *Service) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error) {
 	tc, err := s.transfers()
 	if err != nil {
 		return domain.SessionTransfer{}, err
 	}
-	t, err := tc.PrepareTransfer(ctx, id, transferID, dest)
+	t, err := tc.PrepareTransfer(ctx, id, transferID, dest, stopTurn)
 	if err != nil {
 		return domain.SessionTransfer{}, transferError(err)
 	}

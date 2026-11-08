@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { RotateCcw } from "@/components/app-icons";
+import { LoaderCircle, RotateCcw } from "@/components/app-icons";
 import {
 	createContext,
 	lazy,
@@ -39,6 +39,7 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSessionMovedTo } from "../hooks/useSessionMovedTo";
+import { moveKey, useMoveStore } from "../lib/move-runner";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -1585,10 +1586,14 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 	const terminated = variant === "session" && session && !sessionIsActive(session);
 	// A session that moved to another computer is refused here; point there instead.
 	const movedTo = useSessionMovedTo(terminated ? session : undefined);
-	const canRestore = restorable && !movedTo;
+	const move = useMoveStore((state) => (session ? state.moves[moveKey(session.hostId, session.id)] : undefined));
+	const moving = move?.phase === "moving" || move?.phase === "done" ? move.targetLabel : undefined;
+	const canRestore = restorable && !movedTo && !moving;
 	const agentExited = variant === "session" && sessionAgentExited(session);
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
-	const heading = movedTo
+	const heading = moving
+		? t("moveSession.moving", { host: moving })
+		: movedTo
 		? t("moveSession.movedHeading", { host: movedTo.label })
 		: reviewDelivered
 		? t("terminal.reviewCompleted")
@@ -1599,7 +1604,9 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 				: agentExited
 					? t("terminal.agentExited")
 					: t("terminal.ended");
-	const message = movedTo
+	const message = moving
+		? ""
+		: movedTo
 		? t("moveSession.movedMessage", { sessionId: movedTo.sessionId })
 		: reviewDelivered
 		? t("terminal.reviewerCompleted")
@@ -1621,14 +1628,15 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 							(terminated && !movedTo) || startupFailed ? "text-destructive" : "text-muted-foreground",
 						)}
 					>
+						{moving ? <LoaderCircle aria-hidden="true" className="mr-1.5 inline size-3 animate-spin align-[-2px] text-[var(--color-status-working)]" /> : null}
 						{heading}
 					</div>
 					<div className="mt-0.5 text-xs text-muted-foreground">
-						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+						{moving ? null : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
 					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
-				{variant === "session" && session && !movedTo ? <ResumeAgentControl session={session} /> : null}
+				{variant === "session" && session && !movedTo && !moving ? <ResumeAgentControl session={session} /> : null}
 				{movedTo?.open ? (
 					<Button type="button" variant="secondary" onClick={movedTo.open}>
 						{t("moveSession.open")}

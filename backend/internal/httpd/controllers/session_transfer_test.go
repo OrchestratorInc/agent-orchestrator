@@ -24,11 +24,12 @@ type fakeTransferSessionService struct {
 	receivedProject domain.ProjectID
 	received        domain.SessionTransfer
 	preparedDest    domain.SessionTransferDestination
+	stopTurn        bool
 	cancelled       string
 }
 
-func (f *fakeTransferSessionService) PrepareTransfer(_ context.Context, _ domain.SessionID, transferID, _ string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
-	f.preparedDest = dest
+func (f *fakeTransferSessionService) PrepareTransfer(_ context.Context, _ domain.SessionID, transferID, _ string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error) {
+	f.preparedDest, f.stopTurn = dest, stopTurn
 	return domain.SessionTransfer{TransferID: transferID}, nil
 }
 
@@ -76,8 +77,8 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
-	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/transfer/prepare", `{"transferId":"tr12345678","destination":{"hostId":"host-b","label":"MacBook B"}}`)
-	if status != http.StatusOK || svc.preparedDest.HostID != "host-b" || svc.preparedDest.Label != "MacBook B" {
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/transfer/prepare", `{"transferId":"tr12345678","destination":{"hostId":"host-b","label":"MacBook B"},"stopTurn":true}`)
+	if status != http.StatusOK || svc.preparedDest.HostID != "host-b" || svc.preparedDest.Label != "MacBook B" || !svc.stopTurn {
 		t.Fatalf("prepare = %d %s, destination %+v", status, body, svc.preparedDest)
 	}
 

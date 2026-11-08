@@ -22542,6 +22542,9 @@ components:
             note; empty uses its hostname.
           maxLength: 200
           type: string
+        stopTurn:
+          description: End a turn in progress instead of refusing with TRANSFER_AGENT_BUSY.
+          type: boolean
         transferId:
           maxLength: 64
           minLength: 8

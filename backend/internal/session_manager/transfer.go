@@ -93,8 +93,9 @@ func (m *Manager) readTransferPayload(id domain.SessionID, transferID string) (d
 // conversation into the data dir. It then marks the session as being moved to
 // dest, so it cannot run here until CommitTransfer or CancelTransfer. Calling
 // it again with the same transfer id, or for an unfinished move to the same
-// host, returns the earlier result.
-func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
+// host, returns the earlier result. A mid-turn agent is refused unless
+// stopTurn is set, which ends the turn.
+func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error) {
 	dir, err := m.transferDir(transferID)
 	if err != nil {
 		return domain.SessionTransfer{}, err
@@ -139,7 +140,7 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	if !ok {
 		return domain.SessionTransfer{}, fmt.Errorf("%w: workspace adapter cannot transfer", ErrTransferUnsupported)
 	}
-	if rec.Activity.State == domain.ActivityActive || rec.Activity.State == domain.ActivityBlocked {
+	if !stopTurn && (rec.Activity.State == domain.ActivityActive || rec.Activity.State == domain.ActivityBlocked) {
 		return domain.SessionTransfer{}, ErrTransferAgentBusy
 	}
 	if _, err := m.ExitAgent(ctx, id); err != nil && !errors.Is(err, ErrAgentExited) {
