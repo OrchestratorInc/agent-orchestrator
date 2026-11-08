@@ -125,3 +125,35 @@ func TestRepoResolverCallerDeadlineDoesNotCancelLookup(t *testing.T) {
 		t.Fatalf("lookups = %d, want 1 (the detached lookup is shared)", n)
 	}
 }
+
+func TestRepoResolverKeepsLastGoodAnswerOnTransientFailure(t *testing.T) {
+	f := newFakeGH(t)
+	var status atomic.Int32
+	status.Store(http.StatusOK)
+	f.on(http.MethodGet, "/repos/acme/widgets", func(w http.ResponseWriter, _ *http.Request) {
+		if code := int(status.Load()); code != http.StatusOK {
+			http.Error(w, `{"message":"nope"}`, code)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_name": "acme/widgets"})
+	})
+	r := NewRepoResolver(newProviderForTest(t, f))
+	now := time.Unix(1_000_000, 0)
+	r.now = func() time.Time { return now }
+	if _, err := r.ResolveGitHubRepository(ctx(), "acme", "widgets"); err != nil {
+		t.Fatal(err)
+	}
+
+	status.Store(http.StatusBadGateway)
+	now = now.Add(repoResolveTTL + time.Second)
+	got, err := r.ResolveGitHubRepository(ctx(), "acme", "widgets")
+	if err != nil || got.ID != 7 {
+		t.Fatalf("after a transient failure: %#v, %v; want the last good answer", got, err)
+	}
+
+	status.Store(http.StatusNotFound)
+	now = now.Add(repoResolveFailureTTL + time.Second)
+	if _, err := r.ResolveGitHubRepository(ctx(), "acme", "widgets"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after a 404: err = %v, want ErrNotFound", err)
+	}
+}

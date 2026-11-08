@@ -73,6 +73,13 @@ func (r *RepoResolver) ResolveGitHubRepository(ctx context.Context, owner, name 
 		ttl := repoResolveTTL
 		if err != nil {
 			ttl = repoResolveFailureTTL
+			// A transient failure (offline, 5xx, rate limit) keeps the last
+			// good answer, so an expired entry does not flip the project back
+			// to its stale owner. A 404 means the repository is gone or no
+			// longer visible, so it replaces the old answer.
+			if ok && cached.err == nil && !errors.Is(err, ErrNotFound) {
+				repo, err = cached.repo, nil
+			}
 		}
 		r.mu.Lock()
 		r.cache[key] = repoResolution{repo: repo, err: err, expires: r.now().Add(ttl)}
