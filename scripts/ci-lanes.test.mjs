@@ -25,9 +25,15 @@ test('a docs-only PR runs no lanes', () => {
   assert.deepEqual(pickLanes(pr(['README.md', 'docs/ci.md', 'AGENTS.md'])).lanes, []);
 });
 
-test('a renderer change runs the frontend lane with related vitest files', () => {
+test('drafts and stacked PRs from forks', () => {
+  assert.deepEqual(pickLanes(pr(['backend/a.go'], { draft: true, base: 'feat/parent', fork: true })).lanes, []);
+  assert.throws(() => pickLanes(pr(['backend/a.go'], { base: 'feat/parent', fork: true })), /target main and push again/);
+  assert.deepEqual(pickLanes(pr(['backend/a.go'], { fork: true })).lanes, ['go', 'cli-e2e']);
+});
+
+test('a renderer change runs the frontend lane, with related vitest files and the Electron boundary', () => {
   const pick = pickLanes(pr(['frontend/src/renderer/a.ts', 'frontend/src/renderer/a.test.ts']));
-  assert.deepEqual(pick.lanes, ['frontend']);
+  assert.deepEqual(pick.lanes, ['frontend', 'boundary']);
   assert.equal(pick.vitest, 'src/renderer/a.ts src/renderer/a.test.ts');
   assert.equal(pick.macos, false);
 });
@@ -38,8 +44,13 @@ test('an httpd change runs Go, CLI E2E and the Electron boundary', () => {
 
 test('packages/shared reaches the frontend and mobile, with all vitest files', () => {
   const pick = pickLanes(pr(['packages/shared/theme/palette.ts']));
-  assert.deepEqual(pick.lanes, ['frontend', 'mobile']);
+  assert.deepEqual(pick.lanes, ['frontend', 'boundary', 'mobile']);
   assert.equal(pick.vitest, 'all');
+});
+
+test('the renderer typechecks against cloud-client types', () => {
+  assert.deepEqual(pickLanes(pr(['packages/cloud-client/src/types.ts'])).lanes, ['frontend', 'boundary', 'cloud']);
+  assert.deepEqual(pickLanes(pr(['contracts/cloud/openapi.yaml'])).lanes, ['cloud']);
 });
 
 test('a workflow edit runs every lane except native macOS', () => {
@@ -50,7 +61,7 @@ test('a workflow edit runs every lane except native macOS', () => {
 });
 
 test('labels select native coverage', () => {
-  assert.deepEqual(pickLanes(pr(['frontend/src/main/a.ts'], { labels: ['ci:macos'] })).lanes, ['frontend', 'postcondition', 'mac-native']);
+  assert.deepEqual(pickLanes(pr(['frontend/src/main/a.ts'], { labels: ['ci:macos'] })).lanes, ['frontend', 'boundary', 'mac-native']);
   const full = pickLanes(pr(['README.md'], { labels: ['ci:full'] }));
   assert.deepEqual(full.lanes, Object.keys(LANES));
   assert.equal(full.full, true);
@@ -60,6 +71,7 @@ test('native helper paths start the macOS jobs without a label', () => {
   const pick = pickLanes(pr(['frontend/native/wake-helper/WakePolicy.swift']));
   assert.deepEqual(pick.lanes, ['mac-native']);
   assert.equal(pick.macos, true);
+  assert.ok(pickLanes(pr(['frontend/assets/dmg/background.png'])).lanes.includes('mac-native'));
 });
 
 test('a rename counts its old path', () => {

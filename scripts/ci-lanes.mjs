@@ -1,33 +1,31 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared)\/)/;
+const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared|cloud-client)\/)/;
 
 export const LANES = {
   go: [/^backend\//, /^pricing\//, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/],
   'cli-e2e': [/^backend\//, /^test\/cli\//],
   frontend: [FRONTEND],
   docs: [/^frontend\/src\/docs\//],
-  boundary: [/^backend\/internal\/httpd\//, /^frontend\/src\/preload/, /^frontend\/package(-lock)?\.json$/],
-  postcondition: [
-    /^frontend\/src\/main\//,
-    /^frontend\/scripts\/run-browser-postcondition-integration\.mjs$/,
-    /^frontend\/test\/fixtures\/browser-action-postconditions\//,
-  ],
+  boundary: [FRONTEND, /^backend\/internal\/httpd\//],
   cloud: [/^packages\/cloud-client\//, /^contracts\/cloud\//],
   'product-ui': [/^packages\/product-ui\//],
   mobile: [/^packages\/(mobile|shared)\//],
-  'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/icon\.icns$/],
+  'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/(icon\.icns$|dmg\/)/],
   config: [/^\.github\//, /^scripts\//],
 };
 
-export const FRONTEND_WORKFLOW_LANES = ['frontend', 'docs', 'boundary', 'postcondition', 'cloud', 'product-ui', 'mac-native'];
+export const FRONTEND_WORKFLOW_LANES = ['frontend', 'docs', 'boundary', 'cloud', 'product-ui', 'mac-native'];
 
 const EVERY_LANE = /^(\.github\/(workflows|actions)\/|scripts\/ci-lanes\.mjs$)/;
 const ALL_VITEST = /^(frontend\/(package(-lock)?\.json|vite[^/]*\.ts|vitest[^/]*\.ts|tsconfig[^/]*\.json|src\/renderer\/test\/|scripts\/)|packages\/(product-ui|shared)\/)/;
 const FILE_LIMIT = 3000;
 
-export function pickLanes({ event, draft = false, base = 'main', labels = [], files = [] }) {
+export function pickLanes({ event, draft = false, base = 'main', fork = false, labels = [], files = [] }) {
+  if (event === 'pull_request' && !draft && base !== 'main' && fork) {
+    throw new Error(`This fork PR targets ${base}. CI cannot re-run it when it moves to main, so ci-ok stays red: target main and push again.`);
+  }
   if (event === 'pull_request' && (draft || base !== 'main')) {
     return { lanes: [], full: false, macos: false, vitest: '' };
   }
@@ -72,7 +70,8 @@ function readPullRequest(repo, number) {
       const [status, filename, previous] = line.split('\t');
       return { status, filename, previous_filename: previous || undefined };
     });
-  return { draft: pr.draft, base: pr.base.ref, labels: pr.labels.map(label => label.name), files };
+  const fork = pr.head.repo?.full_name !== pr.base.repo.full_name;
+  return { draft: pr.draft, base: pr.base.ref, fork, labels: pr.labels.map(label => label.name), files };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

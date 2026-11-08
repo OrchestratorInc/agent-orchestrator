@@ -314,7 +314,7 @@ jobs:
           AO_MOBILE_CONTROL_ELECTRON="$electron_binary" xvfb-run -a go test -count=1 -run '^TestMobileControlOriginElectron$' ./internal/httpd
 
   postcondition:
-    if: contains(fromJSON(inputs.lanes), 'postcondition')
+    if: contains(fromJSON(inputs.lanes), 'frontend')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:

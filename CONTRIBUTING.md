@@ -88,7 +88,8 @@ list when it reads source files from disk instead of importing them.
 
 Draft and stacked PRs run no lanes. Marking a PR ready, or retargeting a stacked
 PR to `main`, starts them. Editing a PR's title or body starts nothing. A PR
-from a fork must push again after a retarget.
+from a fork that targets another branch fails `ci-ok`: target `main` and push
+again.
 
 ### Native CI coverage
 
