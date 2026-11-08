@@ -702,6 +702,14 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if !strings.Contains(body, `callHookSync("permission-resolved"`) {
 		t.Fatalf("installed plugin does not emit permission-resolved for replies:\n%s", body)
 	}
+	// With several dialogs open, the first reply must NOT resolve the block:
+	// the plugin tracks open asks by request id and reports only once none
+	// remain, or the first `ao send` types into the still-open dialog.
+	for _, marker := range []string{"openAsks", "askID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not track open permission asks (%q missing):\n%s", marker, body)
+		}
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)

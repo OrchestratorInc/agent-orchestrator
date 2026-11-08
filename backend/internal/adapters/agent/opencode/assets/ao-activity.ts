@@ -8,7 +8,9 @@
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
 //                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
-//   permission/question reply or rejection -> `ao hooks opencode permission-resolved`
+//   last permission/question dialog closed -> `ao hooks opencode permission-resolved`
+//                                             (several dialogs can be open at once;
+//                                              the report waits for the last one)
 //
 // The opencode-native session id (and prompt/model where known) is piped to the
 // hook command as JSON on stdin, run with cwd set to the worktree so AO can
@@ -32,6 +34,14 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   const promptReports = new Map<string, boolean>()
   // message.* events don't carry the session id, so track it from events that do.
   let currentSessionID: string | null = null
+  // OpenCode can hold several permission/question dialogs at once (two bash
+  // calls in one step, for example). Track them by request id: a reply closes
+  // only its own dialog, so the turn-boundary report must wait until the last
+  // one is answered. Reporting the first reply would send AO back to active
+  // while a dialog is still on screen, and `ao send` keystrokes would type
+  // into that dialog instead of reaching the agent.
+  const openAsks = new Set<string>()
+  let askCounter = 0
   // The model of the most recent assistant message, forwarded for context.
   let currentModel: string | null = null
   // AO fences each provider generation with AO_RUNTIME_LAUNCH_ID; carry it in
@@ -105,8 +115,19 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     assistantMessages.clear()
     lastAssistantText = ""
     currentModel = null
+    // Dialogs of the replaced session are no longer ours to track; the new
+    // identity starts with none open.
+    openAsks.clear()
     currentSessionID = sessionID
     return true
+  }
+
+  // The id a dialog is opened and answered under. permission.* carries
+  // permissionID on ask and reply; question.* has been seen as id or requestID
+  // depending on the opencode release. An ask with no id gets a synthetic one.
+  function askID(props: any): string | null {
+    const id = props?.permissionID ?? props?.requestID ?? props?.id
+    return typeof id === "string" && id.length > 0 ? id : null
   }
 
   // Report a user prompt, preferring the one that carries the prompt text.
@@ -184,6 +205,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             callHookSync("stop", { session_id: sessionID, model: currentModel ?? "", last_assistant_message: lastAssistantText })
             assistantMessages.clear()
             lastAssistantText = ""
+            // The turn ended; any dialog state still tracked is stale and must
+            // not suppress the next turn's resolve.
+            openAsks.clear()
             break
           }
 
@@ -191,6 +215,8 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
           case "question.asked": {
             const sessionID = (event as any).properties?.sessionID ?? currentSessionID
             if (!sessionID) break
+            const ask = askID((event as any).properties) ?? `ask-${++askCounter}`
+            openAsks.add(ask)
             callHookSync("permission-blocked", { session_id: sessionID, model: currentModel ?? "" })
             break
           }
@@ -198,11 +224,26 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
           case "permission.replied":
           case "question.replied":
           case "question.rejected": {
-            // A reply is proof the dialog is gone; generic `active` is
-            // suppressed while blocked, so this must be the turn-boundary event
-            // AO already understands (matching the OpenCode 2 plugin).
+            // A reply closes one dialog; generic `active` is suppressed while
+            // blocked, so the turn-boundary event AO already understands is
+            // reserved for the moment the LAST dialog closes (matching the
+            // OpenCode 2 plugin). While a dialog remains open there is no
+            // report: the session stays blocked and AO refuses sends, whose
+            // keystrokes would otherwise type into the still-open dialog.
             const sessionID = (event as any).properties?.sessionID ?? currentSessionID
             if (!sessionID) break
+            if (openAsks.size > 0) {
+              const ask = askID((event as any).properties)
+              if (ask !== null && openAsks.has(ask)) openAsks.delete(ask)
+              else {
+                // No matching id (short payload, or the plugin restarted and
+                // never saw the ask): close the oldest tracked dialog. This
+                // stays strictly stricter than reporting every reply.
+                const oldest = openAsks.values().next().value
+                if (oldest !== undefined) openAsks.delete(oldest)
+              }
+              if (openAsks.size > 0) break
+            }
             callHookSync("permission-resolved", { session_id: sessionID, model: currentModel ?? "" })
             break
           }
