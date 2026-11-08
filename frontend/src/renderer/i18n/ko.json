@@ -4834,5 +4834,8 @@
 	"move.done": "AO Cloud로 이동했습니다",
 	"move.completeFailed": "세션은 AO Cloud에서 실행 중이지만 이 컴퓨터에서는 이동된 것으로 표시하지 못했습니다.",
 	"move.failedRolledBack": "세션은 변경 없이 여기서 계속됩니다.",
+	"move.failedPushedWip": "커밋되지 않은 파일은 이제 이 컴퓨터와 GitHub 모두에서 {{branch}}의 커밋 {{commit}}입니다.",
+	"move.failedPushed": "{{branch}}가 GitHub에 푸시되었습니다.",
+	"move.failedResumed": "이 컴퓨터의 에이전트가 다시 실행 중입니다.",
 	"move.failedNotRolledBack": "이 컴퓨터의 에이전트가 아직 중지되어 있습니다. 세션 메뉴에서 다시 시작하세요."
 }

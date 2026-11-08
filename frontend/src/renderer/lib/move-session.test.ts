@@ -72,7 +72,7 @@ describe("moveSession", () => {
 		const cp = cloud();
 		const error = await moveSession({ sessionId: "app-1", target }, { source, cloud: cp }).catch((e: unknown) => e);
 		expect(error).toBeInstanceOf(MoveError);
-		expect(error).toMatchObject({ step: "export", code: "MOVE_REMOTE_AHEAD", rolledBack: true });
+		expect(error).toMatchObject({ step: "export", code: "MOVE_REMOTE_AHEAD", rolledBack: true, pushed: undefined });
 		expect(calls.at(-1)).toBe("/api/v1/sessions/{sessionId}/resume-agent");
 		expect(cp.createSession).not.toHaveBeenCalled();
 	});
@@ -86,7 +86,10 @@ describe("moveSession", () => {
 		}, calls);
 		const cp = cloud(async () => { throw { code: "branch_in_use", message: "Another session holds feat/move." }; });
 		const error = await moveSession({ sessionId: "app-1", target }, { source, cloud: cp }).catch((e: unknown) => e);
-		expect(error).toMatchObject({ step: "import", rolledBack: true, message: "Another session holds feat/move." });
+		expect(error).toMatchObject({
+			step: "import", rolledBack: true, message: "Another session holds feat/move.",
+			pushed: { branch: "feat/move", tip: "abc", wip: true },
+		});
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/move/complete");
 	});
 

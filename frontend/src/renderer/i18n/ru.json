@@ -5060,5 +5060,8 @@
 	"move.done": "Перемещено в AO Cloud",
 	"move.completeFailed": "Сессия работает в AO Cloud, но этот компьютер не отметил её как перемещённую.",
 	"move.failedRolledBack": "Сессия продолжается здесь без изменений.",
+	"move.failedPushedWip": "Незакоммиченные файлы теперь — коммит {{commit}} в {{branch}}, здесь и на GitHub.",
+	"move.failedPushed": "{{branch}} отправлена на GitHub.",
+	"move.failedResumed": "Агент на этом компьютере снова работает.",
 	"move.failedNotRolledBack": "Агент здесь всё ещё остановлен. Возобновите его из меню сессии."
 }

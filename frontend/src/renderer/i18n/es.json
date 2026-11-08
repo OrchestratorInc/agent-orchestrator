@@ -4951,5 +4951,8 @@
 	"move.done": "Movida a AO Cloud",
 	"move.completeFailed": "La sesión se ejecuta en AO Cloud, pero este equipo no la marcó como movida.",
 	"move.failedRolledBack": "La sesión continúa aquí sin cambios.",
+	"move.failedPushedWip": "Los archivos sin confirmar ahora son el commit {{commit}} en {{branch}}, aquí y en GitHub.",
+	"move.failedPushed": "{{branch}} se subió a GitHub.",
+	"move.failedResumed": "El agente vuelve a ejecutarse aquí.",
 	"move.failedNotRolledBack": "El agente aquí sigue detenido. Reanúdalo desde el menú de la sesión."
 }

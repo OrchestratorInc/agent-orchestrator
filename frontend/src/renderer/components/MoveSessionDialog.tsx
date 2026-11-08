@@ -219,8 +219,19 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
 							<p>{error.message}</p>
+							{error instanceof MoveError && error.pushed ? (
+								<p className="text-settings-muted">
+									{error.pushed.wip
+										? t("move.failedPushedWip", { commit: error.pushed.tip.slice(0, 7), branch: error.pushed.branch })
+										: t("move.failedPushed", { branch: error.pushed.branch })}
+								</p>
+							) : null}
 							<p className="text-settings-muted">
-								{error instanceof MoveError && !error.rolledBack ? t("move.failedNotRolledBack") : t("move.failedRolledBack")}
+								{error instanceof MoveError && !error.rolledBack
+									? t("move.failedNotRolledBack")
+									: error instanceof MoveError && error.pushed
+										? t("move.failedResumed")
+										: t("move.failedRolledBack")}
 							</p>
 						</div>
 					) : null}

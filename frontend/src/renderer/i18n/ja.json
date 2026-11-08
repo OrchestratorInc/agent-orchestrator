@@ -4834,5 +4834,8 @@
 	"move.done": "AO Cloud に移動しました",
 	"move.completeFailed": "セッションは AO Cloud で実行されていますが、このコンピュータでは移動済みとして記録されませんでした。",
 	"move.failedRolledBack": "セッションは変更されずにここで続きます。",
+	"move.failedPushedWip": "未コミットのファイルは、このコンピュータと GitHub の両方で {{branch}} のコミット {{commit}} になりました。",
+	"move.failedPushed": "{{branch}} は GitHub にプッシュされました。",
+	"move.failedResumed": "このコンピュータのエージェントは再び実行中です。",
 	"move.failedNotRolledBack": "ここのエージェントは停止したままです。セッションメニューから再開してください。"
 }

@@ -4816,5 +4816,8 @@
 	"move.done": "已移动到 AO Cloud",
 	"move.completeFailed": "会话已在 AO Cloud 中运行，但此电脑未将其标记为已移动。",
 	"move.failedRolledBack": "会话在这里继续，未作更改。",
+	"move.failedPushedWip": "未提交的文件现在是 {{branch}} 上的提交 {{commit}}，在此电脑和 GitHub 上都是如此。",
+	"move.failedPushed": "{{branch}} 已推送到 GitHub。",
+	"move.failedResumed": "此电脑上的代理已重新运行。",
 	"move.failedNotRolledBack": "这里的代理仍处于停止状态。请从会话菜单恢复它。"
 }

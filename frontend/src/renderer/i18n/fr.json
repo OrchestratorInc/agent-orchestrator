@@ -4951,5 +4951,8 @@
 	"move.done": "Déplacée vers AO Cloud",
 	"move.completeFailed": "La session s'exécute dans AO Cloud, mais cet ordinateur ne l'a pas marquée comme déplacée.",
 	"move.failedRolledBack": "La session continue ici, inchangée.",
+	"move.failedPushedWip": "Les fichiers non commités sont maintenant le commit {{commit}} sur {{branch}}, ici et sur GitHub.",
+	"move.failedPushed": "{{branch}} a été poussée sur GitHub.",
+	"move.failedResumed": "L'agent fonctionne de nouveau ici.",
 	"move.failedNotRolledBack": "L'agent ici est toujours arrêté. Reprenez-le depuis le menu de la session."
 }
