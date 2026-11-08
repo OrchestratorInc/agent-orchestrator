@@ -556,8 +556,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUsageHookMetadata":                "UsageHookMetadata",
 	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
 	"ControllersUsageLimitHistoryRequest":         "UsageLimitHistoryRequest",
-	"ControllersUsageCursorRequest":               "UsageCursorRequest",
-	"DomainCursorUsageStatus":                     "CursorUsageStatus",
 	"ControllersUsagePriceOverride":               "UsagePriceOverride",
 	"ControllersUsagePricesRequest":               "UsagePricesRequest",
 	"ControllersUsagePricesResponse":              "UsagePricesResponse",
@@ -1134,25 +1132,6 @@ func usageOperations() []operation {
 			reqBody: controllers.UsageLimitHistoryRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.UsageLimitHistoryResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/usage/cursor", id: "getUsageCursor", tag: "usage",
-			summary: "Read whether AO reads Cursor usage from cursor.com, and how the last read went",
-			resps: []respUnit{
-				{http.StatusOK, domain.CursorUsageStatus{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodPut, path: "/api/v1/usage/cursor", id: "setUsageCursor", tag: "usage",
-			summary: "Turn reading the Cursor usage of AO sessions from cursor.com on or off",
-			reqBody: controllers.UsageCursorRequest{},
-			resps: []respUnit{
-				{http.StatusOK, domain.CursorUsageStatus{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

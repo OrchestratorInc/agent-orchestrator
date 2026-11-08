@@ -50,7 +50,6 @@ SET state = 'finalizing',
     END,
     updated_at = sqlc.arg(finalized_at)
 WHERE usage_bindings.session_id = sqlc.arg(session_id)
-  AND usage_bindings.harness <> 'cursor'
   AND EXISTS (
       SELECT 1
       FROM sessions
@@ -99,7 +98,6 @@ FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  AND us.kind <> 'cursor_dashboard'
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'
@@ -810,21 +808,3 @@ WHERE model_usage_events.created_at IS NOT NULL
   AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
   AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
 ORDER BY model_usage_events.id;
-
--- name: GetUsageCursorRead :one
-SELECT account_key, read_until FROM usage_cursor_reads LIMIT 1;
-
--- name: DeleteUsageCursorReads :exec
-DELETE FROM usage_cursor_reads;
-
--- name: InsertUsageCursorRead :exec
-INSERT INTO usage_cursor_reads (account_key, read_until) VALUES (?, ?);
-
--- name: DeleteCursorUsageEventsInRange :exec
-DELETE FROM model_usage_events
-WHERE usage_source_id IN (
-    SELECT id FROM usage_sources
-    WHERE kind = 'cursor_dashboard' AND artifact_path = sqlc.arg(artifact_path)
-)
-  AND substr(created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
-  AND substr(created_at, 1, 19) <= CAST(sqlc.arg(until_utc) AS TEXT);

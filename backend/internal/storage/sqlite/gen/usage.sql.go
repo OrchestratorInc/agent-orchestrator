@@ -201,36 +201,6 @@ func (q *Queries) CompleteUsageBindingIfSettled(ctx context.Context, arg Complet
 	return result.RowsAffected()
 }
 
-const deleteCursorUsageEventsInRange = `-- name: DeleteCursorUsageEventsInRange :exec
-DELETE FROM model_usage_events
-WHERE usage_source_id IN (
-    SELECT id FROM usage_sources
-    WHERE kind = 'cursor_dashboard' AND artifact_path = ?1
-)
-  AND substr(created_at, 1, 19) >= CAST(?2 AS TEXT)
-  AND substr(created_at, 1, 19) <= CAST(?3 AS TEXT)
-`
-
-type DeleteCursorUsageEventsInRangeParams struct {
-	ArtifactPath string
-	SinceUtc     string
-	UntilUtc     string
-}
-
-func (q *Queries) DeleteCursorUsageEventsInRange(ctx context.Context, arg DeleteCursorUsageEventsInRangeParams) error {
-	_, err := q.db.ExecContext(ctx, deleteCursorUsageEventsInRange, arg.ArtifactPath, arg.SinceUtc, arg.UntilUtc)
-	return err
-}
-
-const deleteUsageCursorReads = `-- name: DeleteUsageCursorReads :exec
-DELETE FROM usage_cursor_reads
-`
-
-func (q *Queries) DeleteUsageCursorReads(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteUsageCursorReads)
-	return err
-}
-
 const deleteUsagePriceOverrides = `-- name: DeleteUsagePriceOverrides :exec
 DELETE FROM usage_price_overrides
 `
@@ -296,7 +266,6 @@ SET state = 'finalizing',
     END,
     updated_at = ?1
 WHERE usage_bindings.session_id = ?2
-  AND usage_bindings.harness <> 'cursor'
   AND EXISTS (
       SELECT 1
       FROM sessions
@@ -432,17 +401,6 @@ func (q *Queries) GetUsageBindingBySessionHarnessRoot(ctx context.Context, arg G
 		&i.UpdatedAt,
 		&i.ProviderHint,
 	)
-	return i, err
-}
-
-const getUsageCursorRead = `-- name: GetUsageCursorRead :one
-SELECT account_key, read_until FROM usage_cursor_reads LIMIT 1
-`
-
-func (q *Queries) GetUsageCursorRead(ctx context.Context) (UsageCursorRead, error) {
-	row := q.db.QueryRowContext(ctx, getUsageCursorRead)
-	var i UsageCursorRead
-	err := row.Scan(&i.AccountKey, &i.ReadUntil)
 	return i, err
 }
 
@@ -695,20 +653,6 @@ func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsag
 	var id int64
 	err := row.Scan(&id)
 	return id, err
-}
-
-const insertUsageCursorRead = `-- name: InsertUsageCursorRead :exec
-INSERT INTO usage_cursor_reads (account_key, read_until) VALUES (?, ?)
-`
-
-type InsertUsageCursorReadParams struct {
-	AccountKey string
-	ReadUntil  time.Time
-}
-
-func (q *Queries) InsertUsageCursorRead(ctx context.Context, arg InsertUsageCursorReadParams) error {
-	_, err := q.db.ExecContext(ctx, insertUsageCursorRead, arg.AccountKey, arg.ReadUntil)
-	return err
 }
 
 const insertUsagePriceOverride = `-- name: InsertUsagePriceOverride :exec
@@ -1791,7 +1735,6 @@ FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  AND us.kind <> 'cursor_dashboard'
   AND NOT (
       us.state = 'complete'
       AND us.last_error_code = 'artifact_replaced'

@@ -17,7 +17,6 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { UsageCursor } from "./UsageCursor";
 import { UsageLimits } from "./UsageLimits";
 import { UsageSpend } from "./UsageSpend";
 import { UsageWindows } from "./UsageWindows";
@@ -63,10 +62,6 @@ export function UsageView() {
 		[projects, t],
 	);
 	const filterProjects = useMemo(() => projects.filter((project) => project.id !== STANDALONE_WORKSPACE_ID), [projects]);
-	const hasCursorSessions = useMemo(
-		() => projects.some((project) => project.sessions.some((session) => session.provider === "cursor")),
-		[projects],
-	);
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
 	const limitWindows = useUsageLimitWindows(7, tab === "windows");
@@ -173,7 +168,6 @@ export function UsageView() {
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
 						<div className="mx-auto w-full max-w-6xl px-6 py-6">
-							{tab === "spend" ? <UsageCursor hasCursorSessions={hasCursorSessions} /> : null}
 							{isWindows ? (
 								limitWindows.data ? (
 									<>

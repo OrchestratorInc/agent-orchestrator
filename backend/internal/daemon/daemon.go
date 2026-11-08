@@ -883,11 +883,6 @@ func Run(buildVersion string) error {
 			usagePricing.Wait()
 		}()
 	}
-	cursorUsage := usagepipeline.NewCursorUsage(store, log)
-	go func() {
-		defer sentryobs.RecoverBackground()
-		cursorUsage.Run(ctx)
-	}()
 	if roots, rootsErr := usagesvc.DefaultSourceRoots(ctx, cfg.DataDir); rootsErr != nil {
 		log.Warn("usage collection disabled", "err", rootsErr)
 	} else {
@@ -1167,7 +1162,6 @@ func Run(buildVersion string) error {
 		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
 		UsageLimitSetting:  store,
 		UsagePrices:        usagePrices(usagePricing),
-		UsageCursor:        cursorUsage,
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,

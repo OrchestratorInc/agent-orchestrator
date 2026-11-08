@@ -28,7 +28,6 @@ const (
 	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
 	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
 	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
-	UsageSourceCursorDashboard   UsageSourceKind = "cursor_dashboard"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape.
@@ -48,7 +47,6 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceGrokUsage,
 	UsageSourceDeepSeekSession,
 	UsageSourceAgyConversation,
-	UsageSourceCursorDashboard,
 }
 
 // IsKnown reports whether k is a certified usage source kind.
@@ -540,27 +538,4 @@ type SessionStep struct {
 	// EndedAt is zero while the tool is still running.
 	EndedAt time.Time
 	Failed  bool
-}
-
-// CursorUsageRead is one read of a Cursor account's usage, attributed to the AO sessions it was for.
-type CursorUsageRead struct {
-	AccountKey   string
-	Since, Until time.Time
-	Events       []CursorSessionEvent
-	Now          time.Time
-}
-
-// CursorSessionEvent is one billed Cursor request in an AO session.
-type CursorSessionEvent struct {
-	SessionID      SessionID
-	ConversationID string
-	Event          ModelUsageEvent
-}
-
-// CursorUsageStatus is whether AO reads Cursor usage and how the last read went.
-type CursorUsageStatus struct {
-	Supported bool       `json:"supported"`
-	Enabled   bool       `json:"enabled"`
-	ReadAt    *time.Time `json:"readAt,omitempty"`
-	Error     string     `json:"error,omitempty" enum:"signed_out,keychain,failed"`
 }
