@@ -623,7 +623,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-shell--floating-topbar .panel-topbar-controls {
-	top: 1px;
+	top: 1.5px;
 }
 
 .center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control {
@@ -662,8 +662,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-width: 0;
 	border-radius: 0;
 	/* The frame's faint top line reads as part of the gap below the controls,
-	 * so the bar's contents sit 1px low to look evenly spaced. */
-	padding: 1px 1px 1px;
+	 * so the bar's contents sit low to look evenly spaced. 1.5px also lands them
+	 * on the traffic lights' centerline (y = 25). */
+	padding: 1.5px 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,

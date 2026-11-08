@@ -152,7 +152,7 @@ export function TitlebarNav({
           {/* Not a button on purpose. Only the label opts out of window drag (for
               the build-info tooltip); the rest of the row stays draggable. */}
           <span
-            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="flex select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
             ref={brandRef}
             style={{ maxWidth: brandMaxWidth }}
