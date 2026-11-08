@@ -3,10 +3,11 @@ package usage
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -15,14 +16,11 @@ import (
 const agyTestConversationID = "7e58d1c1-4a55-4e47-8393-fb6413f594fe"
 
 func agyVarint(number, value uint64) []byte {
-	out := binary.AppendUvarint(nil, number<<3)
-	return binary.AppendUvarint(out, value)
+	return protowire.AppendVarint(protowire.AppendTag(nil, protowire.Number(number), protowire.VarintType), value)
 }
 
 func agyBytes(number uint64, value []byte) []byte {
-	out := binary.AppendUvarint(nil, number<<3|2)
-	out = binary.AppendUvarint(out, uint64(len(value)))
-	return append(out, value...)
+	return protowire.AppendBytes(protowire.AppendTag(nil, protowire.Number(number), protowire.BytesType), value)
 }
 
 func agyConcat(parts ...[]byte) []byte {

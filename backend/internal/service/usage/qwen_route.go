@@ -1,12 +1,15 @@
 package usage
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net"
 	"net/url"
 	"os"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -137,14 +140,14 @@ func (r qwenRoute) provider(model, authType string) string {
 	}
 	if baseURL == "" {
 		// A model the settings do not list goes to the default endpoint.
-		baseURL = firstNonEmptyString(r.defaultURL, r.authURL)
+		baseURL = cmp.Or(strings.TrimSpace(r.defaultURL), strings.TrimSpace(r.authURL))
 	}
 	if baseURL == "" {
 		envName := "OPENAI_BASE_URL"
 		if r.authType == "anthropic" {
 			envName = "ANTHROPIC_BASE_URL"
 		}
-		baseURL = firstNonEmptyString(r.envURLs[envName], strings.TrimSpace(os.Getenv(envName)))
+		baseURL = cmp.Or(strings.TrimSpace(r.envURLs[envName]), strings.TrimSpace(os.Getenv(envName)))
 	}
 	if baseURL != "" {
 		// An endpoint names its provider, or leaves the route unknown: an
@@ -209,13 +212,13 @@ func qwenEndpointProvider(baseURL string) string {
 			return rule.provider
 		}
 	}
-	label, mainland := registrableLabel(host)
-	if label == "" {
+	registered, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
 		return ""
 	}
+	label, _, _ := strings.Cut(registered, ".")
 	provider := pricing.CanonicalProviderID(label)
-	if mainland {
-		// Mainland endpoints bill in their own price list.
+	if strings.HasSuffix(host, ".cn") {
 		provider += "-cn"
 	}
 	return provider
@@ -256,28 +259,6 @@ var qwenHostRules = []struct{ host, provider string }{
 	{"lambdalabs.com", "lambda_ai"},
 }
 
-// registrableLabel returns the name a host registers under (fireworks for
-// api.fireworks.ai) and whether it sits under China's country domain.
-func registrableLabel(host string) (string, bool) {
-	labels := strings.Split(host, ".")
-	if len(labels) < 2 {
-		return "", false
-	}
-	tld := labels[len(labels)-1]
-	suffixLen := 1
-	// Second-level registries: example.com.cn, example.co.uk.
-	if len(labels) >= 3 {
-		switch labels[len(labels)-2] {
-		case "com", "co", "net", "org", "ac", "gov", "edu":
-			suffixLen = 2
-		}
-	}
-	if len(labels) <= suffixLen {
-		return "", false
-	}
-	return labels[len(labels)-1-suffixLen], tld == "cn"
-}
-
 // privateQwenHost reports a server with no public list price: a loopback or
 // private address, or a name that only resolves on a private network.
 func privateQwenHost(host string) bool {
@@ -293,15 +274,6 @@ func privateQwenHost(host string) bool {
 		}
 	}
 	return false
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 // stickyQwenProviderHint returns the route already recorded for the session's

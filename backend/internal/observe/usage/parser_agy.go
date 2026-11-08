@@ -3,13 +3,12 @@ package usage
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
-	"errors"
-	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protowire"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -237,7 +236,7 @@ func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]js
 }
 
 // agyTimestamp reads a google.protobuf.Timestamp field as Unix milliseconds.
-func agyTimestamp(message []byte, number uint64) (int64, bool) {
+func agyTimestamp(message []byte, number protowire.Number) (int64, bool) {
 	raw, ok := protoFirstBytes(message, number)
 	if !ok {
 		return 0, false
@@ -489,70 +488,43 @@ func agyBillingProvider(model string) string {
 	}
 }
 
-// protoField is one decoded protobuf field: a varint, or a length-delimited
-// value. Fixed-width fields are skipped.
 type protoField struct {
-	number uint64
+	number protowire.Number
 	bytes  bool
 	varint uint64
 	value  []byte
 }
 
-var errProtoMalformed = errors.New("malformed protobuf message")
-
-// protoFields decodes one protobuf message's top-level fields.
 func protoFields(data []byte) ([]protoField, error) {
 	var fields []protoField
 	for len(data) > 0 {
-		key, n := binary.Uvarint(data)
-		if n <= 0 {
-			return nil, errProtoMalformed
+		number, kind, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
 		}
 		data = data[n:]
-		field := protoField{number: key >> 3}
-		if field.number == 0 {
-			return nil, errProtoMalformed
-		}
-		switch key & 7 {
-		case 0:
-			value, n := binary.Uvarint(data)
-			if n <= 0 {
-				return nil, errProtoMalformed
-			}
-			field.varint, data = value, data[n:]
-		case 1:
-			if len(data) < 8 {
-				return nil, errProtoMalformed
-			}
-			data = data[8:]
-			continue
-		case 2:
-			length, n := binary.Uvarint(data)
-			if n <= 0 || length > math.MaxInt32 {
-				return nil, errProtoMalformed
-			}
-			data = data[n:]
-			size := int(length)
-			if size > len(data) {
-				return nil, errProtoMalformed
-			}
-			field.bytes, field.value, data = true, data[:size], data[size:]
-		case 5:
-			if len(data) < 4 {
-				return nil, errProtoMalformed
-			}
-			data = data[4:]
-			continue
+		field := protoField{number: number, bytes: kind == protowire.BytesType}
+		switch kind {
+		case protowire.VarintType:
+			field.varint, n = protowire.ConsumeVarint(data)
+		case protowire.BytesType:
+			field.value, n = protowire.ConsumeBytes(data)
 		default:
-			return nil, errProtoMalformed
+			n = protowire.ConsumeFieldValue(number, kind, data)
 		}
-		fields = append(fields, field)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if kind == protowire.VarintType || kind == protowire.BytesType {
+			fields = append(fields, field)
+		}
 	}
 	return fields, nil
 }
 
 // protoFirstBytes returns the first length-delimited field with the number.
-func protoFirstBytes(data []byte, number uint64) ([]byte, bool) {
+func protoFirstBytes(data []byte, number protowire.Number) ([]byte, bool) {
 	fields, err := protoFields(data)
 	if err != nil {
 		return nil, false

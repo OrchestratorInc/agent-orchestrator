@@ -121,7 +121,7 @@ func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.Usa
 	for _, reading := range readings {
 		reset := reading.ResetsAt.UTC()
 		last := len(spans) - 1
-		if last < 0 || absDuration(reset.Sub(spans[last].ResetsAt)) > sameResetWithin {
+		if last < 0 || reset.Sub(spans[last].ResetsAt).Abs() > sameResetWithin {
 			span := domain.UsageLimitSpan{
 				WindowID: reading.WindowID, Label: reading.Label, DurationMinutes: reading.DurationMinutes,
 				ResetsAt: reset, FirstReadAt: reading.ReadAt,
@@ -177,11 +177,4 @@ func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.Usa
 		}
 	}
 	return spans
-}
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
 }
