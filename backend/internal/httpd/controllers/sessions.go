@@ -157,6 +157,12 @@ type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
+// PRRefresher re-reads a session's pull requests early, when a local signal
+// says they probably just changed on the provider.
+type PRRefresher interface {
+	RequestSessionRefresh(id domain.SessionID)
+}
+
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
@@ -191,6 +197,7 @@ type SessionsController struct {
 		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
 	}
 	Activity                 ActivityRecorder
+	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
 	DataDir                  string
 	Usage                    UsageHookRecorder
@@ -2420,7 +2427,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" && !in.PRMayHaveChanged {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
@@ -2511,6 +2518,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing; retry the hook", nil)
 		return
+	}
+	if in.PRMayHaveChanged && c.PRRefresh != nil {
+		c.PRRefresh.RequestSessionRefresh(sessionID(r))
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
 }

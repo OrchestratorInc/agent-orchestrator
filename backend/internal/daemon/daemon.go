@@ -391,7 +391,11 @@ func Run(buildVersion string) error {
 			}()
 		}
 	}
+	// The review and chat services and the hook route start before the SCM
+	// observer they ask for early refreshes, so they hold a late-bound handle.
+	reviewRefresher := &scmReviewRefresher{}
 	chatSvc := chatsvc.New(chatsvc.Options{
+		PRChanged:           reviewRefresher.RequestSessionRefresh,
 		Store:               store,
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
@@ -587,9 +591,6 @@ func Run(buildVersion string) error {
 		}
 		return fmt.Errorf("reviewer resolver: %w", err)
 	}
-	// The review service starts before the SCM observer it asks for review
-	// refreshes, so it holds a late-bound handle.
-	reviewRefresher := &scmReviewRefresher{}
 	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
@@ -1147,6 +1148,7 @@ func Run(buildVersion string) error {
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           hookActivity,
+		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),

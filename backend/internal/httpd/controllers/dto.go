@@ -1659,6 +1659,7 @@ type SetActivityRequest struct {
 	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
 	ProcessID                    int                                 `json:"processId,omitempty" minimum:"0" description:"Process id of the provider process that fired the hook (Claude's CLAUDE_PID)."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
+	PRMayHaveChanged             bool                                `json:"prMayHaveChanged,omitempty" description:"The finished tool call probably changed the session's pull request (gh pr merge, git push), so AO re-reads it early."`
 }
 
 // UsageHookMetadata is the transcript metadata carried by supported Claude
