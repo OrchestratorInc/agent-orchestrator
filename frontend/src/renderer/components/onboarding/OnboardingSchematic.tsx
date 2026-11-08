@@ -32,6 +32,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { GITHUB_MARK_PATH } from "../GitHubIcon";
 import { OrchestratorIcon } from "../icons";
+import { AgentOutline } from "./AgentOutline";
 import type { PhoneWorker } from "./OnboardingPhone";
 import { APP_HEIGHT, APP_WIDTH, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 
@@ -301,9 +302,9 @@ function StatusGlyph({ status, className }: { status: PreviewCard["status"] | Ph
 	);
 }
 
-/** An agent's avatar reduced to its outline. */
-function AgentMark({ className }: { className?: string }) {
-	return <span aria-hidden="true" className={cn("size-3.5 shrink-0 rounded-full border", LINE, className)} />;
+/** An agent's brand mark as a flat outline (AgentOutline). */
+function AgentMark({ agent, className }: { agent?: string; className?: string }) {
+	return <AgentOutline agent={agent} className={cn("size-3.5", className)} />;
 }
 
 /** A labelled topbar control: an outlined pill. */
@@ -692,11 +693,14 @@ function Topbar({ children, actions }: { children: ReactNode; actions?: ReactNod
 function Composer({
 	placeholder,
 	agent,
+	contextMeter = false,
 	className,
 	style,
 }: {
 	placeholder: string;
 	agent?: { id: string; label: string };
+	/** A session chat's context meter before the agent; New chat has none. */
+	contextMeter?: boolean;
 	className?: string;
 	style?: CSSProperties;
 }) {
@@ -707,12 +711,14 @@ function Composer({
 				<span className={cn("text-[11.5px]", PASSIVE)}>{placeholder}</span>
 				<div className={cn("flex items-center gap-3 text-[10.5px]", MUTED)}>
 					<Plus className="size-3.5" {...ICON} />
-					<svg aria-hidden="true" viewBox="0 0 14 14" className="size-3.5">
-						<circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--schematic-line)" strokeWidth="1" />
-						<path d="M7 1.5a5.5 5.5 0 0 1 5.2 3.7" fill="none" stroke="currentColor" strokeWidth="1" />
-					</svg>
+					{contextMeter ? (
+						<svg aria-hidden="true" viewBox="0 0 14 14" className="size-3.5">
+							<circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--schematic-line)" strokeWidth="1" />
+							<path d="M7 1.5a5.5 5.5 0 0 1 5.2 3.7" fill="none" stroke="currentColor" strokeWidth="1" />
+						</svg>
+					) : null}
 					<span className="flex items-center gap-1.5">
-						<AgentMark />
+						<AgentMark agent={agent?.id} />
 						<span className={TEXT}>{agent?.label ?? t("agentSwitch.agent")}</span>
 						<span className={PASSIVE}>{t("settings.models.effortLevel.high")}</span>
 					</span>
@@ -751,7 +757,7 @@ function ChatPage({ agent }: { agent?: { id: string; label: string } }) {
 			>
 				{/* The open tab, underlined where it meets the topbar's rule. */}
 				<span className={cn("relative flex items-center gap-2 self-stretch pr-1 text-[11.5px]", TEXT)}>
-					<AgentMark />
+					<AgentMark agent={agent?.id} />
 					{t("shell.orchestrator")}
 					<span aria-hidden="true" className="absolute inset-x-0 -bottom-px border-b border-(--schematic-text)" />
 				</span>
@@ -767,7 +773,7 @@ function ChatPage({ agent }: { agent?: { id: string; label: string } }) {
 				{/* The workers it starts stack up on the right (WorkerCards, StackBracket). */}
 			</div>
 			<div className="relative h-[124px] shrink-0">
-				<Composer placeholder={t("sideChat.messageTheAgent")} agent={agent} style={{ left: 28, right: 34, top: 10, bottom: 22 }} />
+				<Composer placeholder={t("sideChat.messageTheAgent")} agent={agent} contextMeter style={{ left: 28, right: 34, top: 10, bottom: 22 }} />
 			</div>
 		</>
 	);
@@ -1213,7 +1219,7 @@ function WorkerCard({ card }: { card: PreviewCard }) {
 			radius={11}
 			header={
 				<>
-					<AgentMark className="size-2.5" />
+					<AgentMark agent={card.provider} className="size-2.5" />
 					<span className="min-w-0 flex-1 truncate">{card.branch}</span>
 					{card.pr ? <span className="shrink-0 tabular-nums">#{card.pr}</span> : null}
 				</>
@@ -1230,9 +1236,9 @@ function WorkerCard({ card }: { card: PreviewCard }) {
 }
 
 /** The picker menu's place over the composer: its left edge on the agent chip
- * (past the composer's padding, the + and the context ring), its bottom just
- * above the composer's bottom bar. */
-const MENU_LEFT = 62;
+ * (past the composer's padding and the +), its bottom just above the
+ * composer's bottom bar. */
+const MENU_LEFT = 36;
 const MENU_BOTTOM = 40;
 const MENU_OPEN = { opacity: 1, y: 0 };
 const MENU_CLOSED = { opacity: 0, y: 6 };
@@ -1279,7 +1285,7 @@ function NewChatPage({
 								</div>
 								{agents.map((candidate) => (
 									<div key={candidate.id} className={cn("flex h-[30px] items-center gap-2 px-4 text-[11px]", candidate.dimmed ? PASSIVE : TEXT)}>
-										<AgentMark className="size-3" />
+										<AgentMark agent={candidate.id} className="size-3" />
 										<span className="min-w-0 flex-1 truncate">{candidate.label}</span>
 										{candidate.id === agent?.id ? <Check className="size-3" {...ICON} /> : null}
 									</div>
@@ -1491,7 +1497,7 @@ function PhoneWorkerRow({ worker, project, highlighted = false }: { worker: Phon
 	return (
 		<div className={cn("flex flex-col gap-1 rounded-[14px] border px-3 py-3", highlighted ? LINE : "border-transparent")}>
 			<div className={cn("flex items-center gap-2 text-[13px]", MUTED)}>
-				<AgentMark className="size-4" />
+				<AgentMark agent={worker.provider} className="size-4" />
 				<span className="min-w-0 flex-1 truncate">{project}</span>
 				{inReview ? (
 					<span className="flex shrink-0 items-center gap-1">
