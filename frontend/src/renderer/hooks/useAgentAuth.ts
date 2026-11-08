@@ -78,7 +78,7 @@ export async function actOnAgentUILogin(agentId: string, operationId: string, ac
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
 			params: { path: { agent: agentId, operationId } }, body: { action, ...(option ? { option } : {}) },
 		});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not control sign-in."));
+	if (error || !data) throw apiErrorException(error, "Could not control sign-in.");
 	return data;
 }
 
@@ -153,6 +153,6 @@ export type CatalogProvider = components["schemas"]["CatalogProvider"];
 /** Key-only providers in the harness's own provider catalog on this host. */
 export async function fetchCatalogProviders(agentId: string, hostId?: string): Promise<CatalogProvider[]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/providers", { params: { path: { agent: agentId } } });
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not load providers."));
+	if (error || !data) throw apiErrorException(error, "Could not load providers.");
 	return data.providers;
 }
