@@ -22,9 +22,10 @@ CREATE INDEX idx_shell_terminals_session
 CREATE INDEX idx_automation_runs_session
     ON automation_runs(session_id) WHERE session_id IS NOT NULL;
 
--- Children of conversation_turns.
-CREATE INDEX idx_conversation_messages_turn ON conversation_messages(turn_id);
-CREATE INDEX idx_conversation_activities_turn ON conversation_activities(turn_id);
+-- Children of conversation_turns. conversation_messages(turn_id) and
+-- conversation_activities(turn_id) are indexed by
+-- 20261107181854835_session_delete_child_indexes, as is
+-- conversation_provider_events(review_id) below.
 CREATE INDEX idx_conversation_turns_retry_of
     ON conversation_turns(retry_of_turn_id) WHERE retry_of_turn_id IS NOT NULL;
 CREATE INDEX idx_conversation_turns_promoted_to
@@ -45,8 +46,6 @@ CREATE INDEX idx_conversation_branches_replacement_turn
 CREATE INDEX idx_conversation_branches_parent ON conversation_branches(parent_branch_id);
 CREATE INDEX idx_conversation_turns_handled_by_review
     ON conversation_turns(handled_by_review_id) WHERE handled_by_review_id IS NOT NULL;
-CREATE INDEX idx_conversation_provider_events_review
-    ON conversation_provider_events(review_id) WHERE review_id IS NOT NULL;
 CREATE INDEX idx_review_run_review ON review_run(review_id);
 CREATE INDEX idx_session_interface_transition_messages_transition
     ON session_interface_transition_messages(transition_id);
@@ -60,7 +59,6 @@ DROP INDEX IF EXISTS idx_agent_switch_failure_receipts_switch;
 DROP INDEX IF EXISTS idx_agent_switches_target_native_session;
 DROP INDEX IF EXISTS idx_session_interface_transition_messages_transition;
 DROP INDEX IF EXISTS idx_review_run_review;
-DROP INDEX IF EXISTS idx_conversation_provider_events_review;
 DROP INDEX IF EXISTS idx_conversation_turns_handled_by_review;
 DROP INDEX IF EXISTS idx_conversation_branches_parent;
 DROP INDEX IF EXISTS idx_conversation_branches_replacement_turn;
@@ -68,8 +66,6 @@ DROP INDEX IF EXISTS idx_conversation_branches_replaced_turn;
 DROP INDEX IF EXISTS idx_conversation_branches_fork_after_turn;
 DROP INDEX IF EXISTS idx_conversation_turns_promoted_to;
 DROP INDEX IF EXISTS idx_conversation_turns_retry_of;
-DROP INDEX IF EXISTS idx_conversation_activities_turn;
-DROP INDEX IF EXISTS idx_conversation_messages_turn;
 DROP INDEX IF EXISTS idx_automation_runs_session;
 DROP INDEX IF EXISTS idx_shell_terminals_session;
 DROP INDEX IF EXISTS idx_notifications_session;

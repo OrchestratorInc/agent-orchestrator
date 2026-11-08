@@ -391,7 +391,11 @@ func Run(buildVersion string) error {
 			}()
 		}
 	}
+	// The review and chat services and the hook route start before the SCM
+	// observer they ask for early refreshes, so they hold a late-bound handle.
+	reviewRefresher := &scmReviewRefresher{}
 	chatSvc := chatsvc.New(chatsvc.Options{
+		PRChanged:           reviewRefresher.RequestSessionRefresh,
 		Store:               store,
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
@@ -424,8 +428,8 @@ func Run(buildVersion string) error {
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 			}, nil
 		}),
-		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, limit int64) (chatsvc.ConversationRows, error) {
-			rows, err := store.LoadConversationSnapshotPage(ctx, conversationID, beforeSequence, limit)
+		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (chatsvc.ConversationRows, error) {
+			rows, err := store.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit)
 			if err != nil {
 				return chatsvc.ConversationRows{}, err
 			}
@@ -441,6 +445,7 @@ func Run(buildVersion string) error {
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
+				AfterSequence:                    rows.AfterSequence,
 			}, nil
 		}),
 		Drivers: chatDrivers,
@@ -586,9 +591,6 @@ func Run(buildVersion string) error {
 		}
 		return fmt.Errorf("reviewer resolver: %w", err)
 	}
-	// The review service starts before the SCM observer it asks for review
-	// refreshes, so it holds a late-bound handle.
-	reviewRefresher := &scmReviewRefresher{}
 	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
@@ -720,7 +722,12 @@ func Run(buildVersion string) error {
 	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log})
+	githubRepos := newGitHubRepoResolver(log)
+	if githubRepos != nil {
+		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
+	}
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -1141,6 +1148,7 @@ func Run(buildVersion string) error {
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           hookActivity,
+		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),

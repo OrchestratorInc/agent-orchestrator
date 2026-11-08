@@ -296,6 +296,8 @@ export interface CommandDetail {
 	outputSource?: "stream" | "aggregate";
 	/** Accumulation stopped at the daemon's cap; the command printed more. */
 	outputTruncated?: boolean;
+	/** The page carries only the head and tail of the output; this is its full size in bytes. */
+	outputBytes?: number;
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
@@ -390,7 +392,9 @@ export interface McpToolDetail {
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
+	/** Codex and Hermes send the call's arguments here; other ACP agents send `input`. */
 	arguments?: unknown;
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;

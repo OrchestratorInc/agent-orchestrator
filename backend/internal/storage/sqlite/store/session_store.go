@@ -873,12 +873,32 @@ WHERE id = ?
 // standaloneSessionIDPrefix is the id prefix of sessions with no project.
 const standaloneSessionIDPrefix = "standalone"
 
+const sessionDeleteBatch = 1000
+
+// sessionCascadedConversations selects the conversations that cascade away
+// with session ?1: its own and its reviewers'. A reviewer's turns name the
+// worker session, though its conversation has no session_id, so only turns and
+// heads in any other conversation are shared history.
+const sessionCascadedConversations = `SELECT id FROM conversations WHERE session_id = ?1
+UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
+
+var sessionDeleteDrains = []string{
+	`DELETE FROM conversation_provider_events WHERE id IN (
+    SELECT id FROM conversation_provider_events WHERE session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+	`DELETE FROM conversation_activities WHERE id IN (
+    SELECT a.id FROM conversation_activities a
+    JOIN conversations c ON c.id = a.conversation_id
+    WHERE c.session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+}
+
 // DeleteTerminatedSession removes a terminated session's row; its own
 // conversations, cleanup facts, PR facts and the other per-session rows go with
 // it through ON DELETE CASCADE. Callers decide whether the session's workspace
 // is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history, all in one
-// transaction so a concurrent restore cannot slip between
+// domain.ErrSessionHistoryShared, shared conversation history. The final
+// transaction checks both again, so a concurrent restore cannot slip between
 // the checks and the delete.
 //
 // The session's number is recorded in session_num_floors so the next spawn
@@ -892,6 +912,15 @@ const standaloneSessionIDPrefix = "standalone"
 //
 // Returns deleted=false when id does not name a terminated session.
 func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if _, _, ok, err := deletableTerminatedSession(ctx, s.readDB, id); err != nil || !ok {
+		return false, err
+	}
+	for _, query := range sessionDeleteDrains {
+		if err := s.drainSessionRows(ctx, query, id); err != nil {
+			return false, fmt.Errorf("delete session %s: clear history: %w", id, err)
+		}
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -900,34 +929,9 @@ func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var projectID sql.NullString
-	var num int64
-	err = tx.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("delete session %s: read: %w", id, err)
-	}
-	// The session's own conversations and its reviewers' cascade away with it.
-	// A reviewer's turns name the worker session, though its conversation has
-	// no session_id, so only turns and heads in any other conversation are
-	// shared history.
-	const cascaded = `SELECT id FROM conversations WHERE session_id = ?1
-UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
-	var shared bool
-	if err := tx.QueryRowContext(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM conversation_turns
-    WHERE handled_by_session_id = ?1 AND conversation_id NOT IN (`+cascaded+`)
-) OR EXISTS (
-    SELECT 1 FROM conversations
-    WHERE current_session_id = ?1 AND id NOT IN (`+cascaded+`)
-)`, id).Scan(&shared); err != nil {
-		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
-	}
-	if shared {
-		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	projectID, num, ok, err := deletableTerminatedSession(ctx, tx, id)
+	if err != nil || !ok {
+		return false, err
 	}
 	prefix := standaloneSessionIDPrefix
 	if projectID.Valid && projectID.String != "" {
@@ -941,24 +945,27 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
-	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
-		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
-	}
 	// Retries and branches point at earlier turns and branches with ON DELETE
 	// RESTRICT, which SQLite enforces even when the cascade below removes the
 	// pointing row too. Those links stay inside one conversation, and the
 	// session's own conversations and its reviewers' all go with it, so unlink
 	// them first.
 	if _, err := tx.ExecContext(ctx, `
-UPDATE conversation_turns SET retry_of_turn_id = NULL
-WHERE retry_of_turn_id IS NOT NULL AND conversation_id IN (`+cascaded+`)`, id); err != nil {
-		return false, fmt.Errorf("delete session %s: unlink retried turns: %w", id, err)
+UPDATE conversation_branches
+SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
+  AND (parent_branch_id IS NOT NULL OR fork_after_turn_id IS NOT NULL OR replaced_turn_id IS NOT NULL)`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink branches: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-UPDATE conversation_branches SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
-WHERE conversation_id IN (`+cascaded+`)`, id); err != nil {
-		return false, fmt.Errorf("delete session %s: unlink conversation branches: %w", id, err)
+UPDATE conversation_turns SET retry_of_turn_id = NULL
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
+  AND retry_of_turn_id IS NOT NULL`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink retries: %w", id, err)
+	}
+	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND is_terminated = 1`, id)
 	if err != nil {
@@ -973,6 +980,54 @@ WHERE conversation_id IN (`+cascaded+`)`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: commit: %w", id, err)
 	}
 	return true, nil
+}
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func deletableTerminatedSession(ctx context.Context, q rowQueryer, id domain.SessionID) (sql.NullString, int64, bool, error) {
+	var projectID sql.NullString
+	var num int64
+	err := q.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
+	if errors.Is(err, sql.ErrNoRows) {
+		return projectID, 0, false, nil
+	}
+	if err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: read: %w", id, err)
+	}
+	var shared bool
+	if err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns
+    WHERE handled_by_session_id = ?1 AND conversation_id NOT IN (`+sessionCascadedConversations+`)
+) OR EXISTS (
+    SELECT 1 FROM conversations
+    WHERE current_session_id = ?1 AND id NOT IN (`+sessionCascadedConversations+`)
+)`, id).Scan(&shared); err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
+	}
+	if shared {
+		return projectID, 0, false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	return projectID, num, true, nil
+}
+
+func (s *Store) drainSessionRows(ctx context.Context, query string, id domain.SessionID) error {
+	for {
+		if err := s.writeMu.LockContext(ctx); err != nil {
+			return err
+		}
+		res, err := s.writeDB.ExecContext(ctx, query, id, sessionDeleteBatch)
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n < sessionDeleteBatch {
+			return err
+		}
+	}
 }
 
 // sessionNumFloor is the highest number a deleted session under prefix held.

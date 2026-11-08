@@ -10,7 +10,7 @@ import {
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
-import { Ungroup, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -25,7 +25,7 @@ import { ShellAgentStatus } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "./ui/context-menu";
+import { TabContextMenu, type TabMenuSpec } from "./TabContextMenu";
 import { terminalTabActionClassName } from "./TerminalTabFrame";
 
 /**
@@ -196,21 +196,19 @@ export type SplitGroupMember = {
  * the others show only their icon, named by a tooltip. Each member is its own
  * target: clicking it shows the group with that pane focused, and dragging it
  * moves it within the split or out of the group. Hovering the tab swaps the
- * focused member's icon for a close button, as on other tabs, and its context
- * menu ungroups it, followed by `menuItems`: the focused member's own tab menu.
+ * focused member's icon for a close button, as on other tabs, and its menu
+ * (`useTabMenuItems`) ungroups it, followed by the focused member's own rows.
  */
 export function SplitGroupTab({
 	active,
 	focusedKey,
 	members,
-	onUngroup,
-	menuItems,
+	menu,
 }: {
 	active: boolean;
 	focusedKey?: string;
 	members: SplitGroupMember[];
-	onUngroup: () => void;
-	menuItems?: ReactNode;
+	menu: TabMenuSpec & { kind: "group" };
 }) {
 	const { t } = useTranslation();
 	// A shell in a split has no strip tab of its own, so the group tab keeps
@@ -319,21 +317,5 @@ export function SplitGroupTab({
 			) : null}
 		</span>
 	);
-	return (
-		<ContextMenu>
-			<ContextMenuTrigger asChild>{frame}</ContextMenuTrigger>
-			<ContextMenuContent className={menuItems ? "min-w-56" : "min-w-44"}>
-				<ContextMenuItem onSelect={onUngroup}>
-					<Ungroup aria-hidden="true" />
-					{t("splitPane.ungroup")}
-				</ContextMenuItem>
-				{menuItems ? (
-					<>
-						<ContextMenuSeparator />
-						{menuItems}
-					</>
-				) : null}
-			</ContextMenuContent>
-		</ContextMenu>
-	);
+	return <TabContextMenu spec={menu}>{frame}</TabContextMenu>;
 }
