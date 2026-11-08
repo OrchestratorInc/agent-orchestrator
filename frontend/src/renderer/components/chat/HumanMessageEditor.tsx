@@ -116,7 +116,7 @@ export function HumanMessageEditor({
 				<Button
 					type="button"
 					size="sm"
-					variant="outline"
+					variant="secondary"
 					onClick={onAbandonRecovery}
 				>
 					{t("chat.edit.abandonRecovery")}

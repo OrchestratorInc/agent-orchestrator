@@ -110,6 +110,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
+							triggerVariant="ghost"
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}
 							options={projectOptions}

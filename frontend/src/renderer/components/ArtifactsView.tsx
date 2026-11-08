@@ -22,7 +22,6 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
 import {
@@ -137,11 +136,11 @@ export function ArtifactsView() {
 							</label>
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
-									<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
+									<Button type="button" size="sm" variant="quiet" aria-label={t("artifacts.projectFilter")} className="max-w-44">
 										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
 										<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
 										<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
-									</TopbarButton>
+									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
 									<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
@@ -151,22 +150,21 @@ export function ArtifactsView() {
 									</DropdownMenuRadioGroup>
 								</DropdownMenuContent>
 							</DropdownMenu>
-							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
+							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0">
 								{([
 									{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
 									{ value: "list", label: t("artifacts.listView"), icon: List },
 								] as const).map(({ value, label, icon: Icon }) => (
 									<Tooltip key={value}>
 										<TooltipTrigger asChild>
-											<TopbarButton
-												variant="icon"
+											<Button type="button" size="icon-sm"
+												variant="quiet"
 												aria-label={label}
 												aria-pressed={view === value}
 												onClick={() => setView(value)}
-												className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
 											>
 												<Icon aria-hidden="true" className="size-icon-sm" />
-											</TopbarButton>
+											</Button>
 										</TooltipTrigger>
 										<TooltipContent side="bottom">{label}</TooltipContent>
 									</Tooltip>
@@ -435,9 +433,9 @@ function CreateArtifactMenu({
 	const trigger =
 		label === "new" ? (
 			// Anchors the menu, so it must not scale on press.
-			<TopbarButton
+			<Button type="button" size="sm"
 				variant="primary"
-				className={cn("topbar-control--labeled", className)}
+				className={className}
 				disabled={disabled}
 				aria-busy={pending}
 			>
@@ -447,7 +445,7 @@ function CreateArtifactMenu({
 					<Plus aria-hidden="true" className="size-icon-md" />
 				)}
 				{pending ? t("artifacts.creating") : t("artifacts.new")}
-			</TopbarButton>
+			</Button>
 		) : (
 			<Button size="sm" className={className} disabled={disabled} aria-busy={pending}>
 				{pending ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin text-status-working motion-reduce:animate-none" /> : null}

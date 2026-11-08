@@ -42,8 +42,7 @@ export function ConnectMobileGetApp() {
 				<div className="flex shrink-0 items-center gap-1.5">
 					<Button
 						type="button"
-						variant="footer"
-						className="rounded-md"
+						variant="secondary"
 						aria-label={t("mobile.iosStoreAria")}
 						onClick={() => void aoBridge.app.openExternal(IOS_APP_STORE_URL)}
 					>
@@ -52,12 +51,11 @@ export function ConnectMobileGetApp() {
 					<Button
 						type="button"
 						variant="quiet"
-						size="none"
+						size="icon"
 						aria-label={showQR ? t("mobile.hideQR") : t("mobile.showQR")}
 						aria-expanded={showQR}
 						data-active={showQR}
 						onClick={() => setShowQR((v) => !v)}
-						className="size-(--size-settings-action-height)"
 					>
 						<QrCode className="size-4" aria-hidden="true" />
 					</Button>
@@ -97,8 +95,7 @@ export function ConnectMobileGetApp() {
 				</div>
 				<Button
 					type="button"
-					variant="footer"
-					className="rounded-md"
+					variant="secondary"
 					aria-label={t("mobile.androidSignupAria")}
 					onClick={() => void aoBridge.app.openExternal(ANDROID_PLAY_STORE_URL)}
 				>

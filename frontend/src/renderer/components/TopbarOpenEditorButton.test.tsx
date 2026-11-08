@@ -200,30 +200,27 @@ describe("TopbarOpenEditorButton", () => {
 		expect(button).not.toHaveAttribute("data-priority");
 		expect(button.querySelector("[data-compact-label]")).not.toBeInTheDocument();
 		expect(button.querySelector("svg")).toBeInTheDocument();
-		expect(button).toHaveClass("topbar-control--icon");
-		expect(button).not.toHaveClass("border", "bg-raised");
+		expect(button).toHaveClass("size-control-md");
+		expect(button).toHaveClass("border-transparent");
 		const options = screen.getByRole("button", { name: "Open workspace options" });
-		expect(options).toHaveClass("topbar-control--icon", "hover:bg-transparent");
+		expect(options).toHaveClass("size-control-md", "hover:bg-transparent");
 		expect(button).toHaveClass("hover:bg-transparent");
-		// The button's tooltip trigger wraps it in a span (disabled buttons don't
-		// fire pointer events, so the hoverable element has to be the wrapper) —
-		// the actual topbar group is one level up.
+		// Disabled buttons retain a hoverable tooltip wrapper.
 		const group = button.parentElement?.parentElement;
-		expect(group).toHaveClass("gap-0", "rounded-md", "bg-transparent", "group/nav-row");
-		expect(group).toHaveAttribute("data-state", "closed");
+		expect(group).toHaveClass("gap-0", "inline-flex");
 		await userEvent.click(button);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
 	});
 
-	it("keeps the shared editor control highlighted while options are open", async () => {
+	it("keeps the options button expanded while its menu is open", async () => {
 		renderButton();
 		const options = await screen.findByRole("button", { name: "Open workspace options" });
-		const group = options.parentElement?.parentElement;
 
 		await userEvent.click(options);
 
-		expect(group).toHaveAttribute("data-state", "open");
-		expect(group?.querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+		expect(options).toHaveAttribute("aria-expanded", "true");
+		expect(options).toHaveAttribute("data-state", "open");
+		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
 	// No supported editor: the main button opens Finder instead of sitting empty,

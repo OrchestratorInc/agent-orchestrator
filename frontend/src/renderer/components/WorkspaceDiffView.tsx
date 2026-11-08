@@ -938,7 +938,7 @@ export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; 
 export function RetryButton({ onClick }: { onClick: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<Button onClick={onClick} size="sm" type="button" variant="outline">
+		<Button onClick={onClick} size="sm" type="button" variant="secondary">
 			{t("files.retry")}
 		</Button>
 	);

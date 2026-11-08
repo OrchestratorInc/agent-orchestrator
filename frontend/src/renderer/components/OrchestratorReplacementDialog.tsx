@@ -92,7 +92,7 @@ export function OrchestratorReplacementDialog({
 						{canBypassApprovals ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryWithoutApprovals(projectId)}
 							>
@@ -102,7 +102,7 @@ export function OrchestratorReplacementDialog({
 						{error && isChatPreflightCode(error.code) ? (
 							<Button
 								type="button"
-								variant="footer"
+								variant="secondary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryAsTui(projectId)}
 							>
@@ -110,13 +110,13 @@ export function OrchestratorReplacementDialog({
 							</Button>
 						) : null}
 						{orchestrator ? (
-							<Button type="button" variant="footer" disabled={pending} onClick={openCurrent}>
+							<Button type="button" variant="secondary" disabled={pending} onClick={openCurrent}>
 								{t("orchestratorReplacement.openCurrent")}
 							</Button>
 						) : null}
 						<Button
 							type="button"
-							variant="footer-primary"
+							variant="primary"
 							aria-disabled={pending}
 							onClick={() => !pending && projectId && onRetry(projectId)}
 						>

@@ -791,7 +791,7 @@ function ModelEffortPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -900,6 +900,7 @@ function ClubbedConfigPicker({
 				<EffortPicker
 					{...acpEffortMenuProps(primaryEffort)}
 					disabled={disabled}
+					triggerVariant="ghost"
 					triggerClassName={TRIGGER_CLASS}
 					onChange={(value) => onChange(primaryEffort.id, { value })}
 				/>
@@ -929,7 +930,7 @@ function ClubbedConfigPicker({
 
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
@@ -1111,7 +1112,7 @@ function ExecutionModePicker({
 }) {
 	return (
 		<OptionMenu>
-			<OptionMenuTrigger
+			<OptionMenuTrigger variant="ghost"
 				showCaret={false}
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
@@ -1596,7 +1597,7 @@ function Picker({
 }) {
 	return (
 		<OptionMenu>
-				<OptionMenuTrigger
+				<OptionMenuTrigger variant="ghost"
 					showCaret={showCaret}
 					aria-label={title}
 					title={title}

@@ -30,7 +30,8 @@ import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { noDragStyle, PageTopbarActions } from "./PageTopbar";
-import { TopbarActionError, TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
+import { TopbarActionError } from "./TopbarActionError";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -123,20 +124,19 @@ function SimplifiedSessionTopbarActions({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex" style={noDragStyle}>
-							<TopbarButton
+							<Button type="button" size="sm"
 								aria-label={t("shell.openOrchestrator")}
-								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => {
 									captureTopbarAction("open_orchestrator", view);
 									void openOrchestrator();
 								}}
-								variant="action"
+								variant="quiet"
 							>
 								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>
-							</TopbarButton>
+							</Button>
 						</span>
 					</TooltipTrigger>
 					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
@@ -210,27 +210,25 @@ function SimplifiedSessionTopbarActions({
 				<>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<TopbarButton
+							<Button type="button" size="sm"
 								aria-label={t("shell.board")}
-								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={startingOrchestrator}
 								onClick={openBoard}
 								style={noDragStyle}
-								variant="action"
+								variant="quiet"
 							>
 								<LayoutDashboard className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.board")}</span>
-							</TopbarButton>
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("shell.board")}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex" style={noDragStyle}>
-								<TopbarButton
+								<Button type="button" size="sm"
 									aria-label={t("shell.newTask")}
-									className="topbar-control--labeled"
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
 									onClick={() => {
@@ -241,7 +239,7 @@ function SimplifiedSessionTopbarActions({
 								>
 									<Plus className="size-icon-md" aria-hidden="true" />
 									<span data-compact-label>{t("newTask.task")}</span>
-								</TopbarButton>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
@@ -372,9 +370,8 @@ function LegacySessionTopbarActions({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex" style={noDragStyle}>
-								<TopbarButton
+								<Button type="button" size="sm"
 									aria-label={t("shell.newTask")}
-									className="topbar-control--labeled"
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
 									onClick={openNewTask}
@@ -382,25 +379,24 @@ function LegacySessionTopbarActions({
 								>
 									<Plus className="size-icon-md" aria-hidden="true" />
 									<span data-compact-label>{t("newTask.task")}</span>
-								</TopbarButton>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<TopbarButton
+							<Button type="button" size="sm"
 								aria-label={t("shell.openKanban")}
 								disabled={startingOrchestrator}
-								className="topbar-control--labeled"
 								data-priority="secondary"
 								onClick={openBoard}
 								style={noDragStyle}
-								variant="action"
+								variant="quiet"
 							>
 								<LayoutDashboard className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.openKanban")}</span>
-							</TopbarButton>
+							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("shell.openKanban")}</TooltipContent>
 					</Tooltip>
@@ -484,9 +480,8 @@ function LegacySessionTopbarActions({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex" style={noDragStyle}>
-							<TopbarButton
+							<Button type="button" size="sm"
 								aria-label={t("shell.openOrchestrator")}
-								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => void openOrchestrator()}
@@ -494,7 +489,7 @@ function LegacySessionTopbarActions({
 							>
 								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>
-							</TopbarButton>
+							</Button>
 						</span>
 					</TooltipTrigger>
 					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
@@ -549,7 +544,7 @@ function LegacyTopbarArchiveButton({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">
-								<TopbarButton
+								<Button type="button" size="icon-sm"
 									aria-label={isPending ? t("shell.archiving") : t("shell.archiveSession")}
 									disabled={isPending}
 									onClick={() => {
@@ -557,10 +552,10 @@ function LegacyTopbarArchiveButton({
 										// Always open the confirm; the modal owns its own dismissal.
 										setConfirmOpen(true);
 									}}
-									variant="icon"
+									variant="quiet"
 								>
 									<Archive className="size-icon-md" aria-hidden="true" />
-								</TopbarButton>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent shortcut="archive-session" side="bottom">{t("shell.archiveSession")}</TooltipContent>

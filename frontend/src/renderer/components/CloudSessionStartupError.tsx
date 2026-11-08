@@ -207,7 +207,7 @@ export function CloudSessionStartupError({
 					) : failed ? (
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							className="mt-1"
 							disabled={retry.isPending || rerunning}
 							onClick={() => retry.mutate()}

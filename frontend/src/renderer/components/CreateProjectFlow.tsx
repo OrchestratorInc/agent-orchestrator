@@ -1310,7 +1310,7 @@ function CloudSignInPanel({
 	const { t } = useTranslation();
 	return (
 		<div className={cn(onboardingPanelClass, "flex flex-col items-center gap-4 px-4 py-6 text-center")}>
-			<Button type="button" variant="outline" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
 				<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 			</Button>
 			<Cloud className="size-6 text-foreground" aria-hidden="true" />
@@ -1427,7 +1427,7 @@ function CloudAgentSetupStep({
 					</p>
 					<Button
 						type="button"
-						variant="outline"
+						variant="secondary"
 						size="sm"
 						className="shrink-0"
 						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
@@ -1442,7 +1442,7 @@ function CloudAgentSetupStep({
 				</p>
 			) : null}
 			<div className={onboardingFooterActionsClass}>
-				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+				<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
 				</Button>
 				<Button
@@ -2075,7 +2075,7 @@ function CloudProjectCard({
 				{/* The agent step carries its own Back; show one here until it appears. */}
 				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
-						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+						<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
 						</Button>
 					</div>
@@ -2423,7 +2423,7 @@ function ProjectImportDialog({
 					onPointerDownOutside={(event) => event.preventDefault()}
 				>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-						<Button type="button" variant="outline" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
+						<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
 							<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 						</Button>
 						<div className="min-w-0 flex-1 pr-8">
@@ -2676,7 +2676,7 @@ function ProjectImportDialog({
 							<Button type="button" variant="primary" disabled={disabled} onClick={onTryWorkspace}>{t("createProject.importAsWorkspace")}</Button>
 						) : step === "blocked" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								{hasChildRepos || Boolean(validation.warning) ? <Button type="button" variant="primary" disabled={disabled} onClick={onContinueProject}>{t("createProject.cloneContinue")}</Button> : null}
@@ -2684,7 +2684,7 @@ function ProjectImportDialog({
 						) : null}
 						{step === "prepare_git" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								<Button type="button" variant="primary" disabled={continueDisabled} onClick={onContinue}>
@@ -2761,7 +2761,7 @@ function CreateProjectFolderDialog({
 					<div className="relative flex shrink-0 items-start gap-3 px-4 pt-3">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="icon"
 							aria-label={t("createProject.backToType")}
 							disabled={disabled}
@@ -2837,7 +2837,7 @@ function CreateProjectFolderDialog({
 					</div>
 					<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 						<div className="flex flex-wrap items-center justify-end gap-3">
-							<Button type="button" variant="outline" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
+							<Button type="button" variant="secondary" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
 								{workspaceHasNoChildGitRepos ? "Go Back" : t("createProject.cancel")}
 							</Button>
 							{hasScan && workspaceRootIsProject && !error ? (
@@ -2845,7 +2845,7 @@ function CreateProjectFolderDialog({
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && workspaceHasNoChildGitRepos && !error ? (
-								<Button type="button" variant="outline" disabled={disabled} onClick={onContinueAsProject}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onContinueAsProject}>
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && !workspaceValidationBlocked && failedRepos.length === 0 && (!error || isWorkspace) ? (

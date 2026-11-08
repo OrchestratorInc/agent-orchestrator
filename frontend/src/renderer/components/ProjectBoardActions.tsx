@@ -4,7 +4,8 @@ import { Plus } from "lucide-react";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { getAgentActivityView } from "../lib/session-presentation";
-import { TopbarActionError, TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
+import { TopbarActionError } from "./TopbarActionError";
 import { OrchestratorIcon } from "./icons";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -30,10 +31,9 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
-					<TopbarButton
+					<Button type="button" size="sm"
 						aria-label={activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel}
 						aria-busy={busy}
-						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
 						onClick={() => {
@@ -43,12 +43,12 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						// The simplified bar shows Orchestrator quiet, labeled, first; the previous
 						// header never demotes it. The empty board's body keeps it as the call to action.
 						variant={simplifiedTopbar
-							? (header ? "action" : quiet ? "secondary" : "primary")
-							: (header || !quiet ? "primary" : "secondary")}
+							? (header || quiet ? "quiet" : "primary")
+							: (header || !quiet ? "primary" : "quiet")}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{busyLabel ?? actionLabel}</TooltipContent>
@@ -58,9 +58,8 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
-					<TopbarButton
+					<Button type="button" size="sm"
 						aria-label={t("shell.newTask")}
-						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}
 						onClick={() => {
@@ -69,11 +68,11 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						}}
 						// The simplified bar's one filled action is New task; the previous header
 						// keeps it a utility control (one filled primary per region).
-						variant={header ? (simplifiedTopbar ? "primary" : "action") : quiet || cloud ? "secondary" : "accent"}
+						variant={header ? (simplifiedTopbar ? "primary" : "quiet") : quiet || cloud ? "quiet" : "secondary"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{t(header ? "newTask.task" : "shell.newTask")}</span>
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
@@ -84,7 +83,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			<TopbarActionError role={header ? "alert" : "status"} className={header ? "max-w-content-max truncate" : "text-caption leading-body"} title={spawnError}>
 				{spawnError}
 			</TopbarActionError>
-			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant="primary">{t("newTask.createAsTui")}</TopbarButton> : null}
+			{canCreateAsTui ? <Button type="button" size="sm" disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant="primary">{t("newTask.createAsTui")}</Button> : null}
 		</div>
 	) : null;
 	return header ? (simplifiedTopbar ? <>{feedback}{orchestratorButton}{newTaskButton}</> : <>{feedback}{newTaskButton}{orchestratorButton}</>) : <>
