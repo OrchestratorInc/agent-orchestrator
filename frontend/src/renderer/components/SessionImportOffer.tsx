@@ -2,6 +2,7 @@ import { Download } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { agentLabel, type AgentId } from "../lib/agent-options";
+import { isLaunchableAgent } from "../lib/agent-select-options";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
@@ -19,7 +20,7 @@ export function SessionImportOffer() {
 	const openFolderImport = useSessionImportStore((state) => state.openFolderImport);
 	const readiness = useAgentReadinessQuery(!closed);
 	const agents = (readiness.data?.agents ?? [])
-		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && agent.installation.state === "installed" && agent.authentication.state !== "unauthorized")
+		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && isLaunchableAgent(agent))
 		.map((agent) => agent.id as AgentId);
 	if (closed || agents.length === 0) return null;
 	const hidden = agents.length - MAX_LOGOS;

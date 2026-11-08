@@ -18,7 +18,7 @@ import {
 	type ImportCandidate,
 	type ImportResult,
 } from "../lib/session-import";
-import { cn } from "../lib/utils";
+import { cn, shortenPaths } from "../lib/utils";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
@@ -72,21 +72,26 @@ function useImportRun(onDone: (results: ImportResult[]) => void) {
 	const queryClient = useQueryClient();
 	const [importing, setImporting] = useState(false);
 	const [error, setError] = useState<string>();
+	const [failures, setFailures] = useState<{ id: string; title: string; error?: string }[]>([]);
 	const run = async (ids: string[], folders?: string[]) => {
 		setImporting(true);
 		setError(undefined);
+		setFailures([]);
 		try {
 			const results = await importChats(queryClient, ids, folders);
-			const failed = results.filter((result) => result.status === "failed").length;
-			if (failed) setError(t("sessionImport.resultFailed", { count: failed }));
+			const failed = results.filter((result) => result.status === "failed");
+			const candidates = queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [];
+			setFailures(failed.map((result) => ({ id: result.id, title: candidates.find((chat) => chat.id === result.id)?.title ?? result.id, error: result.error })));
+			if (failed.length) setError(t("sessionImport.resultFailed", { count: failed.length }));
 			onDone(results);
+			if (failed.length) void queryClient.invalidateQueries({ queryKey: sessionImportPreviewQuery.queryKey });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("sessionImport.failed"));
 		} finally {
 			setImporting(false);
 		}
 	};
-	return { importing, error, run };
+	return { importing, error, failures, run };
 }
 
 function useAgentBlocks() {
@@ -104,7 +109,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	const [unchecked, setUnchecked] = useState(new Set<string>());
 	const chats = projectChats(preview.data?.candidates, projectId);
 	const selected = chats.filter((chat) => !unchecked.has(chat.id));
-	const { importing, error, run } = useImportRun((results) => {
+	const { importing, error, failures, run } = useImportRun((results) => {
 		const created = results.filter((result) => result.status === "created").length;
 		if (created) recordImport(projectId, created);
 		if (!results.some((result) => result.status === "failed")) onClose();
@@ -136,11 +141,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 						))}
 					</div>
 				</PreviewState>
-				{error ? (
-					<p role="alert" className="text-sm text-destructive">
-						{error}
-					</p>
-				) : null}
+				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
 				<Button variant="footer" onClick={onClose}>
@@ -168,7 +169,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 	const [showOther, setShowOther] = useState(false);
 	const byKey = new Map<string, Folder>();
 	for (const chat of preview.data?.candidates ?? []) {
-		const key = chat.projectId ?? chat.folder;
+		const key = folderKey(chat);
 		if (!key || chat.sessionId) continue;
 		const project = chat.projectId ? workspaces.data?.find((workspace) => workspace.id === chat.projectId) : undefined;
 		const folder = byKey.get(key) ?? {
@@ -201,11 +202,12 @@ function Folders({ onClose }: { onClose: () => void }) {
 			else next.delete(key);
 			return next;
 		});
-	const { importing, error, run } = useImportRun((results) => {
+	const { importing, error, failures, run } = useImportRun((results) => {
+		const rescanned = queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [];
 		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
 		if (created.size) {
 			closeSessionImportOffer();
-			const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
+			const imported = rescanned
 				.filter((chat) => chat.sessionId && created.has(chat.id))
 				.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 			for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
@@ -217,7 +219,9 @@ function Folders({ onClose }: { onClose: () => void }) {
 				action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
 			});
 		}
-		if (!results.some((result) => result.status === "failed")) onClose();
+		const failed = new Set(results.flatMap((result) => (result.status === "failed" ? [result.id] : [])));
+		if (failed.size) setPicked(new Set(rescanned.flatMap((chat) => (failed.has(chat.id) ? (folderKey(chat) ?? []) : []))));
+		else onClose();
 	});
 	const otherOpen = showOther || !suggested.length;
 	const row = (folder: Folder) => (
@@ -250,11 +254,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 						) : null}
 					</div>
 				</PreviewState>
-				{error ? (
-					<p role="alert" className="text-sm text-destructive">
-						{error}
-					</p>
-				) : null}
+				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
 				<Button variant="footer" onClick={onClose}>
@@ -274,6 +274,25 @@ function Folders({ onClose }: { onClose: () => void }) {
 				</Button>
 			</div>
 		</>
+	);
+}
+
+function folderKey(chat: ImportCandidate): string | undefined {
+	return chat.projectId ?? chat.folder;
+}
+
+function ImportError({ error, failures }: { error?: string; failures: { id: string; title: string; error?: string }[] }) {
+	if (!error) return null;
+	return (
+		<div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
+			<p>{error}</p>
+			{failures.map((failure) => (
+				<p key={failure.id} className="truncate text-xs">
+					{failure.title}
+					{failure.error ? `: ${failure.error}` : null}
+				</p>
+			))}
+		</div>
 	);
 }
 
@@ -336,6 +355,7 @@ function ChatRow({
 					{agentLabel(chat.harness)} · {t("sessionImport.messages", { count: chat.messageCount })} · <When at={chat.lastActivity} />
 					{block ? <span className="text-warning"> · {t(block === "signed_out" ? "sessionImport.agentSignedOut" : "sessionImport.agentMissing")}</span> : null}
 				</span>
+				{chat.shortened ? <span className="block text-xs text-warning">{t("sessionImport.shortened")}</span> : null}
 			</span>
 		</label>
 	);
@@ -364,7 +384,7 @@ function FolderRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{folder.name}</span>
 				<span className="block truncate text-xs text-muted-foreground" title={folder.path}>
-					{folder.path.replace(/^\/(?:Users|home)\/[^/]+/, "~")}
+					{shortenPaths(folder.path)}
 				</span>
 			</span>
 			<span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">

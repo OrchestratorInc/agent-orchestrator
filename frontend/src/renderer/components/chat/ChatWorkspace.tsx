@@ -2162,7 +2162,7 @@ function ChatWorkspaceContent({
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
-								{conversationEmpty && sessionRole === "orchestrator" && session ? <ProjectImportOffer className="mt-2" projectId={session.workspaceId} /> : null}
+								{conversationEmpty && sessionRole === "orchestrator" && session && !activeRemoteHostId ? <ProjectImportOffer className="mt-2" projectId={session.workspaceId} /> : null}
 								{draftNotice}
 							</div>
 						</div>

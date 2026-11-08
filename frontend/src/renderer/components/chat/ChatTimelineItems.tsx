@@ -69,7 +69,7 @@ const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 	user_input: Keyboard,
 	ao_action: Bot,
 };
-import { cn } from "../../lib/utils";
+import { cn, shortenPaths } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
@@ -818,11 +818,6 @@ function StagedAttachmentItems({
 			})}
 		</ul>
 	);
-}
-
-/** Collapse the home directory so a long absolute path does not eat the row. */
-function shortenPaths(text: string): string {
-	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
 }
 
 function formatDuration(ms: number): string {

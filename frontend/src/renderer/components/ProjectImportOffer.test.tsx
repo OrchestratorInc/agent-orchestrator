@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { importChats, MAX_IMPORT } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { ProjectImportOffer } from "./ProjectImportOffer";
@@ -126,4 +127,37 @@ it("preselects busy folders, folds the rest and adds the picked ones as projects
 	toast?.action?.run();
 	expect(openSession).toHaveBeenCalledWith("alpha", "s-ccc");
 	expect(useSessionImportStore.getState().importedCounts).toEqual({ alpha: 3 });
+});
+
+it("keeps a folder with a failed chat picked and says why", async () => {
+	useSessionImportStore.setState({ dialog: { kind: "folders" } });
+	renderWith(null, ["a", "bb", "ccc"].map((id) => chat(id, "claude-code", { folder: "/code/alpha" })));
+	const dialog = await screen.findByRole("dialog", { name: "Import projects and their chats" });
+	await within(dialog).findByRole("checkbox", { name: "Import alpha" });
+	api.POST.mockResolvedValueOnce({ data: {} });
+	api.GET.mockResolvedValue({
+		data: { candidates: ["a", "bb", "ccc"].map((id) => chat(id, "claude-code", { projectId: "alpha", ...(id === "bb" ? {} : { sessionId: `s-${id}` }) })) },
+	});
+	api.POST.mockResolvedValueOnce({
+		data: {
+			results: [
+				{ id: "a", status: "created", sessionId: "s-a" },
+				{ id: "bb", status: "failed", error: "The chat changed on disk" },
+				{ id: "ccc", status: "created", sessionId: "s-ccc" },
+			],
+		},
+	});
+	fireEvent.click(within(dialog).getByRole("button", { name: "Import 1 folder" }));
+	expect(await within(dialog).findByText("Chat bb: The chat changed on disk")).toBeInTheDocument();
+	expect(within(dialog).getByRole("checkbox", { name: "Import alpha" })).toBeChecked();
+	expect(within(dialog).getByRole("button", { name: "Import 1 folder" })).toBeEnabled();
+});
+
+it("keeps earlier batches when a later one fails", async () => {
+	const ids = Array.from({ length: MAX_IMPORT + 1 }, (_, i) => `c${i}`);
+	api.POST.mockResolvedValueOnce({ data: { results: ids.slice(0, MAX_IMPORT).map((id) => ({ id, status: "created", sessionId: `s-${id}` })) } });
+	api.POST.mockResolvedValueOnce({ error: { code: "INTERNAL" } });
+	const results = await importChats(new QueryClient(), ids);
+	expect(results.filter((result) => result.status === "created")).toHaveLength(MAX_IMPORT);
+	expect(results.at(-1)).toEqual({ id: `c${MAX_IMPORT}`, status: "failed", error: "Import failed" });
 });

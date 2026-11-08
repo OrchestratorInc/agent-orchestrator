@@ -16,6 +16,10 @@ export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+export function shortenPaths(text: string): string {
+	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
+}
+
 /**
  * Shortens a long identifier in the middle, keeping its start and end, so
  * "v0.0.1792022479-ge66e24" reads "v0.0.179…6e24". Text that already fits is

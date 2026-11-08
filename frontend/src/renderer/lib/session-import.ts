@@ -71,10 +71,18 @@ export async function importChats(queryClient: QueryClient, ids: string[], folde
 			const added = await apiClient.POST("/api/v1/projects", { body: { path } });
 			if (added.error && apiErrorCode(added.error) !== "PATH_ALREADY_REGISTERED") throw apiErrorException(added.error);
 		}
-		if (folders.length) await queryClient.fetchQuery(sessionImportPreviewQuery);
+		if (folders.length) {
+			await queryClient.cancelQueries({ queryKey: sessionImportPreviewQuery.queryKey });
+			await queryClient.fetchQuery(sessionImportPreviewQuery);
+		}
 		for (let start = 0; start < ids.length; start += MAX_IMPORT) {
 			const response = await apiClient.POST("/api/v1/session-import", { body: { ids: ids.slice(start, start + MAX_IMPORT) } });
-			if (response.error) throw apiErrorException(response.error);
+			if (response.error) {
+				const failure = apiErrorException(response.error);
+				if (!results.length) throw failure;
+				results.push(...ids.slice(start).map((id) => ({ id, status: "failed" as const, error: failure.message })));
+				break;
+			}
 			results.push(...response.data.results);
 		}
 		return results;

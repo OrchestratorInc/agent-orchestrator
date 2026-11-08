@@ -49,7 +49,10 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 			const created = results.filter((result) => result.status === "created").length;
 			if (created) recordImport(projectId, created);
 			const failed = results.filter((result) => result.status === "failed").length;
-			if (failed) setError(t("sessionImport.resultFailed", { count: failed }));
+			if (failed) {
+				setError(t("sessionImport.resultFailed", { count: failed }));
+				void queryClient.invalidateQueries({ queryKey: sessionImportPreviewQuery.queryKey });
+			}
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("sessionImport.failed"));
 		} finally {
