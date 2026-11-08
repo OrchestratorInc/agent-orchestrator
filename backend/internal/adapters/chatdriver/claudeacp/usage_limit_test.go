@@ -40,7 +40,7 @@ func TestClaudeNativeQuotaMetadata(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.response), &response); err != nil {
 				t.Fatal(err)
 			}
-			failure := claudePromptResponseFailure(response)
+			failure := claudePromptResponseFailure(response, "")
 			if (failure != nil) != tc.failure || errors.Is(failure, ports.ErrChatAuthRequired) {
 				t.Fatalf("native failure = %v, want failure=%v without login", failure, tc.failure)
 			}

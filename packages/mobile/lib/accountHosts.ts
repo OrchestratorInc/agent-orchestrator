@@ -1,5 +1,5 @@
-import { getAccountAccessToken, loadAccount, type Account } from "./account";
-import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
+import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
 import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
@@ -72,14 +72,40 @@ async function syncFetch(url: string, init: RequestInit, timeoutMs: number, sign
 	finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }
 
+// A session from the previous WorkOS environment tagged this phone's account
+// machines with that environment's user ID. The control plane links both users
+// to one AO account, so the listing still has those machines: retag them in
+// place, keeping the phone's name, icon and endpoints, and carry the hidden set
+// over. Otherwise the stale-ID cleanup below would unpair every one of them and
+// re-import them without their local preferences. Only the same email counts
+// as the same person.
+async function adoptPreviousAccount(account: Account, listed: Set<string>, current: () => Promise<boolean>): Promise<void> {
+	const previous = await loadPreviousAccount();
+	if (!previous || previous.id === account.id) return;
+	if (previous.email.trim().toLowerCase() === account.email.trim().toLowerCase()) {
+		const adopted = await mutateAccountHosts(async () => {
+			if (!await current()) return false;
+			await moveIgnoredAccountHosts(previous.id, account.id);
+			for (const host of await loadHosts()) {
+				if (host.accountUserId === previous.id && listed.has(host.id)) await saveHost({ ...host, accountUserId: account.id });
+			}
+			return true;
+		});
+		if (!adopted) return;
+	}
+	await clearPreviousAccount(previous.id);
+}
+
 async function performSync(account: Account, signal: AbortSignal, current: () => Promise<boolean>): Promise<void> {
 	const access = await getAccountAccessToken();
 	if (!access || !await current()) return;
 	const response = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
-	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
+	if (!response.ok) throw new Error(`Could not load your account's machines (${response.status}).`);
 	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
+	if (!await current()) return;
+	await adoptPreviousAccount(account, new Set(hosts.map((item) => item.hostId)), current);
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
@@ -137,8 +163,11 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 				if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
 				return;
 			}
+			// Connecting saves the machine's advertised routes beside the listed
+			// address. Keep them while that address is still one of them: resetting
+			// to the listed address alone restarted the connection on every sync.
 			if (existing && existing.accountUserId === account.id && existing.token === item.token &&
-				existing.endpoints.length === 1 && JSON.stringify(existing.endpoints[0]) === JSON.stringify(address)) return;
+				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address))) return;
 			await saveHost({
 				// Directory labels seed new machines; a phone's chosen name and icon
 				// remain local preferences when remote credentials/routes rotate.

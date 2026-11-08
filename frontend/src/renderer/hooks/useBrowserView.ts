@@ -119,7 +119,7 @@ export type BrowserViewModel = {
 	closeDevTools: () => Promise<void>;
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
-	agentBrowserActivity: BrowserAgentActivityState | null;
+	agentBrowserActivity: ObservedBrowserAgentActivity | null;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -182,6 +182,26 @@ export function resetConsumedPreviewTriggersForTest(): void {
 // good, even though nothing about it actually changed.
 const closedTabsBySession = new Map<string, ClosedBrowserTab[]>();
 
+// The last native view, page and tabs each session showed. A native view
+// outlives a session switch, so switching back can show it in the same frame
+// instead of waiting for `ensure` to answer: the panel is transparent over a
+// live page, so that wait painted the bare window (black) for 100-150 ms.
+type CachedNativeView = { viewId: string; navState: BrowserNavState; tabsState: BrowserTabsState };
+const nativeViewBySession = new Map<string, CachedNativeView>();
+
+export function resetNativeViewCacheForTest(): void {
+	nativeViewBySession.clear();
+}
+
+// Main reports every view's navigation and tabs, including sessions that are
+// not on screen. Keep their cached state current so switching back never shows
+// an address bar or tab list from before an agent navigated that page.
+function refreshCachedNativeView(viewId: string, update: Partial<Omit<CachedNativeView, "viewId">>): void {
+	for (const [sessionId, cached] of nativeViewBySession) {
+		if (cached.viewId === viewId) nativeViewBySession.set(sessionId, { ...cached, ...update });
+	}
+}
+
 export function resetClosedTabsForTest(): void {
 	closedTabsBySession.clear();
 }
@@ -204,8 +224,7 @@ let browserHoleOwner: string | null = null;
 
 function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	const root = document.documentElement;
-	// Custom properties on :root restyle the whole document, so only write them
-	// while the translucent window actually needs the hole.
+	// Only the translucent window needs the hole.
 	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
 	if (!rect) {
 		if (browserHoleOwner !== viewId) return;
@@ -215,10 +234,16 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	}
 	browserHoleOwner = viewId;
 	root.dataset.browserHole = "true";
-	root.style.setProperty("--browser-hole-x", `${rect.x}px`);
-	root.style.setProperty("--browser-hole-y", `${rect.y}px`);
-	root.style.setProperty("--browser-hole-w", `${rect.width}px`);
-	root.style.setProperty("--browser-hole-h", `${rect.height}px`);
+	// This runs on every frame of an inspector slide. The hole properties are
+	// registered non-inheriting (styles.css) and live on the shell root, whose
+	// tint pseudo-element alone reads them, so a write restyles that one element
+	// instead of the whole document, as :root custom properties did.
+	const shell = document.querySelector<HTMLElement>(".app-shell-root");
+	if (!shell) return;
+	shell.style.setProperty("--browser-hole-x", `${rect.x}px`);
+	shell.style.setProperty("--browser-hole-y", `${rect.y}px`);
+	shell.style.setProperty("--browser-hole-w", `${rect.width}px`);
+	shell.style.setProperty("--browser-hole-h", `${rect.height}px`);
 }
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
@@ -233,8 +258,8 @@ const RESIZE_HANDLE_RESERVE_PX = 6;
 
 // The native WebContentsView is a window-level overlay, so DOM `overflow:
 // hidden` never clips it — it paints wherever the slot's bounding box lands.
-// During inspector open/close the column slides on a transform (the slot box
-// moves without a ResizeObserver size change), so also clip to `.session-split`.
+// Keep the inspector's full viewport width while it slides beyond the right
+// window edge. The native window clips that edge without reflowing the page.
 function visibleSlotRect(node: HTMLElement): BrowserRect {
 	const rect = node.getBoundingClientRect();
 	let { left, top, right, bottom } = rect;
@@ -251,7 +276,7 @@ function visibleSlotRect(node: HTMLElement): BrowserRect {
 		const bounds = split.getBoundingClientRect();
 		left = Math.max(left, bounds.left);
 		top = Math.max(top, bounds.top);
-		right = Math.min(right, bounds.right);
+		if (panel?.dataset.slot !== "inspector-container") right = Math.min(right, bounds.right);
 		bottom = Math.min(bottom, bounds.bottom);
 	}
 	return {
@@ -276,6 +301,11 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
 	const fullscreen = document.fullscreenElement;
 	return Boolean(fullscreen) && !fullscreen!.contains(node);
 }
+
+/** An agent command event, marked with whether its start arrived while this
+ *  session's view was the one on screen. A command that began while the user
+ *  was elsewhere and finishes after they switch in is not theirs to reveal. */
+export type ObservedBrowserAgentActivity = BrowserAgentActivityState & { startObserved: boolean };
 
 export function useBrowserView({
 	sessionId,
@@ -306,7 +336,8 @@ export function useBrowserView({
 	const [tabNotice, setTabNotice] = useState("");
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
-	const [agentBrowserActivity, setAgentBrowserActivity] = useState<BrowserAgentActivityState | null>(null);
+	const [agentBrowserActivity, setAgentBrowserActivity] = useState<ObservedBrowserAgentActivity | null>(null);
+	const observedCommandStartsRef = useRef(new Set<string>());
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
 	const viewIdRef = useRef("");
@@ -471,10 +502,15 @@ export function useBrowserView({
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
+		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
+		// The view this run owns, so its cleanup never hides or clears the next
+		// session's view, which the switch below may already have shown.
+		let ownViewId = cached?.viewId ?? "";
+		if (cached) viewIdRef.current = cached.viewId;
 		setStateSessionId(sessionId);
-		setViewId("");
-		setNavState(EMPTY_NAV_STATE);
-		setTabsState(EMPTY_TABS_STATE);
+		setViewId(cached?.viewId ?? "");
+		setNavState(cached?.navState ?? EMPTY_NAV_STATE);
+		setTabsState(cached?.tabsState ?? EMPTY_TABS_STATE);
 		// Tab ids (`t1`, `t2`, ...) restart per session, so a stale order from the
 		// previous session could otherwise silently reapply to the new one.
 		setTabOrder([]);
@@ -489,6 +525,7 @@ export function useBrowserView({
 		setClosedTabs(closedTabsBySession.get(sessionId) ?? []);
 		setAgentBrowserActive(false);
 		setAgentBrowserActivity(null);
+		observedCommandStartsRef.current.clear();
 		if (tabNoticeTimerRef.current !== null) {
 			window.clearTimeout(tabNoticeTimerRef.current);
 			tabNoticeTimerRef.current = null;
@@ -496,6 +533,7 @@ export function useBrowserView({
 		if (terminated) {
 			consumedPreviewTriggers.delete(sessionId);
 			closedTabsBySession.delete(sessionId);
+			nativeViewBySession.delete(sessionId);
 			return;
 		}
 		if (!hasNativeBrowser) {
@@ -531,6 +569,7 @@ export function useBrowserView({
 				return;
 			}
 			viewIdRef.current = state.viewId;
+			ownViewId = state.viewId;
 			setViewId(state.viewId);
 			setNavState(state);
 			void window.ao?.browser
@@ -555,7 +594,7 @@ export function useBrowserView({
 		});
 		return () => {
 			disposed = true;
-			const id = viewIdRef.current;
+			const id = ownViewId;
 			if (id) {
 				if (annotationModeRef.current) {
 					void window.ao?.browser.setAnnotationMode({
@@ -566,11 +605,13 @@ export function useBrowserView({
 				}
 				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
 					window.ao?.browser.destroy(id);
-				} else {
+				} else if (viewIdRef.current === id) {
+					// Otherwise a session switch already took over this view and
+					// hides it once the destination's view is shown.
 					sendHiddenBounds(id);
 				}
 			}
-			viewIdRef.current = "";
+			if (viewIdRef.current === id) viewIdRef.current = "";
 		};
 	}, [
 		sessionEnded,
@@ -581,9 +622,45 @@ export function useBrowserView({
 		sessionId,
 	]);
 
+	// Swap native views as the destination session first paints: show its
+	// cached view, then hide the departing one, so no frame shows neither.
+	// Measure in that first frame, not at commit: the commit's layout is not
+	// final (the address bar renders inline until its top-bar host is known),
+	// and measuring there placed the page 36 px low for ~100 ms.
+	const shownSessionRef = useRef(sessionId);
+	useLayoutEffect(() => {
+		if (shownSessionRef.current === sessionId) return;
+		shownSessionRef.current = sessionId;
+		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
+		if (!cached) return;
+		const previous = viewIdRef.current;
+		viewIdRef.current = cached.viewId;
+		activeRef.current = active;
+		let frame: number | null = window.requestAnimationFrame(() => {
+			frame = null;
+			// `ensure` may already have answered with a new view for this session;
+			// it shows that one. Either way the departing view must go.
+			if (viewIdRef.current === cached.viewId) measureAndSend();
+			if (previous && previous !== viewIdRef.current) sendHiddenBounds(previous);
+		});
+		return () => {
+			if (frame === null) return;
+			window.cancelAnimationFrame(frame);
+			if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+		};
+	}, [active, hasNativeBrowser, measureAndSend, sendHiddenBounds, sessionId, terminated]);
+
+	useEffect(() => {
+		if (!hasNativeBrowser || stateSessionId !== sessionId || !viewId || terminated) return;
+		nativeViewBySession.set(sessionId, { viewId, navState, tabsState });
+	}, [hasNativeBrowser, navState, sessionId, stateSessionId, tabsState, terminated, viewId]);
+
 	useEffect(() => {
 		return window.ao?.browser.onNavState((state) => {
-			if (state.viewId !== viewIdRef.current) return;
+			if (state.viewId !== viewIdRef.current) {
+				refreshCachedNativeView(state.viewId, { navState: state });
+				return;
+			}
 			setNavState(state);
 		});
 	}, []);
@@ -605,7 +682,10 @@ export function useBrowserView({
 
 	useEffect(() => {
 		return window.ao?.browser.onTabsState((state) => {
-			if (state.viewId !== viewIdRef.current) return;
+			if (state.viewId !== viewIdRef.current) {
+				refreshCachedNativeView(state.viewId, { tabsState: state });
+				return;
+			}
 			setTabsState(state);
 			const change = state.change;
 			if (change?.kind === "popup") {
@@ -658,8 +738,17 @@ export function useBrowserView({
 	useEffect(() => {
 		return window.ao?.browser.onAgentActivity((state) => {
 			if (state.viewId !== viewIdRef.current) return;
+			const starts = observedCommandStartsRef.current;
+			let startObserved = false;
+			if (state.commandId) {
+				if (state.phase === "started") starts.add(state.commandId);
+				startObserved = starts.has(state.commandId);
+				if (state.phase === "finished") starts.delete(state.commandId);
+				// Bound memory if a finish is ever lost.
+				if (starts.size > 64) starts.delete(starts.values().next().value!);
+			}
 			setAgentBrowserActive(state.active);
-			setAgentBrowserActivity(state);
+			setAgentBrowserActivity({ ...state, startObserved });
 		});
 	}, []);
 
@@ -718,6 +807,59 @@ export function useBrowserView({
 			resizeObserver.disconnect();
 		};
 	}, [hasNativeBrowser, scheduleSettleMeasure]);
+
+	// The inspector opens and closes as a CSS slide: the rail's gap animates its
+	// width and the panel its transform. The native page is not a DOM node, so it
+	// follows only through setBounds. Resize observers miss the transform, and on
+	// open they reached the page only ~110 ms into a 300 ms slide, so the page
+	// jumped in behind the panel. Track every frame of the slide instead.
+	useEffect(() => {
+		if (!hasNativeBrowser) return;
+		const running = new Set<string>();
+		let frame: number | null = null;
+		let deadline = 0;
+		const isInspectorSlide = (event: TransitionEvent) => {
+			const slot = event.target instanceof Element ? event.target.getAttribute("data-slot") : null;
+			return (slot === "inspector-gap" || slot === "inspector-container") &&
+				(event.propertyName === "width" || event.propertyName === "transform");
+		};
+		// Only while the page is on screen: a hidden view would otherwise be
+		// re-parked through IPC on every frame of a Summary or Files slide.
+		const step = () => {
+			frame = null;
+			if (!activeRef.current) return;
+			measureAndSend();
+			if (running.size > 0 && performance.now() < deadline) frame = window.requestAnimationFrame(step);
+		};
+		const onRun = (event: TransitionEvent) => {
+			if (!isInspectorSlide(event) || !activeRef.current) return;
+			running.add(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
+			// Backstop for a transition whose end event never arrives (hidden window).
+			deadline = performance.now() + 1_000;
+			if (frame === null) frame = window.requestAnimationFrame(step);
+		};
+		const onEnd = (event: TransitionEvent) => {
+			if (!isInspectorSlide(event)) return;
+			running.delete(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
+			if (running.size > 0) return;
+			// The slide has landed: send the final rect now and drop the frame
+			// already queued for it.
+			if (frame !== null) {
+				window.cancelAnimationFrame(frame);
+				frame = null;
+			}
+			if (activeRef.current) measureAndSend();
+		};
+		document.addEventListener("transitionrun", onRun);
+		document.addEventListener("transitionend", onEnd);
+		document.addEventListener("transitioncancel", onEnd);
+		return () => {
+			document.removeEventListener("transitionrun", onRun);
+			document.removeEventListener("transitionend", onEnd);
+			document.removeEventListener("transitioncancel", onEnd);
+			if (frame !== null) window.cancelAnimationFrame(frame);
+		};
+	}, [hasNativeBrowser, measureAndSend]);
 
 	useEffect(() => {
 		const handle = () => scheduleMeasure();
@@ -1149,10 +1291,13 @@ export function useBrowserView({
 	// intervening render so consumers can never interpret the departed session's
 	// state as belonging to the destination session.
 	const stateBelongsToSession = stateSessionId === sessionId;
+	// That render may still show the destination's own cached page, which is
+	// already on screen, so the panel stays transparent over it.
+	const switchingTo = !stateBelongsToSession && hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 
 	return {
-		viewId: stateBelongsToSession ? viewId : "",
-		navState: stateBelongsToSession ? navState : EMPTY_NAV_STATE,
+		viewId: stateBelongsToSession ? viewId : (switchingTo?.viewId ?? ""),
+		navState: stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE),
 		slotRef,
 		navigate,
 		goBack: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()),
@@ -1163,8 +1308,8 @@ export function useBrowserView({
 		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
 		findInPage,
 		stopFindInPage,
-		tabs: stateBelongsToSession ? tabs : [],
-		activeTabId: stateBelongsToSession ? tabsState.activeTabId : "",
+		tabs: stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? []),
+		activeTabId: stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? ""),
 		tabNotice: stateBelongsToSession ? tabNotice : "",
 		selectTab,
 		closeTab,

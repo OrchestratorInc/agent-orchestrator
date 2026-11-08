@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
 const sessionId = "chat-message-overflow";
@@ -25,7 +25,10 @@ async function expectBubbleToStayInsideViewport(bubble: Locator) {
 	expect(layout.bubbleScrollWidth).toBeLessThanOrEqual(layout.bubbleClientWidth);
 }
 
-test("long unbroken user messages stay inside their chat bubble @T0", async ({ page }) => {
+async function openConversation(
+	page: Page,
+	{ turnState, messages, activities }: { turnState: string; messages: unknown[]; activities: unknown[] },
+) {
 	await installFakeAgent(page, {
 		workers: [{ id: sessionId, title: "Debug chat input", mode: "chat" }],
 	});
@@ -40,46 +43,20 @@ test("long unbroken user messages stay inside their chat bubble @T0", async ({ p
 					harness: "codex",
 					mode: "chat",
 					controller: "ready",
-					latestSequence: 2,
+					latestSequence: messages.length + activities.length,
 					oldestSequence: 1,
 					hasMoreBefore: false,
 					turns: [
 						{
 							id: "turn-1",
-							state: "completed",
+							state: turnState,
 							requestedAt: now,
 							startedAt: now,
-							completedAt: now,
+							...(turnState === "completed" ? { completedAt: now } : {}),
 						},
 					],
-					messages: [
-						{
-							kind: "message",
-							id: "user-1",
-							turnId: "turn-1",
-							sequence: 1,
-							revision: 0,
-							role: "user",
-							origin: "human",
-							text: longMessage,
-							streaming: false,
-							createdAt: now,
-						},
-					],
-					activities: [
-						{
-							kind: "activity",
-							id: "steer-1",
-							turnId: "turn-1",
-							sequence: 2,
-							revision: 0,
-							activityKind: "system",
-							status: "completed",
-							summary: longMessage,
-							detail: { event: "steer", text: longMessage, origin: "human" },
-							createdAt: now,
-						},
-					],
+					messages,
+					activities,
 					settings: {},
 				},
 			});
@@ -108,6 +85,40 @@ test("long unbroken user messages stay inside their chat bubble @T0", async ({ p
 	});
 
 	await page.goto(`/#/projects/fake-proj/sessions/${sessionId}`);
+}
+
+test("long unbroken user messages stay inside their chat bubble @T0", async ({ page }) => {
+	await openConversation(page, {
+		turnState: "completed",
+		messages: [
+			{
+				kind: "message",
+				id: "user-1",
+				turnId: "turn-1",
+				sequence: 1,
+				revision: 0,
+				role: "user",
+				origin: "human",
+				text: longMessage,
+				streaming: false,
+				createdAt: now,
+			},
+		],
+		activities: [
+			{
+				kind: "activity",
+				id: "steer-1",
+				turnId: "turn-1",
+				sequence: 2,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: longMessage,
+				detail: { event: "steer", text: longMessage, origin: "human" },
+				createdAt: now,
+			},
+		],
+	});
 	const humanBubble = page
 		.locator(".cursor-chat-human-message")
 		.filter({ hasText: "LABEL OCR OUTPUT" });
@@ -119,4 +130,52 @@ test("long unbroken user messages stay inside their chat bubble @T0", async ({ p
 
 	await expectBubbleToStayInsideViewport(humanBubble);
 	await expectBubbleToStayInsideViewport(steerBubble);
+});
+
+// Claude's Read reaches AO over ACP as an MCP-style row whose only name is its
+// title, so the label carries the whole file path.
+test("a tool row named by a long file path truncates inside the chat column @T0", async ({ page }) => {
+	const readPath =
+		"/private/tmp/claude-501/-Users-dhruvsharma--ao-data-worktrees-agent-orchestrator-1-agent-orchestrator-1-349/d5f66703-1942-488f-aab0-aa2bf491a787/tasks/bkzss8xyu.output";
+	await openConversation(page, {
+		turnState: "running",
+		messages: [],
+		activities: [
+			{
+				kind: "activity",
+				id: "read-1",
+				turnId: "turn-1",
+				sequence: 1,
+				revision: 0,
+				activityKind: "mcp_tool",
+				status: "completed",
+				summary: `Read ${readPath}`,
+				detail: {
+					protocol: "acp",
+					toolKind: "read",
+					locations: [{ path: readPath }],
+					content: [{ type: "content", content: { type: "text", text: "1\tleft:" } }],
+				},
+				createdAt: now,
+			},
+		],
+	});
+
+	const label = page.locator(".activity-row-toggle .activity-row-label").filter({ hasText: "Read /private/tmp" });
+	await expect(label).toBeVisible();
+	const layout = await label.evaluate((node) => {
+		const row = node.closest(".activity-row-toggle");
+		const viewport = node.closest(".chat-scroll-viewport");
+		if (!row || !viewport) throw new Error("activity row or chat scroll viewport not found");
+		return {
+			labelRight: node.getBoundingClientRect().right,
+			rowRight: row.getBoundingClientRect().right,
+			viewportRight: viewport.getBoundingClientRect().right,
+		};
+	});
+
+	expect(layout.labelRight).toBeLessThanOrEqual(layout.rowRight);
+	expect(layout.rowRight).toBeLessThanOrEqual(layout.viewportRight);
+	// The full path stays one hover away.
+	await expect(label).toHaveAttribute("title", `Read ${readPath}`);
 });

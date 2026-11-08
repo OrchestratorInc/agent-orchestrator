@@ -52,8 +52,9 @@ const (
 // POST /api/v1/sessions/{id}/activity. The CLI keeps its own copy so it need
 // not import httpd. Event carries the AO hook sub-command that produced the
 // state; ToolName/ToolUseID are the tool-use correlation facts lifted from the
-// native payload when present. All four are optional: an old daemon decodes
-// the body leniently and simply ignores them.
+// native payload when present. AgentSessionID is a native resumable-session id
+// lifted from the payload when present. All four are optional: an old daemon
+// decodes the body leniently and simply ignores them.
 type setActivityAPIRequest struct {
 	ObservedAt                   time.Time                           `json:"observedAt,omitempty"`
 	State                        string                              `json:"state,omitempty"`
@@ -77,6 +78,9 @@ type setActivityAPIRequest struct {
 	Entrypoint                   string                              `json:"entrypoint,omitempty"`
 	ProcessID                    int                                 `json:"processId,omitempty"`
 	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
+	// PRMayHaveChanged reports a finished shell command that probably changed
+	// the session's PR (gh pr merge, git push), so the daemon re-reads it early.
+	PRMayHaveChanged bool `json:"prMayHaveChanged,omitempty"`
 }
 
 type usageHookMetadata struct {
@@ -128,6 +132,18 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 		p.ToolUseID = ""
 	}
 	return p.ToolName, p.ToolUseID
+}
+
+// hookCommandMayChangePR reports whether a post-tool-use payload's shell
+// command (`tool_input.command`, left raw so a string or argv both work)
+// probably changed a pull request.
+func hookCommandMayChangePR(payload []byte) bool {
+	var p struct {
+		ToolInput struct {
+			Command json.RawMessage `json:"command"`
+		} `json:"tool_input"`
+	}
+	return json.Unmarshal(normalizeHookPayload(payload), &p) == nil && domain.CommandMayChangePR(string(p.ToolInput.Command))
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
@@ -223,6 +239,19 @@ func isCodexSpawnToolName(name string) bool {
 // that surfaces to the child with a BOM prefix) still decode as JSON.
 func normalizeHookPayload(payload []byte) []byte {
 	return bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf"))
+}
+
+// hookAgentSessionIDForHarness is shared by worker and reviewer hooks. Cline
+// must not inherit generic task/conversation aliases when its parser rejects them.
+func hookAgentSessionIDForHarness(agent string, payload []byte) string {
+	if agent == "cline" {
+		id, _ := activitydispatch.AgentSessionID(agent, payload)
+		return id
+	}
+	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
+		return hookAgentSessionID(payload)
+	}
+	return ""
 }
 
 // hookAgentSessionID extracts the native resume handle shared by Agy, Copilot,
@@ -708,10 +737,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if agent == "memcode" && event == "session-start" {
 		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
@@ -729,7 +755,8 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			}
 		}
 	}
-	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" {
+	prMayHaveChanged := event == "post-tool-use" && hookCommandMayChangePR(payload)
+	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" && !prMayHaveChanged {
 		// Unknown agent, or an event carrying neither activity nor resumable
 		// session metadata: report nothing.
 		return nil
@@ -783,6 +810,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		TranscriptPath:               conversation.TranscriptPath,
 		LaunchID:                     launchID,
 		Usage:                        usage,
+		PRMayHaveChanged:             prMayHaveChanged,
 	}
 	if hasActivity {
 		req.State = string(state)
@@ -934,10 +962,7 @@ func (c *commandContext) runReviewHook(ctx context.Context, agent, event, review
 		return nil
 	}
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if !hasActivity && agentSessionID == "" {
 		return nil
 	}

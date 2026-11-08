@@ -6,6 +6,7 @@ import { awakeQueryKey, type AwakeState } from "../hooks/useAwake";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { AwakeControl } from "./AwakeControl";
+import { ConnectMobileContent } from "./settings/ConnectMobileContent";
 import { TooltipProvider } from "./ui/tooltip";
 
 function render(ui: React.ReactNode) {
@@ -14,6 +15,7 @@ function render(ui: React.ReactNode) {
 
 const test = vi.hoisted(() => ({ mac: true, get: vi.fn(), post: vi.fn() }));
 vi.mock("../lib/platform", () => ({ isMacPlatform: () => test.mac }));
+vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: test.get, POST: test.post },
 	apiErrorMessage: (e: unknown) => String(e),
@@ -21,6 +23,7 @@ vi.mock("../lib/api-client", () => ({
 let client: QueryClient;
 let state: AwakeState;
 let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
+let mobileEnabled: boolean;
 let release: (() => void) | undefined;
 let blockStart: boolean;
 function snapshot() { return structuredClone(state); }
@@ -35,13 +38,15 @@ beforeEach(() => {
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	state = { settings: { lidClosed: true }, sessions: [], rules: [], activeRules: [], active: false, paused: false, capabilities: [{ id: "idle", available: true }] } as unknown as AwakeState;
 	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
+	mobileEnabled = false;
 	test.get.mockReset().mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : structuredClone(mobile) }));
 	test.post.mockReset().mockImplementation(async (path, options) => {
 		if (path === "/api/v1/mobile/keep-awake") {
 			Object.assign(mobile.keepAwake, options.body);
-			if (!options.body.enabled) mobile.keepAwake.active = false;
+			mobile.keepAwake.active = options.body.enabled;
 			return { data: structuredClone(mobile) };
 		}
+		if (path === "/api/v1/mobile/disable") mobileEnabled = false;
 		if (path === "/api/v1/awake/sessions") {
 			if (blockStart) await new Promise<void>((resolve) => { release = resolve; });
 			state.sessions.push(awakeSession({ id: "new", ...options.body }));
@@ -65,9 +70,178 @@ function MobileControl() {
 }
 async function show() {
 	render(<QueryClientProvider client={client}><AwakeControl /><MobileControl /></QueryClientProvider>);
-	await waitFor(() => expect(screen.getByRole("button", { name: "Mobile wake" })).toBeEnabled());
+	await waitFor(() => expect(coffee()).toBeEnabled());
 }
 function coffee() { return screen.getByRole("button", { name: "Stay Awake" }); }
+
+async function showCombinedMobile(bridgeEnabled = false) {
+	mobileEnabled = bridgeEnabled;
+	const mobileSnapshot = () => ({
+		enabled: mobileEnabled, browserRemoteAccess: false, loopbackOnly: false, noPublicTunnel: false,
+		host: "", hostId: "h_fixture", tailscaleHost: "", port: 0, password: "", warning: "", endpoints: [],
+		tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "" },
+		securePairing: { enabled: false, available: false, active: false, host: "", port: 0, reason: "" },
+		keepAwake: { ...mobile.keepAwake, hasBattery: true, lidSupported: true, lidActive: mobile.keepAwake.active && mobile.keepAwake.lidClosed },
+	});
+	test.get.mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : mobileSnapshot() }));
+	const post = test.post.getMockImplementation()!;
+	test.post.mockImplementation(async (path, options) => {
+		const response = await post(path, options);
+		return path.startsWith("/api/v1/mobile/") && response.data ? { ...response, data: mobileSnapshot() } : response;
+	});
+	render(<QueryClientProvider client={client}><AwakeControl /><ConnectMobileContent active /></QueryClientProvider>);
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
+}
+
+describe("combined mobile wake with the shared hook", () => {
+	it("turns the Settings switch on when the sidebar starts wake on a lid-capable Mac", async () => {
+		await showCombinedMobile();
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		expect(toggle).not.toBeChecked();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
+		expect(mobile.keepAwake).toMatchObject({ enabled: true, active: true, lidClosed: true });
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		expect(mobile.keepAwake).toMatchObject({ enabled: false, lidClosed: false });
+	});
+
+	it("keeps the transient lid starting status hidden and re-reads it until the helper confirms", async () => {
+		const keepAwake = mobile.keepAwake as typeof mobile.keepAwake & { lidReason?: string };
+		await showCombinedMobile();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/keep-awake") keepAwake.lidReason = "starting";
+			return post(path, options);
+		});
+		const get = test.get.getMockImplementation()!;
+		let statusReads = 0;
+		test.get.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/status" && keepAwake.lidReason === "starting") statusReads++;
+			if (statusReads > 0) keepAwake.lidReason = undefined;
+			return get(path, options);
+		});
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
+		await waitFor(() => expect(statusReads).toBeGreaterThan(0), { timeout: 3_000 });
+		await waitFor(() => expect(screen.getByText("Closed-lid keep awake is armed.")).toBeInTheDocument());
+		expect(toggle).toBeChecked();
+		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
+	});
+
+	it("falls back to idle wake from the sidebar when closed-lid setup fails", async () => {
+		await showCombinedMobile();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/keep-awake" && options.body.lidClosed) return { error: "helper setup failed" };
+			return post(path, options);
+		});
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(state.sessions.some((s) => !s.endedAt)).toBe(true);
+		expect(toggle).not.toBeChecked();
+		expect(screen.queryByText(/helper setup failed/)).not.toBeInTheDocument();
+	});
+
+	it("shows a closed-lid lease that never armed once no request is in flight", async () => {
+		Object.assign(mobile.keepAwake, { enabled: true, lidClosed: true, active: false, lidReason: "starting" });
+		await showCombinedMobile();
+		expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
+		expect(screen.getByText("Starting closed-lid keep awake…")).toBeInTheDocument();
+	});
+
+	it.each([false, true])("keeps both wake modes independent of mobile access (initially enabled=%s)", async (bridgeEnabled) => {
+		await showCombinedMobile(bridgeEnabled);
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(mobile.keepAwake).toMatchObject({ enabled: true, active: true, lidClosed: true });
+		expect(mobileEnabled).toBe(bridgeEnabled);
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		if (bridgeEnabled) {
+			await userEvent.click(screen.getByRole("switch", { name: "Connect mobile" }));
+			await waitFor(() => expect(mobileEnabled).toBe(false));
+			await waitFor(() => expect(toggle).toBeEnabled());
+			expect(toggle).toBeChecked();
+			expect(mobile.keepAwake.active).toBe(true);
+			expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/stop");
+		}
+		await userEvent.click(toggle);
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		expect(mobile.keepAwake).toMatchObject({ enabled: false, active: false, lidClosed: false });
+		expect(mobileEnabled).toBe(false);
+		expect(test.post.mock.calls.some(([path]) => path === "/api/v1/mobile/enable" || path === "/api/v1/mobile/start-remote-access")).toBe(false);
+	});
+
+	it.each(["empty", "existing", "paused"])("preserves %s desktop ownership when lid registration fails", async (ownership) => {
+		if (ownership === "existing") {
+			state.sessions = [awakeSession({ id: "existing" })];
+			state.active = true;
+		}
+		if (ownership === "paused") state.paused = true;
+		const before = snapshot();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => path === "/api/v1/mobile/keep-awake"
+			? { error: "lid registration failed" } : post(path, options));
+		await showCombinedMobile();
+		await userEvent.click(screen.getByRole("switch", { name: "Keep this Mac awake" }));
+		await screen.findByText("lid registration failed");
+		expect(state.sessions).toEqual(before.sessions);
+		expect(state.active).toBe(before.active);
+		expect(state.paused).toBe(before.paused);
+		expect(mobile.keepAwake.enabled).toBe(false);
+		expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).not.toBeChecked();
+		expect(coffee()).toHaveAttribute("aria-pressed", String(ownership === "existing"));
+	});
+
+	it("waits for lid registration before acquiring idle wake while keeping coffee clickable", async () => {
+		const post = test.post.getMockImplementation()!;
+		let finishMobile: (() => Promise<void>) | undefined;
+		test.post.mockImplementation(async (path, options) => path === "/api/v1/mobile/keep-awake"
+			? new Promise((resolve) => { finishMobile = async () => resolve(await post(path, options)); })
+			: post(path, options));
+		await showCombinedMobile();
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(finishMobile).toBeDefined());
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeDisabled();
+		expect(coffee()).toBeEnabled();
+		expect(state.sessions).toEqual([]);
+		expect(state.active).toBe(false);
+		await act(async () => finishMobile!());
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(mobile.keepAwake.lidClosed).toBe(true);
+		expect(state.sessions).toEqual([expect.objectContaining({ lidClosed: false })]);
+		expect(state.active).toBe(true);
+	});
+
+	it("keeps a registered mobile request clearable when desktop start fails", async () => {
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => path === "/api/v1/awake/sessions"
+			? { error: "desktop start failed" } : post(path, options));
+		await showCombinedMobile();
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		await screen.findByText("desktop start failed");
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeEnabled();
+		expect(mobile.keepAwake.lidClosed).toBe(true);
+		await userEvent.click(toggle);
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		expect(mobile.keepAwake.enabled).toBe(false);
+		expect(mobile.keepAwake.lidClosed).toBe(false);
+		expect(state.sessions).toEqual([]);
+	});
+});
 
 describe("shared Stay Awake controls", () => {
 	it("renders no coffee button off macOS", () => {
@@ -154,6 +328,7 @@ describe("shared Stay Awake controls", () => {
 
 	it("starts idle-only wake even when the saved desktop lid default is true", async () => {
 		await show();
+		expect(coffee()).toHaveAccessibleDescription("Stay Awake is off. Click to turn on.");
 		fireEvent.click(coffee());
 		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: false }) }));
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
@@ -186,10 +361,10 @@ describe("shared Stay Awake controls", () => {
 	});
 
 	it.each([
-		{ reason: "low_battery", stopBatteryPercent: 10, explanation: /battery reached the configured safety limit/ },
-		{ reason: "low_battery", stopBatteryPercent: 45, explanation: /battery reached the configured safety limit/ },
-		{ reason: "critical_heat", stopBatteryPercent: 10, explanation: /Mac needs to cool down/ },
-		{ reason: "battery_unknown", stopBatteryPercent: 10, explanation: /battery state could not be read/ },
+		{ reason: "low_battery", stopBatteryPercent: 10, explanation: /Paused: battery below 10%/ },
+		{ reason: "low_battery", stopBatteryPercent: 45, explanation: /Paused: battery below 45%/ },
+		{ reason: "critical_heat", stopBatteryPercent: 10, explanation: /Mac cools/ },
+		{ reason: "battery_unknown", stopBatteryPercent: 10, explanation: /Battery status unavailable/ },
 	])("explains a confirmed $reason safety stop (battery limit $stopBatteryPercent%) and keeps it clearable", async ({ reason, stopBatteryPercent, explanation }) => {
 		state.sessions = [awakeSession({})];
 		state.settings.stopBatteryPercent = stopBatteryPercent;
@@ -201,23 +376,39 @@ describe("shared Stay Awake controls", () => {
 		state.reason = reason;
 		await act(async () => { await client.invalidateQueries({ queryKey: awakeQueryKey }); });
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
-		await waitFor(() => expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("size-2.5"));
 		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
-		expect(coffee()).toHaveAccessibleDescription(/inactive/);
 		expect(coffee()).toHaveAccessibleDescription(explanation);
 		await userEvent.hover(coffee());
-		expect(await screen.findByRole("tooltip")).toHaveTextContent(/inactive/);
+		await screen.findByRole("tooltip");
 		expect(screen.getByRole("tooltip")).toHaveTextContent(explanation);
-		expect(screen.getByRole("tooltip")).not.toHaveTextContent(/\d+%/);
+		if (reason === "low_battery") expect(screen.getByRole("tooltip")).toHaveTextContent(`${stopBatteryPercent}%`);
 		fireEvent.click(coffee());
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/stop");
+	});
+	it("clears the red battery marker automatically after recovery while keeping the sidebar-sized coffee icon", async () => {
+		state.sessions = [awakeSession({})];
+		state.paused = true;
+		state.reason = "low_battery";
+		await show();
+		expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("lucide-triangle-alert", "size-2.5", "text-error", "-right-1", "-top-1");
+		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(coffee()).toHaveAccessibleDescription("Paused: battery below 10%.\nResumes after charging.");
+		state.paused = false;
+		state.reason = "";
+		state.active = true;
+		await act(async () => { await client.invalidateQueries({ queryKey: awakeQueryKey }); });
+		await waitFor(() => expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull());
+		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+		expect(test.post).not.toHaveBeenCalled();
 	});
 	it.each(["helper_missing", "unsupported", "isolated_data_dir", "observation_unavailable", "persistence_failed"])("keeps an unmatched armed rule's inactive description generic despite %s", async (reason) => {
 		state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
 		state.reason = reason;
 		await show();
-		const description = "Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.";
+		const description = "Stay Awake is paused. Click to turn off.";
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 		expect(coffee()).toHaveAccessibleDescription(description);
 		await userEvent.hover(coffee());
@@ -236,13 +427,13 @@ describe("shared Stay Awake controls", () => {
 		state.reason = reason;
 		await show();
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
-		expect(coffee()).toHaveAccessibleDescription("Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.");
+		expect(coffee()).toHaveAccessibleDescription("Stay Awake is paused. Click to turn off.");
 	});
 	it.each(["mobile", "rule"])("marks configured but inactive %s wake without an active fill", async (source) => {
 		if (source === "mobile") mobile.keepAwake.enabled = true;
 		else state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
 		await show();
-		expect(coffee()).toHaveAccessibleDescription(/configured.*not being kept awake/);
+		expect(coffee()).toHaveAccessibleDescription(/Stay Awake is paused/);
 		expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument();
 		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
 	});
@@ -250,7 +441,7 @@ describe("shared Stay Awake controls", () => {
 		if (source === "desktop") state.active = true;
 		else Object.assign(mobile.keepAwake, { enabled: true, active: true });
 		await show();
-		expect(coffee()).toHaveAccessibleDescription(/being kept awake/);
+		expect(coffee()).toHaveAccessibleDescription(/Stay Awake is on/);
 		expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
 		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 	});
@@ -263,23 +454,81 @@ describe("shared Stay Awake controls", () => {
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 		expect(client.getQueryData(mobileStatusQueryKey)).toMatchObject({ keepAwake: { enabled: false } });
 	});
-	it("disables both controls until a pending start settles, preventing double-click races", async () => {
+	it.each([2, 3, 6, 7])("coalesces %s rapid clicks while keeping the button enabled and the latest intent visible", async (clicks) => {
 		blockStart = true;
 		await show();
 		fireEvent.click(coffee());
 		await waitFor(() => expect(release).toBeDefined());
-		expect(coffee()).toHaveAttribute("aria-busy", "true");
-		expect(coffee()).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Mobile wake" })).toBeDisabled();
-		fireEvent.click(coffee());
+		for (let i = 1; i < clicks; i++) {
+			fireEvent.click(coffee());
+			expect(coffee()).toBeEnabled();
+			expect(coffee()).toHaveClass("cursor-pointer");
+			await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", String((i + 1) % 2 === 1)));
+		}
+		const wanted = clicks % 2 === 1;
+		if (wanted) expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+		else expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
 		await act(async () => release!());
+		await waitFor(() => expect(client.isMutating()).toBe(0));
 		await waitFor(() => expect(coffee()).toBeEnabled());
-		expect(coffee()).not.toHaveAttribute("aria-busy");
-		fireEvent.click(coffee());
-		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
-		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(0);
+		expect(coffee()).toHaveAttribute("aria-pressed", String(wanted));
+		expect(state.active).toBe(wanted);
+		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(wanted ? 1 : 0);
+		expect(test.post.mock.calls.filter(([path]) => path === "/api/v1/awake/sessions")).toHaveLength(1);
+		expect(test.post.mock.calls.filter(([path]) => path === "/api/v1/awake/stop")).toHaveLength(wanted ? 0 : 1);
 	});
-	it.each(["active", "safety stop", "timeout", "status error", "hung status"])("waits for native acknowledgement after the POST (%s)", async (outcome) => {
+	it.each([2, 3, 8, 9])("counts all %s clicks even before the pending-intent subscription re-renders", async (clicks) => {
+		blockStart = true;
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(release).toBeDefined());
+		act(() => { for (let i = 1; i < clicks; i++) fireEvent.click(coffee()); });
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", String(clicks % 2 === 1)));
+		await act(async () => release!());
+		await waitFor(() => expect(client.isMutating()).toBe(0));
+		expect(state.active).toBe(clicks % 2 === 1);
+		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(clicks % 2 === 1 ? 1 : 0);
+	});
+	it("serializes a new start after a delayed stop and reads the latest sessions", async () => {
+		state.active = true;
+		state.sessions = [awakeSession({ id: "old" })];
+		let finishStop: (() => void) | undefined;
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/awake/stop") await new Promise<void>((resolve) => { finishStop = resolve; });
+			return post(path, options);
+		});
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(finishStop).toBeDefined());
+		fireEvent.click(coffee());
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
+		expect(state.sessions).toHaveLength(1);
+		await act(async () => finishStop!());
+		await waitFor(() => expect(client.isMutating()).toBe(0));
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(state.active).toBe(true);
+		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(1);
+		expect(state.sessions[0].endedAt).toBeDefined();
+	});
+
+	it("rolls back the immediate highlight when a delayed start fails", async () => {
+		let fail: ((value: { error: string }) => void) | undefined;
+		test.post.mockImplementation(() => new Promise((resolve) => { fail = resolve; }));
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(fail).toBeDefined());
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+		await act(async () => fail!({ error: "native request failed" }));
+		await waitFor(() => expect(client.isMutating()).toBe(0));
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(coffee()).toHaveAttribute("aria-pressed", "false");
+		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
+		expect(coffee()).toHaveAccessibleDescription("Couldn’t update Stay Awake. Try again.");
+	});
+
+	it.each(["active", "safety stop", "timeout", "status error", "hung status"])("shows optimistic feedback until native acknowledgement settles (%s)", async (outcome) => {
 		const post = test.post.getMockImplementation()!;
 		test.post.mockImplementation(async (path, options) => {
 			const result = await post(path, options);
@@ -298,9 +547,12 @@ describe("shared Stay Awake controls", () => {
 			// The POST has finished, but native ownership has not been acknowledged.
 			expect(state.sessions).toHaveLength(1);
 			for (let i = 0; i < 4; i++) {
-				expect(coffee()).toHaveAttribute("aria-busy", "true");
-				expect(coffee()).toHaveAccessibleDescription(/Starting Stay Awake/);
-				expect(coffee()).toBeDisabled();
+				expect(coffee()).not.toHaveAttribute("aria-busy");
+				expect(coffee()).toHaveAttribute("aria-pressed", "true");
+				expect(coffee()).toHaveClass("cursor-pointer");
+				expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+				expect(coffee()).toHaveAccessibleDescription(/Stay Awake is on/);
+				expect(coffee()).toBeEnabled();
 				expect(screen.getByRole("button", { name: "Mobile wake" })).toBeDisabled();
 				expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
 				await act(async () => { await vi.advanceTimersByTimeAsync(500); });
@@ -317,7 +569,7 @@ describe("shared Stay Awake controls", () => {
 			expect(coffee()).toBeEnabled();
 			if (outcome === "active") {
 				expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
-				expect(coffee()).toHaveAccessibleDescription(/being kept awake/);
+				expect(coffee()).toHaveAccessibleDescription(/Stay Awake is on/);
 				expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 			} else {
 				expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument();

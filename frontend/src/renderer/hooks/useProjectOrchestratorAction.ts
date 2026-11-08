@@ -12,7 +12,7 @@ import {
 	type OrchestratorSpawnSource,
 } from "../lib/spawn-orchestrator";
 import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-error";
-import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
+import { addRendererExceptionStep, captureRendererException } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
@@ -134,7 +134,6 @@ export function useProjectOrchestratorAction({
 			source: "orchestrator-open", operation: "open_orchestrator",
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
-		void captureRendererEvent("ao.renderer.orchestrator_open_requested", { project_id: projectId });
 		if (hostId && projectId && !orchestrator && project && !hasConfiguredOrchestratorAgent(project)) {
 			useUiStore.getState().openProjectSettings(projectId, hostId);
 		} else if (resumableOrchestrator) {
@@ -150,7 +149,7 @@ export function useProjectOrchestratorAction({
 	const openNewTask = () => {
 		if (projectId && hostConnected && !isProjectRestarting && !isProvisioning) useUiStore.getState().requestNewTask(projectId, hostId);
 	};
-	return { projectId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
+	return { projectId, hostId, orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError,
 		canCreateAsTui: isChatPreflightError(error), openOrchestrator, openNewTask };
 }
 

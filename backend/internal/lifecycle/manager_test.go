@@ -178,6 +178,16 @@ func (f *fakeStore) CommitSessionControllerEpoch(
 	return f.changeSessionControllerEpoch(id, source, target, nativeConversationID, now, false)
 }
 
+func (f *fakeStore) CommitSessionControllerEpochArchivedChat(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	now time.Time,
+) (bool, error) {
+	return f.changeSessionControllerEpoch(id, source, target, nativeConversationID, now, false)
+}
+
 func (f *fakeStore) RestoreSessionControllerEpoch(
 	_ context.Context,
 	id domain.SessionID,
@@ -3628,6 +3638,34 @@ func TestActivity_SameStateRepeatAfterReceiptIsNoOp(t *testing.T) {
 	}
 	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("same-state repeat after receipt must not rewrite: %+v", st.sessions["mer-1"])
+	}
+}
+
+func TestActivity_SameStatePersistsNewAgentSessionID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.FirstSignalAt = time.Now()
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, AgentSessionID: "cline-task-123",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "cline-task-123" {
+		t.Fatalf("AgentSessionID = %q, want cline-task-123", got)
+	}
+}
+
+func TestActivity_MissingAgentSessionIDDoesNotEraseExistingID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.AgentSessionID = "existing-task"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "existing-task" {
+		t.Fatalf("AgentSessionID = %q, want existing-task", got)
 	}
 }
 

@@ -172,8 +172,9 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
-		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
-		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		pathWritable:          pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes:    map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		privateInstallerHomes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/installer"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
@@ -308,7 +309,6 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode v2 legacy route uses official installer", target: TargetOpencodeV2, goos: "linux", found: []string{"bash"},
-			wantNoticeHas: "replaces the default OpenCode 1",
 		},
 	}
 

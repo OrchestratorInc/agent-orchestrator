@@ -12,11 +12,12 @@ import (
 // remoteHostStatus mirrors the small part of the loopback mobile status API
 // needed to pair another client with a headless daemon.
 type remoteHostStatus struct {
-	Enabled      bool   `json:"enabled"`
-	LoopbackOnly bool   `json:"loopbackOnly"`
-	HostID       string `json:"hostId"`
-	Password     string `json:"password"`
-	Tunnel       struct {
+	Enabled       bool   `json:"enabled"`
+	LoopbackOnly  bool   `json:"loopbackOnly"`
+	AccountLinked bool   `json:"accountLinked"`
+	HostID        string `json:"hostId"`
+	Password      string `json:"password"`
+	Tunnel        struct {
 		Supported  bool   `json:"supported"`
 		Installing bool   `json:"installing"`
 		Running    bool   `json:"running"`
@@ -74,6 +75,11 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remote host enabled\nHost ID: %s\n", status.HostID); err != nil {
 					return err
 				}
+				if status.AccountLinked {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Linked to an AO account: its signed-in devices list this machine."); err != nil {
+						return err
+					}
+				}
 				publicAddress := false
 				for _, endpoint := range status.Endpoints {
 					scheme := "http"
@@ -90,7 +96,10 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if publicAddress {
 					message := "Fixed address: it stays the same after restarts."
 					if !status.Tunnel.Fixed {
-						message = "Quick tunnel: the address changes on restart and has no uptime guarantee. Where AO Cloud offers fixed addresses, adding this machine from a signed-in AO desktop gives it one."
+						message = "Quick tunnel: the address changes on restart and has no uptime guarantee."
+						if !status.AccountLinked {
+							message += " Run `ao remote-host link` to add this machine to your AO account, which gives it a fixed address when the account has one free."
+						}
 					}
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
 						return err
@@ -135,6 +144,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 		}
 		root.AddCommand(cmd)
 	}
+	root.AddCommand(newRemoteHostLinkCommand(ctx))
 	return root
 }
 

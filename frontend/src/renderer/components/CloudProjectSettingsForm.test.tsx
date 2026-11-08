@@ -10,11 +10,11 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
-	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), templateParameters: vi.fn(), ready: true,
+	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), templateParameters: vi.fn(), cues: vi.fn(), models: vi.fn(), ready: true,
 	templates: [] as Array<{ id: string; name: string; displayName: string }>,
 	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me, getCoderTemplateParameters: mocks.templateParameters, evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) => mocks.templateParameters(orgId, templateId, options) }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me, getCoderTemplateParameters: mocks.templateParameters, listProjectCues: mocks.cues, listUserAgentModels: mocks.models, evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) => mocks.templateParameters(orgId, templateId, options) }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }),
@@ -41,10 +41,22 @@ beforeEach(() => {
 	mocks.get.mockReset();
 	mocks.patch.mockReset();
 	mocks.localGet.mockReset();
+	// Cloud's list for the account names the same models these tests pick, so
+	// they exercise the field through the list a Cloud project's settings use.
+	mocks.models.mockReset();
+	mocks.models.mockImplementation(async (_orgId: string, agent: string) => {
+		const local = await mocks.localGet("/api/v1/agents/{agent}/models", { params: { path: { agent } } });
+		const models = (local?.data?.models ?? []) as Array<{ id: string; label: string; isDefault?: boolean; efforts?: string[]; defaultEffort?: string }>;
+		return { source: "release", cliVersion: "test", models: models.map((model) => ({
+			id: model.id, displayName: model.label, default: Boolean(model.isDefault), efforts: model.efforts, defaultEffort: model.defaultEffort,
+		})) };
+	});
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
 	mocks.templateParameters.mockReset();
 	mocks.templateParameters.mockResolvedValue({ parameters: [] });
+	mocks.cues.mockReset();
+	mocks.cues.mockResolvedValue({ cues: [] });
 	mocks.me.mockReset();
 	// A B2B org by default: its projects run on Coder.
 	mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["coder"], defaultProvider: "coder", billingMode: "contract", kind: "b2b", features: [] } });
@@ -89,7 +101,7 @@ describe("Cloud project settings", () => {
 		["worker", "Worker", "codex"], ["worker", "Worker", "claude-code"],
 		["orchestrator", "Orchestrator", "codex"], ["orchestrator", "Orchestrator", "claude-code"],
 		["reviewer", "Reviewer", "codex"], ["reviewer", "Reviewer", "claude-code"],
-	] as const)("keeps the %s agent fixed but edits model, effort and approval for %s with %s", async (role, label, agent) => {
+	] as const)("edits the %s agent's model, effort and approval for %s with %s", async (role, label, agent) => {
 		const agentConfig = { effort: "high" as const, permissions: "auto" as const };
 		if (role === "reviewer") project.config.reviewers = [{ harness: agent, agentConfig }];
 		else project.config[role] = { agent, agentConfig };
@@ -98,7 +110,7 @@ describe("Cloud project settings", () => {
 			{ id: "other-model", label: "Other model", efforts: ["low", "high", "max"] },
 		] } });
 		const view = mount();
-		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
 		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
@@ -118,21 +130,126 @@ describe("Cloud project settings", () => {
 		mount();
 		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
 		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
-		expect(screen.getByRole("button", { name: `${label} agent` })).toBeDisabled();
+		expect(screen.getByRole("button", { name: `${label} agent` })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
 	});
 
-	it("shows the agent each role runs with and never changes it", async () => {
+	it("shows the agent each role runs with and lets each change, as local projects do", async () => {
 		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "cursor" } };
 		mount();
 		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("OpenCode");
 		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Cursor");
-		// Without a project reviewer, Cloud reviews with the session's (worker) agent.
-		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent("OpenCode");
+		// Without a project reviewer, the worker agent's default reviewer runs:
+		// OpenCode's is not one Cloud runs, so Claude Code reviews.
+		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Claude Code");
 		for (const role of ["Worker", "Orchestrator", "Reviewer"]) {
-			expect(screen.getByRole("button", { name: `${role} agent` })).toBeDisabled();
+			expect(screen.getByRole("button", { name: `${role} agent` })).toBeEnabled();
 		}
 		await screen.findByRole("button", { name: "Worker model" });
 		expect(screen.queryByText("Agent default")).not.toBeInTheDocument();
+		expect(mocks.patch).not.toHaveBeenCalled();
+		await choose("Worker agent", "Codex");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "codex", agentConfig: { model: "", mode: "", effort: "", permissions: "" } } },
+		}));
+	});
+
+	it("offers Cloud's models for the account, never this computer's", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [
+			{ id: "opus", displayName: "Opus", default: true },
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+		] });
+		mount();
+		const model = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(model).toBeEnabled());
+		await userEvent.click(model);
+		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
+		// Picking the model asks for its effort, as for any role's model.
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
+		}));
+	});
+
+	it("says a saved model the account's own Cloud list lacks won't run", async () => {
+		project.config = { worker: { agent: "claude-code", agentConfig: { model: "claude-opus-5-5" } }, orchestrator: { agent: "claude-code" } };
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		mount();
+		// The worker's role, and the reviewer's, which runs the worker's model.
+		const warnings = await screen.findAllByText("claude-opus-5-5 isn't available to your Claude Code account on Cloud, so tasks use the default. Pick another model.");
+		expect(warnings.length).toBeGreaterThan(0);
+		// It takes its own line under the agent and model pickers, which stay side by side.
+		for (const warning of warnings) expect(warning).toHaveClass("basis-full");
+	});
+
+	it("lists nothing from this computer after a failed Cloud read", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
+		mount();
+		const model = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(mocks.models).toHaveBeenCalled());
+		expect(model).not.toHaveTextContent("Only On This Computer");
+		await userEvent.click(model);
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+	});
+
+	it("says when Cloud's model list could not be read, and reads it again on Retry", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
+		mount();
+		const warnings = await screen.findAllByText("Couldn't load AO Cloud's model list for Claude Code.");
+		expect(warnings.length).toBeGreaterThan(0);
+		// A model ID can still be entered by hand.
+		const model = screen.getByRole("button", { name: "Worker model" });
+		await userEvent.click(model);
+		await userEvent.type(screen.getByRole("searchbox"), "claude-typed-1");
+		expect(screen.getByRole("menuitem", { name: /claude-typed-1/ })).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		// Retry reads Cloud's list again, not this computer's.
+		const calls = mocks.models.mock.calls.length;
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		await userEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+		await waitFor(() => expect(mocks.models.mock.calls.length).toBeGreaterThan(calls));
+		await waitFor(() => expect(screen.queryByText("Couldn't load AO Cloud's model list for Claude Code.")).not.toBeInTheDocument());
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(await screen.findByRole("menuitem", { name: /^Opus/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+	});
+
+	it("says when Cloud has no model list for an agent, without falling back to this computer's", async () => {
+		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "local-only", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockImplementation(async (_orgId: string, agent: string) => {
+			if (agent === "opencode") throw new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" });
+			return { source: "release", cliVersion: "test", models: [{ id: "opus", displayName: "Opus", default: true }] };
+		});
+		mount();
+		expect(await screen.findByText("AO Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+	});
+
+	it("names Claude Code for a role without an agent and offers no empty choice for it", async () => {
+		project.config = {};
+		mount();
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Claude Code");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code");
+		await userEvent.click(screen.getByRole("button", { name: "Worker agent" }));
+		expect(await screen.findByRole("menuitem", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Session selection" })).not.toBeInTheDocument();
 		expect(mocks.patch).not.toHaveBeenCalled();
 	});
 
@@ -141,7 +258,6 @@ describe("Cloud project settings", () => {
 		mount();
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		expect(reviewer).toHaveTextContent("Codex");
-		expect(reviewer).toBeDisabled();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
 		await choose("Reviewer approval", "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
@@ -165,7 +281,7 @@ describe("Cloud project settings", () => {
 	});
 
 	it("normalizes legacy roles and saves only changed identity fields", async () => {
-		project.config = { workerAgent: "codex", orchestratorAgent: "claude-code", sessionPrefix: "legacy", trackerIntake: { enabled: true } };
+		project.config = { workerAgent: "codex", orchestratorAgent: "claude-code", sessionPrefix: "legacy", trackerIntake: { enabled: true, assignee: "octo" } };
 		const view = mount();
 		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Codex");
 		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code");
@@ -176,8 +292,18 @@ describe("Cloud project settings", () => {
 		await userEvent.clear(name);
 		await userEvent.type(name, "New name");
 		await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("org", "project", { displayName: "New name" }));
-		expect(screen.queryByText("Issue Intake")).not.toBeInTheDocument();
+		// The control plane runs issue intake, so its rule shows as on local projects.
+		expect(screen.getByRole("switch", { name: "Enable issue intake" })).toBeChecked();
 		expect(screen.getByText("legacy")).toBeInTheDocument();
+	});
+
+	it("says issue intake takes only issues from the repository's owners, members and collaborators", async () => {
+		project.config = { trackerIntake: { enabled: true, assignee: "octo" } };
+		mount("general");
+		expect(await screen.findByText(/opened by the repository's owners, members and collaborators/)).toHaveTextContent(
+			"Issues from anyone else are skipped. These sessions don't get the project's environment variables.",
+		);
+		expect(screen.queryByText("Auto-spawn worker sessions from matching tracker issues.")).not.toBeInTheDocument();
 	});
 
 	it("refreshes the shared project list after a rename so the sidebar and board show the new name", async () => {
@@ -266,15 +392,20 @@ describe("Cloud project settings", () => {
 		expect(mocks.localGet).not.toHaveBeenCalled();
 	});
 
-	it("keeps local cue settings out of Cloud project settings, including deep links", async () => {
+	it("opens a Cloud project's cues from a deep link, read from the control plane", async () => {
 		useUiStore.getState().openProjectSettings("project", { cloudOrgId: "org", section: "cues" });
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		render(<QueryClientProvider client={client}><TooltipProvider><SettingsDialog /></TooltipProvider></QueryClientProvider>);
-		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
-		expect(screen.getByText("https://github.com/owner/repo")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Cues" })).not.toBeInTheDocument();
-		expect(mocks.get).toHaveBeenCalledWith("org", "project", { signal: expect.any(AbortSignal) });
+		expect(await screen.findByText("No cues set up yet")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cues" })).toBeInTheDocument();
+		expect(mocks.cues).toHaveBeenCalledWith("org", "project");
 		expect(mocks.localGet).not.toHaveBeenCalled();
+	});
+
+	it("turns on workers requesting review through the settings patch", async () => {
+		mount("general");
+		await userEvent.click(await screen.findByRole("switch", { name: "Workers request AO review" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
 });
 

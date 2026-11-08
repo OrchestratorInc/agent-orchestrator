@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -54,16 +55,25 @@ type spawnRequest struct {
 	Effort          string `json:"effort,omitempty"`
 	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
+	// Async publishes a Chat session as starting, with its prompt queued, before
+	// the worktree and agent are up, as the desktop's new task does. The CLI
+	// then waits for the start to settle so failures still reach the caller.
+	Async bool `json:"async,omitempty"`
+}
+
+type spawnedSession struct {
+	ID             string `json:"id"`
+	Status         string `json:"status"`
+	DisplayName    string `json:"displayName"`
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
+	IsTerminated   bool   `json:"isTerminated,omitempty"`
 }
 
 type spawnResult struct {
-	Session struct {
-		ID          string `json:"id"`
-		Status      string `json:"status"`
-		DisplayName string `json:"displayName"`
-	} `json:"session"`
-	PromptBytes       int `json:"promptBytes,omitempty"`
-	SystemPromptBytes int `json:"systemPromptBytes,omitempty"`
+	Session           spawnedSession `json:"session"`
+	PromptBytes       int            `json:"promptBytes,omitempty"`
+	SystemPromptBytes int            `json:"systemPromptBytes,omitempty"`
 }
 
 func newSpawnCommand(ctx *commandContext) *cobra.Command {
@@ -177,6 +187,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Effort:          strings.TrimSpace(opts.effort),
 				RequestedOutput: opts.output,
 				DisplayName:     name,
+				Async:           !opts.standalone,
 			}
 			var res spawnResult
 			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {
@@ -185,6 +196,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if strings.TrimSpace(res.Session.ID) == "" {
 				return fmt.Errorf("daemon returned empty session id for spawn")
 			}
+			started, err := ctx.awaitSpawnStart(cmd.Context(), res.Session)
+			if err != nil {
+				return err
+			}
+			res.Session = started
 			claimed := ""
 			var claim claimPRResponse
 			if opts.claimPR != "" {
@@ -246,6 +262,40 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
 	return cmd
+}
+
+// spawnStartPollInterval paces the wait for a session started in the background.
+var spawnStartPollInterval = 500 * time.Millisecond
+
+// awaitSpawnStart waits until a session the daemon starts in the background is
+// running or has failed. A failed start stays in AO with its reason and a Retry
+// action, so the error names the session rather than removing it.
+func (c *commandContext) awaitSpawnStart(ctx context.Context, sess spawnedSession) (spawnedSession, error) {
+	for sess.ProvisionState == "provisioning" && !sess.IsTerminated {
+		select {
+		case <-ctx.Done():
+			return sess, ctx.Err()
+		case <-time.After(spawnStartPollInterval):
+		}
+		var res struct {
+			Session spawnedSession `json:"session"`
+		}
+		if err := c.getJSON(ctx, "sessions/"+url.PathEscape(sess.ID), &res); err != nil {
+			return sess, fmt.Errorf("session %s: wait for start: %w", sess.ID, err)
+		}
+		sess = res.Session
+	}
+	switch {
+	case sess.IsTerminated:
+		return sess, fmt.Errorf("session %s was archived before it started", sess.ID)
+	case sess.ProvisionState == "failed":
+		reason := strings.TrimSpace(sess.ProvisionError)
+		if reason == "" {
+			reason = "unknown error"
+		}
+		return sess, fmt.Errorf("session %s failed to start: %s (retry it from the AO app, or archive it with `ao session kill %s`)", sess.ID, reason, sess.ID)
+	}
+	return sess, nil
 }
 
 func (c *commandContext) fetchAgentInventory(ctx context.Context, refresh bool) (agentInventory, error) {

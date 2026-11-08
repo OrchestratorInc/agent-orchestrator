@@ -34,6 +34,7 @@ import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
+import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
 type DragOverTestEvent = {
@@ -477,12 +478,19 @@ async function openCreateProjectDialog(
 	const user = userEvent.setup();
 	window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue(path);
 	window.ao!.app.scanImportFolder = vi.fn().mockResolvedValue(scan);
-	await user.click(screen.getByLabelText("New project"));
+	await openLocalProjectSources(user);
 	await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 	await screen.findByRole("dialog", { name: "Set up project" });
 	await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
 	await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 	return user;
+}
+
+// Cloud is on by default here, so the add-project flow first asks Local or
+// Cloud; these tests exercise the local sources behind "Local".
+async function openLocalProjectSources(user: ReturnType<typeof userEvent.setup>) {
+	await user.click(screen.getByLabelText("New project"));
+	await user.click(await screen.findByRole("button", { name: "On this computer" }));
 }
 
 function fireDrag(
@@ -501,7 +509,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -596,7 +604,9 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
 		const chooser = await screen.findByRole("dialog");
-		expect(screen.queryByRole("button", { name: "Add project on Host B" })).not.toBeInTheDocument();
+		// Remote machines are connected, so the local tile covers them too.
+		await user.click(within(chooser).getByRole("button", { name: "On your machines" }));
+		expect(screen.queryByRole("button", { name: "New project on Host B" })).not.toBeInTheDocument();
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
 		await user.click(screen.getByRole("option", { name: "Host B" }));
 		expect(screen.getByRole("dialog")).toBe(chooser);
@@ -1060,8 +1070,8 @@ describe("Sidebar", () => {
 		});
 
 		for (const label of ["New project", "Open a new agent"]) {
-			// Shared 24px row-action button; the icon is centered by the grid, no optical nudge.
-			expect(screen.getByRole("button", { name: label })).toHaveClass("size-6", "place-items-center");
+			// Shared 24px row-action button (Button icon-xs); the icon is centered, no optical nudge.
+			expect(screen.getByRole("button", { name: label })).toHaveClass("size-control-sm", "justify-center");
 		}
 	});
 
@@ -1177,7 +1187,7 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
 	});
 
-	it("shows scroll-edge fades on project and Scratchpad sections as they scroll", () => {
+	it("fades the scroll edges of project and Scratchpad sections as they scroll", () => {
 		renderSidebar({
 			workspaces: [
 				...Array.from({ length: 2 }, (_, index) => ({
@@ -1204,18 +1214,18 @@ describe("Sidebar", () => {
 			});
 
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-end");
+			expect(scroller).not.toHaveAttribute("data-fade-start");
 
 			scroller.scrollTop = 50;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).toHaveAttribute("data-fade-end");
 
 			scroller.scrollTop = 100;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).not.toHaveAttribute("data-fade-end");
 		}
 	});
 
@@ -1224,7 +1234,7 @@ describe("Sidebar", () => {
 		renderSidebar();
 		const before = useUiStore.getState().newTaskRequest?.nonce ?? 0;
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(await screen.findByRole("button", { name: "Start a standalone agent" }));
 
 		const request = useUiStore.getState().newTaskRequest;
@@ -1239,7 +1249,7 @@ describe("Sidebar", () => {
 			useUiStore.getState().requestCreateProject();
 		});
 
-		expect(await screen.findByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
 	});
 
 	it("keeps the create-project shortcut available when there are no projects", async () => {
@@ -1249,7 +1259,7 @@ describe("Sidebar", () => {
 			useUiStore.getState().requestCreateProject();
 		});
 
-		expect(await screen.findByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
 	});
 
 	it("reveals orchestrator and kebab buttons on the project row (no dashboard button)", () => {
@@ -1318,7 +1328,7 @@ describe("Sidebar", () => {
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
 		const user = userEvent.setup();
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }] });
 
 		const openSession = screen.getByLabelText("Open fix login");
 		const row = openSession.closest<HTMLElement>("[data-session-row]");
@@ -1493,6 +1503,17 @@ describe("Sidebar", () => {
 		expect(screen.getByText("fix login")).toBeTruthy();
 	});
 
+	it("offers a guest no Archive on a session shared with them, and keeps it on the owner's own", async () => {
+		const sharedSession: WorkspaceSession = { ...session, cloud: { orgId: "org-elsewhere", shared: true } };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [sharedSession] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByText("fix login")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Archive session" })).toBeNull();
+		cleanup();
+		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] }], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
+	});
+
 	it("keeps the owner's project actions on a project of their own", () => {
 		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [session] }], expandedProjectIds: ["proj-1"] });
 		expect(screen.getByRole("button", { name: "Project actions for Project One" })).toBeTruthy();
@@ -1571,8 +1592,8 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		await openLocalProjectSources(user);
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		expect(window.ao!.app.chooseDirectory).not.toHaveBeenCalled();
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
@@ -1599,7 +1620,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/project-one/");
 		renderSidebar();
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
@@ -1622,7 +1643,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo");
 		renderSidebar({ onCloneProject, onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: "Clone a repo" }));
 		expect(await screen.findByRole("dialog", { name: "Clone a Git repository" })).toBeInTheDocument();
 
@@ -1670,7 +1691,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCloneProject, onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: "Clone a repo" }));
 		await user.type(
 			await screen.findByRole("textbox", { name: "Repository URL" }),
@@ -1717,7 +1738,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveTextContent(/cursor/i);
@@ -1770,7 +1791,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
@@ -1835,7 +1856,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/workspace");
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 
 		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a workspace folder");
@@ -1867,7 +1888,7 @@ describe("Sidebar", () => {
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -1927,7 +1948,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -1961,7 +1982,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.getByText("Importing a workspace requires at least one direct child Git repository that already has a commit and an origin remote. You can import this folder as a project instead.")).toBeInTheDocument();
 		expect(screen.queryByText("No repositories detected in this folder.")).not.toBeInTheDocument();
@@ -1970,7 +1991,7 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Import as project" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Go Back" }));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		expect(onCreateProject).not.toHaveBeenCalled();
 	});
 
@@ -2004,7 +2025,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 
@@ -2041,7 +2062,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.getByRole("dialog", { name: "Import workspace" })).toBeInTheDocument();
 		expect(screen.getByText("temp")).toBeInTheDocument();
@@ -2074,7 +2095,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Import as project" })).toBeInTheDocument();
@@ -2088,7 +2109,7 @@ describe("Sidebar", () => {
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -2099,7 +2120,7 @@ describe("Sidebar", () => {
 			title: "Project setup failed",
 			body: "AO daemon is not ready.",
 		}));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		// The initial folder validation is required by the import step. The
 		// non-validation create failure must not trigger a second scan.
 		expect(window.ao!.app.checkAncestorRepo).toHaveBeenCalledWith("/repo/workspace");
@@ -2121,7 +2142,7 @@ describe("Sidebar", () => {
 			);
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -2171,7 +2192,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 
@@ -2206,7 +2227,7 @@ describe("Sidebar", () => {
 		);
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
@@ -2778,7 +2799,7 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("paints the dot from its board section while activity drives the pulse", () => {
+	it("shows a quiet dot when idle, the spinner while working, and markers once the agent stops", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2804,6 +2825,8 @@ describe("Sidebar", () => {
 							title: "ci failed task",
 							status: "working",
 							scmStatus: "ci_failed",
+							kanbanColumn: "validating",
+							displayStatus: "Fixing CI failures",
 							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ ci: "failing" })],
 						},
@@ -2811,27 +2834,28 @@ describe("Sidebar", () => {
 							...session,
 							id: "proj-1-review",
 							title: "review task",
-							status: "working",
+							status: "idle",
 							scmStatus: "pr_open",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							kanbanColumn: "needs_review",
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR()],
 						},
 						{
 							...session,
 							id: "proj-1-ready",
 							title: "ready task",
-							status: "working",
+							status: "idle",
 							scmStatus: "mergeable",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ mergeability: "mergeable" })],
 						},
 						{
 							...session,
 							id: "proj-1-merged",
 							title: "merged task",
-							status: "working",
+							status: "idle",
 							scmStatus: "merged",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ state: "merged" })],
 						},
 					],
@@ -2841,22 +2865,384 @@ describe("Sidebar", () => {
 		const sessionDot = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<HTMLElement>("[data-session-status]");
 
-		// No pull request: the dot falls back to runtime status.
-		expect(sessionDot("idle task")).toHaveClass("bg-status-idle");
-		expect(sessionDot("idle task")).not.toHaveClass("animate-status-pulse");
+		expect(sessionDot("idle task")).toHaveAttribute("data-session-idle", "idle");
 
 		const workingDot = sessionDot("working task");
-		expect(workingDot).toHaveClass("bg-status-working");
-		expect(workingDot).toHaveClass("animate-status-pulse");
+		expect(workingDot).toHaveAttribute("data-session-spinner");
+		expect(workingDot).toHaveClass("animate-spin");
 
-		// The board-section tone stays visible while the pulse says the agent is busy.
-		expect(sessionDot("ci failed task")).toHaveClass("bg-status-needs-you", "animate-status-pulse");
-		expect(sessionDot("review task")).toHaveClass("bg-status-in-review", "animate-status-pulse");
-		expect(sessionDot("ready task")).toHaveClass("bg-status-ready", "animate-status-pulse");
-		expect(sessionDot("merged task")).toHaveClass("bg-status-merged", "animate-status-pulse");
+		// A working agent spins even when its PR has a state to flag.
+		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
+		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
+		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
+		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
+		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
+		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
 	});
 
-	it("blinks blue when an idle-section session has working activity", () => {
+	it("shows a red alert icon instead of a dot when a session needs input", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-input",
+							title: "input task",
+							status: "needs_input",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+						{
+							...session,
+							id: "proj-1-ci",
+							title: "ci task",
+							status: "ci_failed",
+							displayStatus: "CI failing",
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		const marker = (title: string) =>
+			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
+
+		expect(marker("input task")).toHaveAttribute("data-session-marker", "attention");
+		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).not.toHaveClass("rounded-full");
+		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
+		expect(marker("ci task")).toHaveClass("text-destructive");
+	});
+
+	it("gives Scratchpad rows the same status icons and age as project rows", () => {
+		const adhoc = { ...session, workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad", lastUserMessageAt: "2026-06-29T23:55:00Z" };
+		renderSidebar({
+			workspaces: [{
+				id: STANDALONE_WORKSPACE_ID,
+				name: "Scratchpad",
+				kind: STANDALONE_PROJECT_KIND,
+				path: "",
+				sessions: [
+					{ ...adhoc, id: "adhoc-idle", title: "idle chat", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } },
+					{ ...adhoc, id: "adhoc-working", title: "working chat", activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" } },
+					{ ...adhoc, id: "adhoc-input", title: "input chat", status: "needs_input", activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" } },
+				],
+			}],
+		});
+		const row = (title: string) => screen.getByLabelText(`Open ${title}`);
+		const dot = (title: string) => row(title).querySelector<HTMLElement>("[data-session-status]");
+
+		expect(dot("idle chat")).toHaveAttribute("data-session-idle", "idle");
+		expect(dot("working chat")).toHaveAttribute("data-session-spinner");
+		expect(dot("input chat")).toHaveAttribute("data-session-marker", "attention");
+		expect(row("idle chat").closest("[data-session-row]")?.querySelector("[data-session-message-age]")).toBeInTheDocument();
+		expect(document.querySelector("[data-scratchpad-section] img")).toBeNull();
+	});
+
+	it("keeps AO's pending review quiet on the session and its project folder", async () => {
+		useUiStore.setState({ projectAvatars: false });
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Needs review" }],
+			}],
+		});
+		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder-open")).toBeInTheDocument();
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+	});
+
+	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+		useUiStore.setState({ projectAvatars: false });
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
+		});
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("lucide-circle-alert", "text-destructive");
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).not.toBeInTheDocument();
+	});
+
+	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
+		useUiStore.setState({ projectAvatars: false });
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [{ ...session, status }] }],
+		});
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+	});
+
+	it("shows a first-letter tile for a project without a repository avatar", () => {
+		useUiStore.setState({ projectAvatars: true });
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [] }] });
+		const icon = document.querySelector("[data-project-folder-icon]");
+		expect(icon).toHaveTextContent("P");
+		expect(icon?.querySelector(".lucide-folder")).not.toBeInTheDocument();
+	});
+
+	it("previews the board card to the right of a hovered session row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-preview",
+							title: "preview task",
+							status: "needs_input",
+							displayStatus: "Blocked",
+							kanbanColumn: "building",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		await user.hover(screen.getByLabelText("Open preview task"));
+		// The first preview waits out a short hover before it opens.
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("preview task");
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Blocked");
+		// Static: attention styling without the pulse, and no card-level click target.
+		expect(card).not.toHaveClass("animate-attention-card-pulse");
+		expect(card).not.toHaveClass("cursor-pointer");
+		// One elevated surface with no outline, even for a session that needs input.
+		expect(card.className).toMatch(/bg-popover|var\(--popover\)/);
+		expect(card).not.toHaveClass("border", "border-status-needs-you");
+		expect(card.querySelector(".border-t")).toBeNull();
+		// The first preview appears instantly: no fade or zoom in, and none out.
+		const content = card.closest('[data-slot="hover-card-content"]');
+		expect(content).not.toBeNull();
+		expect(content?.className).not.toMatch(/animate-in|zoom-|animate-out/);
+
+		await user.unhover(screen.getByLabelText("Open preview task"));
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
+	it("replaces the preview straight away when the pointer moves to another row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-first", title: "first task", status: "working" },
+						{ ...session, id: "proj-1-second", title: "second task", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		await user.hover(screen.getByLabelText("Open first task"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("first task");
+
+		// Well inside the first-open delay: only a warm preview can appear this fast.
+		await user.hover(screen.getByLabelText("Open second task"));
+		await waitFor(
+			() => {
+				const cards = screen.getAllByTestId("board-session-card");
+				expect(cards).toHaveLength(1);
+				expect(cards[0]).toHaveTextContent("second task");
+			},
+			{ timeout: 150 },
+		);
+		const content = screen.getByTestId("board-session-card").closest('[data-slot="hover-card-content"]');
+		expect(content?.className).not.toMatch(/animate-|zoom-|fade-|slide-/);
+	});
+
+	it("keeps the preview open while the pointer is on the card, and closes it once it leaves", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, sessions: [{ ...session, id: "proj-1-card", title: "card task", status: "working" }] },
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open card task");
+		await user.hover(row);
+		const card = await screen.findByTestId("board-session-card");
+
+		// Off the row and onto the card: past the leave grace, it is still there.
+		await user.hover(card);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.getByTestId("board-session-card")).toBeInTheDocument();
+		// The card takes the pointer: it is not click-through.
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/pointer-events-none/);
+
+		await user.unhover(card);
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
+	it("shows only the last row's preview after a quick sweep across cold rows", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "sweep a", status: "working" },
+						{ ...session, id: "proj-1-b", title: "sweep b", status: "idle" },
+						{ ...session, id: "proj-1-c", title: "sweep c", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		// All three hovers land inside the first-open delay, so none has opened yet.
+		await user.hover(screen.getByLabelText("Open sweep a"));
+		await user.hover(screen.getByLabelText("Open sweep b"));
+		await user.hover(screen.getByLabelText("Open sweep c"));
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("sweep c");
+		// Past every row's delay: nothing from the rows swept over may open late.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		const cards = screen.getAllByTestId("board-session-card");
+		expect(cards).toHaveLength(1);
+		expect(cards[0]).toHaveTextContent("sweep c");
+	});
+
+	it("goes back to a delayed first preview after the pointer has left every row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, sessions: [{ ...session, id: "proj-1-cool", title: "cool task", status: "working" }] },
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open cool task");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+		await user.unhover(row);
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		await user.hover(row);
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		const card = await screen.findByTestId("board-session-card");
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
+	});
+
+	it("closes the preview when the row's archive confirm opens", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.hover(screen.getByLabelText("Open fix login"));
+		await screen.findByTestId("board-session-card");
+
+		await user.click(within(row).getByLabelText("Archive session"));
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(within(row).getByLabelText("Archive session")).toHaveFocus());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("closes the row's archive confirm on the first Escape", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.click(within(row).getByLabelText("Archive session"));
+		await screen.findByRole("dialog");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("keeps the preview closed through the archive confirm opened from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+
+		fireEvent.contextMenu(row);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive session" }));
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("previews a row again after renaming it from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		fireEvent.contextMenu(screen.getByLabelText("Open fix login"));
+		await user.click(await screen.findByRole("menuitem", { name: "Rename fix login" }));
+		const input = screen.getByRole("textbox", { name: "Rename fix login" });
+		await user.clear(input);
+		await user.type(input, "polish login{Enter}");
+		await waitFor(() => expect(renameSessionMock).toHaveBeenCalledWith("proj-1-1", "polish login"));
+
+		await user.hover(screen.getByLabelText("Open fix login"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("fix login");
+	});
+
+	it("previews a row when focus moves to it from another control", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		act(() => {
+			screen.getByRole("button", { name: "Search" }).focus();
+			screen.getByLabelText("Open fix login").focus();
+		});
+
+		await screen.findByTestId("board-session-card");
+	});
+
+	it("lists sessions that need input above the rest", () => {
+		const at = "2026-06-30T00:00:00Z";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "newest calm task", status: "working", updatedAt: "2026-06-30T03:00:00Z", activity: { state: "active", lastActivityAt: at } },
+						{ ...session, id: "proj-1-b", title: "older input task", status: "needs_input", updatedAt: "2026-06-30T01:00:00Z", activity: { state: "waiting_input", lastActivityAt: at } },
+						{ ...session, id: "proj-1-c", title: "middle calm task", status: "idle", updatedAt: "2026-06-30T02:00:00Z", activity: { state: "idle", lastActivityAt: at } },
+					],
+				},
+			],
+		});
+
+		const titles = screen
+			.getAllByLabelText(/^Open (newest calm|older input|middle calm) task$/)
+			.map((row) => row.getAttribute("aria-label"));
+		expect(titles).toEqual(["Open older input task", "Open newest calm task", "Open middle calm task"]);
+	});
+
+	it("shows a spinner when an idle-section session has working activity", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2877,10 +3263,11 @@ describe("Sidebar", () => {
 		const dot = screen
 			.getByLabelText("Open idle task receiving work")
 			.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-status-working", "animate-status-pulse");
+		expect(dot).toHaveAttribute("data-session-spinner");
+		expect(dot).toHaveClass("animate-spin");
 	});
 
-	it("holds the dot still for idle activity and keeps its PR tone", async () => {
+	it("keeps idle sessions quiet and shows a review marker without motion", async () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2899,6 +3286,7 @@ describe("Sidebar", () => {
 							title: "idle draft task",
 							status: "draft",
 							scmStatus: "draft",
+							kanbanColumn: "needs_review",
 							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ state: "draft" })],
 						},
@@ -2908,17 +3296,13 @@ describe("Sidebar", () => {
 		});
 
 
-		const idleActivityDot = screen
-			.getByLabelText("Open idle activity task")
-			.querySelector<HTMLElement>("span.rounded-full");
-		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector<HTMLElement>("span.rounded-full");
+		const idleActivityDot = screen.getByLabelText("Open idle activity task").querySelector("[data-session-idle]");
+		const idleDraft = screen.getByLabelText("Open idle draft task");
 
-		// An idle session with no pull request stays gray; a parked draft keeps
-		// the in-review tone the board gives it, without any motion.
-		expect(idleActivityDot).toHaveClass("bg-status-idle");
-		expect(idleDraftDot).toHaveClass("bg-status-in-review");
-		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
-		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
+		expect(idleActivityDot).toHaveAttribute("data-session-idle", "idle");
+		// A draft is still the author's, so it gets the quiet dot, not a review marker.
+		expect(idleDraft.querySelector("[data-session-marker]")).not.toBeInTheDocument();
+		expect(idleDraft.querySelector("[data-session-idle]")).toBeInTheDocument();
 	});
 
 	it("shows sessions on load and hides them once collapsed", async () => {
@@ -3415,6 +3799,18 @@ describe("Sidebar", () => {
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
 	});
 
+	it("keeps restart available for a stalled native stage", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "downloaded",
+			version: "9.9.9",
+			staged: { version: "9.9.9", stagedAt: Date.now(), escalated: false, ready: false },
+		});
+		renderSidebar();
+
+		expect(await screen.findByTestId("sidebar-update-ready")).toBeVisible();
+		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
+	});
+
 	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
@@ -3532,6 +3928,48 @@ describe("Sidebar", () => {
 
 		expect(Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent)).toEqual(["Bravo", "Alpha"]);
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["bravo", "alpha"]);
+	});
+
+	it("pins a project to the top from its context menu and unpins it from the row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, id: "alpha", name: "Alpha" },
+				{ ...workspace, id: "bravo", name: "Bravo" },
+			],
+		});
+		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
+
+		fireEvent.contextMenu(document.querySelector('[data-project-id="bravo"] [data-project-label]')!);
+		await user.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
+
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.pinned-projects") ?? "null")).toEqual(["bravo"]);
+		const unpin = screen.getByRole("button", { name: "Unpin" });
+		expect(unpin.closest("[data-project-id]")).toHaveAttribute("data-project-id", "bravo");
+
+		await user.click(unpin);
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+		expect(useSidebarOrderStore.getState().pinnedProjectIds).toEqual([]);
+	});
+
+	it("does not drop an unpinned project into the pinned group", () => {
+		useSidebarOrderStore.setState({ pinnedProjectIds: ["alpha"] });
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, id: "alpha", name: "Alpha" },
+				{ ...workspace, id: "bravo", name: "Bravo" },
+			],
+		});
+
+		const bravoRow = document.querySelector('[data-project-drag-row][data-project-id="bravo"]')!;
+		const alphaTarget = document.querySelector('li[data-project-drop-target][data-project-id="alpha"]')!;
+		fireDrag("dragStart", bravoRow, {});
+		fireDrag("dragOver", alphaTarget, { clientY: 0 });
+		fireDrag("drop", alphaTarget, {});
+
+		expect(Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent)).toEqual(["Alpha", "Bravo"]);
 	});
 
 	it("keeps the ad hoc group out of the project list and its drag ordering", () => {

@@ -120,7 +120,7 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.sessions["child"] = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", CleanupGeneration: 1}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(WithActionCaller(context.Background(), "parent"))
 	cancel()
 	if _, err := svc.Kill(ctx, "child"); err != nil {
 		t.Fatal(err)
@@ -128,6 +128,34 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 	terminated := actionsNamed(st.activities, actionSessionTerminated)
 	if len(terminated) != 1 || terminated[0].ConversationID != "conv-parent" {
 		t.Fatalf("terminate = %+v, want the parent conversation", terminated)
+	}
+}
+
+// A child archived by the user (or another session) is not the parent's
+// action: it stays out of the parent's chat, where it would read as part of
+// whatever the parent was running then.
+func TestTerminateByOtherCallerStaysOutOfSpawnParent(t *testing.T) {
+	for name, ctx := range map[string]context.Context{
+		"user":          context.Background(),
+		"other session": WithActionCaller(context.Background(), "someone-else"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, st, fc := actionFixture(t)
+			fc.spawnRecord = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", Harness: "codex"}
+			cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "parent", ClientRequestID: "req-spawn"}
+			if _, _, _, err := svc.Spawn(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			st.sessions["child"] = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", CleanupGeneration: 1}
+			if _, err := svc.Kill(ctx, "child"); err != nil {
+				t.Fatal(err)
+			}
+			for _, activity := range actionsNamed(st.activities, actionSessionTerminated) {
+				if activity.ConversationID == "conv-parent" {
+					t.Fatalf("terminate = %+v, want nothing in the parent conversation", activity)
+				}
+			}
+		})
 	}
 }
 

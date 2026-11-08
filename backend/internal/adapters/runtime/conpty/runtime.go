@@ -176,7 +176,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	}
 
 	addr, pid, err := r.spawner(ctx, id, cfg.WorkspacePath, cfg.Argv, cfg.Env,
-		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput})
+		HostOptions{StartOnAttach: cfg.StartOnAttach, LazySurface: cfg.LazyStyledOutput, Cols: cfg.InitialCols, Rows: cfg.InitialRows})
 	if err != nil {
 		cause := fmt.Errorf("conpty: spawn pty-host for %q: %w", id, err)
 		handle := ports.RuntimeHandle{ID: id}
@@ -688,3 +688,26 @@ type processKiller interface {
 // The real defaultOSProcessFinder is in pidalive_unix.go / pidalive_windows.go
 // (same files that provide pidAlive).
 var osProcessFinder = defaultOSProcessFinder
+
+var _ ports.TerminalForegroundWatcher = (*Runtime)(nil)
+
+// WatchTerminalForeground streams the host's foreground program and activity.
+func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return fmt.Errorf("conpty: resolve runtime %q for foreground: %w", handle.ID, err)
+	}
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found: %w", handle.ID, ports.ErrTerminalForegroundUnavailable)
+	}
+	protocolVersion, err := r.resolveHostProtocol(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if protocolVersion < conPTYForegroundProtocolVersion {
+		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalForegroundUnavailable)
+	}
+	return clientWatchForeground(ctx, sess.addr, func(state ForegroundPayload) {
+		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy})
+	})
+}

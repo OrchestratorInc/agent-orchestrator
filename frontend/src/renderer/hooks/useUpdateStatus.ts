@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { UpdateStatus } from "../../main/update-settings";
+import { displayableUpdateError } from "../../shared/update-error-message";
 import { aoBridge } from "../lib/bridge";
 
 let current: UpdateStatus = { state: "idle" };
@@ -97,7 +98,7 @@ export async function requestUpdateDownload(requestId?: string): Promise<void> {
 		await aoBridge.updates.download(requestId);
 	} catch (error) {
 		if (["downloading"].includes(current.state)) {
-			receive({ ...current, state: "error", message: error instanceof Error ? error.message : "Download failed. Try again." });
+			receive({ ...current, state: "error", message: displayableUpdateError(error instanceof Error ? error.message : undefined, "Download failed. Try again.") });
 		}
 	} finally {
 		downloadPending = false;

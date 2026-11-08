@@ -11,6 +11,7 @@ import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { Pressable } from "./ui/pressable";
 
 /**
  * The Workers section of a cloud orchestrator's Summary tab: every session the
@@ -79,10 +80,9 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 			)}
 			data-testid="orchestrator-child-row"
 		>
-			<button
-				className="flex w-full min-w-0 cursor-pointer items-center gap-2 text-left"
+			<Pressable
+				className="flex w-full min-w-0 cursor-pointer items-center gap-2"
 				onClick={onOpen}
-				type="button"
 			>
 				<span
 					aria-hidden="true"
@@ -92,7 +92,7 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 				<AgentAvatar className="size-4 shrink-0" decorative provider={child.provider} />
 				<span className="min-w-0 flex-1 truncate text-sm">{child.title}</span>
 				<span className="shrink-0 text-xs text-settings-muted">{statusLabel}</span>
-			</button>
+			</Pressable>
 			{child.prs.length > 0 ? (
 				<div className="mt-1 flex flex-wrap items-center gap-1.5 pl-4">
 					{child.prs.map((pr) => (

@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
+import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { apiErrorMessage } from "../../lib/api-client";
-import { useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
-import { fetchProjectCues, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
-import { shellTerminalsQueryKey, toShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
+import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
+import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
+import { shellTerminalsQueryKey, toShellTerminal, useOpenShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
 import { markTerminalHandleFresh } from "../../lib/fresh-terminal-handles";
 import { terminalShellRequestValue, useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { TopbarButton } from "../TopbarButton";
@@ -30,18 +31,26 @@ const CUE_MENU_CLOSE_MS = 150;
 export function CueRunMenu({
 	projectId,
 	sessionId,
+	cloudOrgId,
 	disabled = false,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
+	/** A Cloud session's organization: its project's cues live on the control plane. */
+	cloudOrgId?: string;
 	disabled?: boolean;
+	/** Called once per cue dispatch, from the trigger or the menu. */
+	onRun?: () => void;
 }) {
 	return (
 		<CueRunMenuTrigger
-			key={JSON.stringify([projectId, sessionId ?? null])}
+			key={JSON.stringify([projectId, sessionId ?? null, cloudOrgId ?? null])}
 			projectId={projectId}
 			sessionId={sessionId}
+			cloudOrgId={cloudOrgId}
 			disabled={disabled}
+			onRun={onRun}
 		/>
 	);
 }
@@ -49,13 +58,20 @@ export function CueRunMenu({
 function CueRunMenuTrigger({
 	projectId,
 	sessionId,
+	cloudOrgId,
 	disabled,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
+	cloudOrgId?: string;
 	disabled: boolean;
+	onRun?: () => void;
 }) {
 	const { t } = useTranslation();
+	// The hover-highlight and focus handling below belong to the simplified top
+	// bar; the previous one keeps the menu exactly as it was.
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const queryClient = useQueryClient();
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
@@ -71,7 +87,13 @@ function CueRunMenuTrigger({
 	// pointer is still inside. Escape is the keyboard escape hatch.
 	const pointerInsideControl = useRef(false);
 	const escapeRequested = useRef(false);
+	// A menu the pointer opened must not hand focus back to the trigger when it
+	// closes: Chromium can mark that returned focus :focus-visible, which keeps
+	// the hover highlight lit after the pointer has left.
+	const openedByPointer = useRef(false);
 	const invokeMutation = useInvokeCueMutation();
+	const cloud = useCueHost(cloudOrgId);
+	const openShellTerminal = useOpenShellTerminal();
 	const [invokingId, setInvokingId] = useState<string | null>(null);
 	const busy = invokingId !== null;
 	const spinner = busy || runningLastCue;
@@ -97,7 +119,10 @@ function CueRunMenuTrigger({
 		pointerInsideControl.current = true;
 		cancelHoverClose();
 		if (disabled || spinner || creating) return;
-		if (!open) openMenu();
+		if (!open) {
+			openedByPointer.current = true;
+			openMenu();
+		}
 	};
 
 	const handlePointerLeave = () => {
@@ -119,6 +144,7 @@ function CueRunMenuTrigger({
 	const handleOpenChange = (next: boolean) => {
 		if (next) {
 			if (creating) return;
+			openedByPointer.current = false;
 			openMenu();
 			return;
 		}
@@ -131,9 +157,24 @@ function CueRunMenuTrigger({
 	const handleInvoke = async (cue: CueDTO) => {
 		if (pending.current) return;
 		pending.current = true;
+		onRun?.();
 		const origin = generation.current;
 		setInvokingId(cue.id);
 		try {
+			if (cloud) {
+				// A Cloud agent cue was sent to the session; a command cue runs in a
+				// new shell of its sandbox, which types the command once it is up.
+				// The command is queued as the shell is created, before its tab
+				// appears and its terminal connects.
+				const result = await invokeCloudCue(cloud, cue.id, sessionId);
+				rememberLastRunCue(projectId, cue.id);
+				if (result.kind !== "command" || !result.command) return;
+				const shell = await openShellTerminal.mutateAsync({ projectId, sessionId, cloud: { orgId: cloud.orgId }, initialInput: `${result.command}\r` });
+				if (!shell) return;
+				if (origin !== generation.current) return;
+				setActiveShellTerminal(shell.handleId);
+				return;
+			}
 			await useTerminalShellStore.getState().load();
 			if (origin !== generation.current) return;
 			const shell = terminalShellRequestValue(useTerminalShellStore.getState().preference);
@@ -175,7 +216,7 @@ function CueRunMenuTrigger({
 		try {
 			const cues = await queryClient.fetchQuery({
 				queryKey: projectCuesQueryKey(projectId),
-				queryFn: () => fetchProjectCues(projectId),
+				queryFn: () => cloud ? fetchProjectCues(projectId, cloud) : fetchProjectCues(projectId),
 				staleTime: 0,
 			});
 			if (origin !== generation.current) return;
@@ -183,6 +224,7 @@ function CueRunMenuTrigger({
 			// Nothing to run: leave the hover menu up so its empty state can
 			// offer creating the first cue.
 			if (!lastCue) {
+				openedByPointer.current = true;
 				openMenu();
 				return;
 			}
@@ -203,10 +245,11 @@ function CueRunMenuTrigger({
 						ref={buttonRef}
 						type="button"
 						aria-label={t("cues.run")}
-						// The menu is anchored to this button: pressing must not scale it,
-						// or the open menu shifts with the trigger.
-						className="topbar-control--static-press"
+						className={simplifiedTopbar ? "aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground" : undefined}
 						data-priority="secondary"
+						// The menu opens on hover, so "open" just means "hovered": keep
+						// the same hover highlight as the other top bar icons.
+						highlightActive={simplifiedTopbar ? false : undefined}
 						disabled={disabled || spinner}
 						variant="icon"
 						onPointerEnter={handlePointerEnter}
@@ -229,6 +272,7 @@ function CueRunMenuTrigger({
 				{open ? (
 					<CueMenuItems
 						projectId={projectId}
+						cloudOrgId={cloudOrgId}
 						busy={spinner}
 						onInvoke={handleInvoke}
 						onCreate={() => {
@@ -242,10 +286,13 @@ function CueRunMenuTrigger({
 						onEscapeKeyDown={() => {
 							escapeRequested.current = true;
 						}}
+						onCloseAutoFocus={(event) => {
+							if (simplifiedTopbar && openedByPointer.current) event.preventDefault();
+						}}
 					/>
 				) : null}
 			</DropdownMenu>
-			<CreateCueDialog projectId={projectId} open={creating} onOpenChange={setCreating}
+			<CreateCueDialog projectId={projectId} cloudOrgId={cloudOrgId} open={creating} onOpenChange={setCreating}
 				onClosed={() => buttonRef.current?.focus()} />
 		</>
 	);
@@ -253,23 +300,27 @@ function CueRunMenuTrigger({
 
 function CueMenuItems({
 	projectId,
+	cloudOrgId,
 	busy,
 	onInvoke,
 	onCreate,
 	onPointerEnter,
 	onPointerLeave,
 	onEscapeKeyDown,
+	onCloseAutoFocus,
 }: {
 	projectId: string;
+	cloudOrgId?: string;
 	busy: boolean;
 	onInvoke: (cue: CueDTO) => Promise<void>;
 	onCreate: () => void;
 	onPointerEnter: () => void;
 	onPointerLeave: () => void;
 	onEscapeKeyDown: () => void;
+	onCloseAutoFocus: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
-	const query = useProjectCuesQuery(projectId);
+	const query = useProjectCuesQuery(projectId, true, cloudOrgId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	useEffect(() => {
 		if (query.isError && !query.isFetching) {
@@ -288,6 +339,7 @@ function CueMenuItems({
 			onPointerEnter={onPointerEnter}
 			onPointerLeave={onPointerLeave}
 			onEscapeKeyDown={onEscapeKeyDown}
+			onCloseAutoFocus={onCloseAutoFocus}
 		>
 			{query.isError && !query.isFetching ? (
 				<>
