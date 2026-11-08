@@ -55,6 +55,7 @@ import {
 	useVirtualizer,
 	type Virtualizer,
 } from "@tanstack/react-virtual";
+import { isShownAORender } from "../../lib/mcp-tool";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
@@ -2288,6 +2289,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     it would just be the same list twice.
  *   - a plan row the daemon marked superseded: an older copy of a list the agent
  *     keeps across turns, which a later turn or run carries.
+ *   - a completed html_render call. AO records the page it showed as a render row
+ *     right after it, and the call's own answer is a note to the agent.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2307,6 +2310,8 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
+		// The page an html_render call shows is its own row right after it.
+		if (isShownAORender(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
