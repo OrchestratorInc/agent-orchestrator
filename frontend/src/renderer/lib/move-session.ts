@@ -119,7 +119,8 @@ async function copyArchive(source: MoveInput["source"], target: Client, transfer
 	for (let offset = 0, part = 0; offset < bytes.length; offset += MOVE_PART_BYTES, part++) {
 		const res = await target.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
 			params: { path: { transferId, part } },
-			body: bytes.subarray(offset, offset + MOVE_PART_BYTES) as never,
+			// A Blob reaches Electron's request hooks by reference; a byte array is copied into the main process.
+			body: new Blob([bytes.subarray(offset, offset + MOVE_PART_BYTES)]) as never,
 			bodySerializer: (body: unknown) => body as BodyInit,
 			headers: { "Content-Type": "application/octet-stream" },
 		});
