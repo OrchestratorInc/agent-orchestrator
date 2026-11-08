@@ -46,4 +46,25 @@ describe("agentAccountLabel", () => {
 		expect(agentAccountLabel(acme, [device, acme], t)).toBe("a@example.com");
 		expect(agentAccountLabel({ ...device, orgName: undefined }, [device, { ...acme, orgName: undefined }], t)).toBe("a@example.com · Claude Code CLI login");
 	});
+
+	it("adds the organization ID when names cannot tell organizations apart", () => {
+		const one = { ...acme, orgId: "1a2b3c4d-0000-4000-8000-000000000001" };
+		const two = { ...acme, id: "acct-2", orgId: "9f8e7d6c-0000-4000-8000-000000000002" };
+		expect(agentAccountLabel(one, [one, two], t)).toBe("a@example.com · Acme · 1a2b3c4d");
+		expect(agentAccountLabel(two, [one, two], t)).toBe("a@example.com · Acme · 9f8e7d6c");
+		const unnamedOne = { ...one, orgName: undefined };
+		const unnamedTwo = { ...two, orgName: undefined };
+		expect(agentAccountLabel(unnamedOne, [unnamedOne, unnamedTwo], t)).toBe("a@example.com · 1a2b3c4d");
+		expect(agentAccountLabel(unnamedTwo, [unnamedOne, unnamedTwo], t)).toBe("a@example.com · 9f8e7d6c");
+	});
+
+	it("gives every same-email account a distinct label", () => {
+		const one = { ...acme, orgId: "aaaaaaaa-1" };
+		const cli = { ...device, orgId: "aaaaaaaa-1" };
+		const two = { ...acme, id: "acct-2", orgId: "bbbbbbbb-2" };
+		const peers = [cli, one, two];
+		const labels = peers.map((account) => agentAccountLabel(account, peers, t));
+		expect(labels).toEqual(["a@example.com · Acme · aaaaaaaa · Claude Code CLI login", "a@example.com · Acme · aaaaaaaa", "a@example.com · Acme · bbbbbbbb"]);
+		expect(new Set(labels).size).toBe(3);
+	});
 });
