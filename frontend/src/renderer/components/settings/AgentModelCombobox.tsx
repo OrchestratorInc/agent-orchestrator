@@ -83,6 +83,7 @@ export function AgentModelCombobox({
 	compact = false,
 	showEffortInTrigger = true,
 	effortPlacement = "menu",
+	warningClassName,
 	agentId,
 	tuning,
 	disabled = false,
@@ -128,6 +129,8 @@ export function AgentModelCombobox({
 	tuning?: ModelEffortSelection;
 	/** "chip" moves reasoning effort out of the model menu into its own picker beside it. */
 	effortPlacement?: "menu" | "chip";
+	/** Where the unsupported-effort warning sits in the caller's layout. */
+	warningClassName?: string;
 	disabled?: boolean;
 	"aria-label": string;
 }) {
@@ -620,7 +623,7 @@ export function AgentModelCombobox({
 					/>}
 				</div>
 			) : menu}
-			{tuning && invalidEffort && <p role="alert" className="px-1 text-xs leading-row text-warning">
+			{tuning && invalidEffort && <p role="alert" className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>
 				{t("settings.models.unsupportedTuning", { role: effortRoleLabel })}
 			</p>}
 		</>

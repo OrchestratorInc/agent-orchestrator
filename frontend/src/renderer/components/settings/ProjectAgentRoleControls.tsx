@@ -217,41 +217,40 @@ export function AgentModelField({
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
 	};
+	// No wrapper: the pickers and the effort warning join the caller's row, so the
+	// warning takes its own line there instead of widening the model's column.
 	return (
 		<>
-			<div className="min-w-0">
-				<div className="min-w-0">
-					<AgentModelCombobox
-						aria-label={label}
-						value={model}
-						models={models}
-						emptyLabel={unsetLabel}
-						allowCustom={catalog?.allowCustom}
-						customModelEntry={customModelEntry}
-						agentLabel={agentId}
-						agentId={agentId}
-						onRefresh={refreshCatalog}
-						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-						refreshError={catalog?.refreshError}
-						retryAt={catalog?.retryAt}
-						disabled={catalogFetching || agentId === ""}
-						onChange={selectCatalogModel}
-						onCustom={selectCustomModel}
-						triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
-						compact
-						recentScope={agentId}
-						menuAlign="start"
-						effortPlacement="chip"
-						tuning={{
-							effort,
-							effortsWithoutModel: supportedEfforts,
-							onEffortChange,
-							onValidityChange,
-							roleLabel: t(`settings.models.${role}Role`),
-						}}
-					/>
-				</div>
-			</div>
+			<AgentModelCombobox
+				aria-label={label}
+				value={model}
+				models={models}
+				emptyLabel={unsetLabel}
+				allowCustom={catalog?.allowCustom}
+				customModelEntry={customModelEntry}
+				agentLabel={agentId}
+				agentId={agentId}
+				onRefresh={refreshCatalog}
+				refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
+				refreshError={catalog?.refreshError}
+				retryAt={catalog?.retryAt}
+				disabled={catalogFetching || agentId === ""}
+				onChange={selectCatalogModel}
+				onCustom={selectCustomModel}
+				triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
+				compact
+				recentScope={agentId}
+				menuAlign="start"
+				effortPlacement="chip"
+				warningClassName={warningClassName}
+				tuning={{
+					effort,
+					effortsWithoutModel: supportedEfforts,
+					onEffortChange,
+					onValidityChange,
+					roleLabel: t(`settings.models.${role}Role`),
+				}}
+			/>
 			{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 		</>
 	);
