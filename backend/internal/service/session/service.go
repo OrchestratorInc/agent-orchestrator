@@ -263,15 +263,6 @@ type Service struct {
 	// runsOnComputerLogin reports whether a new session would launch on the
 	// computer's own CLI login rather than a saved account. Nil means always.
 	runsOnComputerLogin func(context.Context, domain.AgentHarness, string) bool
-	// githubRepos lets ClaimPR accept a PR on the repository a github.com
-	// origin was renamed or transferred to. Nil keeps exact origin matching.
-	githubRepos ports.GitHubRepositoryResolver
-}
-
-// SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
-// a github.com origin's rename or transfer.
-func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
-	s.githubRepos = r
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
