@@ -36,6 +36,12 @@ type checkEndpoint struct {
 	authorize   func(*http.Request, string)
 	// prefix is stripped from each listed ID (Gemini lists "models/<id>").
 	prefix string
+	// rejectsWith400 marks providers that answer a bad key with HTTP 400
+	// (Gemini's API_KEY_INVALID, xAI) instead of 401 or 403.
+	rejectsWith400 bool
+	// regional marks providers whose keys belong to one region's endpoint, so
+	// a key this endpoint rejects may still be valid at another.
+	regional bool
 }
 
 func bearer(req *http.Request, key string) { req.Header.Set("Authorization", "Bearer "+key) }
@@ -47,21 +53,29 @@ var checkEndpoints = map[string]checkEndpoint{
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}},
 	"OPENAI_API_KEY": {url: "https://api.openai.com/v1/models", authorize: bearer},
-	"GEMINI_API_KEY": {url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", prefix: "models/", authorize: func(req *http.Request, key string) {
+	"GEMINI_API_KEY": {url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", prefix: "models/", rejectsWith400: true, authorize: func(req *http.Request, key string) {
 		req.Header.Set("x-goog-api-key", key)
 	}},
 	"OPENROUTER_API_KEY": {url: "https://openrouter.ai/api/v1/models", validateURL: "https://openrouter.ai/api/v1/key", authorize: bearer},
 	"DEEPSEEK_API_KEY":   {url: "https://api.deepseek.com/models", authorize: bearer},
 	"GROQ_API_KEY":       {url: "https://api.groq.com/openai/v1/models", authorize: bearer},
-	"XAI_API_KEY":        {url: "https://api.x.ai/v1/models", authorize: bearer},
+	"XAI_API_KEY":        {url: "https://api.x.ai/v1/models", authorize: bearer, rejectsWith400: true},
 	"MISTRAL_API_KEY":    {url: "https://api.mistral.ai/v1/models", authorize: bearer},
 	"FIREWORKS_API_KEY":  {url: "https://api.fireworks.ai/inference/v1/models", authorize: bearer},
-	"MOONSHOT_API_KEY":   {url: "https://api.moonshot.ai/v1/models", authorize: bearer},
-	// Matches the China endpoint the Qwen DashScope method configures.
-	"DASHSCOPE_API_KEY": {url: "https://dashscope.aliyuncs.com/compatible-mode/v1/models", authorize: bearer},
+	// Moonshot's .ai and .cn platforms issue separate keys.
+	"MOONSHOT_API_KEY": {url: "https://api.moonshot.ai/v1/models", authorize: bearer, regional: true},
+	// Matches the China endpoint the Qwen DashScope method configures; an
+	// international key is not accepted there.
+	"DASHSCOPE_API_KEY": {url: "https://dashscope.aliyuncs.com/compatible-mode/v1/models", authorize: bearer, regional: true},
 }
 
-var checkClient = &http.Client{Timeout: 10 * time.Second}
+// checkClient never follows a redirect: Go drops Authorization on a
+// cross-host hop but would re-send x-api-key or x-goog-api-key, and follow an
+// https-to-http downgrade. A redirect reads as unreachable.
+var checkClient = &http.Client{
+	Timeout:       10 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 const (
 	// OpenRouter's full catalog alone runs to several megabytes.
@@ -110,7 +124,11 @@ func fetch(ctx context.Context, url string, endpoint checkEndpoint, key string) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+		endpoint.rejectsWith400 && resp.StatusCode == http.StatusBadRequest:
+		if endpoint.regional {
+			return CheckUnverified, nil
+		}
 		return CheckInvalid, nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		return CheckUnreachable, nil

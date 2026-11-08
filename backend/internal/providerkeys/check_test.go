@@ -89,3 +89,49 @@ func TestCheckLeavesUnknownProvidersUnverified(t *testing.T) {
 		t.Fatal("accepted a multiline key")
 	}
 }
+
+func TestCheckReadsEachProvidersRejection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`))
+	}))
+	t.Cleanup(server.Close)
+	// Gemini answers a mistyped key with 400, which must not read as an outage.
+	withCheckEndpoint(t, "GEMINI_API_KEY", checkEndpoint{url: server.URL, authorize: bearer, rejectsWith400: true})
+	if result, err := Check(context.Background(), "GEMINI_API_KEY", "typo"); err != nil || result.Status != CheckInvalid {
+		t.Fatalf("Check(Gemini 400) = %+v, %v", result, err)
+	}
+	withCheckEndpoint(t, "OPENAI_API_KEY", checkEndpoint{url: server.URL, authorize: bearer})
+	if result, err := Check(context.Background(), "OPENAI_API_KEY", "key"); err != nil || result.Status != CheckUnreachable {
+		t.Fatalf("Check(OpenAI 400) = %+v, %v", result, err)
+	}
+	// A key for another region's endpoint is not proven wrong.
+	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	t.Cleanup(rejecting.Close)
+	withCheckEndpoint(t, "MOONSHOT_API_KEY", checkEndpoint{url: rejecting.URL, authorize: bearer, regional: true})
+	if result, err := Check(context.Background(), "MOONSHOT_API_KEY", "cn-key"); err != nil || result.Status != CheckUnverified {
+		t.Fatalf("Check(regional 401) = %+v, %v", result, err)
+	}
+}
+
+func TestCheckNeverFollowsARedirectWithTheKey(t *testing.T) {
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("x-api-key")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(target.Close)
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	t.Cleanup(redirecting.Close)
+	withCheckEndpoint(t, "ANTHROPIC_API_KEY", checkEndpoint{url: redirecting.URL, authorize: func(req *http.Request, key string) { req.Header.Set("x-api-key", key) }})
+	if result, err := Check(context.Background(), "ANTHROPIC_API_KEY", "secret"); err != nil || result.Status != CheckUnreachable {
+		t.Fatalf("Check(redirect) = %+v, %v", result, err)
+	}
+	select {
+	case key := <-leaked:
+		t.Fatalf("followed the redirect and sent %q", key)
+	default:
+	}
+}

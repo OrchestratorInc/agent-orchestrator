@@ -158,11 +158,23 @@ func ompCountCredentials(ctx context.Context, path string) (total, enabled int, 
 	if err = count(path + "?mode=ro"); err == nil || ctx.Err() != nil {
 		return total, enabled, err
 	}
-	if _, statErr := os.Stat(path + "-wal"); os.IsNotExist(statErr) {
-		snapshot := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}).String()
-		if count(snapshot) == nil {
+	walAbsent := func() bool {
+		_, statErr := os.Stat(path + "-wal")
+		return os.IsNotExist(statErr)
+	}
+	if walAbsent() {
+		// OMP may have started meanwhile: an immutable read ignores its WAL,
+		// so the count stands only if there is still none.
+		if count(ompImmutableURI(path)) == nil && walAbsent() {
 			return total, enabled, nil
 		}
 	}
 	return 0, 0, err
+}
+
+// ompImmutableURI opens path read-only as an immutable SQLite file. The URI
+// has no authority, so a Windows drive path is not read as one, and every
+// path character stays literal.
+func ompImmutableURI(path string) string {
+	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&immutable=1"
 }
