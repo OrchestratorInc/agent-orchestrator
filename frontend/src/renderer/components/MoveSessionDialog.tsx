@@ -88,7 +88,7 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 	};
 
 	const stepState = (each: MoveStep): "done" | "active" | "todo" => {
-		if (result) return each === "commit" && !result.committed ? "todo" : "done";
+		if (result) return (each === "commit" && !result.committed) || (each === "copy" && !result.resumed) ? "todo" : "done";
 		if (!step) return "todo";
 		const at = STEPS.indexOf(step);
 		const index = STEPS.indexOf(each);
@@ -143,7 +143,9 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 							{error.resumedSource ? t("moveSession.resumed", { host: source.label }) : t("moveSession.notResumed", { host: source.label })}
 						</p>
 					) : null}
-					{result?.committed ? <p className="text-sm">{t("moveSession.done", { host: destination?.label ?? "" })}</p> : null}
+					{result?.committed ? (
+						<p className="text-sm">{t(result.resumed ? "moveSession.done" : "moveSession.doneSummary", { host: destination?.label ?? "", source: source.label })}</p>
+					) : null}
 					{result && !result.committed ? (
 						<p role="alert" className="text-sm text-destructive">
 							{t("moveSession.commitFailed", { target: destination?.label ?? "", source: source.label, message: result.commitError ?? "" })}

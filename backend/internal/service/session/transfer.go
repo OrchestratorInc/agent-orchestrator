@@ -17,8 +17,9 @@ import (
 // transferCommander moves sessions between machines. Production delegates to
 // Session Manager; focused fakes need not implement it.
 type transferCommander interface {
-	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string) (domain.SessionTransfer, error)
-	TransferArchivePath(transferID string) (string, error)
+	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error)
+	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
+	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
 	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
 	ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer, prompt string) (domain.SessionRecord, error)
 	CommitTransfer(ctx context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error)
@@ -42,12 +43,13 @@ func (s *Service) transfers() (transferCommander, error) {
 // PrepareTransfer stops the session's agent, pushes its branch and uncommitted
 // work, exports its conversation, and returns what the destination needs.
 // sourceLabel names this machine as the user sees it; empty uses MachineName.
-func (s *Service) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string) (domain.SessionTransfer, error) {
+// dest names the machine the session is moving to, for the pending marker.
+func (s *Service) PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
 	tc, err := s.transfers()
 	if err != nil {
 		return domain.SessionTransfer{}, err
 	}
-	t, err := tc.PrepareTransfer(ctx, id, transferID)
+	t, err := tc.PrepareTransfer(ctx, id, transferID, dest)
 	if err != nil {
 		return domain.SessionTransfer{}, transferError(err)
 	}
@@ -99,13 +101,22 @@ func minimalTransferNote(rec domain.SessionRecord, source string) string {
 	return b.String()
 }
 
-// TransferArchivePath is the exported conversation of a prepared transfer.
-func (s *Service) TransferArchivePath(transferID string) (string, error) {
+// CancelTransfer forgets an unfinished move so the session can resume here.
+func (s *Service) CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error {
+	tc, err := s.transfers()
+	if err != nil {
+		return err
+	}
+	return transferError(tc.CancelTransfer(ctx, id, transferID))
+}
+
+// TransferArchivePath is the exported conversation of session id's prepared transfer.
+func (s *Service) TransferArchivePath(id domain.SessionID, transferID string) (string, error) {
 	tc, err := s.transfers()
 	if err != nil {
 		return "", err
 	}
-	path, err := tc.TransferArchivePath(transferID)
+	path, err := tc.TransferArchivePath(id, transferID)
 	return path, transferError(err)
 }
 
@@ -119,24 +130,26 @@ func (s *Service) StoreTransferArchivePart(transferID string, part int, r io.Rea
 }
 
 // ReceiveTransfer starts a session in projectID that continues t, then claims
-// its pull requests. A claim that fails is reported, not fatal.
-func (s *Service) ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, []string, error) {
+// its pull requests. A claim that fails is reported, not fatal. resumed is
+// false when the agent started from the handoff note instead of its own
+// conversation.
+func (s *Service) ReceiveTransfer(ctx context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (sess domain.Session, resumed bool, warnings []string, err error) {
 	tc, err := s.transfers()
 	if err != nil {
-		return domain.Session{}, nil, err
+		return domain.Session{}, false, nil, err
 	}
 	rec, err := tc.ReceiveTransfer(ctx, projectID, t, transferResumeNote(t))
 	if err != nil {
-		return domain.Session{}, nil, transferError(err)
+		return domain.Session{}, false, nil, transferError(err)
 	}
-	var warnings []string
+	resumed = t.Native != nil && rec.Metadata.AgentSessionID == t.Native.NativeID
 	for _, pr := range t.PullRequests {
 		if _, err := s.ClaimPR(ctx, rec.ID, pr, ClaimPROptions{AllowTakeover: true}); err != nil {
 			warnings = append(warnings, fmt.Sprintf("Could not claim %s here: %v", pr, err))
 		}
 	}
-	sess, err := s.Get(ctx, rec.ID)
-	return sess, warnings, err
+	sess, err = s.Get(ctx, rec.ID)
+	return sess, resumed, warnings, err
 }
 
 // transferResumeNote is the first turn of a resumed moved conversation.
@@ -198,6 +211,10 @@ func transferError(err error) error {
 		return apierr.Conflict("TRANSFER_DETACHED_HEAD", msg, nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):
 		return apierr.Conflict("SESSION_MOVED", msg, nil)
+	case errors.Is(err, sessionmanager.ErrTransferPending):
+		return apierr.Conflict("TRANSFER_PENDING", msg, nil)
+	case errors.Is(err, sessionmanager.ErrTransferDefaultBranch):
+		return apierr.Conflict("TRANSFER_DEFAULT_BRANCH", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferArchive):
 		return apierr.Invalid("TRANSFER_ARCHIVE_INVALID", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferUnsupported):

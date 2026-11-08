@@ -87,11 +87,16 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const draftId = `new-chat:${hostKey}`;
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
-	// Drafts are kept per computer, so the typed brief follows the switch. Staged
-	// attachments live on the computer that staged them and stay behind.
+	// Drafts are kept per computer, so the typed brief follows the switch and
+	// joins any brief already waiting there. Staged attachments live on the
+	// computer that staged them and stay behind.
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const switchHost = (nextHost: string | undefined, nextProject: string) => {
-		const text = readChatSessionDraft(draftScope).composer.text;
-		if (text) writeChatComposerText(newChatDraftScope(nextHost), text);
+		const { text, attachments } = readChatSessionDraft(draftScope).composer;
+		const nextScope = newChatDraftScope(nextHost);
+		const waiting = readChatSessionDraft(nextScope).composer.text;
+		if (text && waiting !== text) writeChatComposerText(nextScope, waiting.trim() ? `${waiting}\n\n${text}` : text);
+		if (attachments.length > 0) showGlobalToast(t("newTask.attachmentsStay", { count: attachments.length }));
 		void navigate({ to: "/new", search: { project: nextProject, host: nextHost }, replace: true });
 	};
 	const [echo, setEcho] = useState<ConversationLocalEcho>();

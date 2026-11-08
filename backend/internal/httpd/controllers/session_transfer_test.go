@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 )
 
@@ -22,13 +23,24 @@ type fakeTransferSessionService struct {
 	parts           map[int]string
 	receivedProject domain.ProjectID
 	received        domain.SessionTransfer
+	preparedDest    domain.SessionTransferDestination
+	cancelled       string
 }
 
-func (f *fakeTransferSessionService) PrepareTransfer(_ context.Context, _ domain.SessionID, transferID, _ string) (domain.SessionTransfer, error) {
+func (f *fakeTransferSessionService) PrepareTransfer(_ context.Context, _ domain.SessionID, transferID, _ string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error) {
+	f.preparedDest = dest
 	return domain.SessionTransfer{TransferID: transferID}, nil
 }
 
-func (f *fakeTransferSessionService) TransferArchivePath(string) (string, error) {
+func (f *fakeTransferSessionService) CancelTransfer(_ context.Context, id domain.SessionID, transferID string) error {
+	f.cancelled = string(id) + "/" + transferID
+	return nil
+}
+
+func (f *fakeTransferSessionService) TransferArchivePath(id domain.SessionID, _ string) (string, error) {
+	if id != "ao-1" {
+		return "", apierr.NotFound("TRANSFER_ARCHIVE_INVALID", "no prepared transfer")
+	}
 	return f.archivePath, nil
 }
 
@@ -38,9 +50,16 @@ func (f *fakeTransferSessionService) StoreTransferArchivePart(_ string, part int
 	return err
 }
 
-func (f *fakeTransferSessionService) ReceiveTransfer(_ context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, []string, error) {
+func (f *fakeTransferSessionService) ReceiveTransfer(_ context.Context, projectID domain.ProjectID, t domain.SessionTransfer) (domain.Session, bool, []string, error) {
 	f.receivedProject, f.received = projectID, t
-	return f.sessions["ao-1"], nil, nil
+	return f.sessions["ao-1"], true, nil, nil
+}
+
+func (f *fakeTransferSessionService) SessionMovedTo(_ context.Context, id domain.SessionID) (domain.SessionMovedTo, bool, error) {
+	if id != "ao-1" {
+		return domain.SessionMovedTo{}, false, nil
+	}
+	return domain.SessionMovedTo{TransferID: "tr12345678", HostID: "host-b", Label: "MacBook B", SessionID: "web-9"}, true, nil
 }
 
 func (f *fakeTransferSessionService) CommitTransfer(_ context.Context, id domain.SessionID, transferID string, dest domain.SessionTransferDestination) (domain.SessionMovedTo, error) {
@@ -57,10 +76,17 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
-	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/transfer/tr12345678/native", "")
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/transfer/prepare", `{"transferId":"tr12345678","destination":{"hostId":"host-b","label":"MacBook B"}}`)
+	if status != http.StatusOK || svc.preparedDest.HostID != "host-b" || svc.preparedDest.Label != "MacBook B" {
+		t.Fatalf("prepare = %d %s, destination %+v", status, body, svc.preparedDest)
+	}
+
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/transfer/tr12345678/native", "")
 	if status != http.StatusOK || string(body) != "archive-bytes" {
 		t.Fatalf("archive = %d %q", status, body)
 	}
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-2/transfer/tr12345678/native", "")
+	assertErrorCode(t, body, status, http.StatusNotFound, "TRANSFER_ARCHIVE_INVALID")
 
 	if _, status, _ = doRequest(t, srv, http.MethodPut, "/api/v1/sessions/transfer/tr12345678/native/1", "part-one"); status != http.StatusNoContent {
 		t.Fatalf("put part = %d", status)
@@ -81,13 +107,30 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 	}
 	var received controllers.ReceiveTransferResponse
 	mustJSON(t, body, &received)
-	if received.Session.ID != "ao-1" || received.Warnings == nil || received.HostLabel == "" || svc.receivedProject != "web" || svc.received.Branch != "feat/x" {
+	if received.Session.ID != "ao-1" || received.Warnings == nil || received.HostLabel == "" || !received.Resumed || svc.receivedProject != "web" || svc.received.Branch != "feat/x" {
 		t.Fatalf("receive response = %+v, service got %s %+v", received, svc.receivedProject, svc.received)
 	}
 
+	var state controllers.SessionTransferStateResponse
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/transfer", "")
+	mustJSON(t, body, &state)
+	if status != http.StatusOK || state.MovedTo == nil || state.MovedTo.SessionID != "web-9" {
+		t.Fatalf("transfer state = %d %s", status, body)
+	}
+	var unmoved controllers.SessionTransferStateResponse
+	body, _, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-2/transfer", "")
+	if mustJSON(t, body, &unmoved); unmoved.MovedTo != nil {
+		t.Fatalf("unmoved transfer state = %s, want no movedTo", body)
+	}
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/transfer/commit",
 		`{"transferId":"tr12345678","destination":{"hostId":"host-b","label":"MacBook B","sessionId":"web-9"}}`)
 	var committed controllers.CommitTransferResponse
+	defer func() {
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/transfer/cancel", `{"transferId":"tr12345678"}`)
+		if status != http.StatusOK || svc.cancelled != "ao-1/tr12345678" {
+			t.Fatalf("cancel = %d %s, cancelled %q", status, body, svc.cancelled)
+		}
+	}()
 	mustJSON(t, body, &committed)
 	if status != http.StatusOK || committed.MovedTo.HostID != "host-b" || committed.MovedTo.SessionID != "web-9" {
 		t.Fatalf("commit = %d %+v", status, committed)

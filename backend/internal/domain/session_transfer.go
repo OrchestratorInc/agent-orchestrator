@@ -59,6 +59,9 @@ type SessionMovedTo struct {
 	SessionID  SessionID `json:"sessionId"`
 }
 
+// Pending reports a move that was prepared but not yet finished.
+func (m SessionMovedTo) Pending() bool { return m.SessionID == "" }
+
 // RepositoryKey is host/namespace/name for an origin URL, lower-cased for
 // GitHub, whose names are case-insensitive. Any other origin, such as a local
 // path, keys as itself.

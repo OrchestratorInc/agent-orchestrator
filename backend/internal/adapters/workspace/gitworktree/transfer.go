@@ -120,3 +120,26 @@ func (w *Workspace) ReleaseTransferBranch(ctx context.Context, info ports.Worksp
 	}
 	return nil
 }
+
+// DeleteTransferRef deletes a preserved ref from origin. A ref that is already
+// gone is not an error.
+func (w *Workspace) DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error {
+	if !strings.HasPrefix(remotePreservedRef, "refs/ao/preserved/") {
+		return fmt.Errorf("gitworktree: invalid preserved ref %q", remotePreservedRef)
+	}
+	repo, err := physicalAbs(repoPath)
+	if err != nil {
+		return fmt.Errorf("gitworktree: repo path: %w", err)
+	}
+	out, err := w.run(ctx, w.binary, "-C", repo, "ls-remote", "origin", remotePreservedRef)
+	if err != nil {
+		return fmt.Errorf("gitworktree: ls-remote: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return nil
+	}
+	if out, err := w.run(ctx, w.binary, "-C", repo, "push", "--porcelain", "origin", ":"+remotePreservedRef); err != nil {
+		return fmt.Errorf("gitworktree: delete %s: %w: %s", remotePreservedRef, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
