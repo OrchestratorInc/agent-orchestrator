@@ -2113,6 +2113,8 @@
 	"settings.replayOnboarding.label": "重新播放新手引导",
 	"settings.replayOnboarding.hint": "从头重新打开首次运行设置。",
 	"settings.replayOnboarding.open": "打开",
+	"settings.simulateNewMachine.label": "模拟新电脑",
+	"settings.simulateNewMachine.hint": "引导流程会把 git、GitHub CLI 和智能体视为未安装，安装只是模拟。在关闭应用前一直有效。",
 	"startup.blockedBodyShort": "安装缺少的组件即可开始运行代理。",
 	"startup.gitPurpose": "为每个代理提供独立的工作树。",
 	"startup.ghPurpose": "可选。让代理可以创建拉取请求。",
