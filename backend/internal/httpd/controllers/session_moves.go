@@ -14,6 +14,7 @@ import (
 
 // SessionMover moves sessions between this machine and AO Cloud.
 type SessionMover interface {
+	PreviewMove(ctx context.Context, id domain.SessionID) (sessionsvc.MovePreview, error)
 	ExportMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveExportInput) (sessionsvc.MoveExport, error)
 	ImportMove(ctx context.Context, in sessionsvc.MoveImportInput) (sessionsvc.MoveImportOutcome, error)
 	CompleteMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveCompleteInput) (domain.Session, error)
@@ -27,9 +28,39 @@ type SessionMovesController struct {
 
 // Register mounts the session move routes.
 func (c *SessionMovesController) Register(r chi.Router) {
+	r.Get("/sessions/{sessionId}/move/preview", c.preview)
 	r.Post("/sessions/{sessionId}/move/export", c.export)
 	r.Post("/sessions/move/import", c.importMove)
 	r.Post("/sessions/{sessionId}/move/complete", c.complete)
+}
+
+func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/move/preview")
+		return
+	}
+	out, err := c.Svc.PreviewMove(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	changes := make([]MoveChange, 0, len(out.Changes))
+	for _, ch := range out.Changes {
+		changes = append(changes, MoveChange{Path: ch.Path, Status: moveChangeStatus(ch.Status)})
+	}
+	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{Branch: out.Branch, Changes: changes})
+}
+
+// moveChangeStatus names git's diff status letter.
+func moveChangeStatus(status byte) string {
+	switch status {
+	case 'A':
+		return "added"
+	case 'D':
+		return "deleted"
+	default:
+		return "modified"
+	}
 }
 
 func (c *SessionMovesController) export(w http.ResponseWriter, r *http.Request) {
