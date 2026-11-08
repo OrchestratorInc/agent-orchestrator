@@ -38,7 +38,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
 					<TopbarButton
-						aria-label={orchestratorReplyLabel(activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel, orchestratorReply, t)}
+						aria-label={orchestratorReplyLabel(activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel, activity && orchestratorReply === "working" ? null : orchestratorReply, t)}
 						aria-busy={busy}
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
