@@ -27,6 +27,7 @@ import {
 } from "../hooks/useTerminateSession";
 import { OrchestratorIcon } from "./icons";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
+import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { noDragStyle, PageTopbarActions } from "./PageTopbar";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
@@ -93,6 +94,7 @@ function SimplifiedSessionTopbarActions({
 		if (!supportsProjectActions || startingOrchestrator) return;
 		openOrchestrator();
 	});
+	useSessionMenuAvailable("open-orchestrator", !isOrchestrator && supportsProjectActions && !isSpawning && !isProjectRestarting && !isProvisioning);
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
 		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
 	const orchestratorTooltipShortcut = !isProjectRestarting && !isSpawning && orchestrator ? "open-orchestrator" : undefined;
@@ -283,6 +285,7 @@ export function SessionArchiveShortcut({
 		clearTerminateSessionState(queryClient, session.id, session.hostId);
 		setConfirmOpen(true);
 	});
+	useSessionMenuAvailable("archive-session", !isPending);
 
 	return (
 		<>
@@ -345,6 +348,7 @@ function LegacySessionTopbarActions({
 		if (!supportsProjectActions || startingOrchestrator) return;
 		openOrchestrator();
 	});
+	useSessionMenuAvailable("open-orchestrator", !isOrchestrator && supportsProjectActions && !isSpawning && !isProjectRestarting && !isProvisioning);
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
 		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
 	const orchestratorTooltipShortcut = !isProjectRestarting && !isSpawning && orchestrator ? "open-orchestrator" : undefined;
@@ -532,6 +536,7 @@ function LegacyTopbarArchiveButton({
 		clearTerminateSessionState(queryClient, session.id, session.hostId);
 		setConfirmOpen(true);
 	});
+	useSessionMenuAvailable("archive-session", !isPending);
 
 	return (
 		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>
