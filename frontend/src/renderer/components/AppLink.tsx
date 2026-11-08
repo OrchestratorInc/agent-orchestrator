@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { useLinkPreview } from "../hooks/useLinkPreview";
-import { LinkPreviewCard, LinkPreviewCardLoading } from "./LinkPreviewCard";
+import { LinkPreviewHoverCard } from "./LinkPreviewCard";
 import {
 	ContextMenu,
 	ContextMenuTrigger,
@@ -14,7 +14,7 @@ import {
 	ContextMenuSeparator,
 } from "./ui/context-menu";
 import { ChatPathMenuContext, ChatPathMenuItems } from "./ChatPathMenu";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
@@ -55,7 +55,16 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, men
 	if (!href || href.startsWith("#") || (href.startsWith("/") && !browserLink && !filePath)) return anchor;
 	const trigger = hasHoverPreview ? (
 		<ContextMenuTrigger asChild>
-			<HoverCardTrigger asChild>{anchor}</HoverCardTrigger>
+			<HoverCardTrigger
+				asChild
+				onFocus={(event) => {
+					// Keyboard focus opens the preview. Focus returning to a clicked
+					// link, as when the window regains focus, must not.
+					if (!event.currentTarget.matches(":focus-visible")) event.preventDefault();
+				}}
+			>
+				{anchor}
+			</HoverCardTrigger>
 		</ContextMenuTrigger>
 	) : (
 		<ContextMenuTrigger asChild>{anchor}</ContextMenuTrigger>
@@ -96,15 +105,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, men
 	return (
 		<HoverCard onOpenChange={setPreviewOpen}>
 			{menu}
-			{previewOpen && webLink && !previewQuery.isError && (
-				<HoverCardContent collisionPadding={8}>
-					{previewQuery.data ? (
-						<LinkPreviewCard url={href} preview={previewQuery.data} onBrowserOpen={openBrowser} />
-					) : (
-						<LinkPreviewCardLoading />
-					)}
-				</HoverCardContent>
-			)}
+			{previewOpen && webLink && <LinkPreviewHoverCard url={href} query={previewQuery} onBrowserOpen={openBrowser} />}
 			{previewOpen && !webLink && hoverPreview?.(previewOpen)}
 		</HoverCard>
 	);
