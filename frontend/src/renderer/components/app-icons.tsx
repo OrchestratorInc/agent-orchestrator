@@ -26,7 +26,6 @@ import {
 	Box as MynaBox,
 	Bug as MynaBug,
 	Camera as MynaCamera,
-	Check as MynaCheck,
 	CheckCircle as MynaCheckCircle,
 	CheckWaves as MynaCheckWaves,
 	ChevronDown as MynaChevronDown,
@@ -50,8 +49,6 @@ import {
 	CreditCard as MynaCreditCard,
 	DangerCircle as MynaDangerCircle,
 	DangerTriangle as MynaDangerTriangle,
-	Dots as MynaDots,
-	DotsVertical as MynaDotsVertical,
 	Download as MynaDownload,
 	ExternalLink as MynaExternalLink,
 	Eye as MynaEye,
@@ -69,7 +66,6 @@ import {
 	GitPullRequest as MynaGitPullRequest,
 	Globe as MynaGlobe,
 	Grid as MynaGrid,
-	GripVertical as MynaGripVertical,
 	Hand as MynaHand,
 	Heading1 as MynaHeading1,
 	Heading2 as MynaHeading2,
@@ -78,7 +74,7 @@ import {
 	Heading5 as MynaHeading5,
 	Home as MynaHome,
 	Image as MynaImage,
-	Info as MynaInfo,
+	InfoCircle as MynaInfoCircle,
 	Key as MynaKey,
 	Keyboard as MynaKeyboard,
 	LayoutDashboard as MynaLayoutDashboard,
@@ -104,10 +100,8 @@ import {
 	PanelLeft as MynaPanelLeft,
 	PanelRight as MynaPanelRight,
 	Paperclip as MynaPaperclip,
-	Pause as MynaPause,
 	Pencil as MynaPencil,
 	Pin as MynaPin,
-	Play as MynaPlay,
 	Plus as MynaPlus,
 	Presentation as MynaPresentation,
 	QuestionCircle as MynaQuestionCircle,
@@ -204,6 +198,12 @@ import {
 	Workflow as LucideWorkflow,
 	WrapText as LucideWrapText,
 	Ungroup as LucideUngroup,
+	Check as LucideCheck,
+	Ellipsis as LucideEllipsis,
+	EllipsisVertical as LucideEllipsisVertical,
+	GripVertical as LucideGripVertical,
+	Pause as LucidePause,
+	Play as LucidePlay,
 	Copy as LucideCopy,
 	Undo2 as LucideUndo2,
 	type LucideIcon as LucideComponent,
@@ -218,19 +218,29 @@ export type AppIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
 };
 export type AppIcon = ForwardRefExoticComponent<AppIconProps & RefAttributes<SVGSVGElement>>;
 
-const MYNA_STROKE = 1.5;
+const STROKE = 1.5;
+
+// Myna draws inside an 18-unit frame (3-21) while lucide uses 20 (2-22), so
+// at the same CSS size Myna glyphs read about 10% smaller than lucide ones.
+// Crop the viewBox to Myna's frame so both libraries render at one optical
+// size, and thin the stroke by the same ratio so line weight stays at 1.5px
+// per 24px. Glyphs that already fill the box (wide clouds, messages) opt out.
+const MYNA_CROP = 21.6 / 24;
+const MYNA_VIEWBOX = "1.2 1.2 21.6 21.6";
 
 type MynaComponent = (props: Record<string, unknown>) => unknown;
 
-function fromMyna(Icon: MynaComponent, name: string): AppIcon {
+function fromMyna(Icon: MynaComponent, name: string, frame: "crop" | "full" = "crop"): AppIcon {
 	const Component = Icon as unknown as ForwardRefExoticComponent<Record<string, unknown> & RefAttributes<SVGSVGElement>>;
+	const scale = frame === "crop" ? MYNA_CROP : 1;
 	const Wrapped = forwardRef<SVGSVGElement, AppIconProps>(({ absoluteStrokeWidth: _ignored, className, strokeWidth, ...rest }, ref) => (
 		<Component
 			aria-hidden={rest["aria-label"] ? undefined : true}
+			{...(frame === "crop" ? { viewBox: MYNA_VIEWBOX } : {})}
 			{...rest}
 			className={cn("icon", `icon-${name}`, className)}
 			ref={ref}
-			strokeWidth={strokeWidth ?? MYNA_STROKE}
+			strokeWidth={Number(strokeWidth ?? STROKE) * scale}
 		/>
 	));
 	Wrapped.displayName = `Icon(${name})`;
@@ -239,7 +249,7 @@ function fromMyna(Icon: MynaComponent, name: string): AppIcon {
 
 function fromLucide(Icon: LucideComponent, name: string): AppIcon {
 	const Wrapped = forwardRef<SVGSVGElement, AppIconProps>(({ className, strokeWidth, ...rest }, ref) => (
-		<Icon {...rest} className={cn("icon", `icon-${name}`, className)} ref={ref} strokeWidth={strokeWidth ?? MYNA_STROKE} />
+		<Icon {...rest} className={cn("icon", `icon-${name}`, className)} ref={ref} strokeWidth={strokeWidth ?? STROKE} />
 	));
 	Wrapped.displayName = `Icon(${name})`;
 	return Wrapped;
@@ -249,19 +259,19 @@ export const Activity = fromMyna(MynaActivity, "activity");
 export const AlertCircle = fromMyna(MynaDangerCircle, "circle-alert");
 export const AlertTriangle = fromMyna(MynaDangerTriangle, "triangle-alert");
 export const Archive = fromMyna(MynaArchive, "archive");
-export const ArrowDown = fromMyna(MynaArrowDown, "arrow-down");
-export const ArrowLeft = fromMyna(MynaArrowLeft, "arrow-left");
+export const ArrowDown = fromMyna(MynaArrowDown, "arrow-down", "full");
+export const ArrowLeft = fromMyna(MynaArrowLeft, "arrow-left", "full");
 export const ArrowLeftRight = fromMyna(MynaArrowLeftRight, "arrow-left-right");
-export const ArrowRight = fromMyna(MynaArrowRight, "arrow-right");
+export const ArrowRight = fromMyna(MynaArrowRight, "arrow-right", "full");
 export const ArrowRightLeft = fromMyna(MynaArrowLeftRight, "arrow-right-left");
-export const ArrowUp = fromMyna(MynaArrowUp, "arrow-up");
+export const ArrowUp = fromMyna(MynaArrowUp, "arrow-up", "full");
 export const ArrowUpFromLine = fromMyna(MynaUpload, "arrow-up-from-line");
-export const ArrowUpRight = fromMyna(MynaArrowUpRight, "arrow-up-right");
-export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check");
+export const ArrowUpRight = fromMyna(MynaArrowUpRight, "arrow-up-right", "full");
+export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check", "full");
 export const Ban = fromMyna(MynaBan, "ban");
 export const Bell = fromMyna(MynaBell, "bell");
 export const BellRing = fromMyna(MynaBellOn, "bell-ring");
-export const Bold = fromMyna(MynaTypeBold, "bold");
+export const Bold = fromMyna(MynaTypeBold, "bold", "full");
 export const BookOpen = fromMyna(MynaBookOpen, "book-open");
 export const Bot = fromLucide(LucideBot, "bot");
 export const Box = fromMyna(MynaBox, "box");
@@ -270,7 +280,7 @@ export const Bug = fromMyna(MynaBug, "bug");
 export const CalendarClock = fromLucide(LucideCalendarClock, "calendar-clock");
 export const Camera = fromMyna(MynaCamera, "camera");
 export const CaseSensitive = fromLucide(LucideCaseSensitive, "case-sensitive");
-export const Check = fromMyna(MynaCheck, "check");
+export const Check = fromLucide(LucideCheck, "check");
 export const CheckCheck = fromLucide(LucideCheckCheck, "check-check");
 export const CheckCircle2 = fromMyna(MynaCheckCircle, "circle-check");
 export const ChevronDown = fromMyna(MynaChevronDown, "chevron-down");
@@ -295,7 +305,7 @@ export const ClipboardCheck = fromLucide(LucideClipboardCheck, "clipboard-check"
 export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
 // Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
-export const Cloud = fromMyna(MynaCloudy, "cloud");
+export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
 export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
@@ -306,11 +316,11 @@ export const CornerDownRight = fromMyna(MynaCornerDownRight, "corner-down-right"
 export const CornerUpRight = fromMyna(MynaCornerUpRight, "corner-up-right");
 export const CreditCard = fromMyna(MynaCreditCard, "credit-card");
 export const Download = fromMyna(MynaDownload, "download");
-export const Ellipsis = fromMyna(MynaDots, "ellipsis");
+export const Ellipsis = fromLucide(LucideEllipsis, "ellipsis");
 export const Eraser = fromLucide(LucideEraser, "eraser");
 export const ExternalLink = fromMyna(MynaExternalLink, "external-link");
-export const Eye = fromMyna(MynaEye, "eye");
-export const EyeOff = fromMyna(MynaEyeOff, "eye-off");
+export const Eye = fromMyna(MynaEye, "eye", "full");
+export const EyeOff = fromMyna(MynaEyeOff, "eye-off", "full");
 export const File = fromMyna(MynaFile, "file");
 export const FileCode2 = fromLucide(LucideFileCode2, "file-code-2");
 export const FileDiff = fromLucide(LucideFileDiff, "file-diff");
@@ -338,8 +348,8 @@ export const GitPullRequestArrow = fromMyna(MynaGitPullRequest, "git-pull-reques
 export const GitPullRequestClosed = fromLucide(LucideGitPullRequestClosed, "git-pull-request-closed");
 export const GitPullRequestDraft = fromLucide(LucideGitPullRequestDraft, "git-pull-request-draft");
 export const Globe = fromMyna(MynaGlobe, "globe");
-export const GripVertical = fromMyna(MynaGripVertical, "grip-vertical");
-export const GripVerticalIcon = fromMyna(MynaGripVertical, "grip-vertical");
+export const GripVertical = fromLucide(LucideGripVertical, "grip-vertical");
+export const GripVerticalIcon = fromLucide(LucideGripVertical, "grip-vertical");
 export const Hand = fromMyna(MynaHand, "hand");
 export const Heading1 = fromMyna(MynaHeading1, "heading-1");
 export const Heading2 = fromMyna(MynaHeading2, "heading-2");
@@ -350,10 +360,10 @@ export const History = fromLucide(LucideHistory, "history");
 export const House = fromMyna(MynaHome, "house");
 export const Image = fromMyna(MynaImage, "image");
 export const Import = fromLucide(LucideImport, "import");
-export const Info = fromMyna(MynaInfo, "info");
-export const Italic = fromMyna(MynaTypeItalic, "italic");
+export const Info = fromMyna(MynaInfoCircle, "info");
+export const Italic = fromMyna(MynaTypeItalic, "italic", "full");
 export const KeyRound = fromMyna(MynaKey, "key-round");
-export const Keyboard = fromMyna(MynaKeyboard, "keyboard");
+export const Keyboard = fromMyna(MynaKeyboard, "keyboard", "full");
 export const Laptop = fromLucide(LucideLaptop, "laptop");
 export const LayoutDashboard = fromMyna(MynaLayoutDashboard, "layout-dashboard");
 export const LayoutGrid = fromMyna(MynaGrid, "layout-grid");
@@ -371,10 +381,10 @@ export const Lock = fromMyna(MynaLock, "lock");
 export const LogIn = fromMyna(MynaLogin, "log-in");
 export const LogOut = fromMyna(MynaLogout, "log-out");
 export const Maximize2 = fromMyna(MynaMaximize, "maximize-2");
-export const MessageSquare = fromMyna(MynaMessage, "message-square");
+export const MessageSquare = fromMyna(MynaMessage, "message-square", "full");
 export const MessageSquareDiff = fromLucide(LucideMessageSquareDiff, "message-square-diff");
-export const MessageSquareDot = fromMyna(MynaMessageDots, "message-square-dot");
-export const MessageSquarePlus = fromMyna(MynaMessagePlus, "message-square-plus");
+export const MessageSquareDot = fromMyna(MynaMessageDots, "message-square-dot", "full");
+export const MessageSquarePlus = fromMyna(MynaMessagePlus, "message-square-plus", "full");
 export const MessageSquareQuote = fromLucide(LucideMessageSquareQuote, "message-square-quote");
 export const Mic = fromMyna(MynaMicrophone, "mic");
 export const Minimize2 = fromMyna(MynaMinimize, "minimize-2");
@@ -382,8 +392,8 @@ export const Minus = fromMyna(MynaMinus, "minus");
 export const Monitor = fromMyna(MynaMonitor, "monitor");
 export const MonitorCog = fromLucide(LucideMonitorCog, "monitor-cog");
 export const MonitorSmartphone = fromLucide(LucideMonitorSmartphone, "monitor-smartphone");
-export const MoreHorizontal = fromMyna(MynaDots, "ellipsis");
-export const MoreVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
+export const MoreHorizontal = fromLucide(LucideEllipsis, "ellipsis");
+export const MoreVertical = fromLucide(LucideEllipsisVertical, "ellipsis-vertical");
 export const MousePointer2 = fromMyna(MynaMousePointer, "mouse-pointer-2");
 export const MousePointerClick = fromMyna(MynaMousePointerClick, "mouse-pointer-click");
 export const NotebookPen = fromLucide(LucideNotebookPen, "notebook-pen");
@@ -391,13 +401,13 @@ export const PanelLeft = fromMyna(MynaPanelLeft, "panel-left");
 export const PanelLeftIcon = fromMyna(MynaPanelLeft, "panel-left");
 export const PanelRight = fromMyna(MynaPanelRight, "panel-right");
 export const Paperclip = fromMyna(MynaPaperclip, "paperclip");
-export const Pause = fromMyna(MynaPause, "pause");
+export const Pause = fromLucide(LucidePause, "pause");
 export const Pencil = fromMyna(MynaPencil, "pencil");
 export const PencilLine = fromMyna(MynaPencil, "pencil-line");
 export const Pilcrow = fromLucide(LucidePilcrow, "pilcrow");
 export const Pin = fromMyna(MynaPin, "pin");
 export const PinOff = fromLucide(LucidePinOff, "pin-off");
-export const Play = fromMyna(MynaPlay, "play");
+export const Play = fromLucide(LucidePlay, "play");
 export const Plug = fromLucide(LucidePlug, "plug");
 export const Plus = fromMyna(MynaPlus, "plus");
 export const Presentation = fromMyna(MynaPresentation, "presentation");
@@ -418,7 +428,7 @@ export const SearchX = fromMyna(MynaSearchX, "search-x");
 export const Send = fromMyna(MynaSend, "send");
 export const Server = fromMyna(MynaServers, "server");
 export const Settings = fromMyna(MynaCog, "settings");
-export const Settings2 = fromMyna(MynaCog, "settings-2");
+export const Settings2 = fromMyna(MynaCog, "settings-2", "full");
 export const Share = fromMyna(MynaShare, "share");
 export const Share2 = fromMyna(MynaShare, "share-2");
 export const Sheet = fromLucide(LucideSheet, "sheet");
@@ -439,7 +449,7 @@ export const Strikethrough = fromLucide(LucideStrikethrough, "strikethrough");
 export const Sun = fromMyna(MynaSun, "sun");
 export const Table2 = fromMyna(MynaTable, "table-2");
 export const Tablet = fromMyna(MynaTablet, "tablet");
-export const Tag = fromMyna(MynaTag, "tag");
+export const Tag = fromMyna(MynaTag, "tag", "full");
 export const TerminalSquare = fromMyna(MynaTerminal, "square-terminal");
 export const Trash2 = fromMyna(MynaTrash, "trash-2");
 export const TriangleAlert = fromMyna(MynaDangerTriangle, "triangle-alert");
@@ -459,14 +469,14 @@ export const Zap = fromMyna(MynaZap, "zap");
 
 // Added by hand (no lucide equivalent was in use): inspector tab icons.
 export const Chat = fromMyna(MynaChat, "chat");
-export const CheckWaves = fromMyna(MynaCheckWaves, "check-waves");
+export const CheckWaves = fromMyna(MynaCheckWaves, "check-waves", "full");
 export const Package = fromMyna(MynaPackage, "package");
 
 // Added for screens that landed on main after the port.
-export const Building2 = fromMyna(MynaBuilding, "building-2");
-export const Mail = fromMyna(MynaMail, "mail");
+export const Building2 = fromMyna(MynaBuilding, "building-2", "full");
+export const Mail = fromMyna(MynaMail, "mail", "full");
 export const Rows2 = fromMyna(MynaRows, "rows-2");
-export const Terminal = fromMyna(MynaTerminal, "terminal");
+export const Terminal = fromMyna(MynaTerminal, "terminal", "full");
 export const Ungroup = fromLucide(LucideUngroup, "ungroup");
 export const UserPlus = fromMyna(MynaUserPlus, "user-plus");
 export const ZoomIn = fromMyna(MynaSearchPlus, "zoom-in");

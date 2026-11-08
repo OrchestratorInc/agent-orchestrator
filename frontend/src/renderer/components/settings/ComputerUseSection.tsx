@@ -313,7 +313,7 @@ function PermissionsGear({ busy, disabled, onClick }: { busy: boolean; disabled:
 	return (
 		<Button type="button" size="icon-sm" variant="ghost" aria-label={label} title={label} aria-busy={busy || undefined} disabled={disabled || busy} onClick={onClick} className="relative">
 			<Settings aria-hidden="true" />
-			{busy ? <LoaderCircle className="absolute inset-0 m-auto size-6 animate-spin text-settings-muted" strokeWidth={1.5} aria-hidden="true" /> : null}
+			{busy ? <LoaderCircle className="absolute inset-0 m-auto size-6 animate-spin text-settings-muted" aria-hidden="true" /> : null}
 		</Button>
 	);
 }

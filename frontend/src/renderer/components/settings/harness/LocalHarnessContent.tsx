@@ -865,11 +865,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
+								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										strokeWidth={1.75}
 										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
 										role="img"
 									/>

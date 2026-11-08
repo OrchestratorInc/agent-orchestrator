@@ -1923,7 +1923,7 @@ const ProjectItem = memo(function ProjectItem({
 											)}
 											data-project-chevron-icon=""
 										>
-											<ChevronRight strokeWidth={1.75} />
+											<ChevronRight />
 										</span>
 									</span>
 									{/* Collapsed icon rail: the project icon, with a red badge when a session
@@ -3624,7 +3624,7 @@ function ProjectIcon({
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {
 		const Icon = expanded ? FolderOpen : Folder;
-		return <Icon className={className} strokeWidth={1.75} />;
+		return <Icon className={className} />;
 	}
 	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
 	const loaded = showAvatar && loadedUrl === avatarUrl;
@@ -3687,7 +3687,6 @@ function SectionDisclosure({
 				<ChevronRight
 					aria-hidden="true"
 					className={cn("size-3.5! shrink-0 transition-transform duration-150", open && "rotate-90")}
-					strokeWidth={2}
 				/>
 			) : null}
 		</>
@@ -3832,7 +3831,7 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 	return (
 		<SidebarMenuItem className="group-data-[collapsible=icon]:mb-0">
 			<SidebarTopNavRow
-				icon={<Search strokeWidth={1.75} aria-hidden="true" />}
+				icon={<Search aria-hidden="true" />}
 				label={t("shell.search")}
 				onClick={() => {
 					// Open on the microtask after this click rather than inside it: mounting

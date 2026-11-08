@@ -260,8 +260,8 @@ export function FirstRunSources({
 			</div>
 			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
 			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
-				{tile(<FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
-				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
 			</div>
 		</div>
 	);

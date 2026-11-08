@@ -99,7 +99,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
-				{project.folderMissing ? <AlertTriangle strokeWidth={1.8} className="text-warning" /> : <Folder strokeWidth={1.8} />}
+				{project.folderMissing ? <AlertTriangle className="text-warning" /> : <Folder />}
 			</span>
 			<span className="relative z-[1] min-w-0 text-sm leading-5">
 				<span className="flex items-center gap-1.5">
@@ -286,37 +286,37 @@ function HomePageContent() {
 								type="button"
 								variant="link"
 							>
-								<Star className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+								<Star className="size-3.5" aria-hidden="true" />
 								{t("home.starUs")}
 							</Button>
 						</div>
 
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
-								icon={<GitFork strokeWidth={1.8} />}
+								icon={<GitFork />}
 								label={t("createProject.cloneFromGit")}
 								onClick={() => requestSource("clone")}
 							/>
 							<HomeActionCard
-								icon={<FolderOpen strokeWidth={1.8} />}
+								icon={<FolderOpen />}
 								label={t("createProject.openLocal")}
 								onClick={() => requestSource("local")}
 							/>
 							<HomeActionCard
-								icon={<Folders strokeWidth={1.8} />}
+								icon={<Folders />}
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
 							{/* Cloud is on for everyone a control plane is configured for. */}
 							{cloudEnabled ? (
 								<HomeActionCard
-									icon={<Cloud strokeWidth={1.8} />}
+									icon={<Cloud />}
 									label={t("createProject.cloudTitle")}
 									onClick={() => requestSource("cloud")}
 								/>
 							) : (
 								<HomeActionCard
-									icon={<MessageSquarePlus strokeWidth={1.8} />}
+									icon={<MessageSquarePlus />}
 									label={t("home.newStandaloneAgent")}
 									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 								/>

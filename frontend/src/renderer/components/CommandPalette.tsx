@@ -1123,7 +1123,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

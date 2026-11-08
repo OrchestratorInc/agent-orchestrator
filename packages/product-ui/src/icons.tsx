@@ -25,8 +25,8 @@ function Icon({
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			strokeWidth="1.5"
-			viewBox="0 0 24 24"
+			strokeWidth="1.35"
+			viewBox="1.2 1.2 21.6 21.6"
 			width="24"
 			xmlns="http://www.w3.org/2000/svg"
 			{...props}
@@ -79,7 +79,7 @@ export function BotIcon(props: IconProps) {
 export function CheckIcon(props: IconProps) {
 	return (
 		<Icon name="check" {...props}>
-			<path d="m6 13.626 1.606 1.722c.886.95 1.329 1.424 1.825 1.574.436.131.9.096 1.315-.1.473-.224.852-.761 1.612-1.836L18 7" />
+			<path d="M20 6 9 17l-5-5" />
 		</Icon>
 	);
 }
@@ -178,7 +178,9 @@ export function MessageSquareIcon(props: IconProps) {
 export function MoreHorizontalIcon(props: IconProps) {
 	return (
 		<Icon name="more-horizontal" {...props}>
-			<path d="M12 12.313v-.626m5 .626v-.626m-10 .626v-.626" />
+			<circle cx="12" cy="12" r="1" />
+			<circle cx="19" cy="12" r="1" />
+			<circle cx="5" cy="12" r="1" />
 		</Icon>
 	);
 }
