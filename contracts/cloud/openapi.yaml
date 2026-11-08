@@ -2274,11 +2274,14 @@ paths:
           description: |
             Read back from this sequence instead of forward from after: the
             newest events with after < sequence < before (at most limit), oldest
-            first. 9007199254740991 reads the newest page. The page then extends
-            back to the prompt of every turn and the first step of every Setup
-            or Cleanup run it holds part of, so it never starts inside one, by
-            at most 1000 events and never to after or below. Such a page carries
-            hasOlder and nextBefore; a control plane that predates this
+            first. Must be greater than after, or it is refused with 400.
+            9007199254740991 reads the newest page. The page then extends back,
+            once, to the prompt of every turn and the first step of every Setup
+            or Cleanup run among those events, by at most 1000 events and never
+            to after or below. What that brings in can begin partway through an
+            earlier turn or run (a prompt queued while another turn ran sits
+            inside that turn); the next older page holds the rest. Such a page
+            carries hasOlder and nextBefore; a control plane that predates this
             parameter ignores it and answers with a page after `after` without
             them.
           schema:

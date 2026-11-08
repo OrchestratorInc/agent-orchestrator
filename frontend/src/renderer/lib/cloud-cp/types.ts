@@ -1406,9 +1406,10 @@ export interface CloudCpChatEventsQuery {
 	types?: readonly string[];
 	/**
 	 * Read back from this sequence instead of forward from `after`: the newest
-	 * `limit` events below it (and above `after`), extended back to where their
-	 * turns start. 9007199254740991 reads the newest page. An older control
-	 * plane ignores it and reads forward; its page then has no `hasOlder`.
+	 * `limit` events below it (and above `after`, which must be lower), extended
+	 * back once to where their turns start. 9007199254740991 reads the newest
+	 * page. An older control plane ignores it and reads forward; its page then
+	 * has no `hasOlder`.
 	 */
 	before?: number;
 	/** With `before` only: only events created at or after this ISO time. */

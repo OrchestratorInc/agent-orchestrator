@@ -4,8 +4,9 @@ import type { CloudCpClient, CloudCpClientEvent, CloudCpChatEventsResponse } fro
 /**
  * A Cloud chat reads its history newest first: the newest page, then the half
  * hour before it, and older pages only as the reader scrolls up. The control
- * plane starts each page where its turns start (the turn's prompt), so a page
- * never shows a turn without its start.
+ * plane starts each page where the turns it selects start (the turn's prompt).
+ * What that reads in can begin partway through an earlier turn (a prompt
+ * queued while it ran), which shows from there until older pages load.
  */
 
 /** The before cursor that reads the newest page. */
