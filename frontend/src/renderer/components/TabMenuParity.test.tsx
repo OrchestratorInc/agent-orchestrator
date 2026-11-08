@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { editorHandoffQueryKey } from "../hooks/useEditorHandoff";
@@ -84,6 +84,18 @@ function menuRows() {
 	});
 }
 
+/** The open menu's rows once its lookups (editor targets, workspace) have settled. */
+async function settledMenuRows() {
+	let rows = menuRows();
+	for (let attempt = 0; attempt < 10; attempt += 1) {
+		await act(async () => {});
+		const next = menuRows();
+		if (next.join("\n") === rows.join("\n")) return next;
+		rows = next;
+	}
+	return rows;
+}
+
 async function renderBoth(spec: TabMenuSpec, agent: SessionTabAgentMenu | undefined, splitOn: boolean) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(editorHandoffQueryKey("sess-1"), editorState);
@@ -106,12 +118,12 @@ async function renderBoth(spec: TabMenuSpec, agent: SessionTabAgentMenu | undefi
 	const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 	fireEvent.contextMenu(screen.getByRole("button", { name: "tab" }));
-	const contextRows = menuRows();
+	const contextRows = await settledMenuRows();
 	fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 	expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
 	await user.click(screen.getByRole("button", { name: "Tab actions" }));
-	const dropdownRows = menuRows();
+	const dropdownRows = await settledMenuRows();
 	return { contextRows, dropdownRows };
 }
 
