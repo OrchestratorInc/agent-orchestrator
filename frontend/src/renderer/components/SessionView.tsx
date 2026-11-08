@@ -1,5 +1,4 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,8 +22,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
-import { SessionContextMenuItems } from "./SessionContextMenuItems";
-import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
+import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
@@ -66,12 +64,11 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
-import { FileTabMenuItems, SessionFileTab } from "./SessionFileTabs";
+import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
@@ -149,6 +146,7 @@ import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
 import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
+import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -586,7 +584,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -1581,14 +1579,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				),
 				onSelect: () => activateCenterFile(path),
 				onClose: () => closeCenterFile(path),
-				menuItems: (
-					<FileTabMenuItems
-						path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
-						remote={Boolean(hostId || session?.cloud)}
-						sessionId={sessionId}
-						source={centerFileRequestsBySession[uiSessionId]?.[path]?.source}
-					/>
-				),
+				menu: {
+					kind: "file",
+					tabKey: `file:${path}`,
+					onClose: () => closeCenterFile(path),
+					file: {
+						path: centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path,
+						remote: Boolean(hostId || session?.cloud),
+						sessionId,
+						source: centerFileRequestsBySession[uiSessionId]?.[path]?.source,
+					},
+				} satisfies TabMenuSpec,
 			})),
 		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId, hostId, session?.cloud, sessionId],
 	);
@@ -1660,14 +1661,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// only preview work arriving afterward may reveal Browser automatically.
 	useLayoutEffect(() => {
 		if (!session) return;
-		if (browserOnly) {
-			const current = useUiStore.getState().inspectorSessions[uiSessionId];
-			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
-			return;
-		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+	}, [hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession]);
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
@@ -1904,25 +1899,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
 		};
-		// The focused member's own tab menu, below the group's Ungroup.
-		const memberMenu = (key: string, shown: boolean) => {
+		// The focused member's own tab menu, below the group's Ungroup. A
+		// member's title is not edited in the group tab, so it has no rename.
+		const memberMenu = (key: string, shown: boolean): TabMenuSpec | undefined => {
 			const filePath = key.startsWith("file:") ? key.slice("file:".length) : undefined;
 			const request = filePath ? centerFileRequestsBySession[uiSessionId]?.[filePath] : undefined;
-			const items = key === SESSION_TAB_KEY
-				? session ? <SessionContextMenuItems session={session} /> : undefined
-				: filePath
-					? <FileTabMenuItems path={request?.path ?? filePath} remote={Boolean(hostId || session?.cloud)} sessionId={sessionId} source={request?.source} />
-					: undefined;
-			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud && sessionIsActive(session);
-			return (
-				<TabMenuBody
-					closeShortcut={shown}
-					destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
-					items={items}
-					onClose={() => closePane(key)}
-					tabKey={key}
-				/>
-			);
+			const base = { tabKey: key, closeShortcut: shown, onClose: () => closePane(key) };
+			if (key === SESSION_TAB_KEY) {
+				if (!session) return { ...base, kind: "plain" };
+				const canArchive = !isOrchestrator && !session.cloud && sessionIsActive(session);
+				return { ...base, kind: "session", session, canArchive };
+			}
+			if (filePath) {
+				return { ...base, kind: "file", file: { path: request?.path ?? filePath, remote: Boolean(hostId || session?.cloud), sessionId, source: request?.source } };
+			}
+			return { ...base, kind: "plain" };
 		};
 		return groups.map((group) => ({
 			key: groupTabKey(group),
@@ -1931,8 +1922,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					active={group === shownGroup}
 					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 					members={leafKeys(group.root).map(groupMember)}
-					menuItems={memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup)}
-					onUngroup={() => updateGroups((current) => ungroupById(current, group.id))}
+					menu={{
+						kind: "group",
+						onUngroup: () => updateGroups((current) => ungroupById(current, group.id)),
+						member: memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup),
+					}}
 				/>
 			),
 			onSelect: () => selectTab(groupFocus(group)),
@@ -2030,25 +2024,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	// A local session's tab menus hold the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	// SessionTabMenu renders nothing without a switch or an agent picker; pass no
-	// action then, so the tab keeps its avatar on hover.
-	const sessionTabMenuEmpty = !interfaceUi.switchAction && !interfaceUi.switchControl && interfaceUi.target !== "chat";
-	const sessionTabActions = !session || session.cloud || sessionTabMenuEmpty
-		? (session?.cloud ? interfaceUi.switchControl : null)
-		: (
-			<SessionTabMenu
-				key={uiSessionId}
-				session={session}
-				hostId={hostId}
-				blocked={agentWorking}
-				switchTarget={interfaceUi.target}
-				switchAction={interfaceUi.switchAction}
-				switchControl={interfaceUi.switchControl}
-			/>
-		);
+	// The agent rows apply while there is a switch to offer, or a terminal's
+	// agent to pick and no switch running. Then the tab also shows its ⋮ button;
+	// otherwise the running switch's status takes the tab's action slot.
+	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
+		if (!session || session.cloud) return undefined;
+		const picksAgent = interfaceUi.target === "chat" && !interfaceUi.switchControl;
+		if (!interfaceUi.switchAction && !picksAgent) return undefined;
+		return { session, hostId, blocked: agentWorking, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
+	const sessionTabActions = sessionTabAgentMenu
+		? <SessionTabMenuButton key={uiSessionId} />
+		: session ? (interfaceUi.switchControl ?? null) : null;
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
@@ -2364,6 +2354,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
 	// native Browser view.
 	useSessionShortcut("toggle-inspector", handleToggleInspector, hasInspector);
+	useSessionMenuAvailable("toggle-inspector", hasInspector);
+	useSessionMenuAvailable("new-shell-terminal", Boolean(session) && !isOrchestrator);
 	useSessionShortcut(
 		"toggle-diff",
 		() => {
@@ -2541,6 +2533,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<TabSplitMenuContext.Provider value={splitTabMenu}>
+							<SessionTabAgentMenuContext.Provider value={sessionTabAgentMenu}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
@@ -2681,6 +2674,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							)}
 							</div>
+							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
 							</SplitHiddenTabKeysContext.Provider>
 							</SplitCloseFocusedContext.Provider>
@@ -2828,7 +2822,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
-							browserOnly={browserOnly}
+							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
 							filesView={
@@ -2871,11 +2865,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<TopbarButton
-							aria-label={
-								browserOnly
-									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-							}
+							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
 								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
@@ -2884,26 +2874,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							style={noDragStyle}
 							variant="icon"
 						>
-							{browserOnly ? (
-								<span className="relative inline-flex">
-									<BrowserIcon aria-hidden="true" className="size-icon-md" />
-									{!isInspectorOpen && browserUnseen ? (
-										<span
-											aria-hidden="true"
-											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-											data-testid="orchestrator-browser-unseen-indicator"
-										/>
-									) : null}
-								</span>
-							) : (
+							<span className="relative inline-flex">
 								<PanelRight className="size-icon-md" aria-hidden="true" />
-							)}
+								{browserOnly && !isInspectorOpen && browserUnseen ? (
+									<span
+										aria-hidden="true"
+										className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+										data-testid="orchestrator-browser-unseen-indicator"
+									/>
+								) : null}
+							</span>
 						</TopbarButton>
 					</TooltipTrigger>
-					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
-						{browserOnly
-							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
+					<TooltipContent shortcut="toggle-inspector" side="bottom">
+						{isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>

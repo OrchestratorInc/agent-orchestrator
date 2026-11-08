@@ -64,6 +64,7 @@ type Service struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
+	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
@@ -192,6 +193,10 @@ type Options struct {
 	// DataDir locates a session's artifact directory when its record names
 	// none, for a render kept as an artifact.
 	DataDir string
+	// PRChanged is told when a finished agent command probably changed the
+	// session's pull request (`gh pr merge`, `git push`), so the SCM observer
+	// can re-read it early. Nil leaves it to the regular poll.
+	PRChanged func(domain.SessionID)
 	// ReconcileOutputType updates a session's output type at once after a
 	// render is kept as an artifact. Nil leaves it to the artifact observer.
 	ReconcileOutputType func(context.Context, domain.SessionID) error
@@ -225,6 +230,7 @@ func New(opts Options) *Service {
 		now:                    now,
 		onAccountChanged:       opts.OnAccountChanged,
 		recheckAccount:         opts.RecheckAccount,
+		prChanged:              opts.PRChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
@@ -1044,7 +1050,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {

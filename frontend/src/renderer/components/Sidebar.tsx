@@ -81,9 +81,8 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import {
-	getSessionRowMarker,
+	getSessionRowIndicator,
 	getSessionStatusDotView,
-	isAgentActivityWorking,
 	sessionNeedsInput,
 	type SessionRowMarker,
 } from "../lib/session-presentation";
@@ -578,20 +577,12 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// A row spins while its agent works, ahead of any PR state: it may already be
-// on its next PR, and the hover card has the PR detail.
-function isSessionRowWorking(session: WorkspaceSession): boolean {
-	if (session.displayStatus === "Terminated") return false;
-	// Setting up (worktree, agent) already counts as working, so the row spins from the moment it is created.
-	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
-}
-
 // Rows showing the red alert sit above the rest, but only in the default
 // order: once the user has dragged rows into their own order, it wins. Stable,
 // so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
-	const flagged = sessions.filter((session) => !isSessionRowWorking(session) && getSessionRowMarker(session) === "attention");
+	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
@@ -649,11 +640,16 @@ function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, working, legacy }: { session: WorkspaceSession; working: boolean; legacy: boolean }) {
+function SessionStatusDot({ session, indicator, legacy }: {
+	session: WorkspaceSession;
+	indicator: ReturnType<typeof getSessionRowIndicator>;
+	legacy: boolean;
+}) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
-	const marker = working ? null : getSessionRowMarker(session);
+	const working = indicator === "working";
+	const marker = working ? null : indicator;
 	// Filled until the user has opened the session since it last changed.
 	const unread = useSessionUnread(session);
 	const previous = useRef(marker);
@@ -1380,7 +1376,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<ArrowLeft aria-hidden="true" />
 								<span className="tracking-tight">{t("settings.back")}</span>
 							</span>
@@ -1419,7 +1415,7 @@ export function Sidebar({
 						type="button"
 					>
 						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 							<Smartphone aria-hidden="true" />
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
@@ -1433,7 +1429,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<Settings aria-hidden="true" />
 								<span className="tracking-tight">{t("shell.settings")}</span>
 							</span>
@@ -2661,7 +2657,8 @@ const SessionRow = memo(function SessionRow({
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
-	const working = isSessionRowWorking(session);
+	const indicator = getSessionRowIndicator(session);
+	const working = indicator === "working";
 	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
 	useEffect(() => {
@@ -2670,7 +2667,7 @@ const SessionRow = memo(function SessionRow({
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
 	const shimmer = newSidebarDesign && working && !active;
-	const marker = !newSidebarDesign || working ? null : getSessionRowMarker(session);
+	const marker = !newSidebarDesign || working ? null : indicator;
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2739,7 +2736,7 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
+					<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
@@ -2846,7 +2843,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
+							<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
@@ -3054,7 +3051,7 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 			type="button"
 		>
 			<NavRowHighlight />
-			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 				<LogIn aria-hidden="true" />
 				<span className="tracking-tight">{t("shell.signInToAOCloud")}</span>
 			</span>
@@ -3117,7 +3114,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<AccountAvatar user={session?.user} />
 						<span className="min-w-0 truncate tracking-tight">{name}</span>
 						{plan ? (
@@ -3319,7 +3316,7 @@ function UpdateStatusRow({
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<Download aria-hidden="true" className="size-icon-lg shrink-0" />
 						<span className="min-w-0 flex-1">
 							<span className="block truncate tracking-tight">{t("shell.updateAvailable")}</span>

@@ -479,14 +479,25 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 		</div>
 	),
 }));
-// The session tab's menu is stood in for by the switch control it wraps.
-vi.mock("./TerminalAgentControls", () => ({
-	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
-		<>
-			{switchControl}
-		</>
-	),
-}));
+vi.mock("./TerminalAgentControls", () => ({ TerminalAgentPickerRow: () => null }));
+// The session tab's ⋮ menu is stood in for by its interface switch row, as a button.
+vi.mock("./TabContextMenu", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./TabContextMenu")>();
+	const { useContext } = await import("react");
+	return {
+		...actual,
+		SessionTabMenuButton: () => {
+			const menu = useContext(actual.SessionTabAgentMenuContext);
+			const action = menu?.switchAction;
+			if (!action) return null;
+			return (
+				<button disabled={action.disabled} onClick={action.run} title={action.reason} type="button">
+					{menu.switchTarget === "chat" ? "Switch to chat UI" : "Switch to terminal UI"}
+				</button>
+			);
+		},
+	};
+});
 vi.mock("./chat/ReviewerChatSurface", () => ({
 	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
@@ -5675,14 +5686,14 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 	});
 
-	it("starts the orchestrator Browser closed and opens it with the inspector shortcut", () => {
+	it("starts the orchestrator inspector closed on Summary and opens it with the inspector shortcut", () => {
 		render(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.getByRole("button", { name: "Open Browser" })).toHaveAttribute("aria-pressed", "false");
+		expect(screen.getByRole("button", { name: "Open inspector panel" })).toHaveAttribute("aria-pressed", "false");
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		expect(screen.getByRole("button", { name: "Close Browser" })).toHaveAttribute("aria-pressed", "true");
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
@@ -5778,7 +5789,7 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "open chat basename" }));
 		await waitFor(() => expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument());
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("reveals each explicit orchestrator preview and respects closing it during passive activity", () => {
@@ -5788,11 +5799,11 @@ describe("SessionView", () => {
 		orchestrator.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		orchestrator.previewRevision = 2;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
@@ -5805,7 +5816,7 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
 		expect(screen.getByTestId("orchestrator-browser-unseen-indicator")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 		expect(screen.queryByTestId("orchestrator-browser-unseen-indicator")).not.toBeInTheDocument();
 		expect(browserUnseen("sess-orch")).toBe(false);
 	});

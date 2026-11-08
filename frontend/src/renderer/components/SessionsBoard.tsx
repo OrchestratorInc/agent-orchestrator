@@ -28,6 +28,7 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
+import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
@@ -153,6 +154,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
+	useSessionMenuAvailable(
+		"open-orchestrator",
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);

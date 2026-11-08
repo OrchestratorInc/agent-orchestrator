@@ -623,17 +623,16 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-shell--floating-topbar .panel-topbar-controls {
-	top: 1px;
+	top: 1.5px;
 }
 
 .center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control {
 	font-size: var(--font-size-md);
 }
 
-/* The last tab's trailing gap (and separator) already spaces New terminal from
- * it like any other tab; the action region starts one gap after it; and the
- * reserve for the panel's trailing controls drops the surface's 1px edge
- * padding. */
+/* The last tab's trailing gap already spaces New terminal from it; the action
+ * region starts one gap after it; and the reserve for the panel's trailing
+ * controls drops the surface's 1px edge padding. */
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
 	padding-inline-start: 0;
 }
@@ -663,8 +662,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-width: 0;
 	border-radius: 0;
 	/* The frame's faint top line reads as part of the gap below the controls,
-	 * so the bar's contents sit 1px low to look evenly spaced. */
-	padding: 1px 1px 1px;
+	 * so the bar's contents sit low to look evenly spaced. 1.5px also lands them
+	 * on the traffic lights' centerline (y = 25). */
+	padding: 1.5px 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
@@ -732,9 +732,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * short separators between them. Hover is a rounded pill around the label;
  * the selected tab is the same pill, filled more strongly and outlined with
  * the panel frame's line, so it reads as current at a glance (translucent
- * windows included, where fills are faint). Every tab, the last included,
- * ends in the same gap with its separator centered in it, so tabs and New
- * terminal are evenly spaced and the separators never move or vanish. */
+ * windows included, where fills are faint). Each tab ends in a gap with its
+ * separator centered in it, so tabs are evenly spaced and the separators
+ * never move or vanish. */
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
 	--floating-tab-gap: var(--space-1);
 	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
@@ -775,15 +775,22 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	pointer-events: none;
 }
 
-/* With nothing after the strip (orchestrators have no New terminal), the last
- * tab ends at its pill. It is the reorder group's last tab, or the session tab
- * when that group is empty. */
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame] {
-	margin-inline-end: 0;
+/* Separators only sit between tabs: the last tab drops its separator and
+ * ends one gap before New terminal, the same space a tab leaves before a
+ * separator. It is the reorder group's last tab, or the session tab when that
+ * group is empty; its frame sits inside the tab's context-menu trigger. */
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: var(--floating-tab-gap);
 }
 
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame]::after {
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
 	content: none;
+}
+
+/* With nothing after the strip (orchestrators have no New terminal), the last
+ * tab ends at its pill. */
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: 0;
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,

@@ -24,6 +24,7 @@ import {
 	useMarkAllNotificationsReadMutation,
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
+import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -497,6 +498,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}
 	}, [queryClient]);
 
+	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
+	// the user can see answers the menu.
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	useAppMenuAvailable("toggle-notifications", true);
+	useAppMenuAction("toggle-notifications", () => {
+		const fullscreenElement = document.fullscreenElement;
+		if (fullscreenElement && !fullscreenElement.contains(anchorRef.current)) return;
+		setPanelOpen(!openRef.current);
+	});
+
 	const retryMarkRead = () => {
 		setMarkReadError(null);
 		setAckRetryNonce((nonce) => nonce + 1);
@@ -676,7 +687,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		<Popover onOpenChange={setPanelOpen} open={open}>
 			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
-				<span className="inline-flex shrink-0">
+				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
 						<TopbarButton
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
