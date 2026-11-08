@@ -162,6 +162,18 @@ func (m *Manager) markAccountSwitch(ctx context.Context, rec domain.SessionRecor
 	}
 }
 
+func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfaceTransition) {
+	if !transition.AccountMove() || transition.SourceMode != domain.SessionModeChat || m.chat == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
+	defer cancel()
+	if err := m.chat.DrainChatQueue(ctx, transition.SessionID); err != nil {
+		m.logger.Warn("account transition: messages sent during the move not delivered",
+			"sessionID", transition.SessionID, "transition", transition.ID, "error", err)
+	}
+}
+
 // runtimeEnvOnAccount is runtimeEnv as the session's agent would get it on
 // accountID, for checks made before the move. It leaves the account override
 // alone: the source agent still runs, and a restart of it must keep its own

@@ -1888,7 +1888,7 @@ function ChatWorkspaceContent({
 					data-testid="chat-conversation-panel"
 					hidden={reviewerActive || shellActive}
 					inert={
-						reviewerActive || shellActive || agentInputDisabled || controllerTransitioning
+						reviewerActive || shellActive || agentInputDisabled || (controllerTransitioning && !accountMoving)
 							? true
 							: undefined
 					}
@@ -2068,7 +2068,7 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onInterrupt={turn && !newWorkDisabled && !openingStarting && !accountMoving ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
@@ -2087,14 +2087,14 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || startupQueues}
+										willQueue={Boolean(turn) || startupQueues || accountMoving}
 										queuePlaceholder={
-											session?.provisionState === "provisioning" || cloudStarting
+											session?.provisionState === "provisioning" || cloudStarting || accountMoving
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoving && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoving) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder

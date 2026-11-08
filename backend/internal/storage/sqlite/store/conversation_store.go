@@ -1313,8 +1313,17 @@ func (s *Store) appendUserMessage(
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
 		}
-		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
+		if record.IsTerminated {
 			return false, domain.ErrSessionNotProvisioning
+		}
+		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid {
+			move, moveErr := s.qw.GetActiveSessionInterfaceTransition(ctx, session)
+			if moveErr != nil && !errors.Is(moveErr, sql.ErrNoRows) {
+				return false, fmt.Errorf("check account move of %s: %w", session, moveErr)
+			}
+			if moveErr != nil || !transitionRowToDomain(move).AccountMoveAwaitsTarget() {
+				return false, domain.ErrSessionNotProvisioning
+			}
 		}
 		// The caller read the conversation before taking writeMu. An orchestrator's
 		// first controller may have moved the queue out of it since then; a turn
