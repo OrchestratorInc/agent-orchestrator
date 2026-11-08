@@ -193,33 +193,56 @@ func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, erro
 		}
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 	}
-	p.CanonicalRepo = m.canonicalGitHubRepo(ctx, p.Repo)
+	canonical := m.canonicalGitHubRepo(ctx, p.Repo)
+	p.CanonicalRepo, p.CanonicalOwnerAvatarURL = canonical.FullName, canonical.OwnerAvatarURL
 	return GetResult{Status: "ok", Project: &p}, nil
+}
+
+// WarmCanonicalRepos resolves every github.com project origin so the first
+// project read after startup already has CanonicalRepo. Run it in the
+// background: it makes one GitHub request per uncached origin.
+func (m *Service) WarmCanonicalRepos(ctx context.Context) {
+	if m.githubRepos == nil {
+		return
+	}
+	rows, err := m.store.ListProjects(ctx)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return
+		}
+		if id, err := domain.ParseRepositoryIdentity(row.RepoOriginURL); err == nil && id.Host == "github.com" {
+			_, _ = m.githubRepos.ResolveGitHubRepository(ctx, id.Namespace, id.Name)
+		}
+	}
 }
 
 // canonicalRepoWait bounds how long Get waits for GitHub on a cold cache. A
 // slower lookup keeps running and fills the cache for the next read.
 const canonicalRepoWait = 2 * time.Second
 
-// canonicalGitHubRepo returns GitHub's current owner/name for a github.com
-// origin, or "" when the origin is on any other host or the lookup fails.
+// canonicalGitHubRepo returns GitHub's current identity for a github.com
+// origin, or the zero value when the origin is on any other host or the
+// lookup fails.
 // Only github.com origins are looked up: sending a self-hosted remote's host
 // or owner to a third party would leak internal names.
-func (m *Service) canonicalGitHubRepo(ctx context.Context, origin string) string {
+func (m *Service) canonicalGitHubRepo(ctx context.Context, origin string) ports.GitHubRepository {
 	if m.githubRepos == nil || origin == "" {
-		return ""
+		return ports.GitHubRepository{}
 	}
 	id, err := domain.ParseRepositoryIdentity(origin)
 	if err != nil || id.Host != "github.com" {
-		return ""
+		return ports.GitHubRepository{}
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, canonicalRepoWait)
 	defer cancel()
 	repo, err := m.githubRepos.ResolveGitHubRepository(waitCtx, id.Namespace, id.Name)
 	if err != nil {
-		return ""
+		return ports.GitHubRepository{}
 	}
-	return repo.FullName
+	return repo
 }
 
 // Add registers a local git repository as a project.

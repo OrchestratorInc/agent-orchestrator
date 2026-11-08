@@ -726,6 +726,7 @@ func Run(buildVersion string) error {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")

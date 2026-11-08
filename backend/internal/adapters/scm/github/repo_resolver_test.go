@@ -20,7 +20,7 @@ func TestRepoResolverFollowsRename(t *testing.T) {
 		http.Redirect(w, r, "/repositories/42", http.StatusMovedPermanently)
 	})
 	f.on(http.MethodGet, "/repositories/42", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42, "full_name": "OrchestratorInc/agent-orchestrator"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42, "full_name": "OrchestratorInc/agent-orchestrator", "owner": map[string]any{"avatar_url": "https://avatars.githubusercontent.com/u/310302959?v=4"}})
 	})
 	r := NewRepoResolver(newProviderForTest(t, f))
 
@@ -28,7 +28,7 @@ func TestRepoResolverFollowsRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (ports.GitHubRepository{ID: 42, FullName: "OrchestratorInc/agent-orchestrator"}) {
+	if got != (ports.GitHubRepository{ID: 42, FullName: "OrchestratorInc/agent-orchestrator", OwnerAvatarURL: "https://avatars.githubusercontent.com/u/310302959?v=4"}) {
 		t.Fatalf("resolved = %#v", got)
 	}
 	if _, err := r.ResolveGitHubRepository(ctx(), "untrivial-ai", "Agent-Orchestrator"); err != nil {
@@ -42,7 +42,9 @@ func TestRepoResolverFollowsRename(t *testing.T) {
 func TestRepoResolverUnchangedRepository(t *testing.T) {
 	f := newFakeGH(t)
 	f.on(http.MethodGet, "/repos/acme/widgets", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_name": "acme/widgets"})
+		// An avatar on any other host is dropped: the renderer only loads
+		// GitHub avatars from avatars.githubusercontent.com.
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_name": "acme/widgets", "owner": map[string]any{"avatar_url": "https://evil.example/acme.png"}})
 	})
 	r := NewRepoResolver(newProviderForTest(t, f))
 

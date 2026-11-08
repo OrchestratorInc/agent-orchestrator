@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -95,6 +96,9 @@ func (r *RepoResolver) fetch(ctx context.Context, owner, name string) (ports.Git
 	var body struct {
 		ID       int64  `json:"id"`
 		FullName string `json:"full_name"`
+		Owner    struct {
+			AvatarURL string `json:"avatar_url"`
+		} `json:"owner"`
 	}
 	if err := json.Unmarshal(resp.Body, &body); err != nil {
 		return ports.GitHubRepository{}, fmt.Errorf("github scm: decode repository: %w", err)
@@ -103,5 +107,15 @@ func (r *RepoResolver) fetch(ctx context.Context, owner, name string) (ports.Git
 	if body.ID == 0 || strings.Count(fullName, "/") != 1 || strings.HasPrefix(fullName, "/") || strings.HasSuffix(fullName, "/") {
 		return ports.GitHubRepository{}, errors.New("github scm: repository response missing id or full_name")
 	}
-	return ports.GitHubRepository{ID: body.ID, FullName: fullName}, nil
+	return ports.GitHubRepository{ID: body.ID, FullName: fullName, OwnerAvatarURL: ownerAvatarURL(body.Owner.AvatarURL)}, nil
+}
+
+// ownerAvatarURL keeps only an HTTPS avatars.githubusercontent.com URL, the
+// one host the renderer loads GitHub avatars from.
+func ownerAvatarURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Host != "avatars.githubusercontent.com" || u.User != nil {
+		return ""
+	}
+	return u.String()
 }
