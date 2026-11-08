@@ -6,11 +6,13 @@ import (
 	"fmt"
 )
 
+// OwnApp is the AO desktop app that runs drags in its own windows.
 type OwnApp interface {
 	PID() int
 	Drag(ctx context.Context, sessionID string, drag map[string]any) (any, error)
 }
 
+// SetOwnApp sets the desktop app that runs drags in AO's own windows.
 func (s *Service) SetOwnApp(app OwnApp) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
