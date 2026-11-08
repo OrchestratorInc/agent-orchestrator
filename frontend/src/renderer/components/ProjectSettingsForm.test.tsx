@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -474,7 +474,7 @@ describe("ProjectSettingsForm", () => {
 		expect(repoLink).toHaveAttribute("href", "https://github.com/acme/project-one");
 	});
 
-	it("saves Codex effort from the combined default model picker", async () => {
+	it("saves Codex effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
 			if (path === "/api/v1/agents/{agent}/models") return { data: {
@@ -491,10 +491,12 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		await waitFor(() => expect(picker).toHaveTextContent("GPT Test · High"));
-		expect(screen.queryByRole("button", { name: "Worker Effort" })).not.toBeInTheDocument();
-		await userEvent.click(picker);
-		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await waitFor(() => expect(picker).toHaveTextContent("GPT Test"));
+		expect(picker).not.toHaveTextContent("High");
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("High");
+		expect(within(effort).getByTestId("effort-meter")).toHaveAttribute("data-filled", "2");
+		await userEvent.click(effort);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
@@ -503,7 +505,7 @@ describe("ProjectSettingsForm", () => {
 		);
 	});
 
-	it("saves Claude effort from the combined model picker", async () => {
+	it("saves Claude effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
 			if (path === "/api/v1/agents/{agent}/models") return { data: {
@@ -520,11 +522,16 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		await waitFor(() => expect(picker).toHaveTextContent("Opus · Medium"));
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
 		expect(picker).not.toHaveTextContent("Claude");
+		expect(picker).not.toHaveTextContent("Medium");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		expect(screen.queryByRole("menuitem", { name: /Reasoning effort/ })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Medium");
+		await userEvent.click(effort);
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));

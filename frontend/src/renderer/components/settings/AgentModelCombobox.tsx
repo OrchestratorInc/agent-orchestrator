@@ -9,6 +9,7 @@ import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant, type ModelVariant } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
 import { ToggleRow } from "../chat/AgentSwitchPicker";
+import { EffortChip } from "./EffortChip";
 import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
@@ -82,6 +83,7 @@ export function AgentModelCombobox({
 	recentScope,
 	compact = false,
 	showEffortInTrigger = true,
+	effortPlacement = "menu",
 	agentId,
 	tuning,
 	disabled = false,
@@ -125,6 +127,8 @@ export function AgentModelCombobox({
 	showEffortInTrigger?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
+	/** "chip" moves reasoning effort out of the model menu into its own picker beside it. */
+	effortPlacement?: "menu" | "chip";
 	disabled?: boolean;
 	"aria-label": string;
 }) {
@@ -186,6 +190,9 @@ export function AgentModelCombobox({
 	const variant = families ? findModelVariant(families, effectiveModel) : undefined;
 	// The row a Cursor variant id shows as is its model's.
 	const shownModel = variant?.family.id ?? effectiveModel;
+	// Cursor's effort is part of its model variant, so it stays in the model menu.
+	const effortChip = effortPlacement === "chip" && !variant;
+	const effortInMenu = showEffort && !effortChip;
 	const selected = searchIndex.byID.get(normalizeSearch(shownModel));
 	const hasMultipleProviders = useMemo(
 		() =>
@@ -253,7 +260,7 @@ export function AgentModelCombobox({
 		const family = families?.find((entry) => entry.id === item.id);
 		const openEffort = family
 			? Boolean(tuning) && (family.efforts.length > 1 || family.hasThinkingChoice)
-			: Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
+			: Boolean(tuning && !effortChip && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
 		setEffortMenuOpen(openEffort);
@@ -271,7 +278,7 @@ export function AgentModelCombobox({
 		void Promise.resolve(onRefresh()).catch(() => setRefreshFailed(true)).finally(() => setRefreshingLocal(false));
 	};
 
-	return (
+	const menu = (
 		<DropdownMenu
 			open={menuOpen}
 			onOpenChange={(open) => {
@@ -301,7 +308,7 @@ export function AgentModelCombobox({
 					) : (
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
-					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
+					{effortInMenu && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
 					{variant?.variant.effort && tuning && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {formatEffortLabel(variant.variant.effort, t)}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
@@ -563,7 +570,7 @@ export function AgentModelCombobox({
 						</OptionMenuSub>
 					</div>
 				)}
-				{showEffort && tuning && (
+				{effortInMenu && tuning && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
 						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {
@@ -594,10 +601,27 @@ export function AgentModelCombobox({
 					</div>
 				)}
 			</DropdownMenuContent>
-			{tuning && invalidEffort && <p role="alert" className="px-1 text-xs leading-row text-warning">
-				{t("settings.models.unsupportedTuning", { role: tuning.roleLabel ? `${tuning.roleLabel} ` : "" })}
-			</p>}
 		</DropdownMenu>
+	);
+	const effortRoleLabel = tuning?.roleLabel ? `${tuning.roleLabel} ` : "";
+	return (
+		<>
+			{effortChip && tuning && effortOptions.length > 0 ? (
+				<div className="flex min-w-0 flex-wrap items-center gap-2">
+					{menu}
+					<EffortChip
+						aria-label={`${effortRoleLabel}${t("settings.models.effort")}`}
+						value={effectiveEffort}
+						levels={effortOptions.map((effort) => ({ value: effort }))}
+						disabled={disabled}
+						onChange={(effort) => tuning.onEffortChange(effort === defaultEffort ? "" : effort)}
+					/>
+				</div>
+			) : menu}
+			{tuning && invalidEffort && <p role="alert" className="px-1 text-xs leading-row text-warning">
+				{t("settings.models.unsupportedTuning", { role: effortRoleLabel })}
+			</p>}
+		</>
 	);
 }
 

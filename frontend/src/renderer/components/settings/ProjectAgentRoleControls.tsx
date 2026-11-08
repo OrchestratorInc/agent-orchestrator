@@ -11,6 +11,7 @@ import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../hooks/us
 import { LOCAL_HOST } from "../../lib/hosts";
 import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
+import { EffortChip } from "./EffortChip";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
@@ -138,6 +139,24 @@ export function AgentModelField({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
+		const chipMode = selectedMode || (options.some((option) => option.value === defaultMode) ? defaultMode : "") || "";
+		const selectMode = (value: string) => {
+			onModeChange(value === defaultMode ? "" : value);
+			onModelChange("");
+		};
+		// The agent picks its own model for each mode, so its modes are the row's
+		// effort levels and the model column reads "Auto".
+		if (options.length > 0 && !(selectedMode && !defaultMode)) {
+			return (
+				<>
+					<div className="flex min-w-0 flex-wrap items-center gap-2">
+						<span className="text-settings-muted">{t("settings.models.autoRouteLabel")}</span>
+						<EffortChip aria-label={label} value={chipMode} levels={options} onChange={selectMode} />
+					</div>
+					{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
+				</>
+			);
+		}
 		return (
 			<>
 				<div className="min-w-0">
@@ -217,6 +236,7 @@ export function AgentModelField({
 						compact
 						recentScope={agentId}
 						menuAlign="start"
+						effortPlacement="chip"
 						tuning={{
 							effort,
 							effortsWithoutModel: supportedEfforts,
