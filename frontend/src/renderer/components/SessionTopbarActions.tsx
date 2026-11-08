@@ -5,6 +5,7 @@ import { Archive, LayoutDashboard, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
+import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import {
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
@@ -25,7 +26,7 @@ import {
 	useTerminateSession,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
-import { OrchestratorIcon } from "./icons";
+import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
@@ -87,6 +88,12 @@ function SimplifiedSessionTopbarActions({
 		hostId,
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: supportsProjectActions ? projectId : undefined,
+		hostId,
+		orchestrator: supportsProjectActions ? orchestrator : undefined,
+		viewing: isOrchestrator,
+	});
 	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
 	// project in scope: open, resume, or spawn. The board registers the same
 	// shortcut, but a session page and the board are never mounted together,
@@ -125,7 +132,7 @@ function SimplifiedSessionTopbarActions({
 					<TooltipTrigger asChild>
 						<span className="inline-flex" style={noDragStyle}>
 							<Button type="button" size="sm"
-								aria-label={t("shell.openOrchestrator")}
+								aria-label={orchestratorReplyLabel(t("shell.openOrchestrator"), orchestratorReply, t)}
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => {
@@ -134,12 +141,12 @@ function SimplifiedSessionTopbarActions({
 								}}
 								variant="quiet"
 							>
-								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
+								<OrchestratorReplyIcon className="size-icon-md" reply={orchestratorReply} surface="topbar" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>
 							</Button>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
+					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorReplyLabel(orchestratorTooltip, orchestratorReply, t)}</TooltipContent>
 				</Tooltip>
 			) : null}
 			{sessionAction ? (
@@ -338,6 +345,12 @@ function LegacySessionTopbarActions({
 		hostId,
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: supportsProjectActions ? projectId : undefined,
+		hostId,
+		orchestrator: supportsProjectActions ? orchestrator : undefined,
+		viewing: isOrchestrator,
+	});
 	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
 	// project in scope: open, resume, or spawn. The board registers the same
 	// shortcut, but a session page and the board are never mounted together,
@@ -481,18 +494,18 @@ function LegacySessionTopbarActions({
 					<TooltipTrigger asChild>
 						<span className="inline-flex" style={noDragStyle}>
 							<Button type="button" size="sm"
-								aria-label={t("shell.openOrchestrator")}
+								aria-label={orchestratorReplyLabel(t("shell.openOrchestrator"), orchestratorReply, t)}
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => void openOrchestrator()}
 								variant="primary"
 							>
-								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
+								<OrchestratorReplyIcon className="size-icon-md" reply={orchestratorReply} surface="filled" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>
 							</Button>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
+					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorReplyLabel(orchestratorTooltip, orchestratorReply, t)}</TooltipContent>
 				</Tooltip>
 			) : null}
 		</PageTopbarActions>

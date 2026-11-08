@@ -146,6 +146,7 @@ import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
+import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -156,6 +157,7 @@ import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -1685,6 +1687,12 @@ const ProjectItem = memo(function ProjectItem({
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		orchestrator,
+		viewing: orchestratorActive,
+	});
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
@@ -2016,21 +2024,27 @@ const ProjectItem = memo(function ProjectItem({
 														size="icon-xs"
 														variant="quiet"
 														aria-current={orchestratorActive ? "page" : undefined}
-														aria-label={
+														aria-label={orchestratorReplyLabel(
 															orchestrator
 																? t("shell.openProjectOrchestrator", {
 																name: nameWithHost,
 																	})
 																: t("shell.spawnProjectOrchestrator", {
 																name: nameWithHost,
-																	})
-														}
+																	}),
+															orchestratorReply,
+															t,
+														)}
 															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
 															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
 														onClick={() => void openOrchestrator()}
 														type="button"
 													>
-														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
+														<OrchestratorReplyIcon
+															reply={orchestratorReply}
+															strokeWidth={orchestratorActive ? 2.5 : 2}
+															surface="sidebar"
+														/>
 													</Button>
 												</span>
 											</TooltipTrigger>
@@ -2040,7 +2054,7 @@ const ProjectItem = memo(function ProjectItem({
 														: isSpawning
 														? t("shell.spawning")
 														: orchestrator
-															? t("shell.orchestrator")
+															? orchestratorReplyLabel(t("shell.orchestrator"), orchestratorReply, t)
 															: t("shell.spawnOrchestratorLower")}
 											</TooltipContent>
 										</Tooltip>

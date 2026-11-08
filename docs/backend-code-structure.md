@@ -701,6 +701,7 @@ graph LR
 - `AO_PORT` — HTTP bind port (default: 3001)
 - `AO_REQUEST_TIMEOUT` — Per-request timeout (default: 60s)
 - `AO_SHUTDOWN_TIMEOUT` — Graceful shutdown cap (default: 10s)
+- `AO_INSTALLER_SHUTDOWN_TIMEOUT` — How long the daemon waits at shutdown for an agent CLI install or update it started to stop and clean up (default: about 285s, never less than `AO_SHUTDOWN_TIMEOUT`). A new daemon on the same data directory waits for this too. Tests set it low.
 - `AO_RUN_FILE` — PID/port handshake (default: ~/.ao/running.json)
 - `AO_DATA_DIR` — SQLite data directory (default: ~/.ao/data)
 - `AO_AGENT` — Compatibility agent adapter (default: claude-code)
