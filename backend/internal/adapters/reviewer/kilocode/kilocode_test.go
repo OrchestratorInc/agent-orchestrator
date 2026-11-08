@@ -169,6 +169,25 @@ func TestBashPolicyAllowsEveryParsedReportingPipelineStage(t *testing.T) {
 				`ao review submit --session sess-1 --reviews -`,
 			},
 		},
+		{
+			name: "AO single-run bookkeeping",
+			stages: []string{
+				`printf '%s' 'it'\''s ready'`,
+				`ao review submit --session sess-1 --run run-1 --verdict approved --review-id 42 --body -`,
+			},
+		},
+		{
+			name: "GitHub review heredoc",
+			stages: []string{
+				"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{ \"event\": \"COMMENT\", \"body\": \"it's ready\" }\nAO_REVIEW_EOF",
+			},
+		},
+		{
+			name: "AO bookkeeping heredoc",
+			stages: []string{
+				"ao review submit --session sess-1 --run run-1 --verdict changes_requested --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's check doesn't run.\nAO_REVIEW_EOF",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -223,7 +242,8 @@ func bashAllowsCommand(t *testing.T, policy map[string]string, command string) b
 		for i, part := range parts {
 			parts[i] = regexp.QuoteMeta(part)
 		}
-		matcher, err := regexp.Compile("^" + strings.Join(parts, ".*") + "$")
+		// Kilo Code's wildcard matcher is dot-all, so `*` spans heredoc lines.
+		matcher, err := regexp.Compile("(?s)^" + strings.Join(parts, ".*") + "$")
 		if err != nil {
 			t.Fatalf("compile pattern %q: %v", pattern, err)
 		}

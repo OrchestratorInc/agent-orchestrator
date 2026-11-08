@@ -20,12 +20,14 @@ const HostTrustWarning = "experimental host-trusted reviewer: Kimchi tool allow/
 // entirely — it launches in --auto mode where these rules are honored. The
 // reviewer can read the checkout and run the few commands it needs (git
 // diff/log/status to inspect the PR, gh api to post the review, printf to pipe
-// JSON, and `ao review submit` to record the verdict) without stalling. This is
-// hardening, not an OS sandbox; the adapter remains host-trusted.
+// review text, and `ao review submit` to record the verdict) without stalling.
+// This is hardening, not an OS sandbox; the adapter remains host-trusted.
 //
-// The review protocol (review/prompt.go step 1) requires the piped command:
+// The review protocol (review/prompt.go) feeds the submit commands from a
+// quoted heredoc, a single segment the gh and ao review submit allow rules
+// match. Its read-only-sandbox fallback is the piped command:
 //
-//	printf '%s' '{...}' | gh api --method POST .../reviews --input -
+//	printf '%s' '...' | gh api --method POST .../reviews --input -
 //
 // Kimchi's allow matcher is single-segment only, so piped commands can't be
 // auto-approved by an allow rule — they fall to the classifier under --auto.
