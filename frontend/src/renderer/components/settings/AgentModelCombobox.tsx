@@ -612,7 +612,7 @@ export function AgentModelCombobox({
 			{effortPlacement === "chip" ? (
 				<div className="flex min-w-0 flex-wrap items-center gap-2">
 					{menu}
-					{effortChip && tuning && effortOptions.length > 0 && <EffortPicker
+					{effortChip && showEffort && tuning && <EffortPicker
 						label={`${effortRoleLabel}${t("settings.models.effort")}`}
 						value={effectiveEffort}
 						choices={effortOptions.map((effort) => ({ value: effort }))}

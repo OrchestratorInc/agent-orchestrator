@@ -539,6 +539,34 @@ describe("ProjectSettingsForm", () => {
 		);
 	});
 
+	it("keeps a saved effort the model no longer lists visible and clearable", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "claude-code", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "claude-haiku", label: "Claude Haiku", isDefault: true, efforts: [] }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "claude-code", agentConfig: { model: "claude-haiku", effort: "max" } },
+					orchestrator: { agent: "codex" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		await screen.findByText(/Worker model tuning is no longer supported/);
+		const effort = screen.getByRole("button", { name: "Worker Effort" });
+		expect(effort).toHaveTextContent("Max");
+		await userEvent.click(effort);
+		expect(screen.getByRole("menuitem", { name: "Max (unavailable)" })).toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Clear effort" }));
+		await waitFor(() => expect(screen.queryByText(/Worker model tuning is no longer supported/)).not.toBeInTheDocument());
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig?.effort).toBeUndefined();
+	});
+
 	it("shows Claude's permission setting and preserves saved permission modes", async () => {
 		mockProject({
 			id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
