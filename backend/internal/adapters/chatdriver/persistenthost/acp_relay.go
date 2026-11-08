@@ -85,7 +85,12 @@ type acpRelay struct {
 	state             ACPState
 	promptJournal     *acpPromptJournal
 	promptResult      []byte
-	cancelRequested   bool
+	// availableCommands holds the latest command catalog the adapter announced
+	// and availableCommandsSession the session it belongs to; see
+	// ACPState.AvailableCommands.
+	availableCommands        json.RawMessage
+	availableCommandsSession string
+	cancelRequested          bool
 	// lastActivityAt stamps the last adapter output, prompt registration, or
 	// client answer to an adapter request, so the stall watchdog can tell a
 	// live turn from a lost one.
@@ -117,7 +122,32 @@ func (r *acpRelay) snapshot() *ACPState {
 	state := r.state
 	state.InitializeResult = append(json.RawMessage(nil), state.InitializeResult...)
 	state.SessionResult = append(json.RawMessage(nil), state.SessionResult...)
+	if r.availableCommandsSession != "" && r.availableCommandsSession == state.SessionID {
+		state.AvailableCommands = append(json.RawMessage(nil), r.availableCommands...)
+	}
 	return &state
+}
+
+// captureAvailableCommands keeps the latest available_commands_update. ACP
+// updates replace the whole catalog, so only the last one matters.
+func (r *acpRelay) captureAvailableCommands(method string, params json.RawMessage) {
+	if method != "session/update" {
+		return
+	}
+	var notification struct {
+		SessionID string `json:"sessionId"`
+		Update    struct {
+			SessionUpdate     string          `json:"sessionUpdate"`
+			AvailableCommands json.RawMessage `json:"availableCommands"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(params, &notification) != nil ||
+		notification.Update.SessionUpdate != "available_commands_update" ||
+		notification.SessionID == "" {
+		return
+	}
+	r.availableCommands = append(json.RawMessage(nil), notification.Update.AvailableCommands...)
+	r.availableCommandsSession = notification.SessionID
 }
 
 func (r *acpRelay) replayTo(ctx context.Context, dst io.Writer) error {
@@ -356,6 +386,7 @@ func (r *acpRelay) providerFrame(
 			}
 			return rewritten, true, nil
 		}
+		r.captureAvailableCommands(method, envelope["params"])
 		if r.state.ActivePrompt {
 			eventID := r.newEventID()
 			injectMeta(envelope, ACPEventIDMetaKey, eventID)

@@ -20,6 +20,7 @@ import { LiveStatus } from "./LiveStatus";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
@@ -122,8 +123,7 @@ export function CoderTemplateOptions({
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
 			<div className="flex flex-col gap-1">
 				{collapsible ? (
-					<button
-						type="button"
+					<Pressable
 						className="flex w-fit items-center gap-1 font-medium text-foreground"
 						aria-expanded={expanded}
 						aria-describedby={collapsedDuplicates.length > 0 ? collapsedWarningId : undefined}
@@ -133,7 +133,7 @@ export function CoderTemplateOptions({
 							? <ChevronDown aria-hidden="true" className="size-icon-sm text-muted-foreground" />
 							: <ChevronRight aria-hidden="true" className="size-icon-sm text-muted-foreground" />}
 						{t("coder.templateOptions.titleCount", { total: parameters.length })}
-					</button>
+					</Pressable>
 				) : (
 					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
 				)}

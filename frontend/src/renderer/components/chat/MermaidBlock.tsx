@@ -22,6 +22,7 @@
 
 import { memo, useCallback, useEffect, useState, type MouseEvent } from "react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { isRenderableDiagram, renderMermaidDiagram, type DiagramTheme } from "../../lib/mermaid-diagram";
 import { CopyButton } from "./CopyButton";
@@ -155,8 +156,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 							aria-label="Diagram view"
 							className="flex items-center rounded-md border border-border bg-background p-0.5"
 						>
-							<button
-								type="button"
+							<Pressable
 								onClick={() => setShowSource(false)}
 								aria-pressed={!showSource}
 								className={cn(
@@ -167,9 +167,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Diagram
-							</button>
-							<button
-								type="button"
+							</Pressable>
+							<Pressable
 								onClick={() => setShowSource(true)}
 								aria-pressed={showSource}
 								className={cn(
@@ -180,7 +179,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Code
-							</button>
+							</Pressable>
 						</div>
 					) : null}
 					<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">

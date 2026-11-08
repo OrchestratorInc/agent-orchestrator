@@ -260,9 +260,15 @@ describe("optimistic message delivery", () => {
 		await act(async () => pending.reject(error));
 
 		expect(field).toHaveTextContent("write a README");
-		if (error instanceof Error) expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
-		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		expect(field).toHaveAttribute("contenteditable", "true");
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("inspect this image");
+		// The parked image leaves memory with the next draft, so Retry re-reads its staged file.
+		const response = new Response();
+		vi.spyOn(response, "blob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		fetch.mockRestore();
 		expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
 		expect(pending.onSend.mock.calls[1][1]).toEqual([{ mimeType: "image/png", data: "iVBORw==" }]);
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
@@ -296,7 +302,7 @@ describe("optimistic message delivery", () => {
 			await act(async () => pending.reject({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
 			expect(field).toHaveTextContent("unsaved next draft");
 			failWrite = false;
-			await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+			await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
 			await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
 			expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
 			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());

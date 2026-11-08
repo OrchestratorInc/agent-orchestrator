@@ -1,6 +1,8 @@
 // Runs before the page's own styles and scripts. It hands the page the host
 // theme and display mode, reports the page's content height, and asks the host
-// to open links.
+// to open links. A host that zooms the page (the artifact viewer) gets its
+// pinch and Cmd+=/-/0 forwarded, hears when the pointer nears the bottom edge
+// where its zoom controls float, and sets the page zoom.
 // The messages are the MCP Apps postMessage methods T3 Code also uses, so this
 // host could later show upstream MCP apps.
 (function () {
@@ -12,6 +14,11 @@
   var wrap = document.createElement("style");
   wrap.id = "ao-wrap";
   (document.head || document.documentElement).appendChild(wrap);
+  // While zoomed the page pans by document scrolling, so a page that hides
+  // its root overflow (slide decks, app shells) still scrolls.
+  var zoomStyle = document.createElement("style");
+  zoomStyle.id = "ao-zoom";
+  (document.head || document.documentElement).appendChild(zoomStyle);
   var framed = window.parent !== window;
   var seq = 0;
   // Fullscreen gives the page the whole dialog width: center a top-level block
@@ -49,6 +56,27 @@
       history.replaceState(history.state, "", location.pathname + location.search);
     }
   } catch (e) {}
+  // The host owns the zoom level. The page scales with a transform, without
+  // relayout, keeping the point under the pinch (or the viewport's center) in
+  // place; below fit it stays centered. Zoomed, it pans by native scroll.
+  var zoomable = false, zoom = 1, revealPx = 0;
+  function setZoom(next, anchor) {
+    next = Number(next);
+    if (!(next >= 0.1 && next <= 10) || next === zoom) return;
+    var ax = anchor && typeof anchor.x === "number" ? anchor.x : window.innerWidth / 2;
+    var ay = anchor && typeof anchor.y === "number" ? anchor.y : window.innerHeight / 2;
+    var ratio = next / zoom;
+    var left = (window.scrollX + ax) * ratio - ax, top = (window.scrollY + ay) * ratio - ay;
+    zoom = next;
+    var root = document.documentElement;
+    root.style.transformOrigin = next === 1 ? "" : "0 0";
+    // Below fit the page stays centered: a percentage of its own width keeps
+    // that true when the pane is resized.
+    root.style.transform = next === 1 ? "" :
+      "translateX(" + (next < 1 ? (1 - next) * 50 : 0) + "%) scale(" + next + ")";
+    zoomStyle.textContent = next === 1 ? "" : "html,body{overflow:visible!important}";
+    window.scrollTo(left, top);
+  }
   window.addEventListener("message", function (e) {
     var d = e.data;
     var p = d && d.params;
@@ -57,8 +85,37 @@
     // MCP Apps context updates may be partial; an absent field is unchanged.
     setDisplay(p.displayMode, p.scrollable, p.wrapContent);
     if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
+    if (p.zoomable !== undefined) zoomable = p.zoomable === true;
+    if (typeof p.zoomRevealPx === "number" && p.zoomRevealPx >= 0) revealPx = p.zoomRevealPx;
+    if (p.zoom !== undefined) setZoom(p.zoom, p.zoomAnchor);
   });
   if (!framed) return;
+  function zoomRequest(params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method: "ao/zoom", params: params }, "*");
+  }
+  // A trackpad pinch arrives as a wheel event with ctrlKey.
+  window.addEventListener("wheel", function (e) {
+    if (!zoomable || !e.ctrlKey) return;
+    e.preventDefault();
+    zoomRequest({ deltaY: e.deltaY, deltaMode: e.deltaMode, x: e.clientX, y: e.clientY });
+  }, { passive: false });
+  // The host's zoom controls float over the page's bottom edge, and pointer
+  // moves inside the frame never reach the host; report entering that zone.
+  var lastReveal = 0;
+  window.addEventListener("pointermove", function (e) {
+    if (!zoomable || !revealPx || window.innerHeight - e.clientY > revealPx) return;
+    var now = Date.now();
+    if (now - lastReveal < 250) return;
+    lastReveal = now;
+    zoomRequest({ reveal: true });
+  }, { passive: true });
+  document.addEventListener("keydown", function (e) {
+    if (!zoomable || e.altKey || !(e.metaKey || e.ctrlKey)) return;
+    var action = e.key === "=" || e.key === "+" ? "in" : e.key === "-" || e.key === "_" ? "out" : e.key === "0" ? "reset" : "";
+    if (!action) return;
+    e.preventDefault();
+    zoomRequest({ action: action });
+  }, true);
   document.addEventListener("click", function (e) {
     if (!e.isTrusted) return;
     var link = e.composedPath().find(function (n) { return n && n.matches && n.matches("a[href]"); });

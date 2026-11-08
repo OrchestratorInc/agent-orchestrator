@@ -15,8 +15,8 @@ vi.mock("../lib/host-clients", () => ({
 const session = { id: "sess-1", status: "working" } as WorkspaceSession;
 const catalog = ["reports/index.html"];
 
-function Chat({ text, openInBrowser, onUnownedFile }: { text: string; openInBrowser: (uri: string) => Promise<void>; onUnownedFile: (reference: string) => void }) {
-	const openLink = useSessionBrowserLink(session, openInBrowser, catalog, onUnownedFile);
+function Chat({ text, target = session, openInBrowser, onUnownedFile }: { text: string; target?: WorkspaceSession; openInBrowser: (uri: string) => Promise<void>; onUnownedFile: (reference: string) => void }) {
+	const openLink = useSessionBrowserLink(target, openInBrowser, catalog, onUnownedFile);
 	return (
 		<ChatLinkProvider onLinkOpen={openLink} onFileOpen={onUnownedFile} workspacePaths={catalog}>
 			<ChatMarkdown text={text} />
@@ -24,12 +24,12 @@ function Chat({ text, openInBrowser, onUnownedFile }: { text: string; openInBrow
 	);
 }
 
-function renderChat(text: string) {
+function renderChat(text: string, target?: WorkspaceSession) {
 	const openInBrowser = vi.fn(async (_uri: string) => undefined);
 	const onUnownedFile = vi.fn();
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<Chat text={text} openInBrowser={openInBrowser} onUnownedFile={onUnownedFile} />
+			<Chat text={text} target={target} openInBrowser={openInBrowser} onUnownedFile={onUnownedFile} />
 		</QueryClientProvider>,
 	);
 	return { openInBrowser, onUnownedFile };
@@ -94,5 +94,17 @@ describe("useSessionBrowserLink", () => {
 		await waitFor(() => expect(openInBrowser).toHaveBeenCalledTimes(1));
 		expect(openInBrowser.mock.calls[0]?.[0]).toMatch(/\/sessions\/sess-1\/preview\/files\/reports\/index\.html$/);
 		expect(resolveRequests()).toEqual([]);
+	});
+
+	it("opens a cloud session's web link in the Browser tab and never asks the local daemon about its files", async () => {
+		const cloudSession = { ...session, cloud: { orgId: "org-1" } } as WorkspaceSession;
+		const { openInBrowser } = renderChat("See [the PR](https://github.com/o/r/pull/1) and [report](reports/index.html).", cloudSession);
+
+		await userEvent.click(screen.getByRole("link", { name: "the PR" }));
+		await userEvent.click(screen.getByRole("link", { name: "report" }));
+
+		await waitFor(() => expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("https://github.com/o/r/pull/1"));
+		expect(getMock).not.toHaveBeenCalled();
+		expect(postMock).not.toHaveBeenCalled();
 	});
 });

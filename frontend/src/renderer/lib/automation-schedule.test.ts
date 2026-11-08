@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WEEKDAY_CODES, buildRRuleFromSchedule, scheduleFieldsFromRRule } from "./automation-schedule";
+import { WEEKDAY_CODES, buildRRuleFromSchedule, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
 
 describe("automation-schedule", () => {
 	it("roundtrips every weekday the form can choose", () => {
@@ -57,4 +57,43 @@ describe("automation-schedule", () => {
 		expect(monthlyFields.monthDay).toBe("15");
 		expect(buildRRuleFromSchedule(monthlyFields)).toBe(monthly);
 	});
+});
+
+it("round trips and edits weekday schedules without reverting to monthly", () => {
+	const fields = scheduleFieldsFromRRule("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0");
+	expect(fields).toMatchObject({ preset: "custom", customFrequency: "weekdays", hour: "9", minute: "0", legacyRaw: null });
+	expect(buildRRuleFromSchedule({ ...fields, hour: "10", minute: "30" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=30;BYSECOND=0");
+});
+
+it.each([
+	["FREQ=DAILY;BYHOUR=9;BYMINUTE=15;BYSECOND=0", "daily", "daily"],
+	["FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0;BYSECOND=0", "weekly", "weekly"],
+	["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", "custom", "weekdays"],
+])("shows saved starter schedule %s while preserving its daemon anchor", (rrule, preset, frequency) => {
+	const saved = `DTSTART;TZID=America/New_York:20261015T080000\nRRULE:${rrule}`;
+	const fields = scheduleFieldsFromRRule(saved);
+	expect(fields.preset).toBe(preset);
+	expect(fields.customFrequency).toBe(frequency);
+	expect(buildRRuleFromSchedule(fields)).toBe(saved);
+	if (frequency === "weekdays") {
+		expect(buildRRuleFromSchedule({ ...fields, legacyRaw: null, hour: "10" })).toBe("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0;BYSECOND=0");
+	}
+});
+
+it.each([
+	"FREQ=DAILY;BYHOUR=9,17;BYMINUTE=0;BYSECOND=0",
+	"FREQ=DAILY;BYHOUR=9;BYMINUTE=0,30;BYSECOND=0",
+	"FREQ=WEEKLY;BYDAY=FR;BYHOUR=9,17;BYMINUTE=0;BYSECOND=0",
+	"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0,30;BYSECOND=0",
+	"FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=9;BYMINUTE=0;BYSECOND=0",
+	"FREQ=MONTHLY;BYMONTHDAY=-1;BYHOUR=9;BYMINUTE=0;BYSECOND=0",
+	"FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9,17;BYMINUTE=0;BYSECOND=0",
+])("keeps unsupported recurrence %s in the raw-rule fallback", (rule) => {
+	for (const raw of [rule, `DTSTART:20261015T080000Z\nRRULE:${rule}`]) {
+		const fields = scheduleFieldsFromRRule(raw);
+		expect(fields).toMatchObject({ preset: "custom", monthDay: "1", legacyRaw: raw });
+		expect(parseTimeValue(fields.time)).not.toBeNull();
+		expect(parseHourMinute(fields.hour, fields.minute)).not.toBeNull();
+		expect(buildRRuleFromSchedule(fields)).toBe(raw);
+	}
 });

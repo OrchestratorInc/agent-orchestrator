@@ -73,13 +73,17 @@ enum UpdateStage: Equatable {
     case complete
     case reopened
     case legacyComplete
+    // The install failed and AO stayed open. AO's own update dialog shows the
+    // error, so the helper cleans up and exits instead of lingering with a
+    // window that AO's next quit would count as a running AO (#6911).
+    case abandoned
 
     // Whether this stage should bring the helper window on screen. The normal
     // close-and-reopen path (.closing/.installing) stays silent; only the
     // stall/failure paths that need the user's attention surface a window.
     var presentsWindow: Bool {
         switch self {
-        case .closing, .installing, .complete, .legacyComplete:
+        case .closing, .installing, .complete, .legacyComplete, .abandoned:
             return false
         case .recovery, .reopened:
             return true
@@ -87,9 +91,13 @@ enum UpdateStage: Equatable {
     }
 }
 
+let failureGraceMs: Double = 20_000
+
 struct UpdateProgressState {
     let request: UpdateRequest
-    private var waitingSince: Double
+    private(set) var waitingSince: Double
+    // When a failure was first seen while AO was still running.
+    private(set) var failureSeenAt: Double?
 
     init(request: UpdateRequest, now: Double) {
         self.request = request
@@ -97,6 +105,7 @@ struct UpdateProgressState {
     }
 
     mutating func keepWaiting(now: Double) { waitingSince = now }
+    mutating func noteFailure(now: Double) { if failureSeenAt == nil { failureSeenAt = now } }
 
     func stage(now: Double, parentAlive: Bool, completion: UpdateCompletion?, failure: String?, legacy: LegacyLaunchEvidence? = nil) -> UpdateStage {
         // A stale or unrelated acknowledgement never dismisses the only visible UI.
@@ -104,7 +113,14 @@ struct UpdateProgressState {
         if !parentAlive, let legacy, legacy.launched(request, now: now) {
             return legacy.visibleWindow ? .legacyComplete : .reopened
         }
-        if let failure, !failure.isEmpty { return .recovery(failure) }
+        if let failure, !failure.isEmpty {
+            guard parentAlive else { return .recovery(failure) }
+            // AO may already be quitting when the failure lands (Squirrel can
+            // fail after quitAndInstall). It exits within its 15 s shutdown
+            // deadline, and then the recovery window is the only UI left.
+            // Only an AO still open after that keeps its own error dialog.
+            return now - (failureSeenAt ?? now) < failureGraceMs ? .closing : .abandoned
+        }
         // A normal update just closes AO and reopens it, and even a slow-but-
         // healthy machine can take a while at each step. Stay hidden (accessory,
         // no window) for the whole budget so nothing pops in front of a working

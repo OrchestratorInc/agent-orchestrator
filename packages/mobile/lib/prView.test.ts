@@ -5,6 +5,10 @@ import {
 	comparePRs,
 	mergeReasonLabel,
 	prBlockerLine,
+	prFilterCounts,
+	prFilterLabel,
+	prInFilter,
+	prListFilters,
 	prListSections,
 	prLifecycle,
 	prStatusAtoms,
@@ -323,5 +327,30 @@ describe("prListSections", () => {
 	it("orders newer pull requests first within a section", () => {
 		const sections = prListSections([item({ number: 7 }), item({ number: 12 }), item({ number: 4 })], "open");
 		expect(sections[0]?.data.map(({ pr }) => pr.number)).toEqual([12, 7, 4]);
+	});
+});
+
+describe("PR list filters", () => {
+	const item = (over: Partial<DashboardPR>) => ({ pr: pr(over), session: session("alpha", []) });
+
+	// Drafts are open pull requests; closed ones are history, under All only.
+	it("counts each filter the way its sections list it", () => {
+		const items = [
+			item({ number: 1 }),
+			item({ number: 2, isDraft: true }),
+			item({ number: 3, state: "merged" }),
+			item({ number: 4, state: "closed" }),
+		];
+		expect(prFilterCounts(items)).toEqual({ open: 2, merged: 1, all: 4 });
+		for (const filter of prListFilters) {
+			const listed = prListSections(items, filter).flatMap((section) => section.data).length;
+			expect(listed).toBe(prFilterCounts(items)[filter]);
+		}
+		expect(prInFilter("open", "draft")).toBe(true);
+		expect(prInFilter("merged", "closed")).toBe(false);
+	});
+
+	it("names each segment with its count", () => {
+		expect(prListFilters.map((filter) => prFilterLabel(filter, 3))).toEqual(["Open 3", "Merged 3", "All 3"]);
 	});
 });

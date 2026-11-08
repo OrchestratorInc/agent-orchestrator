@@ -3,7 +3,7 @@ import { AppState as RNAppState } from "react-native";
 import type { ServerConfig } from "../config";
 import { ApiError } from "../api";
 import { shouldPoll } from "../appStatePoll";
-import { shouldKeepPolling, userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { shouldKeepPolling, userFacingError, RECONNECTING_ACTION_COPY } from "../connectionError";
 import {
 	acknowledgeSessionInterfaceTransitionNotice,
 	cancelSessionInterfaceTransition,
@@ -237,7 +237,7 @@ export function useInterfaceTransition(
 
 	const start = useCallback(
 		async (targetMode: "chat" | "tui", policy: "drain" | "interrupt") => {
-			if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
+			if (!cfg) throw new Error(RECONNECTING_ACTION_COPY);
 			setStarting(true);
 			setError(undefined);
 			try {
@@ -266,7 +266,7 @@ export function useInterfaceTransition(
 	);
 
 	const cancel = useCallback(async () => {
-		if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
+		if (!cfg) throw new Error(RECONNECTING_ACTION_COPY);
 		setCancelling(true);
 		setError(undefined);
 		try {
@@ -283,7 +283,7 @@ export function useInterfaceTransition(
 
 	const acknowledgeNotice = useCallback(
 		async (transitionId: string) => {
-			if (!cfg) throw new Error(NOT_PAIRED_ACTION_COPY);
+			if (!cfg) throw new Error(RECONNECTING_ACTION_COPY);
 			setAcknowledgingNotice(true);
 			setAcknowledgeNoticeError(undefined);
 			try {

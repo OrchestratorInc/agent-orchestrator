@@ -1180,12 +1180,18 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
 	      WHERE binding_id = ub.id
 	  )
   )
-ORDER BY ub.updated_at, ub.id
-LIMIT ?
+  AND ub.id > ?1
+ORDER BY ub.id
+LIMIT ?2
 `
 
-func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) ([]UsageBinding, error) {
-	rows, err := q.db.QueryContext(ctx, listUsageDiscoveryBindings, limit)
+type ListUsageDiscoveryBindingsParams struct {
+	AfterID  int64
+	RowLimit int64
+}
+
+func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, arg ListUsageDiscoveryBindingsParams) ([]UsageBinding, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageDiscoveryBindings, arg.AfterID, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1554,6 +1560,11 @@ UPDATE usage_bindings SET
     END,
     updated_at = ?3
 WHERE id = ?4
+  AND (
+      (?1 <> '' AND usage_bindings.state <> ?1)
+      OR (usage_bindings.last_error_code <> 'codex_source_budget_exceeded'
+          AND usage_bindings.last_error_code <> ?2)
+  )
 `
 
 type UpdateUsageBindingParams struct {
@@ -1563,6 +1574,9 @@ type UpdateUsageBindingParams struct {
 	ID            int64
 }
 
+// Every binding row update emits a session_updated change event, and
+// reconciliation re-asserts the same state on every pass, so a write that would
+// change neither the state nor the error code is skipped.
 func (q *Queries) UpdateUsageBinding(ctx context.Context, arg UpdateUsageBindingParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateUsageBinding,
 		arg.State,

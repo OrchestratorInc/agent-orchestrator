@@ -1,5 +1,7 @@
 package terminal
 
+import "encoding/json"
+
 // The wire protocol is a single multiplexed JSON stream tagged by channel
 // ("ch"), mirroring the legacy Node mux server so the existing xterm client can
 // connect unchanged. One socket carries every logical stream:
@@ -7,15 +9,18 @@ package terminal
 //	ch "terminal" — per-pane byte stream, keyed by an opaque runtime handle id
 //	ch "subscribe" — the client opts into the session-state channel
 //	ch "sessions"  — server-pushed session-state messages (CDC-fed)
+//	ch "shell-agents" — agents running in shell terminals; the client sends
+//	                    "subscribe", the server pushes "snapshot" frames
 //	ch "system"    — liveness; ws-level ping/pong also runs underneath
 //
 // Terminal payloads are base64 in the Data field: PTY output is arbitrary bytes
 // and need not be valid UTF-8, which a raw JSON string could not carry.
 const (
-	chTerminal  = "terminal"
-	chSubscribe = "subscribe"
-	chSessions  = "sessions"
-	chSystem    = "system"
+	chTerminal    = "terminal"
+	chSubscribe   = "subscribe"
+	chSessions    = "sessions"
+	chShellAgents = "shell-agents"
+	chSystem      = "system"
 )
 
 // client message types (ch "terminal" unless noted).
@@ -80,6 +85,8 @@ type serverMsg struct {
 	Rows    uint16         `json:"rows,omitempty"`
 	Error   string         `json:"error,omitempty"`
 	Session *sessionUpdate `json:"session,omitempty"`
+	// Agents is the ch "shell-agents" snapshot, already JSON-encoded.
+	Agents json.RawMessage `json:"agents,omitempty"`
 
 	// raw holds a data frame's PTY output until the writer encodes it into
 	// Data, so consecutive queued output for one terminal can be merged.

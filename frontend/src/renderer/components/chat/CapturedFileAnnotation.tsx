@@ -2,6 +2,8 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { fileReferencePreview } from "../../../shared/chat-file-reference";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 
 export function CapturedFileAnnotation({ reference, children, onOpen, opening = false }: { reference: ChatFileReference; children?: ReactNode; onOpen?: () => void; opening?: boolean }) {
 	const { t } = useTranslation();
@@ -56,10 +58,10 @@ export function CapturedFileAnnotation({ reference, children, onOpen, opening = 
 			open();
 		}}
 	>
-		{onOpen ? <button type="button" className={`${headerClass} w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`} title={reference.path} aria-label={`${t("chat.fileAnnotationOpenFile")}: ${reference.path} · ${location}`} disabled={opening} onClick={event => { if (event.detail === 0) dragged.current = false; open(); }}>{header}</button>
+		{onOpen ? <Pressable className={`${headerClass} w-full`} title={reference.path} aria-label={`${t("chat.fileAnnotationOpenFile")}: ${reference.path} · ${location}`} disabled={opening} onClick={event => { if (event.detail === 0) dragged.current = false; open(); }}>{header}</Pressable>
 			: <div className={headerClass} title={reference.path}>{header}</div>}
 		<pre ref={previewRef} id={previewId} className={`whitespace-pre-wrap break-words text-xs leading-5 select-text ${expanded ? "max-h-48 overflow-auto" : "line-clamp-6"}`}>{expanded ? full : shortened + (clipped ? "…" : "")}</pre>
-		{clipped || wrappedOverflow ? <button type="button" className="mt-1 text-xs text-muted-foreground underline underline-offset-2" aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded(value => !value)}>{t(expanded ? "chat.fileAnnotationShowLess" : "chat.fileAnnotationShowMore")}</button> : null}
+		{clipped || wrappedOverflow ? <Button type="button" variant="link" className="mt-1 text-xs text-muted-foreground" aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded(value => !value)}>{t(expanded ? "chat.fileAnnotationShowLess" : "chat.fileAnnotationShowMore")}</Button> : null}
 		{reference.truncated ? <span className="block text-muted-foreground">{t("chat.capturedSelectionTruncated")}</span> : null}
 		{children}
 	</div>;

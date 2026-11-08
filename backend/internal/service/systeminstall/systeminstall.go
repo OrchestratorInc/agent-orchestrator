@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -1493,6 +1494,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	}
 
 	if err := s.transitionAgentJob(job, StatusVerifying, out.String(), "", ""); err != nil {
+		// AO's own state write failed; network and user-environment install
+		// failures are expected and are not reported.
+		sentryobs.CaptureBackground(parent, err, "systeminstall", "agent_install", map[string]string{"agent": string(job.Target), "reason": "persist"})
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
@@ -1566,8 +1570,13 @@ func lastOutputLine(output string) string {
 // the update command's last line: self-updaters can exit 0 without replacing
 // the binary ("already up to date", "update manually", "restart to finish"),
 // and a failed update quotes it so the user sees which.
+// errVerifierMissing reports a wiring bug: an agent install ran without the
+// adapter-backed verifier.
+var errVerifierMissing = errors.New("systeminstall: adapter-backed install verifier is not configured")
+
 func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *installedBaseline, updaterReport string) {
 	if s.verifier == nil {
+		sentryobs.CaptureBackground(ctx, errVerifierMissing, "systeminstall", "agent_install", map[string]string{"agent": string(job.Target), "reason": "verify"})
 		s.finishAgentJob(job, StatusFailed, "", "adapter-backed install verifier is not configured", "")
 		return
 	}

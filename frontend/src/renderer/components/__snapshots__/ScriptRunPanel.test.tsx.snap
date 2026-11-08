@@ -24,7 +24,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
   <button
     aria-controls="_r_a_"
     aria-expanded="true"
-    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+    class="text-left outline-none group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
     type="button"
   >
     <svg
@@ -94,7 +94,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       <button
         aria-controls="_r_b_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -157,7 +157,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       <button
         aria-controls="_r_c_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -240,7 +240,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
   <button
     aria-controls="_r_d_"
     aria-expanded="true"
-    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+    class="text-left outline-none group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
     type="button"
   >
     <svg
@@ -313,7 +313,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       <button
         aria-controls="_r_e_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -376,7 +376,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       <button
         aria-controls="_r_f_"
         aria-expanded="true"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -450,14 +450,14 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
           </pre>
           <button
             aria-label="Copy output"
-            class="flex items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,transform] hover:bg-interactive-hover hover:text-foreground absolute right-1 top-1 size-6 bg-background"
+            class="group/button inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent bg-clip-padding text-sm font-normal transition-[background-color,border-color,color,box-shadow,opacity] duration-[100ms] ease-out outline-none select-none focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [:where(&_svg:not([class*='size-']))]:size-4 text-muted-foreground hover:text-foreground focus-visible:text-foreground isolate hover:bg-transparent data-[state=open]:bg-transparent before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-[inherit] before:bg-interactive-hover before:opacity-0 before:transition-[inset] before:duration-normal before:ease-[var(--ease-out)] motion-reduce:before:inset-0 motion-reduce:before:transition-none hover:before:inset-0 hover:before:opacity-100 focus-visible:before:inset-0 focus-visible:before:opacity-100 aria-pressed:before:inset-0 aria-pressed:before:opacity-100 aria-pressed:before:bg-interactive-active aria-pressed:text-foreground data-[state=open]:before:inset-0 data-[state=open]:before:opacity-100 data-[state=open]:before:bg-interactive-active data-[state=open]:text-foreground data-[active=true]:before:inset-0 data-[active=true]:before:opacity-100 data-[active=true]:before:bg-interactive-active data-[active=true]:text-foreground size-control-sm absolute right-1 top-1 bg-background"
             data-slot="tooltip-trigger"
             data-state="closed"
             type="button"
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3"
+              class="lucide lucide-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"
@@ -637,7 +637,7 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       <button
         aria-controls="_r_1_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -700,7 +700,7 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       <button
         aria-controls="_r_2_"
         aria-expanded="true"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="text-left outline-none group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
         type="button"
       >
         <svg
@@ -778,14 +778,14 @@ Pulling cache
           </pre>
           <button
             aria-label="Copy output"
-            class="flex items-center justify-center rounded-md text-muted-foreground transition-[background-color,color,transform] hover:bg-interactive-hover hover:text-foreground absolute right-1 top-1 size-6 bg-background"
+            class="group/button inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent bg-clip-padding text-sm font-normal transition-[background-color,border-color,color,box-shadow,opacity] duration-[100ms] ease-out outline-none select-none focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [:where(&_svg:not([class*='size-']))]:size-4 text-muted-foreground hover:text-foreground focus-visible:text-foreground isolate hover:bg-transparent data-[state=open]:bg-transparent before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-[inherit] before:bg-interactive-hover before:opacity-0 before:transition-[inset] before:duration-normal before:ease-[var(--ease-out)] motion-reduce:before:inset-0 motion-reduce:before:transition-none hover:before:inset-0 hover:before:opacity-100 focus-visible:before:inset-0 focus-visible:before:opacity-100 aria-pressed:before:inset-0 aria-pressed:before:opacity-100 aria-pressed:before:bg-interactive-active aria-pressed:text-foreground data-[state=open]:before:inset-0 data-[state=open]:before:opacity-100 data-[state=open]:before:bg-interactive-active data-[state=open]:text-foreground data-[active=true]:before:inset-0 data-[active=true]:before:opacity-100 data-[active=true]:before:bg-interactive-active data-[active=true]:text-foreground size-control-sm absolute right-1 top-1 bg-background"
             data-slot="tooltip-trigger"
             data-state="closed"
             type="button"
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3"
+              class="lucide lucide-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"

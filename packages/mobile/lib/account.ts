@@ -14,12 +14,13 @@ const TOKEN_URL = "https://api.workos.com/user_management/authenticate";
 const STORE_KEY = "ao.account.session";
 const PREVIOUS_KEY = "ao.account.previous";
 
-export type Account = { id: string; email: string };
+/** `name` and `avatarUrl` are the person's own, from the sign-in provider, when it has them. */
+export type Account = { id: string; email: string; name?: string; avatarUrl?: string };
 /** clientId is the AuthKit client that issued the refresh token. Sessions from
  * before it was stored came from the previous WorkOS environment. */
 type StoredAccount = Account & { refreshToken: string; clientId?: string };
 type TokenResponse = {
-	user?: { id?: string; email?: string };
+	user?: { id?: string; email?: string; first_name?: string | null; last_name?: string | null; profile_picture_url?: string | null };
 	access_token?: string;
 	refresh_token?: string;
 	error?: string;
@@ -107,21 +108,29 @@ async function readSession(): Promise<StoredAccount | null> {
 	}
 }
 
+/** The person as the desktop's account row shows them: their name, as the provider gives it, and photo. */
+function profile(user: NonNullable<TokenResponse["user"]>): Pick<Account, "name" | "avatarUrl"> {
+	const name = [user.first_name, user.last_name].map((part) => part?.trim()).filter(Boolean).join(" ");
+	return { ...(name ? { name } : {}), ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}) };
+}
+
 async function saveAccount(result: TokenResponse, generation: number): Promise<Account> {
 	const { id, email } = result.user ?? {};
 	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("Orchestrator sign-in returned an incomplete session.");
+	// Refreshed with every token, so a name or photo changed at the provider shows up here too.
+	const person = profile(result.user!);
 	await rememberPreviousAccount(await SecureStore.getItemAsync(STORE_KEY), id);
-	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, refreshToken: result.refresh_token, clientId: CLIENT_ID } satisfies StoredAccount));
+	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, ...person, refreshToken: result.refresh_token, clientId: CLIENT_ID } satisfies StoredAccount));
 	if (generation === accountGeneration) {
 		accessToken = result.access_token;
 		accessTokenExpiresAt = tokenExpiry(result.access_token);
 	}
-	return { id, email };
+	return { id, email, ...person };
 }
 
 export async function loadAccount(): Promise<Account | null> {
 	const stored = await readSession();
-	return stored ? { id: stored.id, email: stored.email } : null;
+	return stored ? { id: stored.id, email: stored.email, ...(stored.name ? { name: stored.name } : {}), ...(stored.avatarUrl ? { avatarUrl: stored.avatarUrl } : {}) } : null;
 }
 
 /** The account a retired session from another AuthKit client belonged to. */

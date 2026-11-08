@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { sessionUiKey } from "../../lib/hosts";
-import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 /**
@@ -19,6 +19,7 @@ export type LaunchSettings = {
 	showApprovalMode?: boolean;
 	/** What no chosen model means, as the bar names it (see TurnSettingsBar). */
 	unsetModelLabel?: string;
+	approvalModes?: ApprovalMode[];
 };
 
 const launchSettingsKey = (sessionId: string, hostId?: string) => ["session-launch-settings", sessionUiKey(sessionId, hostId)] as const;
@@ -62,7 +63,7 @@ const ignorePending = () => undefined;
 
 // The new chat page's settings bar, held still while the task starts. The
 // session's own bar replaces it, in the same place, once its agent is ready.
-export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel }: LaunchSettings) {
+export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel, approvalModes }: LaunchSettings) {
 	const providerMode = Boolean(configOptions?.length);
 	return (
 		<div className="contents [&_button:disabled]:cursor-default [&_button:disabled]:opacity-100">
@@ -75,6 +76,7 @@ export function LaunchSettingsBar({ harness, projectId, hostId, models, settings
 				onChangeConfigOption={providerMode ? ignoreChange : undefined}
 				showApprovalMode={showApprovalMode}
 				unsetModelLabel={unsetModelLabel}
+				approvalModes={approvalModes}
 				agentSwitch={{ projectId, hostId, disabled: true, onPendingChange: ignorePending }}
 				disabled
 			/>

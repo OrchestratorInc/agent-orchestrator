@@ -1,3 +1,4 @@
+import type { MainErrorCapture } from "./main-error-capture";
 import { AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED, type RendererTelemetryCapture, type TelemetryPolicySnapshot, type TelemetryPolicyView } from "../shared/telemetry-policy";
 
 const RETRY_BACKOFF_INIT_MS = 2_000;
@@ -13,6 +14,7 @@ export type DesktopTelemetryTransport = {
 	closeAndDrain(): Promise<void>;
 	clearCache(): Promise<void>;
 	capture(request: RendererTelemetryCapture): void;
+	captureMain?(request: MainErrorCapture): void;
 };
 
 type Authority = {
@@ -107,6 +109,12 @@ export class DesktopTelemetryController {
 	capture(request: RendererTelemetryCapture): boolean {
 		if (!this.captureEnabled(this.view) || request.consentGeneration !== this.view.consentGeneration || !this.transport) return false;
 		this.transport.capture(request); return true;
+	}
+
+	// Main-process handled errors follow the same consent as renderer captures.
+	captureMain(request: MainErrorCapture): boolean {
+		if (!this.captureEnabled(this.view) || !this.transport?.captureMain) return false;
+		this.transport.captureMain(request); return true;
 	}
 
 	async close(): Promise<void> {

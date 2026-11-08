@@ -1,9 +1,11 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, Smartphone, Trash2 } from "lucide-react";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
+import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -89,7 +91,7 @@ export function MobileDevicesSection() {
 			const { error } = await apiClient.DELETE("/api/v1/mobile/devices/{installId}", {
 				params: { path: { installId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		onSuccess: async (_data, installId) => {
 			// Drop the row from the cached roster rather than hiding its id, so a
@@ -211,17 +213,18 @@ export function MobileDevicesSection() {
 										</span>
 									}
 								>
-									<button
+									<Button
 										type="button"
+										variant="ghost"
 										// The trash button this replaces had focus; keep it on the row.
 										autoFocus
 										aria-label={t("mobile.devices.undoRemoveAria", { name })}
-										className="h-8 rounded-md px-2 text-sm font-medium text-primary transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										className="px-2 font-medium text-primary"
 										disabled={deletingIds.has(device.installId)}
 										onClick={() => undoRemoval(device.installId)}
 									>
 										{t("mobile.devices.undo")}
-									</button>
+									</Button>
 									<span
 										className="mobile-device-undo-countdown"
 										style={{ animationDuration: `${REMOVE_UNDO_MS}ms` }}
@@ -232,19 +235,20 @@ export function MobileDevicesSection() {
 						}
 						return (
 							<SettingsRow key={device.installId} role="listitem" icon={Smartphone} label={name}>
-								<button
+								<Button
 									type="button"
+									variant="destructive-ghost"
+									size="icon"
 									ref={(el) => {
 										if (el) trashButtons.current.set(device.installId, el);
 										else trashButtons.current.delete(device.installId);
 									}}
 									aria-label={t("mobile.devices.removeAria", { name })}
 									title={t("mobile.devices.removeAria", { name })}
-									className="grid size-8 place-items-center rounded-md text-settings-muted transition-colors hover:bg-interactive-hover hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 									onClick={() => startRemoval(device.installId)}
 								>
 									<Trash2 className="size-4" />
-								</button>
+								</Button>
 							</SettingsRow>
 						);
 					})}

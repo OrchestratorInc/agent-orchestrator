@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import { Pressable } from "./ui/pressable";
 
 export function ArtifactGalleryCard({ row, context, onPreview, actions, previewLive = true }: {
 	row: ArtifactRow;
@@ -18,9 +19,8 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
 				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
 			</span>
-			<button
-				type="button"
-				className="block w-full overflow-hidden rounded-md text-left transition-none hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+			<Pressable
+				className="block w-full overflow-hidden rounded-md hover:bg-accent"
 				onClick={onPreview}
 				title={`${row.sessionTitle} · ${row.path}`}
 			>
@@ -35,7 +35,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 						<time dateTime={row.updatedAt} className="shrink-0 tabular-nums">{formatTimeCompact(row.updatedAt)}</time>
 					</span>
 				</span>
-			</button>
+			</Pressable>
 			<div className="absolute right-2 top-2 z-[2] flex items-center gap-1">{actions}</div>
 		</li>
 	);

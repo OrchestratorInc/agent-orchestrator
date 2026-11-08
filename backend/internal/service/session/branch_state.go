@@ -161,12 +161,14 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		state.Unpushed = state.Commits
 	case local:
 		state.RemoteBranch = branchStateRemote + "/" + target.branch
+		state.RemoteHead = remote
 	default:
 		unpushed, ok := gitRevListCount(ctx, root, remote+".."+local)
 		if !ok {
 			return nil
 		}
 		state.RemoteBranch = branchStateRemote + "/" + target.branch
+		state.RemoteHead = remote
 		state.Unpushed = unpushed
 	}
 	if rec.BranchState == nil || *rec.BranchState != state {

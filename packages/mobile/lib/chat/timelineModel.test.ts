@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -26,7 +26,7 @@ describe("mobile Chat timeline model", () => {
 		value.controller.state = "hibernated";
 		expect(canRollbackTurn(value, value.turns[0])).toBe(false);
 	});
-	it("keeps the empty state outside the inverted conversation surface", () => {
+	it("keeps the empty state outside the conversation list", () => {
 		const value = snapshot();
 		value.items = [];
 		value.turns = [];
@@ -34,47 +34,24 @@ describe("mobile Chat timeline model", () => {
 			timelineModel as unknown as {
 				conversationTimelineRenderPlan?: (snapshot: ConversationSnapshot) => {
 					kind: "empty" | "list";
-					inverted: boolean;
 					groups: unknown[];
 				};
 			}
 		).conversationTimelineRenderPlan;
 
-		expect(buildPlan?.(value)).toEqual({ kind: "empty", inverted: false, groups: [] });
+		expect(buildPlan?.(value)).toEqual({ kind: "empty", groups: [] });
 	});
 
-	it("puts the latest exchange first in the virtualized render plan", () => {
-		expect(latestFirstConversationGroups(snapshot()).map((group) => group.items.map((item) => item.id))).toEqual([
-			["u2", "a2"],
-			["u1", "a1"],
-		]);
-	});
-
-	it("renders Android exchanges in natural order without an inverted list transform", () => {
-		const plan = timelineModel.conversationTimelineRenderPlan(snapshot(), undefined, "android");
-		expect(plan).toMatchObject({ kind: "list", inverted: false });
+	// Never inverted, on either platform: see conversationTimelineRenderPlan.
+	it("renders exchanges in reading order", () => {
+		const plan = timelineModel.conversationTimelineRenderPlan(snapshot());
+		expect(plan).toMatchObject({ kind: "list" });
 		expect(plan.groups.map((group) => group.key)).toEqual(["turn-t1", "turn-t2"]);
 	});
 
 	it("keeps queued questions with their own answers instead of strict-sequence interleaving", () => {
 		const groups = groupConversationByTurn(snapshot());
 		expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([["u1", "a1"], ["u2", "a2"]]);
-		expect(conversationMarkers(snapshot())).toMatchObject([
-			{ sequence: 1, title: "First task", detail: "First answer" },
-			{ sequence: 2, title: "Queued task", detail: "Queued answer" },
-		]);
-	});
-
-	it("titles a marker with the human's words rather than AO's staged attachment list", () => {
-		const value = snapshot();
-		const [first, second] = value.items;
-		if (first.kind !== "message" || second.kind !== "message") throw new Error("fixture");
-		first.text = "See screenshot\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png";
-		second.text = "Attached files (read these files in the workspace):\n- .ao/attachments/attachment-b.png\n- .ao/attachments/attachment-c.png";
-		expect(conversationMarkers(value)).toMatchObject([
-			{ sequence: 1, title: "See screenshot" },
-			{ sequence: 2, title: "2 attachments" },
-		]);
 	});
 
 	it("keys a loaded turn by durable identity rather than its current page boundary", () => {
@@ -92,6 +69,33 @@ describe("mobile Chat timeline model", () => {
 			activity("usage", 5, "t1"), activity("reasoning", 6, "t1"), activity("plan", 7, "t1"), activity("system", 8, "t1"),
 		);
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
+	});
+
+	// Claude keeps one task list across turns and can revise it after a turn ends,
+	// when the revision belongs to no turn. The daemon marks every older copy
+	// superseded, so only the newest shows.
+	it("hides plan rows the daemon marked superseded", () => {
+		const value = snapshot();
+		const row = (sequence: number, superseded: boolean): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", spansTurns: true, superseded, steps: [{ text: "Render", status: "completed" }] },
+		});
+		value.items.push(row(5, true), row(6, false));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-6"]);
+	});
+
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const value = snapshot();
+		const row = (sequence: number, text: string): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", steps: [{ text, status: "completed" }] },
+		});
+		value.items.push(row(5, "Read"), row(6, "Write"));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
 	});
 
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {
@@ -325,13 +329,13 @@ describe("turn plans", () => {
 
 	it("shows a list the agent keeps across turns only on the latest turn that carries it", () => {
 		const value = snapshot();
-		value.turns[0].plan = { spansTurns: true, steps: list("in_progress") };
+		// The daemon marks every older copy superseded, a failed turn's included.
+		value.turns[0].state = "failed";
+		value.turns[0].plan = { spansTurns: true, superseded: true, steps: list("in_progress") };
 		value.turns[1].plan = { spansTurns: true, steps: list("completed") };
 		const groups = groupConversationByTurn(value);
 		expect(groups.find((group) => group.turnId === "t1")?.plan).toBeUndefined();
 		expect(groups.find((group) => group.turnId === "t2")?.plan).toBe(value.turns[1].plan);
-		// Newest-first order (iOS) picks the same turn.
-		expect(latestFirstConversationGroups(value).find((group) => group.plan)?.turnId).toBe("t2");
 	});
 
 	it("keeps each turn's own plan", () => {

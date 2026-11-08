@@ -3,6 +3,7 @@ import { QueryClientContext, useQuery, useQueryClient } from "@tanstack/react-qu
 import { useTranslation } from "react-i18next";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { CapturedFileAnnotation } from "./CapturedFileAnnotation";
+import { Button } from "../ui/button";
 import { clientForSessionHost } from "../../lib/host-clients";
 import { subscribeWorkspaceFileChanges } from "../../lib/workspace-file-events";
 
@@ -118,16 +119,17 @@ function ResolvedPreview({
 				}
 			/>
 			{state === "unavailable" || (query.isError && !invalid) ? (
-				<button
+				<Button
 					type="button"
-					className="mt-1 text-xs underline underline-offset-2"
+					variant="link"
+					className="mt-1 text-xs"
 					disabled={query.isFetching}
 					onClick={() => {
 						void query.refetch();
 					}}
 				>
 					{t("chat.fileAnnotationRetry")}
-				</button>
+				</Button>
 			) : null}
 		</>
 	);

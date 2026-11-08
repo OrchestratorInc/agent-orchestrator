@@ -1,8 +1,9 @@
 # Agent Orchestrator — Mobile
 
-Expo (expo-router) mobile supervisor for Agent Orchestrator. Four tabs — Kanban, PRs,
-Orchestrator, Settings — plus a Chat-first spawn flow, a native conversation surface,
-the existing live terminal, and a preview browser. Chat sessions expose durable history,
+Expo (expo-router) mobile supervisor for Agent Orchestrator. Three native tabs — Workers,
+Projects, Pull Requests — with Settings and Notifications in their headers, plus a
+Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
+preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
 worktree-shell escape hatch. It is a **thin client**: it talks to the AO daemon running on your
 computer through the endpoints advertised by the desktop pairing offer. It never runs agents itself.
@@ -418,7 +419,8 @@ Play Store** checks on demand.
 
 ```
 app/                 expo-router routes
-  (tabs)/            Kanban (index), PRs, Orchestrator, Settings
+  (tabs)/            NativeTabs; one group per tab, each a stack for its native header:
+                     (workers)/index, (projects)/projects, (prs)/prs
   session/[id].tsx   persisted-mode router (native Chat or Terminal UI)
   shell/[handleId]   session-scoped worktree shell over the existing mux
   preview/[id]       unified live browser and generated app preview

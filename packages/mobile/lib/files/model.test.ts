@@ -3,6 +3,7 @@ import { parseUnifiedDiff } from "../../../shared/files/diff-parser";
 import type { WorkspaceFileSummary, WorkspaceManifest } from "./api";
 import {
 	annotationTarget,
+	branchName,
 	changeAccessibilityLabel,
 	changeGroups,
 	commentAnchor,
@@ -210,5 +211,14 @@ describe("inline comments", () => {
 	it("draws a context line's comment once, though it has both numbers", () => {
 		const out = summarize(withInlineComments(rows, [{ id: "ctx", anchor: { side: "new", line: 5 } }]));
 		expect(out.filter((row) => row === "comment ctx")).toHaveLength(1);
+	});
+});
+
+describe("branchName", () => {
+	it("says the branch a compared ref names, without its remote", () => {
+		expect(branchName("refs/remotes/origin/main")).toBe("main");
+		expect(branchName("refs/remotes/upstream/release/1.2")).toBe("release/1.2");
+		expect(branchName("refs/heads/feature/x")).toBe("feature/x");
+		expect(branchName("main")).toBe("main");
 	});
 });

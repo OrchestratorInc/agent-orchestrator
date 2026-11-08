@@ -11,14 +11,15 @@ import (
 // is needed to re-attach after daemon/desktop restarts. Transient trusted
 // terminals expire when their originating app launch ends.
 type ShellTerminalRecord struct {
-	HandleID   string
-	ProjectID  domain.ProjectID
-	SessionID  domain.SessionID
-	WorkingDir string
-	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	Transient  bool // Trusted auth terminal, owned by its app launch.
+	HandleID     string
+	ProjectID    domain.ProjectID
+	SessionID    domain.SessionID
+	WorkingDir   string
+	Title        string
+	AppRunID     string
+	CreatedAt    time.Time
+	Transient    bool // Trusted auth terminal, owned by its app launch.
+	CommandOwner string
 	// PreviewCapabilityVerifier authorizes only managed preview lifecycle calls
 	// from this session-scoped shell; the bearer stays in its process environment.
 	PreviewCapabilityVerifier string

@@ -52,6 +52,13 @@ class FakeChrome {
 	debuggerCalls: { method: string; params?: Record<string, unknown> }[] = [];
 	attached = 0;
 	windowsCreated: string[] = [];
+	holdLoad = false;
+	/** When set, tabs.update leaves the commit to the test. */
+	deferCommit?: () => void;
+	holdCommit = false;
+	windowsRemoved: number[] = [];
+	windowStates = new Map<number, string>();
+	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
 	events = {
 		tabsRemoved: event(),
@@ -61,6 +68,8 @@ class FakeChrome {
 		windowsRemoved: event(),
 		runtimeMessage: event(),
 		navCommitted: event(),
+		navFragment: event(),
+		navDomContentLoaded: event(),
 		navCompleted: event(),
 		navError: event(),
 		debuggerEvent: event(),
@@ -85,6 +94,11 @@ class FakeChrome {
 	frameResponder?: (frameId: number, message: Record<string, unknown>) => unknown;
 
 	load(tabId: number, url: string) {
+		if (this.holdCommit) {
+			this.holdCommit = false;
+			this.deferCommit = () => this.load(tabId, url);
+			return;
+		}
 		const tab = this.tabs.get(tabId)!;
 		tab.url = url;
 		tab.title = url === "about:blank" ? "" : (PAGES[url]?.match(/<h1>(.*?)<\/h1>/)?.[1] ?? url);
@@ -93,7 +107,8 @@ class FakeChrome {
 		this.injected.delete(tabId);
 		this.registries.set(tabId, new RefRegistry());
 		this.events.navCommitted.fire({ tabId, frameId: 0, url });
-		setTimeout(() => this.events.navCompleted.fire({ tabId, frameId: 0, url }), 0);
+		this.events.navDomContentLoaded.fire({ tabId, frameId: 0, url });
+		if (!this.holdLoad) setTimeout(() => this.events.navCompleted.fire({ tabId, frameId: 0, url }), 0);
 	}
 
 	api(): ChromeApi {
@@ -187,9 +202,17 @@ class FakeChrome {
 					self.windowsCreated.push(url ?? "");
 					return { id: self.nextWindow++, focused: true };
 				},
+				get: async (windowId) => ({ id: windowId, focused: false, state: self.windowStates.get(windowId) ?? "normal" }),
 				getLastFocused: async () => ({ id: 1, focused: true }),
-				update: async () => ({ id: 1, focused: true }),
-				remove: async () => undefined,
+				update: async (windowId, props) => {
+					self.windowUpdates.push({ windowId, ...props });
+					if (props.state) self.windowStates.set(windowId, props.state);
+					return { id: windowId, focused: false };
+				},
+				remove: async (windowId) => {
+					self.windowsRemoved.push(windowId);
+					for (const [id, tab] of self.tabs) if (tab.windowId === windowId) self.tabs.delete(id);
+				},
 				onRemoved: self.events.windowsRemoved,
 			},
 			scripting: {
@@ -218,10 +241,13 @@ class FakeChrome {
 			webNavigation: {
 				getAllFrames: async () => self.frames,
 				onCommitted: self.events.navCommitted,
+				onReferenceFragmentUpdated: self.events.navFragment,
+				onDOMContentLoaded: self.events.navDomContentLoaded,
 				onCompleted: self.events.navCompleted,
 				onErrorOccurred: self.events.navError,
 			},
 			webRequest: { onBeforeRequest: self.events.requestStarted, onCompleted: self.events.requestCompleted, onErrorOccurred: event() } as never,
+			alarms: { create: async () => undefined, onAlarm: event() },
 			action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined, setTitle: async () => undefined },
 		} as ChromeApi;
 	}
@@ -365,6 +391,76 @@ describe("Executor", () => {
 		expect(await run("snapshot", { interactive: true, delta: true })).toMatchObject({ kind: "unchanged", revision: 2, baseRevision: 1 });
 	});
 
+	it("gives each session its own unfocused window instead of the user's", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
+		// Window 1 is the user's focused window in the fake.
+		expect(windowOf("https://shop.test/")).not.toBe(1);
+		expect(windowOf("https://shop.test/done")).not.toBe(1);
+		expect(windowOf("https://shop.test/")).not.toBe(windowOf("https://shop.test/done"));
+		// A second tab for a session joins that session's window.
+		await run("tab-new", { url: "https://shop.test/more" }, "s1");
+		expect(windowOf("https://shop.test/more")).toBe(windowOf("https://shop.test/"));
+	});
+
+	it("closes a finished session's window when everything in it was the session's", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		await run("tab-new", { url: "https://shop.test/more" }, "s1");
+		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
+		const own = windowOf("https://shop.test/");
+		const other = windowOf("https://shop.test/done");
+		await run("__destroy-session", {}, "s1");
+		expect(fake.windowsRemoved).toEqual([own]);
+		expect(fake.windowsRemoved).not.toContain(other);
+	});
+
+	it("keeps the window and the pages when the user has their own tab in it", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const page = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId: page.windowId });
+		await run("__destroy-session");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(personal.id!)).toBeDefined();
+		expect(fake.tabs.get(page.id!)?.groupId).toBe(-1);
+	});
+
+	it("keeps the window when the user handed the session one of their tabs", async () => {
+		const { fake, run, approve, sessions } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const page = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		const handed = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: page.windowId });
+		const tab = fake.tabs.get(handed.id!)!;
+		tab.groupId = page.groupId;
+		fake.events.tabsUpdated.fire(handed.id, { groupId: page.groupId }, tab);
+		await vi.waitFor(() => expect(sessions.ownerOf(handed.id!)).toBeDefined());
+		await run("__destroy-session");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(handed.id!)?.groupId).toBe(-1);
+	});
+
+	it("restores a minimized agent window for trusted input without focusing it", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		fake.windowStates.set(sessionWindow, "minimized");
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
+		expect(fake.windowUpdates).toEqual([{ windowId: sessionWindow, state: "normal" }]);
+	});
+
 	it("blocks denied sites and non-web pages", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
@@ -427,16 +523,26 @@ describe("Executor", () => {
 		await expect(run("tab-close", { tabId: "t1" })).rejects.toMatchObject({ code: "CANNOT_CLOSE_LAST_TAB" });
 	});
 
-	it("releases the session: closes blank tabs, keeps pages, revokes consent", async () => {
+	it("releases the session: closes its window and revokes consent", async () => {
 		const { fake, consent, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
 		await run("tab-new");
 		await run("__destroy-session");
-		const remaining = [...fake.tabs.values()];
-		expect(remaining).toHaveLength(1);
-		expect(remaining[0]).toMatchObject({ url: "https://shop.test/", groupId: -1 });
+		expect([...fake.tabs.values()]).toHaveLength(0);
 		expect(await consent.approvals()).toEqual({});
+	});
+
+	it("closes blank tabs and keeps pages when the window holds a tab of the user's", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await run("tab-new");
+		const windowId = [...fake.tabs.values()][0]!.windowId;
+		await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId });
+		await run("__destroy-session");
+		expect([...fake.tabs.values()].map((tab) => tab.url).sort()).toEqual(["https://personal.test/", "https://shop.test/"]);
+		expect([...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")).toMatchObject({ groupId: -1 });
 	});
 
 	it("adds every enclosing frame's offset to trusted pointer coordinates", async () => {
@@ -488,20 +594,99 @@ describe("Executor", () => {
 		const { fake, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
-		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: 1 });
-		// The user switches to a personal tab during every capture.
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: sessionWindow });
+		// The user switches the session's window to another tab during the capture.
 		fake.duringCapture = () => fake.activate(personal.id!);
-		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
+		expect(fake.captures).toHaveLength(1);
+		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
+	});
 
-		// A single switch is retried and then succeeds on the session's tab.
-		let switches = 1;
-		fake.duringCapture = () => {
-			if (switches-- > 0) fake.activate(personal.id!);
-		};
-		fake.captures = [];
-		expect(await run("screenshot")).toMatchObject({ target: { url: "https://shop.test/" } });
-		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.id!;
-		expect(fake.captures).toEqual([personal.id, own]);
+	it("never switches away from a tab the user chose in the agent's window", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		await run("screenshot");
+		expect(own.active).toBe(true);
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: own.windowId });
+		fake.activate(personal.id!);
+		const inputBefore = fake.debuggerCalls.length;
+
+		// Input still works, without trusted input, which would need the tab in front.
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
+		expect(await run("press", { key: "Enter" })).toBeTruthy();
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
+		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
+		expect(fake.debuggerCalls.slice(inputBefore).filter((call) => call.method.startsWith("Input."))).toEqual([]);
+
+		// Back on the agent's tab, trusted input resumes.
+		fake.activate(own.id!);
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
+	});
+
+	it("still brings an agent's own tab forward when another agent tab is in front", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await run("screenshot");
+		await run("tab-new", { url: "https://shop.test/more" });
+		const first = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/more")!;
+		await run("screenshot");
+		expect(first.active).toBe(true);
+	});
+
+	it("returns from open once the page is usable, without waiting for every resource", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		fake.holdLoad = true;
+		const started = Date.now();
+		const opened = await run("open", { url: "https://shop.test/" });
+		expect(opened).toMatchObject({ url: "https://shop.test/", isLoading: true });
+		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	it("ignores load events from the page that was already loading when open started", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const tab = [...fake.tabs.values()].find((candidate) => candidate.url === "https://shop.test/")!;
+		fake.holdCommit = true;
+		let settled = false;
+		const opening = run("open", { url: "https://shop.test/done" }).finally(() => (settled = true));
+		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
+		fake.events.navDomContentLoaded.fire({ tabId: tab.id, frameId: 0, url: "https://shop.test/" });
+		fake.events.navCompleted.fire({ tabId: tab.id, frameId: 0, url: "https://shop.test/" });
+		await new Promise((resolve) => setTimeout(resolve, 1_700));
+		expect(settled).toBe(false);
+		fake.deferCommit!();
+		expect(await opening).toMatchObject({ url: "https://shop.test/done", isLoading: false });
+	});
+
+	it("finishes an open that only changes the URL fragment", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const tab = [...fake.tabs.values()].find((candidate) => candidate.url === "https://shop.test/")!;
+		fake.holdCommit = true;
+		const opening = run("open", { url: "https://shop.test/#more" });
+		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
+		tab.url = "https://shop.test/#more";
+		const started = Date.now();
+		// A same-document navigation fires no DOMContentLoaded or load event.
+		fake.events.navFragment.fire({ tabId: tab.id, frameId: 0, url: tab.url });
+		expect(await opening).toMatchObject({ isLoading: false, target: { tabId: "t1" } });
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
+
+	it("reports a fully loaded page when load finishes within the grace period", async () => {
+		const { run, approve } = setup();
+		await approve();
+		expect(await run("open", { url: "https://shop.test/" })).toMatchObject({ isLoading: false });
 	});
 
 	it("applies the site policy to frames, not just the tab", async () => {

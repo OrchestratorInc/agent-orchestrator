@@ -36,6 +36,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
 import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
@@ -549,14 +550,13 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 					{check.name}
 				</ForgeLink>
 				{check.log ? (
-					<button
-						type="button"
+					<Pressable
 						aria-expanded={open}
 						onClick={() => setOpen((current) => !current)}
-						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground"
 					>
 						{t(open ? "chat.automation.hideLog" : "chat.automation.showLog")}
-					</button>
+					</Pressable>
 				) : null}
 			</div>
 			{open && check.log ? (

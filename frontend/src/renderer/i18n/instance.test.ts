@@ -52,12 +52,13 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
-	it("explains side-chat restrictions as behavior while files remain shared", () => {
-		const explanation = createAppI18n("en").t("sideChat.isolationPolicy");
-		expect(explanation).toContain("Files and Git are shared");
-		expect(explanation).toContain("Read-only is behavioral");
-		expect(explanation).toContain("Sub-agent interaction is prohibited by instruction");
-		expect(explanation).not.toContain("disabled");
+	it("provides a brief side-chat description in every locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["sideChat.emptyDescription"], locale).toBeTruthy();
+		}
+		expect(createAppI18n("en").t("sideChat.emptyDescription"))
+			.toBe("Explore a quick question without interrupting the main chat.");
 	});
 
 	it("provides agent management and readiness labels for every supported locale", () => {

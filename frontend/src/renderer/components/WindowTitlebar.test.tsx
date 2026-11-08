@@ -124,6 +124,18 @@ describe("WindowTitlebar", () => {
     ).toBeInTheDocument();
   });
 
+  it("enables Settings Back without route history and restores its disabled state on close", async () => {
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    const onBack = vi.fn();
+    const { rerender } = render(<TooltipProvider><WindowTitlebar onBack={onBack} /></TooltipProvider>);
+    const back = screen.getByRole("button", { name: "Go back" });
+    expect(back).toBeEnabled();
+    await userEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    rerender(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    expect(back).toBeDisabled();
+  });
+
   it("switches the maximize control to a restore icon when the window is maximized", async () => {
     let reportMaximized: ((maximized: boolean) => void) | undefined;
     window.ao!.window.isMaximized = vi.fn().mockResolvedValue(false);

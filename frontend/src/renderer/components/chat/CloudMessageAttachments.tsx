@@ -16,6 +16,7 @@ import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { PdfPreview } from "../PdfPreview";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Pressable } from "../ui/pressable";
 import { ChatImage } from "./ChatImage";
 
 type CloudAttachmentSource = { baseUrl: string; orgId: string; sessionId: string };
@@ -77,8 +78,7 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 	if (failed) return <CloudFileAttachment source={source} attachment={attachment} />;
 	return (
 		<>
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setOpen(true)}
 				title={attachment.fileName}
 				className="flex w-44 flex-col overflow-hidden rounded-md border border-border bg-background text-left transition-colors hover:bg-interactive-hover"
@@ -90,7 +90,7 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
 					<span className="truncate">{attachment.fileName}</span>
 				</span>
-			</button>
+			</Pressable>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
 					<DialogTitle className="truncate text-sm">{attachment.fileName}</DialogTitle>
@@ -120,8 +120,7 @@ function CloudFileAttachment({ source, attachment }: { source: CloudAttachmentSo
 		}
 	};
 	return (
-		<button
-			type="button"
+		<Pressable
 			onClick={() => void save()}
 			disabled={!source || saving}
 			title={t("chat.attachment.save", { name: attachment.fileName })}
@@ -130,7 +129,7 @@ function CloudFileAttachment({ source, attachment }: { source: CloudAttachmentSo
 			<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
 			<span className="truncate">{attachment.fileName}</span>
 			<span className="shrink-0 tabular-nums opacity-70">{formatSize(attachment.size)}</span>
-		</button>
+		</Pressable>
 	);
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
@@ -80,5 +81,38 @@ func TestAuthCacheDoesNotStoreAProbeItsCallerCanceled(t *testing.T) {
 	})
 	if _, ok := cache.get(credential.Fingerprint(), agentcreds.ProviderFirstParty); ok {
 		t.Fatal("an abandoned probe must not answer later callers")
+	}
+}
+
+// A login changes what `claude auth status` says without changing anything the
+// report's cache key covers, so only an invalidation can reveal it.
+func TestPluginInvalidationDropsThePreLoginCLIReport(t *testing.T) {
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	previous := claudeAuthCommand
+	t.Cleanup(func() { claudeAuthCommand = previous })
+	loggedIn := "false"
+	claudeAuthCommand = func(context.Context, string, string, map[string]string) (claudeCommandOutput, error) {
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":` + loggedIn + `,"apiProvider":"firstParty"}`)}, nil
+	}
+	var plugin ports.AgentAuthCacheInvalidator = &Plugin{}
+	read := func() ports.AgentAuthStatus {
+		t.Helper()
+		report, ok := (&Plugin{}).claudeCLIAuthReport(context.Background(), "claude", "", nil)
+		if !ok {
+			t.Fatal("CLI report unavailable")
+		}
+		return report.status()
+	}
+	if got := read(); got != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("before login = %q, want unauthorized", got)
+	}
+	loggedIn = "true"
+	if got := read(); got != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("within the cache window = %q, want the cached report", got)
+	}
+	plugin.InvalidateAuthCache()
+	if got := read(); got != ports.AgentAuthStatusConfigured {
+		t.Fatalf("after invalidation = %q, want configured", got)
 	}
 }

@@ -4,14 +4,15 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
-const actionsSheetSource = readFileSync(new URL("./ConversationActionsSheet.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
-		expect(screenSource).toContain('const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;');
+		// Keyed by the machine, not the connection: an app switch drops `config`
+		// and must not remount the composer (the resume flicker).
+		expect(screenSource).toContain('const composerKey = JSON.stringify([machine, session.id]);');
 		expect(screenSource).toContain('key={composerKey}');
 		expect(screenSource).toContain('quoteRequest?.composerKey === composerKey ? quoteRequest : undefined');
-		expect(composerSource).toContain('`ao.chat.draft.${machineIdentity(config)}.${sessionId}`');
+		expect(composerSource).toContain('`ao.chat.draft.${machine}.${sessionId}`');
 		expect(composerSource).toContain('if (!draftKey || !draftLoaded) return;');
 	});
 
@@ -40,14 +41,10 @@ describe("active turn controls", () => {
 
 	it("keeps the queued row compact without a second labeled steer pill", () => {
 		expect(composerSource).not.toContain("queueSteerText");
-		expect(composerSource).toContain('queueSteer: { width: 40, height: 40');
 	});
 
-	it("keeps settings and active-turn delivery state in one fixed-height row", () => {
-		expect(composerSource).toContain("<View style={styles.metaRow}>");
-		expect(composerSource).toContain('metaRow: { width: "100%", height: 44');
-		expect(composerSource).toContain('numberOfLines={1} style={styles.deliveryNoteText}');
-		expect(composerSource).toContain('Sent after this');
+	it("keeps the turn settings in the pill's controls row", () => {
+		expect(composerSource).toContain("style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>");
 	});
 	// One name per session, as on desktop: useWorkspaceQuery derives
 	// `displayName ?? issueId ?? id`, ChatWorkspace prefers that over the
@@ -58,14 +55,10 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
 	});
 
-	it("renames the session, not the conversation", () => {
-		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
-		expect(screenSource).not.toContain("conversation.rename(next)");
-	});
-
-	it("does not offer rename on the project orchestrator", () => {
-		expect(screenSource).toContain('canRename: !("projectName" in session)');
-		expect(actionsSheetSource).toContain('canRename: entry.canRename && can(snapshot, "rename")');
+	// The actions sheet holds only Shell, Preview, Artifacts, Pin, PR Review, Compact and Archive.
+	it("offers no history map from the actions sheet", () => {
+		expect(screenSource).not.toContain('kind: "conversation-map"');
+		expect(screenSource).toContain("contextPercent: menuContextPercent,");
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
@@ -91,9 +84,17 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
 		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
 		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
-		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
-		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
+		expect(screenSource).toContain("reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number)");
 		expect(screenSource).toContain("<ChatComposer");
+	});
+
+});
+
+describe("whole-screen states", () => {
+	it("shows loading, and failures as an alert with Retry", () => {
+		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
+		expect(screenSource).toContain('onPress={() => void resume()} />}');
+		expect(screenSource).toContain('<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>');
 	});
 });
 
@@ -112,5 +113,17 @@ describe("ao://sessions links in the conversation", () => {
 		const openLink = source.slice(source.indexOf("const openLink = useCallback"), source.indexOf("const nameOfSession"));
 		expect(openLink).toMatch(/const target = sessionLink\(url\);\s*if \(target\) \{\s*router\.push\(\{ pathname: "\/session\/\[id\]", params: \{ id: target\.sessionId, projectId: target\.projectId, hostId: currentHostId \} \}\);\s*return;/);
 		expect(source).toContain("<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession}");
+	});
+});
+
+describe("the composer and the keyboard", () => {
+	// In a long chat, or one still loading as it opened, focusing the field kept
+	// the JS thread busy for most of a second, and the keyboard came up over a
+	// composer still at the bottom: the padded root held it back.
+	it("rides the keyboard outside the padded root, by a transform", () => {
+		const root = screenSource.indexOf("</KeyboardAvoidingView>");
+		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
+		expect(follower).toBeGreaterThan(root);
+		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
 	});
 });

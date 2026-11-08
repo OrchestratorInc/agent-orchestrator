@@ -5,6 +5,8 @@ const actions = readFileSync(new URL("../app/sheets/review-actions.tsx", import.
 const detail = readFileSync(new URL("../app/review/[sessionId].tsx", import.meta.url), "utf8");
 const pickerIOS = readFileSync(new URL("./reviewer-picker.ios.tsx", import.meta.url), "utf8");
 const picker = readFileSync(new URL("./reviewer-picker.tsx", import.meta.url), "utf8");
+const sheetIOS = readFileSync(new URL("./review-actions-sheet.ios.tsx", import.meta.url), "utf8");
+const sheetAndroid = readFileSync(new URL("./review-actions-sheet.tsx", import.meta.url), "utf8");
 const terminal = readFileSync(new URL("./session/TerminalSessionScreen.tsx", import.meta.url), "utf8");
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -17,8 +19,8 @@ describe("reviewer control integration", () => {
 		// must never pick the model catalog after a switch.
 		expect(actions).not.toContain("result.reviewerHarness");
 		expect(actions).not.toContain("reviewState.reviewerHarness");
-		expect(actions).toContain("selectedReviewer={reviewerOverride}");
-		expect(actions).toContain("effectiveReviewer={effectiveReviewer}");
+		expect(actions).toContain("selectedReviewer: reviewerOverride,");
+		expect(actions).toContain("\t\t\teffectiveReviewer,\n");
 	});
 
 	it("ignores stale model catalogs after the effective reviewer changes", () => {
@@ -37,36 +39,29 @@ describe("reviewer control integration", () => {
 	it("renders every reviewer through the shared harness logo registry", () => {
 		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
 		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		expect(picker).toContain("<AgentLogo harness={harness}");
-	});
-
-	it("expands reviewer and model choices inline on Android/web", () => {
-		expect(picker).toContain('accessibilityState={{ expanded: expanded === "reviewer", disabled: busy }}');
-		expect(picker).toContain('accessibilityState={{ expanded: expanded === "model", disabled: busy }}');
-		expect(picker).toContain('{expanded === "reviewer" ? <View style={styles.options}>');
-		expect(picker).toContain('{expanded === "model" ? <View style={styles.options}>');
+		expect(picker).toContain("const source = logoFor(harness);");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {
-		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
+		expect(actions).toContain('import { ReviewActionsSheet } from "../../lib/review-actions-sheet";');
+		expect(sheetAndroid).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
 	});
 
-	it("picks the reviewer and model from native iOS menus like the spawn sheet", () => {
-		expect(pickerIOS).toContain('import { Button, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui"');
+	it("picks the reviewer and model from native iOS menu pickers", () => {
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
 	});
 
 	it("only offers reviewers that can run, like the spawn sheet", () => {
 		expect(actions).toContain(".filter((agent) => agent.selectable || agent.id === reviewerOverride)");
-		expect(actions).toContain("reviewers={availableReviewers}");
+		expect(actions).toContain("reviewers: availableReviewers,");
 	});
 
 	it("uses the desktop inspector's automation wording and the system switch colors", () => {
-		expect(actions).toContain('title="Auto review"');
-		expect(actions).toContain('title="Automatically fix review comments"');
-		expect(actions).toContain('title="Automatically fix CI failures"');
-		expect(actions).not.toContain("trackColor");
+		expect(actions).toContain('title: "Auto review"');
+		expect(actions).toContain('title: "Automatically fix review comments"');
+		expect(actions).toContain('title: "Automatically fix CI failures"');
+		for (const file of [actions, sheetIOS, sheetAndroid]) expect(file).not.toContain("trackColor");
 	});
 
 	it("does not let auto review lose its persistent reviewer", () => {
@@ -97,15 +92,15 @@ describe("reviewer control integration", () => {
 	});
 
 	it("keeps per-item actions in a desktop-style menu", () => {
-		expect(actions).toContain("<ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`}");
+		expect(actions).toContain("menuLabel: `Actions for ${reviewerId}'s comment`,");
 		expect(actions).toContain('{ id: "resolve", label: "Resolve"');
 		expect(detail).toContain("<ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`}");
 	});
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
 		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
-		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <RowPill label=\"Open\"");
-		expect(detail).toContain(": controls.restore ? <RowPill label=\"Restore\"");
+		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <ReviewActionButton label=\"Open\"");
+		expect(detail).toContain(": controls.restore ? <ReviewActionButton label=\"Restore\"");
 		expect(detail).toContain("Push a new commit to run another review.");
 	});
 
@@ -119,8 +114,8 @@ describe("reviewer control integration", () => {
 
 	// A native menu nested in the row's Pressable lost its tap to the row, which
 	// opened the reviewer instead of the menu.
-	it("lays the reviewer's pill and menu over its row instead of nesting them", () => {
-		const start = detail.indexOf("onPress={openReviewer} style=");
+	it("lays the reviewer's button and menu over its row instead of nesting them", () => {
+		const start = detail.indexOf("onPress={openReviewer} android_ripple=");
 		const end = detail.indexOf('<ListSectionHeader label="Orchestrator review" />');
 		expect(start).toBeGreaterThanOrEqual(0);
 		expect(end).toBeGreaterThan(start);
@@ -135,7 +130,7 @@ describe("reviewer control integration", () => {
 		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, hostId))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
-		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');
+		expect(source("../app/notifications/index.tsx")).toContain('action.kind === "review") openPage(');
 		expect(source("./PushManager.tsx")).toContain('if (target === "review") openPage(destination as Href);');
 		expect(detail).toContain("openPage(destination);");
 		for (const path of ["./PRCard.tsx", "./worker-list-row.tsx", "./chat/ChatSessionScreen.tsx", "../app/review/[sessionId].tsx"]) {
@@ -153,6 +148,17 @@ describe("reviewer control integration", () => {
 		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
 		expect(detail).toContain("await mergeSessionPR(config, pr)");
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
+	});
+
+	// A raw message can be an engine string or a bare HTTP status; the shared
+	// mapping turns those into copy that says what to do, as other screens do.
+	it("shows failures through userFacingError, never a raw error message", () => {
+		for (const screen of [detail, actions]) {
+			expect(screen).toContain('import { userFacingError } from "../../lib/connectionError";');
+			expect(screen).not.toMatch(/\.message\s*:/);
+		}
+		expect(detail).toContain('setError(userFacingError(value, "Could not load this review."))');
+		expect(actions).toContain('setError(userFacingError(cause, "Could not load review actions."))');
 	});
 
 	it("keys automatic-review dismissal to the stable run id", () => {

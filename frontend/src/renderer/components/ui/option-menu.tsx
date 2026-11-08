@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useContext, useRef, type ButtonHTMLAttributes } from "react";
+import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
@@ -23,6 +23,7 @@ export const MENU_TRIGGER_CHROME =
 	"settings-option-trigger max-w-full min-w-0 bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] hover:text-[var(--color-text-settings-trigger)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0 disabled:cursor-not-allowed disabled:opacity-50";
 
 const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
+const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Root — re-export for convenience
@@ -170,6 +171,7 @@ export function OptionMenuItem({
 	searchActive,
 	radio,
 	onPointerLeave,
+	onSelect,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	active?: boolean;
@@ -177,6 +179,7 @@ export function OptionMenuItem({
 	searchActive?: boolean;
 	radio?: boolean;
 }) {
+	const closeSubmenu = useContext(CloseSubmenu);
 	return (
 		<DropdownMenuPrimitive.Item
 			{...(radio === undefined
@@ -189,6 +192,16 @@ export function OptionMenuItem({
 				onPointerLeave?.(event);
 				skipFocusHopToSibling(event);
 			}}
+			onSelect={(event) => {
+				onSelect?.(event);
+				if (!closeSubmenu || event.defaultPrevented) return;
+				const triggerId = event.currentTarget instanceof HTMLElement
+					? event.currentTarget.closest('[role="menu"]')?.getAttribute("aria-labelledby")
+					: undefined;
+				event.preventDefault();
+				closeSubmenu();
+				if (triggerId) document.getElementById(triggerId)?.focus();
+			}}
 			{...props}
 		/>
 	);
@@ -198,7 +211,46 @@ export function OptionMenuItem({
 // Submenu — trigger row + subcontent panel
 // ---------------------------------------------------------------------------
 
-export const OptionMenuSub = DropdownMenuPrimitive.Sub;
+/**
+ * Lets a submenu that a selection closed open again, once its trigger is
+ * asked for it: a click, a key, or a pointer that actually moves over it.
+ */
+const AllowSubmenuReopen = createContext<(() => void) | undefined>(undefined);
+
+export function OptionMenuSub({
+	closeOnSelect = false,
+	open,
+	defaultOpen = false,
+	onOpenChange,
+	...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Sub> & { closeOnSelect?: boolean }) {
+	const [localOpen, setLocalOpen] = useState(defaultOpen);
+	// Radix opens a submenu 100ms after the pointer moves onto its trigger and
+	// does not cancel that timer when a click opens it at once. A choice made
+	// inside that window (a quick click and pick, or a search and Enter) closes
+	// the submenu, and the old timer then reopened it. After a selection closes
+	// it, only the trigger being asked again (see AllowSubmenuReopen) opens it.
+	const closedBySelection = useRef(false);
+	const changeOpen = (next: boolean) => {
+		if (next && closedBySelection.current) return;
+		setLocalOpen(next);
+		onOpenChange?.(next);
+	};
+	const closeAfterSelection = () => {
+		closedBySelection.current = true;
+		changeOpen(false);
+	};
+	const allowReopen = useCallback(() => {
+		closedBySelection.current = false;
+	}, []);
+	return (
+		<CloseSubmenu.Provider value={closeOnSelect ? closeAfterSelection : undefined}>
+			<AllowSubmenuReopen.Provider value={allowReopen}>
+				<DropdownMenuPrimitive.Sub open={open ?? localOpen} onOpenChange={changeOpen} {...props} />
+			</AllowSubmenuReopen.Provider>
+		</CloseSubmenu.Provider>
+	);
+}
 
 export function OptionMenuSubTrigger({
 	className,
@@ -206,11 +258,14 @@ export function OptionMenuSubTrigger({
 	value,
 	children,
 	onClick,
+	onKeyDown,
+	onPointerMove,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
 	label?: string;
 	value?: string;
 }) {
+	const allowReopen = useContext(AllowSubmenuReopen);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
 			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
@@ -219,7 +274,18 @@ export function OptionMenuSubTrigger({
 			// signal to skip its own open/close handling.
 			onClick={(e) => {
 				e.stopPropagation();
+				allowReopen?.();
 				onClick?.(e);
+			}}
+			onKeyDown={(e) => {
+				allowReopen?.();
+				onKeyDown?.(e);
+			}}
+			onPointerMove={(e) => {
+				// A real move, not the zero-movement one a browser sends when the
+				// page changes under a resting pointer.
+				if (e.movementX || e.movementY) allowReopen?.();
+				onPointerMove?.(e);
 			}}
 			{...props}
 		>

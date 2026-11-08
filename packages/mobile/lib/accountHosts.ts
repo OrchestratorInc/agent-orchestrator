@@ -102,7 +102,7 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 	const response = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
-	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
+	if (!response.ok) throw new Error(`Could not load your account's machines (${response.status}).`);
 	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
 	if (!await current()) return;
 	await adoptPreviousAccount(account, new Set(hosts.map((item) => item.hostId)), current);
@@ -163,8 +163,11 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 				if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
 				return;
 			}
+			// Connecting saves the machine's advertised routes beside the listed
+			// address. Keep them while that address is still one of them: resetting
+			// to the listed address alone restarted the connection on every sync.
 			if (existing && existing.accountUserId === account.id && existing.token === item.token &&
-				existing.endpoints.length === 1 && JSON.stringify(existing.endpoints[0]) === JSON.stringify(address)) return;
+				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address))) return;
 			await saveHost({
 				// Directory labels seed new machines; a phone's chosen name and icon
 				// remain local preferences when remote credentials/routes rotate.

@@ -459,6 +459,13 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 			"type": "preset", "preset": "claude_code", "append": standing,
 		}
 	}
+	// Claude Code starts cycles on its own after an AO turn, for example to answer
+	// a finished background task. AO has no turn for those, so the SDK's own
+	// running/idle report is the only sign that the agent is working.
+	claudeCode := map[string]any{
+		"emitRawSDKMessages": []map[string]string{{"type": "system", "subtype": "session_state_changed"}},
+	}
+	meta["claudeCode"] = claudeCode
 	// Also per session, so a choice made after the adapter started still applies.
 	options := map[string]any{}
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
@@ -470,10 +477,7 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		options["disallowedTools"] = []string{"mcp__*"}
 	}
 	if len(options) > 0 {
-		meta["claudeCode"] = map[string]any{"options": options}
-	}
-	if len(meta) == 0 {
-		return nil
+		claudeCode["options"] = options
 	}
 	return meta
 }
@@ -565,6 +569,12 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 		return runtimeLaunch{}, err
 	}
 	if err := requireNodeVersion(ctx, node); err != nil {
+		return runtimeLaunch{}, err
+	}
+	// The entry stays in the packaged runtime, so module resolution is
+	// unchanged even when an Intel Mac launches a re-signed copy of Node.
+	node, err := jitCapableNode(ctx, node)
+	if err != nil {
 		return runtimeLaunch{}, err
 	}
 	return runtimeLaunch{command: node, args: []string{entry}}, nil

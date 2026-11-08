@@ -3,6 +3,12 @@
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
 import { aoBridge } from "./bridge";
+import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
+
+function forwardCapture(input: RendererTelemetryCaptureInput): void {
+	try { void Promise.resolve(aoBridge.telemetry?.capture(input)).catch(() => undefined); }
+	catch { /* a failing reporter must not become an unhandled rejection */ }
+}
 
 export type ObservabilityContext = { release?: string; channel?: string; platform?: string; distinctId?: string };
 export type CaptureMeta = ClassifyInput & { operation?: string; surface?: string; domain?: string; requestId?: string };
@@ -39,9 +45,9 @@ function safeRendererFrames(error: unknown): Array<{ function: string; filename?
 
 export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}): void {
 	const triage = classifyError(meta);
-	void aoBridge.telemetry?.capture({
+	forwardCapture({
 		kind: triage.report ? "exception" : "breadcrumb",
-		message: String((error as Error)?.message ?? error),
+		message: "Renderer error",
 		level: triage.level,
 		tags: tagsFor(meta, triage),
 		...(triage.report ? { exception: { type: safeSentryExceptionType((error as Error)?.name), frames: safeRendererFrames(error) } } : {}),
@@ -50,5 +56,5 @@ export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {})
 export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
 	const meta: CaptureMeta = { operation, category, httpStatus: status, code, requestId, domain: domainOf(operation) };
 	const triage = classifyError(meta);
-	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
+	forwardCapture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
 }

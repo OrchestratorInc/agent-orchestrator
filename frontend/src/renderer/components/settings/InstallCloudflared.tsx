@@ -89,7 +89,7 @@ export function InstallCloudflared({ onInstalled }: { onInstalled: () => void })
 	return (
 		<div className="mt-2 flex flex-col gap-1.5" data-testid="mobile-install-cloudflared">
 			{view.kind === "offer" && (
-				<Button type="button" variant="ghost" size="sm" className="self-start text-settings-muted hover:text-settings-label" onClick={() => void start()}>
+				<Button type="button" variant="quiet" size="sm" className="self-start" onClick={() => void start()}>
 					{t("mobile.installConnector", "Install cloudflared")}
 				</Button>
 			)}
@@ -104,7 +104,7 @@ export function InstallCloudflared({ onInstalled }: { onInstalled: () => void })
 			{view.kind === "fallback" && (
 				<>
 					<p className="text-xs text-error">{view.reason}</p>
-					<Button type="button" variant="ghost" size="sm" className="self-start text-settings-muted hover:text-settings-label" onClick={() => void start()}>
+					<Button type="button" variant="quiet" size="sm" className="self-start" onClick={() => void start()}>
 						{t("mobile.installConnectorFallback", "Install with your package manager")}
 					</Button>
 				</>
@@ -117,7 +117,7 @@ export function InstallCloudflared({ onInstalled }: { onInstalled: () => void })
 					<code className="block overflow-x-auto rounded bg-(--color-bg-settings-input) px-2 py-1 text-xs text-settings-label">
 						{view.command}
 					</code>
-					<Button type="button" variant="ghost" size="sm" className="self-start text-settings-muted hover:text-settings-label" onClick={onInstalled}>
+					<Button type="button" variant="quiet" size="sm" className="self-start" onClick={onInstalled}>
 						{t("mobile.checkConnectorAgain", "Check again")}
 					</Button>
 				</>

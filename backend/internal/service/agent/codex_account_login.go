@@ -91,7 +91,7 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	if targetAccountID != "" {
 		title = "Sign in to Codex account"
 	}
-	terminal, err := m.terminal.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: []string{executable, "codex-login", "--executable", codex}, Env: map[string]string{"CODEX_HOME": home}, WorkingDir: home, Title: title})
+	terminal, err := m.terminal.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Owner: "codex-account-auth", Argv: []string{executable, "codex-login", "--executable", codex}, Env: map[string]string{"CODEX_HOME": home}, WorkingDir: home, Title: title})
 	if err != nil {
 		_ = os.RemoveAll(pendingDir)
 		m.clearLoginReservation(id)

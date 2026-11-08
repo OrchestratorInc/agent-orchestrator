@@ -22,8 +22,9 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronDown, ListChecks } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
-import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
+import { syncEdgeFade as syncViewportEdgeFade } from "../../hooks/useEdgeFade";
 
 const STEP_LABEL: Record<PlanStepStatus, string> = {
 	pending: "not started",
@@ -107,12 +108,11 @@ export const TurnPlan = memo(function TurnPlan({
 			data-turn-plan="true"
 		>
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
-			<button
-				type="button"
+			<Pressable
 				onClick={() => setExpanded((open) => !open)}
 				aria-expanded={expanded}
 				aria-label={expanded ? "Collapse plan" : "Expand plan"}
-				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+				className="group/plan flex h-11 w-full items-center gap-2.5 px-3.5"
 			>
 				<PlanMark done={allDone} />
 				<span className="shrink-0 text-sm font-medium text-foreground">Plan</span>
@@ -131,7 +131,7 @@ export const TurnPlan = memo(function TurnPlan({
 						expanded && "rotate-180",
 					)}
 				/>
-			</button>
+			</Pressable>
 
 			<AnimatePresence initial={false}>
 				{expanded ? (
@@ -152,7 +152,7 @@ export const TurnPlan = memo(function TurnPlan({
 						<div
 							ref={viewportRef}
 							onScroll={syncEdgeFade}
-							className="edge-fade-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+							className="edge-fade scrollbar-none relative max-h-60 overflow-y-auto"
 						>
 							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
 							    step is spoken rather than left to a colour. */}
@@ -164,7 +164,7 @@ export const TurnPlan = memo(function TurnPlan({
 										className="flex items-start gap-2.5 py-1"
 										aria-label={`${step.text} — ${STEP_LABEL[step.status]}`}
 									>
-										<StepMark status={step.status} />
+										<StepMark status={step.status} live={Boolean(live)} />
 										{/* The strike is always there and only its colour changes, so a step
 										    being ticked off fades its line in, even across a wrapped line. */}
 										<span
@@ -239,8 +239,12 @@ function activeStepIndex(plan: ConversationPlan): number {
  * them: a spinner that is a pixel taller than a tick would nudge every line below it
  * each time a step finished. All three marks are drawn and only the current one is
  * shown, so a step that ticks over cross-fades in place instead of popping.
+ *
+ * The arc shows only while the turn runs. A turn that has ended, failed or been
+ * stopped is not working on anything, so its unfinished step keeps only the faint
+ * ring. The arc keeps turning as it fades, so it does not jump back first.
  */
-function StepMark({ status }: { status: PlanStepStatus }) {
+function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 	const shown = (mark: PlanStepStatus) =>
 		cn("transition-opacity duration-200 motion-reduce:transition-none", status === mark ? "opacity-100" : "opacity-0");
 	return (
@@ -258,7 +262,7 @@ function StepMark({ status }: { status: PlanStepStatus }) {
 					className={cn("text-muted-foreground/45", shown("pending"))}
 				/>
 				{/* In progress: a faint ring with an arc turning round it, neutral like the
-				    chat's own Working spinner. */}
+				    chat's own Working spinner. Unfinished once the turn settles: the ring alone. */}
 				<g className={cn("text-foreground", shown("in_progress"))}>
 					<circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="1.5" />
 					<circle
@@ -270,7 +274,10 @@ function StepMark({ status }: { status: PlanStepStatus }) {
 						strokeWidth="1.5"
 						strokeLinecap="round"
 						strokeDasharray="12 43"
-						className="origin-center animate-spin [transform-box:fill-box] motion-reduce:animate-none"
+						className={cn(
+							"origin-center animate-spin transition-opacity duration-200 [transform-box:fill-box] motion-reduce:animate-none motion-reduce:transition-none",
+							!live && "opacity-0",
+						)}
 					/>
 				</g>
 				{/* Done: an outlined circle whose tick draws itself in as the step finishes. */}

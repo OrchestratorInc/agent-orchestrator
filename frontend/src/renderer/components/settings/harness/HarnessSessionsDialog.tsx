@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cancelHarnessUpdate, IDLE_WAIT_DETAIL_MS, installJobsQueryKeyForHost, upsertInstallJob, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { workspaceQueryKeyForHost } from "../../../hooks/useWorkspaceQuery";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { useNavigateToSession } from "../../../lib/navigate-to-session";
@@ -47,10 +48,10 @@ export function HarnessSessionsDialog({ agentId, inUse, hostId, onOpenChange }: 
 			? <p className="text-control text-settings-muted">{t("settings.harness.sessionsUsingUnavailable")}</p>
 			: <ul className="max-h-48 space-y-1 overflow-y-auto">
 				{sessions.map(({ session, projectId, projectName }) => <li key={session.id}>
-					<button type="button" className="flex w-full items-baseline justify-between gap-3 rounded-md px-2 py-1 text-left text-control hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => open(projectId, session.id)}>
+					<Pressable className="flex w-full items-baseline justify-between gap-3 rounded-md px-2 py-1 text-control hover:bg-muted" onClick={() => open(projectId, session.id)}>
 						<span className="min-w-0 truncate font-medium text-settings-label">{session.title || session.id}</span>
 						<span className="shrink-0 text-caption text-settings-muted">{projectName}</span>
-					</button>
+					</Pressable>
 				</li>)}
 			</ul>}
 	</ConfirmDialog>;
@@ -104,11 +105,11 @@ export function IdleUpdateStatus({ agentId, job, hostId, now = Date.now(), onVie
 				? t("settings.harness.waitingFor", { session: firstTitle, reason: t(WAIT_REASON_KEYS[first.reason]) })
 				: t("settings.harness.waitingForIdle")}
 		</span>
-		{waitedLong && waitingOn.length > 0 ? <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+		{waitedLong && waitingOn.length > 0 ? <Button type="button" size="xs" variant="ghost"
 			onClick={() => onViewSessions({ count: waitingOn.length, sessionIds: waitingOn.map((wait) => wait.sessionId), level: "idle", starting: false })}>
 			{t("settings.harness.viewWaitingSessions")}
 		</Button> : null}
-		<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-caption" disabled={cancelling} onClick={() => void cancel()}>
+		<Button type="button" size="xs" variant="outline" disabled={cancelling} onClick={() => void cancel()}>
 			{t("settings.harness.cancelUpdate")}
 		</Button>
 		{error ? <p role="alert" className="w-full text-error">{error}</p> : null}

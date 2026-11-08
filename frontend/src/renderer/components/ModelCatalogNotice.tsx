@@ -49,11 +49,11 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 				<span className="min-w-0">{headline}</span>
 				<span className="inline-flex shrink-0 items-center gap-1">
-					<Button type="button" size="sm" variant="outline" className="h-6 px-2" onClick={onLogin}>
+					<Button type="button" size="xs" variant="outline" onClick={onLogin}>
 						<LogIn aria-hidden="true" className="size-3.5" />
 						{issue === "expired" ? t("newTask.modelNotice.loginAgain") : t("newTask.modelNotice.login")}
 					</Button>
-					<Button type="button" size="sm" variant="ghost" className="h-6 px-2" disabled={retrying} onClick={() => void retry()}>
+					<Button type="button" size="xs" variant="ghost" disabled={retrying} onClick={() => void retry()}>
 						{retrying
 							? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
 							: <RotateCw aria-hidden="true" className="size-3.5" />}
@@ -62,9 +62,8 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 					{detail ? (
 						<Button
 							type="button"
-							size="sm"
-							variant="ghost"
-							className="h-6 px-2 text-muted-foreground"
+							size="xs"
+							variant="quiet"
 							aria-controls={detailId}
 							aria-expanded={showDetail}
 							onClick={() => setShowDetail((current) => !current)}

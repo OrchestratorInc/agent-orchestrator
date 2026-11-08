@@ -1284,6 +1284,65 @@ describe("controller recovery", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 		invalidateSpy.mockRestore();
 	});
+
+	it("restores a terminated session, which the daemon refuses to resume", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		await act(async () => {
+			await result.current.resumeAgent();
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", {
+			params: { path: { sessionId: "ao-1" } },
+		});
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", expect.anything());
+	});
+
+	it("stays pending until the chat has read the restored agent", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } });
+		const refetched = deferred<void>();
+		const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries").mockImplementation(async (filters) => {
+			if (filters?.queryKey?.[0] === "conversation") await refetched.promise;
+		});
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		let settled = false;
+		let restoring: Promise<unknown> = Promise.resolve();
+		act(() => {
+			restoring = result.current.resumeAgent().then(() => { settled = true; });
+		});
+		await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["conversation", "ao-1"] }));
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+
+		// The cached snapshot still says stopped, which would read as a crashed agent.
+		expect(settled).toBe(false);
+		expect(result.current.resumingAgent).toBe(true);
+
+		await act(async () => {
+			refetched.resolve();
+			await restoring;
+		});
+		await waitFor(() => expect(result.current.resumingAgent).toBe(false));
+		invalidateSpy.mockRestore();
+	});
+
+	it("reports a refused restore through the resume error", async () => {
+		apiErrorMessageMock.mockImplementation((error: unknown, fallback: string) =>
+			error instanceof Error ? error.message : fallback,
+		);
+		postMock.mockResolvedValue({ data: undefined, error: { message: "Workspace restore failed" }, response: { status: 500 } });
+
+		const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+		await act(async () => {
+			await expect(result.current.resumeAgent()).rejects.toThrow();
+		});
+
+		await waitFor(() => expect(result.current.resumeError).toBe("Unable to restore session"));
+		apiErrorMessageMock.mockReset();
+	});
 });
 
 describe("useConversationSkills polling", () => {

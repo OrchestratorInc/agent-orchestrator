@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
 
-const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock } = vi.hoisted(
+const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionArtifactsMock, listSessionsMock, listSharedProjectSessionsMock, listSharedProjectsMock, remoteGetMock } = vi.hoisted(
 	() => ({
 		captureRendererEventMock: vi.fn().mockResolvedValue(undefined),
 		cloudState: { ready: false, org: undefined as { id: string } | undefined },
@@ -13,7 +13,10 @@ const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTruste
 		getSessionMock: vi.fn(),
 		hasTrustedApiBaseUrlMock: vi.fn(() => true),
 		listProjectsMock: vi.fn(),
+		listSessionArtifactsMock: vi.fn(),
 		listSessionsMock: vi.fn(),
+		listSharedProjectSessionsMock: vi.fn(),
+		listSharedProjectsMock: vi.fn(),
 		remoteGetMock: vi.fn(),
 	}),
 );
@@ -28,9 +31,17 @@ vi.mock("../lib/host-clients", () => ({ clientForHost: () => ({ GET: remoteGetMo
 
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { getSession: getSessionMock, listProjects: listProjectsMock, listSessions: listSessionsMock },
+		client: {
+			getSession: getSessionMock,
+			listProjects: listProjectsMock,
+			listSessionArtifacts: listSessionArtifactsMock,
+			listSessions: listSessionsMock,
+			listSharedProjectSessions: listSharedProjectSessionsMock,
+			listSharedProjects: listSharedProjectsMock,
+		},
 		ready: cloudState.ready,
 		baseUrl: "https://cp.example.com",
+		userId: "guest-user",
 	}),
 }));
 
@@ -39,7 +50,8 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { forgetSharedSessions, sessionWasSharedWithYou } from "../lib/shared-session-memory";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -71,7 +83,106 @@ beforeEach(() => {
 	cloudState.org = undefined;
 	listProjectsMock.mockReset();
 	listSessionsMock.mockReset().mockResolvedValue({ items: [] });
+	listSessionArtifactsMock.mockReset();
+	listSharedProjectSessionsMock.mockReset();
+	listSharedProjectsMock.mockReset().mockResolvedValue({ shared: [] });
 	remoteGetMock.mockReset();
+});
+
+describe("cloud sessions shared with this person", () => {
+	const sharedProject = {
+		id: "p-shared", orgId: "org-owner", displayName: "shared", repositoryUrl: "https://github.com/acme/shared", defaultBranch: "main",
+		config: {}, createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+	};
+	const sharedSession = (id: string, artifactCount?: number) => ({
+		id, orgId: "org-owner", projectId: "p-shared", kind: "worker", harness: "claude-code", displayName: id, status: "idle",
+		activityState: "idle", isTerminated: false, prs: [], createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+		...(artifactCount === undefined ? {} : { artifactCount, artifactsUpdatedAt: "2026-08-02T00:00:00Z" }),
+	});
+	const artifact = (path: string) => ({ path, name: path, kind: "file", contentType: "text/markdown", size: 3, sha256: "a".repeat(64), updatedAt: "2026-08-02T00:00:00Z" });
+
+	beforeEach(() => {
+		cloudState.ready = true;
+		listSharedProjectsMock.mockResolvedValue({ shared: [{ grant: { role: "viewer" }, project: sharedProject, sharedByName: "Owner" }] });
+	});
+
+	it("reads each shared session's artifact files, so a guest sees them", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({
+			sessions: [sharedSession("with-files", 1), sharedSession("no-files", 0), sharedSession("older-control-plane")],
+		});
+		listSessionArtifactsMock.mockResolvedValue({ artifacts: [artifact("plan.md")] });
+
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		const sessions = result.current.data![0]!.sessions;
+		expect(sessions.find((session) => session.id === "with-files")?.artifactFiles?.map((file) => file.path)).toEqual(["plan.md"]);
+		expect(sessions.find((session) => session.id === "with-files")?.cloud?.shared).toBe(true);
+		expect(sessions.find((session) => session.id === "no-files")?.artifactFiles).toBeUndefined();
+		expect(listSessionArtifactsMock).toHaveBeenCalledTimes(1);
+		expect(listSessionArtifactsMock).toHaveBeenCalledWith("org-owner", "with-files", expect.anything());
+	});
+
+	it("remembers each session it listed as shared, for this account only", async () => {
+		forgetSharedSessions();
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("listed")] });
+
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		expect(sessionWasSharedWithYou("https://cp.example.com", "guest-user", "listed")).toBe(true);
+		expect(sessionWasSharedWithYou("https://cp.example.com", "someone-else", "listed")).toBe(false);
+		expect(sessionWasSharedWithYou("https://cp.example.com", "guest-user", "never-listed")).toBe(false);
+	});
+
+	it("reads a session's failing files again a minute later, not on every refresh", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("with-files", 1)] });
+		listSessionArtifactsMock.mockRejectedValue(new CloudCpError("The service is unavailable.", { status: 503, code: "unavailable" }));
+		const now = vi.spyOn(Date, "now");
+		const start = Date.now();
+		try {
+			const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+			await waitFor(() => expect(result.current.data).toBeDefined());
+			const firstRead = listSessionArtifactsMock.mock.calls.length;
+			expect(firstRead).toBeGreaterThan(0);
+			await act(async () => { await result.current.refetch(); });
+			await act(async () => { await result.current.refetch(); });
+			expect(listSessionArtifactsMock).toHaveBeenCalledTimes(firstRead);
+			now.mockReturnValue(start + SHARED_ARTIFACT_RETRY_MS + 10_000);
+			await act(async () => { await result.current.refetch(); });
+			expect(listSessionArtifactsMock.mock.calls.length).toBeGreaterThan(firstRead);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("keeps a shared session's last files when a newer version can't be read", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("with-files", 1)] });
+		listSessionArtifactsMock.mockResolvedValue({ artifacts: [artifact("plan.md")] });
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions[0]?.artifactFiles?.map((file) => file.path)).toEqual(["plan.md"]));
+
+		listSharedProjectSessionsMock.mockResolvedValue({
+			sessions: [{ ...sharedSession("with-files", 2), displayName: "with-files v2", artifactsUpdatedAt: "2026-08-03T00:00:00Z" }],
+		});
+		listSessionArtifactsMock.mockRejectedValue(new CloudCpError("The service is unavailable.", { status: 503, code: "unavailable" }));
+		await act(async () => { await result.current.refetch(); });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions[0]?.title).toBe("with-files v2"));
+		expect(listSessionArtifactsMock).toHaveBeenCalledTimes(3);
+		expect(result.current.data?.[0]?.sessions[0]?.artifactFiles?.map((file) => file.path)).toEqual(["plan.md"]);
+	});
+
+	it("still lists a shared session whose files cannot be read", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("with-files", 1)] });
+		listSessionArtifactsMock.mockRejectedValue(new CloudCpError("You do not have access to this organization.", { status: 403, code: "forbidden" }));
+
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toBeDefined(), { timeout: 3000 });
+		const session = result.current.data![0]!.sessions[0]!;
+		expect(session.id).toBe("with-files");
+		expect(session.artifactFiles).toBeUndefined();
+	});
 });
 
 describe("useWorkspaceQuery", () => {

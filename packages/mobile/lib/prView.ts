@@ -81,7 +81,7 @@ export type PRLifecycle = "draft" | "open" | "merged" | "closed";
 export type PRListFilter = "open" | "merged" | "all";
 export type PRListItem = { pr: DashboardPR; session: DashboardSession };
 export type PRListSectionKey = "ready" | "attention" | "review" | "draft" | "merged" | "closed";
-export type PRListSection = { key: PRListSectionKey; label: string; data: PRListItem[] };
+export type PRListSection<T extends PRListItem = PRListItem> = { key: PRListSectionKey; label: string; data: T[] };
 
 /** Lifecycle state, reading `isDraft` — which the card has never rendered. */
 export function prLifecycle(pr: DashboardPR): PRLifecycle {
@@ -111,7 +111,7 @@ const PR_LIST_SECTIONS: readonly { key: PRListSectionKey; label: string }[] = [
 	{ key: "closed", label: "Closed" },
 ];
 
-export function prListSections(items: PRListItem[], filter: PRListFilter): PRListSection[] {
+export function prListSections<T extends PRListItem>(items: T[], filter: PRListFilter): PRListSection<T>[] {
 	const allowed = (key: PRListSectionKey) => {
 		if (filter === "open") return key !== "merged" && key !== "closed";
 		if (filter === "merged") return key === "merged";
@@ -125,6 +125,37 @@ export function prListSections(items: PRListItem[], filter: PRListFilter): PRLis
 			.sort((a, b) => b.pr.number - a.pr.number);
 		return data.length ? [{ key, label, data }] : [];
 	});
+}
+
+/** The PR list's filters, in the order its segmented control shows them. */
+export const prListFilters = ["open", "merged", "all"] as const satisfies readonly PRListFilter[];
+
+/**
+ * Whether a pull request in this lifecycle belongs under the filter. Drafts are
+ * open pull requests, so they count under Open even though the row labels them
+ * "draft".
+ */
+export function prInFilter(filter: PRListFilter, life: PRLifecycle): boolean {
+	if (filter === "all") return true;
+	if (filter === "open") return life === "open" || life === "draft";
+	return life === "merged";
+}
+
+/** How many pull requests each filter holds. */
+export function prFilterCounts(items: readonly PRListItem[]): Record<PRListFilter, number> {
+	const counts: Record<PRListFilter, number> = { open: 0, merged: 0, all: 0 };
+	for (const { pr } of items) {
+		const life = prLifecycle(pr);
+		for (const filter of prListFilters) if (prInFilter(filter, life)) counts[filter] += 1;
+	}
+	return counts;
+}
+
+const PR_FILTER_TITLES: Record<PRListFilter, string> = { open: "Open", merged: "Merged", all: "All" };
+
+/** A filter's segment, named with its count: "Open 4". */
+export function prFilterLabel(filter: PRListFilter, count: number): string {
+	return `${PR_FILTER_TITLES[filter]} ${count}`;
 }
 
 export function prStateVisual(t: Theme, pr: DashboardPR): { label: PRLifecycle; color: string; tint: string } {

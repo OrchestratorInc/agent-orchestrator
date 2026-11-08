@@ -166,6 +166,9 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 	if originErr == nil || (project.Config.CanonicalRepoURL != "" && requireSameRepo(prURL, project.Config.CanonicalRepoURL) == nil) {
 		return nil
 	}
+	if s.sameRenamedGitHubRepo(ctx, prURL, project.RepoOriginURL) {
+		return nil
+	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
 		return originErr
 	}
@@ -182,6 +185,35 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 		}
 	}
 	return ErrProjectMismatch
+}
+
+// sameRenamedGitHubRepo reports whether GitHub resolves the github.com origin
+// and the PR's repository to the same repository id, as it does after the
+// origin's owner or name was renamed or transferred. The PR is on the very
+// repository the origin's git remote already reaches through GitHub's
+// redirect, so this grants no trust beyond the origin itself. Any lookup
+// failure, other host, or different id keeps the mismatch.
+func (s *Service) sameRenamedGitHubRepo(ctx context.Context, prURL, origin string) bool {
+	if s.githubRepos == nil {
+		return false
+	}
+	prHost, prOwner, prRepo, _, err := parsePRURL(prURL)
+	if err != nil || !strings.EqualFold(prHost, "github.com") {
+		return false
+	}
+	originID, err := domain.ParseRepositoryIdentity(strings.TrimSpace(origin))
+	if err != nil || originID.Host != "github.com" {
+		return false
+	}
+	fromOrigin, err := s.githubRepos.ResolveGitHubRepository(ctx, originID.Namespace, originID.Name)
+	if err != nil || fromOrigin.ID == 0 {
+		return false
+	}
+	fromPR, err := s.githubRepos.ResolveGitHubRepository(ctx, prOwner, prRepo)
+	if err != nil {
+		return false
+	}
+	return fromPR.ID == fromOrigin.ID
 }
 
 func (s *Service) fetchClaimObservation(ctx context.Context, ref ports.SCMPRRef) (ports.SCMObservation, error) {

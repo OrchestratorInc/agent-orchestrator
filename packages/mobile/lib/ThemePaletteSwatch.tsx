@@ -1,25 +1,20 @@
-import { StyleSheet, View } from "react-native";
-import type { Theme } from "./theme";
+import { Circle, HStack } from "@expo/ui/swift-ui";
+import { accessibilityHidden, foregroundStyle, frame } from "@expo/ui/swift-ui/modifiers";
+import { paletteSwatchHues, SWATCH_DOT, SWATCH_GAP, type ThemePaletteSwatchProps } from "./ThemePaletteSwatch.types";
+
+export type { ThemePaletteSwatchProps } from "./ThemePaletteSwatch.types";
 
 /**
- * A theme's signature hues as a row of dots before its name: its highlight,
- * then the working, ready and merged colours. Colours come from the swatch's
- * theme, not the active one, because each swatch previews a theme that usually
- * isn't applied. Drawn from the phone's derived palette so the preview matches
- * what the theme will look like here.
+ * A theme's signature hues as a row of dots before its name, drawn in SwiftUI
+ * so it can sit inside a native picker's option. The name beside it is what
+ * VoiceOver reads; the dots are decoration.
  */
-export function ThemePaletteSwatch({ theme }: { theme: Theme }) {
-	const hues = [theme.highlight, theme.orange, theme.green, theme.purple];
+export function ThemePaletteSwatch({ theme }: ThemePaletteSwatchProps) {
 	return (
-		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.dots}>
-			{hues.map((color, index) => (
-				<View key={index} style={[styles.dot, { backgroundColor: color }]} />
+		<HStack spacing={SWATCH_GAP} modifiers={[accessibilityHidden(true)]}>
+			{paletteSwatchHues(theme).map((color, index) => (
+				<Circle key={index} modifiers={[foregroundStyle(color), frame({ width: SWATCH_DOT, height: SWATCH_DOT })]} />
 			))}
-		</View>
+		</HStack>
 	);
 }
-
-const styles = StyleSheet.create({
-	dots: { flexDirection: "row", alignItems: "center", gap: 4 },
-	dot: { width: 8, height: 8, borderRadius: 4 },
-});

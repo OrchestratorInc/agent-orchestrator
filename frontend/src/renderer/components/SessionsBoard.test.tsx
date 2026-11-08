@@ -217,6 +217,21 @@ describe("SessionsBoard", () => {
 		}
 	});
 
+	it("offers a guest of a shared project no Task, orchestrator or missing-orchestrator notice", () => {
+		const worker = boardSession({ id: "s1", title: "Upgrade to React 20", status: "working", cloud: { orgId: "org-elsewhere", shared: true } });
+		workspaceQueryMock.mockReturnValue({ data: [{ ...workspaceWithSessions([worker]), kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Asha" } }], isSuccess: true });
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: /^(Task|New task)$/ })).toBeNull();
+		expect(screen.queryByText("No orchestrator is running for this project.")).toBeNull();
+	});
+
+	it("keeps Task and the missing-orchestrator notice on the owner's own project", () => {
+		const worker = boardSession({ id: "s1", title: "Upgrade to React 20", status: "working", cloud: { orgId: "org-mine" } });
+		workspaceQueryMock.mockReturnValue({ data: [{ ...workspaceWithSessions([worker]), kind: "cloud", cloudOrgId: "org-mine" }], isSuccess: true });
+		renderBoard("p1");
+		expect(screen.getAllByRole("button", { name: /^(Task|New task)$/ }).length).toBeGreaterThan(0);
+	});
+
 	it("leaves an unflagged cloud project on its board", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
@@ -654,6 +669,33 @@ describe("SessionsBoard", () => {
 		const card = screen.getByText("mergeable-active-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		const status = within(card).getByTestId("session-status");
 		expect(status.querySelector(".animate-spin")).not.toBeNull();
+	});
+
+	it("paints a Merged card purple and holds the loader even while its agent keeps running", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-merged-active",
+						title: "merged-active-task",
+						status: "working",
+						displayStatus: "Merged",
+						kanbanColumn: "ready",
+						activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("merged-active-task").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const status = within(card).getByTestId("session-status");
+		expect(status).toHaveTextContent("Merged");
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-success", "text-status-ready");
+		expect(status.querySelector(".animate-spin")).toBeNull();
 	});
 
 	it("paints Closed without merge red while keeping merged status purple", () => {
@@ -1607,6 +1649,21 @@ describe("SessionsBoard", () => {
 		// stranded on <body> instead of the control they came from.
 		expect(screen.getByRole("button", { name: "Archive merged worker" })).toHaveFocus();
 		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("closes the card's archive confirm on the first Escape", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-merged", title: "merged worker", status: "merged" })])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await userEvent.click(screen.getByRole("button", { name: "Archive merged worker" }));
+		await screen.findByRole("dialog");
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 	});
 
 	it("terminates a live merged session from its card without opening the session", async () => {

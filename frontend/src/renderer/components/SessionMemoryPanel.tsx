@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2 } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
@@ -40,6 +40,8 @@ import {
 import { useSessionUsageSummaries, type SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import { isOrchestratorSession, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
+import { Pressable } from "./ui/pressable";
 import {
 	Dialog,
 	DialogClose,
@@ -123,7 +125,7 @@ export function AppMemoryIndicator() {
 		<>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
+					<Pressable
 						aria-label={`${word} · ${detail}`}
 						className="inline-flex items-center gap-2 px-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-state={state ?? "unknown"}
@@ -133,7 +135,7 @@ export function AppMemoryIndicator() {
 					>
 						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />
 						<span className={state ? stateText[state] : undefined}>{formatMemory(app.rssBytes)}</span>
-					</button>
+					</Pressable>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">{detail}</TooltipContent>
 			</Tooltip>
@@ -275,7 +277,7 @@ function SortHeader({ active, ascending, className, label, onSort, sortable }: {
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
 		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
-			<button
+			<Pressable
 				className={cn(
 					"inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 					active && "text-settings-label",
@@ -286,7 +288,7 @@ function SortHeader({ active, ascending, className, label, onSort, sortable }: {
 			>
 				{label}
 				<Arrow aria-hidden="true" className={cn("size-icon-2xs", active ? "opacity-100" : "opacity-50")} />
-			</button>
+			</Pressable>
 		</th>
 	);
 }
@@ -559,9 +561,7 @@ export function SessionMemoryPanel({
 						<DialogDescription className="sr-only">{t("shell.memoryPanelDescription")}</DialogDescription>
 					</div>
 					<DialogClose asChild>
-						<Button aria-label={t("common.close")} size="icon" variant="ghost">
-							<X className="size-icon-md" aria-hidden="true" />
-						</Button>
+						<CloseButton aria-label={t("common.close")} />
 					</DialogClose>
 				</div>
 				<div
@@ -1078,12 +1078,11 @@ function CopyReportButton({ value }: { value: () => string }) {
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={label}
-					className="text-settings-muted hover:text-settings-label"
 					data-testid="session-memory-copy"
 					onClick={() => void copy()}
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					{copied ? <Check aria-hidden="true" className="size-icon-sm text-success" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
 				</Button>
@@ -1113,7 +1112,7 @@ function CopyControl({
 }) {
 	const { copied, copy } = useCopy(value);
 	return (
-		<button
+		<Pressable
 			aria-label={copied ? copiedLabel : label}
 			className="group relative inline-flex shrink-0 items-center rounded-sm text-settings-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 			data-testid={testId}
@@ -1133,7 +1132,7 @@ function CopyControl({
 					className="absolute left-full ml-1 size-icon-2xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
 				/>
 			)}
-		</button>
+		</Pressable>
 	);
 }
 

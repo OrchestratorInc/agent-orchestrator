@@ -389,6 +389,8 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
+	// The 201 has already gone out, so the request logger never sees this.
+	captureBackgroundFault(cleanupCtx, cause, "chat_spawn", "")
 	m.stopChatBestEffort(cleanupCtx, id)
 	// A failed Setup step already explains itself; the spawn stage prefix is noise.
 	message := cause.Error()
@@ -398,6 +400,7 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	}
 	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, message); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
+		captureBackgroundFault(cleanupCtx, err, "chat_spawn", "record_failure")
 	}
 }
 

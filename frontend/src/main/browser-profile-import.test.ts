@@ -912,6 +912,56 @@ describe("BrowserProfileImportService", () => {
 		expect(result.entries[0]!.warnings).toContainEqual({ code: "cookie-attributes-defaulted", count: 1 });
 	});
 
+	it("leaves anti-bot cookies behind, since they only work in the browser that earned them", async () => {
+		const root = await fixtureRoot();
+		const appData = path.join(root, "roaming");
+		const profileRoot = path.join(appData, "Mozilla", "Firefox", "Profiles", "legacy.default-release");
+		await mkdir(profileRoot, { recursive: true });
+		const database = new Database(path.join(profileRoot, "cookies.sqlite"));
+		database.exec(`
+			CREATE TABLE moz_cookies (
+				host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER,
+				isSecure INTEGER, isHttpOnly INTEGER, originAttributes TEXT,
+				lastAccessed INTEGER, creationTime INTEGER
+			);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'session', 'keep', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'cf_clearance', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', '__cf_bm', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'datadome', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', '_abck', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+		`);
+		database.close();
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const setCookie = vi.fn(async (_details: Electron.CookiesSetDetails) => undefined);
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { APPDATA: appData },
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+			fromPartition: () => ({
+				cookies: { set: setCookie },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		});
+		const source = (await service.discover()).sources[0]!;
+		await service.import({
+			requestId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge", name: "Anti-bot" },
+		}, vi.fn());
+
+		expect(setCookie.mock.calls.map(([details]) => details.name)).toEqual(["session"]);
+	});
+
 	it.each([0, 2, 5_000, 5_002])("imports only visited Firefox places and counts truncation with %i visited URLs", async (visitedCount) => {
 		const root = await fixtureRoot();
 		const profileRoot = path.join(root, ".mozilla", "firefox", "fixture.default-release");
@@ -1221,7 +1271,10 @@ describe("BrowserProfileImportService", () => {
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
 		const historyStore = new BrowserHistoryStore({ stateDir });
-		vi.spyOn(historyStore, "mergeImportedEntries").mockRejectedValueOnce(new Error("disk full"));
+		vi.spyOn(historyStore, "mergeImportedEntries").mockImplementationOnce(async () => {
+			expect(profileStore.getDefaultProfileId()).toBeNull();
+			throw new Error("disk full");
+		});
 		const service = new BrowserProfileImportService({
 			stateDir,
 			profileStore,
@@ -1242,9 +1295,68 @@ describe("BrowserProfileImportService", () => {
 		};
 		await expect(service.import(request, vi.fn())).rejects.toThrow("disk full");
 		expect(profileStore.profiles).toEqual([]);
-		await expect(service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn())).resolves.toMatchObject({
-			entries: [expect.objectContaining({ importedHistoryEntries: 2 })],
+		expect(profileStore.getDefaultProfileId()).toBeNull();
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getDefaultProfileId()).toBeNull();
+		const result = await service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn());
+		expect(result).toMatchObject({ entries: [expect.objectContaining({ importedHistoryEntries: 2 })] });
+		expect(profileStore.getDefaultProfileId()).toBe(result.entries[0]!.destinationProfile.id);
+	});
+
+	it("makes a first import the default only after it commits", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const defaultsDuringImport: Array<string | null> = [];
+		let releaseCookie!: () => void;
+		const cookieBlocked = new Promise<void>((resolve) => {
+			releaseCookie = resolve;
 		});
+		const setCookie = vi.fn(async () => {
+			defaultsDuringImport.push(profileStore.getDefaultProfileId());
+			await cookieBlocked;
+		});
+		const options = {
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32" as const,
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({
+				cookies: { set: setCookie },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		};
+		const interrupted = new BrowserProfileImportService(options);
+		const source = (await interrupted.discover()).sources[0]!;
+		const request = {
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge" as const, name: "Imported Chrome" },
+		};
+		const importing = interrupted.import({ ...request, requestId: "96969696-9696-4696-8696-969696969696" }, vi.fn());
+		await vi.waitFor(() => expect(setCookie).toHaveBeenCalled());
+		const disposing = interrupted.dispose();
+		releaseCookie();
+		await expect(importing).rejects.toThrow("app is closing");
+		await disposing;
+		expect(profileStore.profiles).toEqual([]);
+		expect(profileStore.getDefaultProfileId()).toBeNull();
+
+		const result = await new BrowserProfileImportService(options).import(
+			{ ...request, requestId: "97979797-9797-4797-8797-979797979797" },
+			vi.fn(),
+		);
+		expect(defaultsDuringImport.length).toBeGreaterThan(1);
+		expect(defaultsDuringImport.every((id) => id === null)).toBe(true);
+		expect(profileStore.getDefaultProfileId()).toBe(result.entries[0]!.destinationProfile.id);
 	});
 
 	it("rejects a separate import before reading when destination capacity is insufficient", async () => {

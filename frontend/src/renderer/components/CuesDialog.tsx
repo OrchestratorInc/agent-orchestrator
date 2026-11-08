@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useUiStore } from "../stores/ui-store";
@@ -13,6 +13,7 @@ import {
 import { CUE_LIMITS } from "../lib/cues";
 import type { CueDTO, CueInput } from "../lib/cues";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	Dialog,
@@ -210,7 +211,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 						<p role="alert" className="min-w-0 text-sm text-error">
 							{apiErrorMessage(cuesQuery.error, t("cues.loadFailed"))}
 						</p>
-						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void cuesQuery.refetch()}>
+						<Button type="button" variant="quiet" size="sm" onClick={() => void cuesQuery.refetch()}>
 							{t("cues.retry")}
 						</Button>
 					</div>
@@ -225,7 +226,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 						<div className="settings-grouped-rows flex w-full flex-col">
 							<div className="settings-row-bar">
 								<span className="text-sm leading-5 text-settings-label">{t("cues.empty")}</span>
-								<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={busy} onClick={openNew}>
+								<Button type="button" variant="quiet" size="sm" disabled={busy} onClick={openNew}>
 									<Plus aria-hidden="true" />
 									{t("cues.newCue")}
 								</Button>
@@ -253,25 +254,25 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 									{hideCueActions ? null : <div className="flex shrink-0 items-center gap-0.5">
 										<Button
 											type="button"
-											variant="ghost"
+											variant="quiet"
 											size="icon-sm"
 											disabled={busy}
 											onClick={() => openEdit(cue)}
 											aria-label={t("cues.edit")}
 											title={t("cues.edit")}
-											className="size-7 shrink-0 p-0 text-settings-muted hover:text-foreground"
+											className="shrink-0"
 										>
 											<Pencil className="size-3.5" aria-hidden="true" />
 										</Button>
 										<Button
 											type="button"
-											variant="ghost"
+											variant="destructive-ghost"
 											size="icon-sm"
 											disabled={busy}
 											onClick={() => { if (!pending.current) { deleteMutation.reset(); setDeletingCue(cue); } }}
 											aria-label={t("cues.delete")}
 											title={t("cues.delete")}
-											className="size-7 shrink-0 p-0 text-settings-muted hover:text-destructive"
+											className="shrink-0"
 										>
 											<Trash2 className="size-3.5" aria-hidden="true" />
 										</Button>
@@ -353,7 +354,7 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (
 					<>
-						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={saving} onClick={() => createOnly ? onCancel?.() : setFormOpen(null)}>
+						<Button type="button" variant="quiet" size="sm" disabled={saving} onClick={() => createOnly ? onCancel?.() : setFormOpen(null)}>
 							{t("cues.cancel")}
 						</Button>
 						<Button type="button" size="sm" disabled={saving} onClick={() => void handleSave()}>
@@ -407,7 +408,7 @@ export function CreateCueDialog({ projectId, cloudOrgId, open, onOpenChange, onC
 				}}>
 				<DialogHeader className={`${settingsDialogHeaderClass} flex flex-row items-center justify-between`}>
 					<DialogTitle className="text-2xl font-bold text-foreground">{t("cues.newCue")}</DialogTitle>
-					<button type="button" aria-label={t("settings.close")} className="settings-close-button" disabled={busy} onClick={() => onOpenChange(false)}><X aria-hidden="true" className="size-4" /></button>
+					<CloseButton aria-label={t("settings.close")} disabled={busy} onClick={() => onOpenChange(false)} />
 				</DialogHeader>
 				{open ? <div className={settingsDialogBodyClass}>
 					<CuesSettings projectId={projectId} cloudOrgId={cloudOrgId} createOnly hideCueActions onBusyChange={setBusy}

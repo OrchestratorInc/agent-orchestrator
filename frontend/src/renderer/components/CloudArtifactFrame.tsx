@@ -14,9 +14,11 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * calls onAccessRefused so the caller can take a fresh one. When the page
  * opens another file of its session, onNavigate gets that file's path, and a
  * link refused on the way (the frame shows "Link expired") calls
- * onAccessRefused.
+ * onAccessRefused. A zoom scales the frame as browser zoom does: the page
+ * gets a viewport of the pane's size over zoom, shown scaled by zoom, so it
+ * reflows and pans with its own scrolling.
  */
-export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, thumbnail }: {
+export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, thumbnail, zoom = 1 }: {
 	title: string;
 	url: string;
 	onAccessRefused?: () => void;
@@ -24,6 +26,8 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	onNavigate?: (path: string) => void;
 	/** Scale only the page; gallery fallbacks keep the card's normal size. */
 	thumbnail?: { width: number; fallback: ReactNode };
+	/** The artifact viewer's zoom, 1 at fit. */
+	zoom?: number;
 }) {
 	const { t } = useTranslation();
 	useEffect(() => {
@@ -57,7 +61,9 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	return (
 		<iframe
 			className={thumbnail ? "absolute left-0 top-0 origin-top-left border-0 bg-white" : "block h-full w-full border-0 bg-white"}
-			style={thumbnail ? { width: 1000, height: 625, transform: `scale(${thumbnail.width / 1000})` } : undefined}
+			style={thumbnail
+				? { width: 1000, height: 625, transform: `scale(${thumbnail.width / 1000})` }
+				: zoom !== 1 ? { width: `${100 / zoom}%`, height: `${100 / zoom}%`, transform: `scale(${zoom})`, transformOrigin: "0 0" } : undefined}
 			referrerPolicy="no-referrer"
 			sandbox="allow-scripts allow-forms"
 			src={url}

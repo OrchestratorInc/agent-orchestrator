@@ -52,7 +52,7 @@ After a yes, on that computer. The download takes a few minutes, so the install 
 f(){ mkdir -p ~/.ao-grok && cat > ~/.ao-grok/install-orchestrator.sh <<'EOF'
 a=$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arm64 || echo x64); d=$(mktemp -d)
 echo "downloading the $a build"
-curl -fsSL -o "$d/o.dmg" "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-$a.dmg" || { echo DOWNLOAD_FAILED; rm -rf "$d"; exit 1; }
+curl -fsSL -o "$d/o.dmg" "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-$a.dmg" || { echo DOWNLOAD_FAILED; rm -rf "$d"; exit 1; }
 m=$(hdiutil attach -nobrowse -readonly "$d/o.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
 [ -n "$m" ] || { echo INSTALL_FAILED; rm -rf "$d"; exit 1; }
 app=$(find "$m" -maxdepth 1 -name '*.app' 2>/dev/null | head -1)

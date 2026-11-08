@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import type { MessageKey } from "../i18n";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import type { SystemRequirement } from "./SystemRequirementsChecklist";
@@ -59,7 +60,7 @@ export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 // identity-sensitive adapters can perform their bounded validation probe.
 export async function checkRequirementsAgain(onRefetchRequirements: () => Promise<unknown> | void): Promise<void> {
 	const { error } = await apiClient.POST("/api/v1/agents/refresh");
-	if (error) throw new Error(apiErrorMessage(error, "Could not refresh agent inventory."));
+	if (error) throw apiErrorException(error, "Could not refresh agent inventory.");
 	await onRefetchRequirements();
 }
 
@@ -67,7 +68,7 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
  *  which command is running. */
-function useInstallRunner(onSucceeded: () => void) {
+export function useInstallRunner(onSucceeded: () => void) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
@@ -138,7 +139,7 @@ function useInstallRunner(onSucceeded: () => void) {
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start the install."));
+			if (error || !data) throw apiErrorException(error, "Could not start the install.");
 			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
 			else if (data.status === "succeeded") markSucceeded(nextTarget);
@@ -172,22 +173,14 @@ export function InstallDependencyDialog({
 	const git = byId.get("git");
 	const tmux = byId.get("tmux");
 	const harness = byId.get("harness");
-	const gh = byId.get("gh");
 	const gitBlocking = Boolean(git && git.required && !git.satisfied);
 	const tmuxBlocking = Boolean(tmux && tmux.required && !tmux.satisfied);
 	const harnessBlocking = Boolean(harness && harness.required && !harness.satisfied);
-	// gh stays listed after its install so the row settles on Installed
-	// instead of vanishing while the rest of the gate is still open.
-	const showGh = Boolean(gh && (!gh.satisfied || install.succeeded("gh")));
 	const { inspect } = install;
 
 	useEffect(() => {
 		if (tmuxBlocking) void inspect("tmux");
 	}, [inspect, tmuxBlocking]);
-
-	useEffect(() => {
-		if (showGh) void inspect("gh");
-	}, [inspect, showGh]);
 
 	useEffect(() => {
 		if (!harnessBlocking) return;
@@ -241,7 +234,7 @@ export function InstallDependencyDialog({
 				</div>
 
 				<div className={cn(settingsDialogBodyClass, "gap-4")}>
-					{gitBlocking || tmuxBlocking || showGh ? (
+					{gitBlocking || tmuxBlocking ? (
 						<div className="settings-grouped-rows">
 							{gitBlocking ? (
 								<RequirementRow label="git" purpose={t("startup.gitPurpose")}>
@@ -257,7 +250,6 @@ export function InstallDependencyDialog({
 								</RequirementRow>
 							) : null}
 							{tmuxBlocking ? installRow("tmux", "tmux", t("startup.tmuxPurpose")) : null}
-							{showGh ? installRow("gh", "GitHub CLI", t("startup.ghPurpose")) : null}
 						</div>
 					) : null}
 
@@ -287,21 +279,21 @@ export function InstallDependencyDialog({
 							{checkAgainError}
 						</p>
 					) : null}
-					<button
+					<Button
 						type="button"
-						className="settings-footer-button"
+						variant="footer"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
-					</button>
-					<button
+					</Button>
+					<Button
 						type="button"
-						className="settings-footer-button settings-footer-button-primary"
+						variant="footer-primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
 						{isCheckingAgain ? t("startup.checkingAgain") : t("startup.checkAgain")}
-					</button>
+					</Button>
 				</div>
 			</DialogContent>
 		</Dialog>
@@ -411,6 +403,80 @@ function InstallRow({
 	);
 }
 
+/** One install's action and its progress, for callers outside this dialog (FirstRunSteps' GitHub CLI install). */
+export function InstallAction({
+	primaryLabel,
+	disabled,
+	job,
+	planChecked,
+	error,
+	onInstall,
+	t,
+}: {
+	primaryLabel: string;
+	disabled: boolean;
+	job: InstallJob | undefined;
+	planChecked: boolean;
+	error: string | undefined;
+	onInstall: () => void;
+	t: TFunction;
+}) {
+	const running = isActiveInstallJob(job);
+	const failed = job?.status === "failed";
+	const unsupported = job?.status === "unsupported";
+
+	if (!planChecked) {
+		return <p className="text-caption text-settings-muted">{t("startup.checkingInstallOptions")}</p>;
+	}
+
+	if (running) {
+		return (
+			<div className="flex flex-col gap-1.5">
+				<p className="text-caption text-settings-muted">
+					{job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis")}
+				</p>
+				<div className="ao-install-progress" aria-hidden="true">
+					<div className="ao-install-progress__bar" />
+				</div>
+			</div>
+		);
+	}
+
+	if (unsupported) {
+		return (
+			<div className="flex flex-col gap-1.5">
+				{job.error ? <p className="text-caption text-settings-muted">{job.error}</p> : null}
+				{job.command ? <ManualCommand command={job.command} t={t} /> : null}
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex flex-col gap-1.5">
+			<Button
+				type="button"
+				variant="footer-primary"
+				className="self-start"
+				disabled={disabled}
+				onClick={onInstall}
+			>
+				{failed ? t("startup.retryPrefix", { label: primaryLabel }) : primaryLabel}
+			</Button>
+			{error ? <p className="text-caption text-error">{error}</p> : null}
+			{failed ? (
+				<>
+					{job?.error ? <p className="text-caption text-error">{job.error}</p> : null}
+					{job?.output ? (
+						<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md border border-(--color-border-settings-input) bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
+							{job.output}
+						</pre>
+					) : null}
+				</>
+			) : null}
+		</div>
+	);
+}
+
 function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	const [copied, setCopied] = useState(false);
 	const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -433,15 +499,16 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 			<code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-caption text-settings-title">
 				{command}
 			</code>
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button shrink-0"
+				variant="footer"
+				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}
 			>
 				{copied ? <Check className="size-icon-sm" aria-hidden="true" /> : <Copy className="size-icon-sm" aria-hidden="true" />}
 				{copied ? t("startup.commandCopied") : t("startup.copyCommand")}
-			</button>
+			</Button>
 		</div>
 	);
 }

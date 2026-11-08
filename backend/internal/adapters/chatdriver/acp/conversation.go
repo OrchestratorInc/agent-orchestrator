@@ -191,6 +191,7 @@ type conversation struct {
 	compactingTurnID  string
 	compactionBefore  int64
 	compactionSummary string
+	compactionFailure string
 	compactedTurn     string
 
 	eventMu      sync.RWMutex
@@ -864,6 +865,7 @@ func (c *conversation) finishPrompt(
 	c.settlingTurn = turnID
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
+	compactionFailure := c.compactionFailure
 	answered := len(c.messages) > 0 || len(c.tools) > 0
 	// "" when the turn started before this controller (a reattached durable
 	// turn): its model is unknown, and the current selection may not be it.
@@ -916,6 +918,10 @@ func (c *conversation) finishPrompt(
 				turnErr = failure
 			}
 		}
+		if isCompaction && compactionFailure != "" && turnErr == nil && state == domain.TurnStateCompleted && !interruptedLocally {
+			state = domain.TurnStateFailed
+			turnErr = errors.New(compactionFailure)
+		}
 		if resp.Usage != nil {
 			cached := 0
 			if resp.Usage.CachedReadTokens != nil {
@@ -964,7 +970,13 @@ func (c *conversation) finishPrompt(
 			c.compactingTurnID = ""
 			c.compactionBefore = 0
 			c.compactionSummary = ""
+			c.compactionFailure = ""
 			c.mu.Unlock()
+			if turnErr != nil {
+				// A compaction turn has no prompt or reply. Without this row the
+				// timeline leaves the turn out and the failure is never shown.
+				c.emit(ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: turnErr})
+			}
 		}
 	}
 	// Only a durable host receipt replaces the outstanding one. A host-local
@@ -1029,6 +1041,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.compactingTurnID = id
 	c.compactionBefore = before
 	c.compactionSummary = ""
+	c.compactionFailure = ""
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -1071,6 +1084,7 @@ func (c *conversation) settleCompaction(turnID string) {
 	c.compactingTurnID = ""
 	c.compactionBefore = 0
 	c.compactionSummary = ""
+	c.compactionFailure = ""
 	c.compactedTurn = turnID
 	c.mu.Unlock()
 

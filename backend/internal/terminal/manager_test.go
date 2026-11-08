@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -719,6 +720,44 @@ func TestServeForwardsSessionChannelFromCDC(t *testing.T) {
 		default:
 			return false
 		}
+	})
+}
+
+type fakeShellAgents struct {
+	mu   sync.Mutex
+	subs int
+}
+
+func (f *fakeShellAgents) SubscribeShellAgents(fn func(json.RawMessage)) func() {
+	f.mu.Lock()
+	f.subs++
+	f.mu.Unlock()
+	fn(json.RawMessage(`[{"handleId":"h1"}]`))
+	return func() {
+		f.mu.Lock()
+		f.subs--
+		f.mu.Unlock()
+	}
+}
+
+func TestServeForwardsShellAgentSnapshots(t *testing.T) {
+	src := &fakeShellAgents{}
+	mgr := NewManager(&fakeSource{}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.SetShellAgents(src)
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chShellAgents, Type: msgSubscribe}
+	if msg := recv(t, conn, chShellAgents, msgSnapshot, time.Second); string(msg.Agents) != `[{"handleId":"h1"}]` {
+		t.Fatalf("snapshot = %s", msg.Agents)
+	}
+	cancel()
+	eventually(t, time.Second, func() bool {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return src.subs == 0
 	})
 }
 

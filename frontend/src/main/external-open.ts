@@ -1,10 +1,9 @@
+import { PRIVACY_PANE_URLS } from "./privacy-guide";
+
 const APP_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 // macOS System Settings panes the renderer may open, matched exactly: the
 // Privacy & Security panes where Cua Driver's permissions are managed.
-const APP_EXTERNAL_EXACT_URLS = new Set([
-	"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-	"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-]);
+const APP_EXTERNAL_EXACT_URLS = new Set(Object.values(PRIVACY_PANE_URLS));
 
 export type ExternalOpener = {
 	openExternal: (url: string) => Promise<unknown>;

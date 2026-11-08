@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
@@ -15,7 +16,6 @@ import {
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -24,6 +24,7 @@ import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode"
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const PENDING_MAX_MS = 10 * 60_000;
@@ -50,6 +51,7 @@ type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind
 
 export function SessionBranchSummary({
 	hostId,
+	merged = false,
 	onOpenFiles,
 	openPRNumber,
 	pullRequests,
@@ -57,6 +59,7 @@ export function SessionBranchSummary({
 	title,
 }: {
 	hostId?: string;
+	merged?: boolean;
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
@@ -84,7 +87,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const plan = gitActionPlan(facts, openPRNumber, merged);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
@@ -93,7 +96,7 @@ export function SessionBranchSummary({
 				params: { path: { sessionId: session.id } },
 				body: { message: gitActionMessage(kind, facts.base, openPRNumber) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.git.actionFailed")));
+			if (error) throw apiErrorException(error, t("inspector.git.actionFailed"));
 		},
 		onMutate: (kind) => startPending(key, kind),
 		onError: () => clearPending(key),
@@ -217,10 +220,9 @@ function GitStatusRow({
 	onClick: () => void;
 }) {
 	return (
-		<button
-			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+		<Pressable
+			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-sm transition-colors hover:bg-interactive-hover"
 			onClick={onClick}
-			type="button"
 		>
 			{icon}
 			<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
@@ -234,7 +236,7 @@ function GitStatusRow({
 				<span className="text-error">−{deletions}</span>
 			</span>
 			<ChevronRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />
-		</button>
+		</Pressable>
 	);
 }
 
@@ -315,7 +317,7 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, merged = false): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
@@ -326,7 +328,7 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined)
 	}
 	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
 	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
+	if (!merged && facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
 

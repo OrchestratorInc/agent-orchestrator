@@ -5,6 +5,7 @@ import {
 	type EditorHandoffState,
 	type EditorId,
 	type EditorPreferenceState,
+	type OpenArtifactInBrowserInput,
 	type OpenSessionArtifactsInput,
 	type OpenTargetId,
 } from "../../shared/editor-handoff";
@@ -187,6 +188,18 @@ export function useOpenSessionArtifacts() {
 		mutationFn: async (input: OpenSessionArtifactsInput) => {
 			try {
 				return await aoBridge.editorHandoff.openArtifacts(input);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
+		},
+	});
+}
+
+export function useOpenArtifactInBrowser() {
+	return useMutation({
+		mutationFn: async (input: OpenArtifactInBrowserInput) => {
+			try {
+				await aoBridge.editorHandoff.openArtifactInBrowser(input);
 			} catch (error) {
 				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
 			}
