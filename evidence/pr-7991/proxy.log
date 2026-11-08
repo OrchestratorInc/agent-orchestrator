@@ -1,0 +1,45 @@
+2026/11/08 18:51:28 http: proxy error: context canceled
+2026/11/08 18:51:28 PASS 200 GET /v1/models
+2026/11/08 18:51:34 http: proxy error: context canceled
+2026/11/08 18:51:37 http: proxy error: context canceled
+2026/11/08 18:51:44 PASS 200 POST /v1/messages
+2026/11/08 18:51:49 PASS 200 POST /v1/messages
+2026/11/08 18:51:51 http: proxy error: context canceled
+2026/11/08 18:53:11 http: proxy error: context canceled
+2026/11/08 18:53:15 LAB limit until=1794144360 (2026-11-08T13:26:00Z)
+2026/11/08 18:53:15 PASS 200 POST /v1/messages
+2026/11/08 18:53:21 LAB 429 POST /v1/messages reset=1794144360
+2026/11/08 18:54:15 http: proxy error: context canceled
+2026/11/08 18:55:17 http: proxy error: context canceled
+2026/11/08 18:56:00 http: proxy error: context canceled
+2026/11/08 18:56:03 PASS 200 POST /v1/messages
+2026/11/08 18:56:04 http: proxy error: context canceled
+2026/11/08 18:56:08 PASS 200 POST /v1/messages
+2026/11/08 18:57:21 http: proxy error: context canceled
+2026/11/08 18:57:22 PASS 200 GET /v1/models
+2026/11/08 18:57:24 http: proxy error: context canceled
+2026/11/08 18:57:25 http: proxy error: context canceled
+2026/11/08 18:57:28 PASS 200 POST /v1/messages
+2026/11/08 18:57:32 PASS 200 POST /v1/messages
+2026/11/08 18:57:32 http: proxy error: context canceled
+2026/11/08 18:57:53 LAB limit until=1794144660 (2026-11-08T13:31:00Z)
+2026/11/08 18:57:54 LAB 429 POST /v1/messages reset=1794144660
+2026/11/08 18:57:59 LAB 429 POST /v1/messages reset=1794144660
+2026/11/08 18:58:52 http: proxy error: context canceled
+2026/11/08 18:59:53 http: proxy error: context canceled
+2026/11/08 19:00:54 http: proxy error: context canceled
+2026/11/08 19:04:08 http: proxy error: context canceled
+2026/11/08 19:04:09 PASS 200 GET /v1/models
+2026/11/08 19:04:10 http: proxy error: context canceled
+2026/11/08 19:04:11 http: proxy error: context canceled
+2026/11/08 19:04:14 PASS 200 POST /v1/messages
+2026/11/08 19:04:18 PASS 200 POST /v1/messages
+2026/11/08 19:04:18 http: proxy error: context canceled
+2026/11/08 19:04:27 LAB limit until=1794145020 (2026-11-08T13:37:00Z)
+2026/11/08 19:04:29 LAB 429 POST /v1/messages reset=1794145020
+2026/11/08 19:04:30 LAB 429 POST /v1/messages reset=1794145020
+2026/11/08 19:07:00 http: proxy error: context canceled
+2026/11/08 19:07:03 PASS 200 POST /v1/messages
+2026/11/08 19:07:04 PASS 200 POST /v1/messages
+2026/11/08 19:07:05 http: proxy error: context canceled
+2026/11/08 19:07:12 PASS 200 POST /v1/messages

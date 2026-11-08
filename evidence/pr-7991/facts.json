@@ -1,0 +1,56 @@
+{
+ "before": {
+  "mode": "before",
+  "until": 1794144660,
+  "untilISO": "2026-11-08T13:31:00.000Z",
+  "failedTurn": "ee5b3687-99eb-4021-aaa1-b2e1db9b2bec",
+  "errorMessage": "You've hit your 5-hour limit \u00b7 resets 7:01pm (Asia/Calcutta)",
+  "genericErrorShown": true,
+  "noticeShown": false,
+  "turnsAfterFailure": [],
+  "failedTurnRow": "failed|You've hit your 5-hour limit \u00b7 resets 7:01pm (Asia/Calcutta)||0||2026-11-08 13:27:59.980212 +0000 UTC",
+  "resumedTurn": null
+ },
+ "after": {
+  "mode": "after",
+  "until": 1794144360,
+  "untilISO": "2026-11-08T13:26:00.000Z",
+  "failedTurn": "4865395e-98b9-461a-ae56-2dcfcfdfe079",
+  "errorMessage": "You've hit your 5-hour limit \u00b7 resets 6:56pm (Asia/Calcutta)\n\nResets at 2026-11-08T13:26:00Z",
+  "noticeShown": true,
+  "turnsAfterFailure": [
+   {
+    "id": "f13d0933-8edc-4573-ae16-72921408ecaf",
+    "state": "completed"
+   }
+  ],
+  "failedTurnRow": "failed|You've hit your 5-hour limit \u00b7 resets 6:56pm (Asia/Calcutta)\n\nResets at 2026-11-08T13:26:00Z|2026-11-08 13:26:00 +0000 UTC|0||2026-11-08 13:23:21.508038 +0000 UTC",
+  "resumedTurn": {
+   "id": "f13d0933-8edc-4573-ae16-72921408ecaf",
+   "row": "completed|||0||2026-11-08 13:26:03.866207 +0000 UTC"
+  }
+ },
+ "fresh_chat_after": {
+  "until": 1794145020,
+  "untilISO": "2026-11-08T13:37:00.000Z",
+  "session": "usagelab-2",
+  "failedTurn": "63f47dbf-b55d-459a-8b6a-985bfe52b6ab",
+  "errorMessage": "You've hit your 5-hour limit \u00b7 resets 7:07pm (Asia/Calcutta)",
+  "rateLimitFramesStored": 0,
+  "apiUsageLimits": [
+   {
+    "id": "63f47dbf-b55d-459a-8b6a-985bfe52b6ab",
+    "state": "failed",
+    "usageLimit": {
+     "resetsAt": "2026-11-08T13:37:00Z",
+     "autoResume": false
+    }
+   }
+  ],
+  "resumedTurn": "66e357f1-341c-4af3-8822-de72aa63a5dc|2026-11-08 13:37:04.834518 +0000 UTC"
+ },
+ "builds": {
+  "before": "65307f85c7aa1c4c653bba43264154c85065fa9d",
+  "after": "1d61a30958bc27f2d379e434b54b7e6a62333ece"
+ }
+}
