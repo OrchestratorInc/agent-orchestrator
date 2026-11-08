@@ -2,11 +2,11 @@ package chat_test
 
 import (
 	"context"
-	"strings"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
