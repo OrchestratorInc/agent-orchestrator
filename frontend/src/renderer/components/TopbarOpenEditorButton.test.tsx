@@ -67,10 +67,10 @@ describe("TopbarOpenEditorButton", () => {
 		);
 		renderButton();
 
-		const main = await screen.findByRole("button", { name: "Open in Cursor" });
+		const main = await screen.findByRole("button", { name: "Open workspace options" });
 		expect(main).toBeEnabled();
 
-		await userEvent.click(main);
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 
 		// the failure must trigger a refetch, not just show a message
 		await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
@@ -89,7 +89,8 @@ describe("TopbarOpenEditorButton", () => {
 		);
 		renderButton();
 
-		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
+		await screen.findByRole("button", { name: "Open workspace options" });
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
 			body: "Session workspace is not available",
@@ -143,7 +144,7 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Could not copy session path", body: "Workspace removed", tone: "error" }));
-		await waitFor(() => expect(screen.getByRole("button", { name: "Open workspace options" })).toBeDisabled());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Session workspace is not available." })).toBeDisabled());
 		expect(openMock).not.toHaveBeenCalled();
 	});
 
@@ -181,7 +182,7 @@ describe("TopbarOpenEditorButton", () => {
 			expect(item.querySelector("svg path")).toBeInTheDocument();
 		}
 		expect(screen.getByRole("menuitem", { name: "VS Code" }).querySelector("svg")).toHaveStyle({ color: "#1F9CF0" });
-		expect(screen.getByLabelText("Open in Cursor").querySelector("image")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Open workspace options").querySelector("image")).not.toBeInTheDocument();
 	});
 
 	it.each(["wezterm", "kitty"] as const)("keeps a visible SVG fallback when the %s app icon fails to load", async (id) => {
@@ -194,22 +195,15 @@ describe("TopbarOpenEditorButton", () => {
 		expect(item.querySelector("svg path")).toBeInTheDocument();
 	});
 
-	it("uses persisted Cursor as the primary target and sends no filesystem path", async () => {
+	it("combines the preferred target icon and chevron into one menu button", async () => {
 		renderButton();
-		const button = await screen.findByRole("button", { name: "Open in Cursor" });
-		expect(button).not.toHaveAttribute("data-priority");
-		expect(button.querySelector("[data-compact-label]")).not.toBeInTheDocument();
-		expect(button.querySelector("svg")).toBeInTheDocument();
-		expect(button).toHaveClass("size-control-md");
-		expect(button).toHaveClass("border-0");
-		const options = screen.getByRole("button", { name: "Open workspace options" });
-		expect(options).toHaveClass("size-control-md", "hover:bg-transparent");
-		expect(button).toHaveClass("hover:bg-transparent");
-		// Disabled buttons retain a hoverable tooltip wrapper.
-		const group = button.parentElement?.parentElement;
-		expect(group).toHaveClass("gap-0", "inline-flex");
+		const button = await screen.findByRole("button", { name: "Open workspace options" });
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		expect(button.querySelectorAll("svg")).toHaveLength(2);
 		await userEvent.click(button);
-		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
+		expect(openMock).not.toHaveBeenCalled();
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Cursor" }));
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "cursor" }));
 	});
 
 	it("keeps the options button expanded while its menu is open", async () => {
@@ -223,7 +217,7 @@ describe("TopbarOpenEditorButton", () => {
 		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
-	// No supported editor: the main button opens Finder instead of sitting empty,
+	// No supported editor: the shortcut opens Finder instead of sitting empty,
 	// with no guidance copy, and the menu still offers every native fallback.
 	it("falls back to Finder when the saved editor is no longer installed", async () => {
 		setState({
@@ -236,10 +230,10 @@ describe("TopbarOpenEditorButton", () => {
 		});
 		openMock.mockClear();
 		renderButton();
-		const main = await screen.findByRole("button", { name: "Open in Finder" });
+		const main = await screen.findByRole("button", { name: "Open workspace options" });
 		expect(main).toBeEnabled();
 		expect(main.querySelector("svg.lucide-code-xml, svg.lucide-code")).not.toBeInTheDocument();
-		await userEvent.click(main);
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
@@ -260,7 +254,7 @@ describe("TopbarOpenEditorButton", () => {
 		});
 		renderButton();
 		expect(await screen.findByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Open workspace options" })).toBeDisabled();
+		expect(screen.getByRole("button")).toBeDisabled();
 		// A standing unavailable state must not take inline topbar space.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
@@ -305,7 +299,7 @@ describe("TopbarOpenEditorButton", () => {
 				await vi.runOnlyPendingTimersAsync();
 			});
 			expect(getState).toHaveBeenCalledTimes(2);
-			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeEnabled();
+			expect(screen.getByRole("button", { name: "Open workspace options" })).toBeEnabled();
 			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 			expect(renderedAlerts).toEqual([]);
 		} finally {
@@ -371,7 +365,7 @@ describe("TopbarOpenEditorButton", () => {
 				await vi.runOnlyPendingTimersAsync();
 			});
 			expect(getState).toHaveBeenCalledTimes(2);
-			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeEnabled();
+			expect(screen.getByRole("button", { name: "Open workspace options" })).toBeEnabled();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -434,11 +428,11 @@ describe("TopbarOpenEditorButton", () => {
 			preferredEditorId: "cursor",
 		});
 		renderButton();
-		const main = await screen.findByRole("button", { name: "Open in Finder" });
+		const main = await screen.findByRole("button", { name: "Open workspace options" });
 		expect(main.querySelector("image")).toHaveAttribute("href", iconDataUrl);
 		await userEvent.hover(main);
-		expect((await screen.findAllByText(/workspace in Finder/)).length).toBeGreaterThan(0);
-		await userEvent.click(main);
+		expect((await screen.findAllByText("Open workspace options")).length).toBeGreaterThan(0);
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 		await waitFor(() => expect(openMock).toHaveBeenCalledTimes(2));
@@ -446,14 +440,14 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "VS Code" }));
-		expect(await screen.findByRole("button", { name: "Open in VS Code" })).toBeEnabled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Open workspace options" }).querySelector("svg")).toHaveStyle({ color: "#1F9CF0" }));
 	});
 
 	it("updates the primary target after a chosen editor succeeds", async () => {
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open workspace options" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "VS Code" }));
-		expect(await screen.findByRole("button", { name: "Open in VS Code" })).toBeEnabled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Open workspace options" }).querySelector("svg")).toHaveStyle({ color: "#1F9CF0" }));
 	});
 
 	it("gives each editor its own mark and keeps real brand color behavior", async () => {
@@ -472,7 +466,7 @@ describe("TopbarOpenEditorButton", () => {
 		openMock.mockClear();
 		setState(availableState);
 		renderButton();
-		await screen.findByRole("button", { name: "Open in Cursor" });
+		await screen.findByRole("button", { name: "Open workspace options" });
 
 		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 
@@ -488,7 +482,7 @@ describe("TopbarOpenEditorButton", () => {
 		});
 		renderButton();
 		await waitFor(() => expect(window.ao!.editorHandoff.getState).toHaveBeenCalled());
-		await screen.findByRole("button", { name: "Open in Finder" });
+		await screen.findByRole("button", { name: "Open workspace options" });
 
 		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 
@@ -511,7 +505,8 @@ describe("TopbarOpenEditorButton", () => {
 	it("surfaces an Electron launch failure", async () => {
 		openMock.mockRejectedValueOnce(new Error("Could not open Cursor. Check that it is installed and try again."));
 		renderButton();
-		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
+		await screen.findByRole("button", { name: "Open workspace options" });
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
 			title: "Open in Cursor",
 			body: "Could not open Cursor. Check that it is installed and try again.",
