@@ -617,7 +617,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, "", providerInput)
+	activity, err := makeSteerActivity(activityID, msg, providerInput)
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, err)
 	}
@@ -863,7 +863,7 @@ func (c *Controller) recordSteer(
 	providerInput steerProviderInput,
 ) (string, error) {
 	id := c.newID()
-	activity, err := makeSteerActivity(id, msg, "", providerInput)
+	activity, err := makeSteerActivity(id, msg, providerInput)
 	if err != nil {
 		return "", err
 	}
@@ -884,7 +884,6 @@ type steerProviderInput struct {
 func makeSteerActivity(
 	id string,
 	msg ports.ChatUserMessage,
-	sourceTurnID string,
 	providerInputs ...steerProviderInput,
 ) (domain.ConversationActivity, error) {
 	detail := map[string]any{
@@ -903,9 +902,6 @@ func makeSteerActivity(
 	}
 	if msg.ClientMessageID != "" {
 		detail["clientMessageId"] = msg.ClientMessageID
-	}
-	if sourceTurnID != "" {
-		detail["sourceTurnId"] = sourceTurnID
 	}
 	if len(providerInputs) > 0 {
 		detail["providerInputCaptured"] = true

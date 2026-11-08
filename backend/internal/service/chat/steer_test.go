@@ -1251,7 +1251,7 @@ func TestPromoteQueuedUserAuthoredAutomationTurnPromotesLikeTyped(t *testing.T) 
 	if len(provider.steers()) != 0 {
 		t.Fatalf("promotion contacted the mid-turn steer seam: %+v", provider.steers())
 	}
-	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		for _, turn := range s.Turns {
 			if turn.ID == queued.ID {
 				return turn.State == domain.TurnStateRunning
