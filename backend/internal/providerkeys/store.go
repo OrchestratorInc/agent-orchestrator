@@ -1,5 +1,7 @@
 // Package providerkeys stores provider environment credentials for AO-launched
-// harnesses. Values never appear in API responses or command arguments.
+// harnesses. Values never appear in API responses or command arguments:
+// runtimes hand them to sessions through the process environment, and the
+// tmux runtime through a 0600 file the pane's shell reads and deletes.
 package providerkeys
 
 import (
