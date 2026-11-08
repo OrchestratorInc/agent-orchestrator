@@ -43,10 +43,12 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	records: ShareLinkRecordStore;
 }
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
+const UNPLAYABLE_VIDEO_EXTENSIONS = new Set([".avi", ".mkv"]);
+const UNPLAYABLE_VIDEO_MESSAGE = "This video format can't be played in a browser. Use MP4, MOV or WebM.";
 
-function isVideo(name: string): boolean {
-	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
+/** A link has no download, so a video no browser plays could show nothing. */
+function isUnplayableVideo(name: string): boolean {
+	return UNPLAYABLE_VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
 function shareFileArgument(value: unknown): CloudShareFile {
@@ -131,7 +133,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			name: found.name,
 			size: found.size,
 			secretFindings: found.secretFindings,
-			unsupported: isVideo(found.name),
+			unsupported: isUnplayableVideo(found.name),
 			fingerprint: found.sha256,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
@@ -139,13 +141,14 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	};
 
 	const publishCloudFile = async (file: CloudSessionShareFile): Promise<CloudSharePublishResult> => {
-		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+		if (isUnplayableVideo(file.path)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 		if (!(await deps.getToken())) return { status: "signed_out" };
 		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file) };
 		try {
-			// The control plane copies the file inside its bucket in one quick
-			// request, so there is nothing to cancel: stopping the wait could
-			// leave a public link the person was told was cancelled.
+			// The control plane copies the file inside its bucket and finishes
+			// whatever happens to this request, so there is nothing to cancel:
+			// stopping the wait could leave a public link the person was told
+			// was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
 			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint);
 			return { status: "published", share: result.share, replaced: result.replaced };
@@ -170,7 +173,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			name: resolved.name,
 			size: resolved.size,
 			secretFindings,
-			unsupported: isVideo(resolved.name),
+			unsupported: isUnplayableVideo(resolved.name),
 			fingerprint,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
@@ -216,7 +219,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		let snapshot: ShareSnapshot | undefined;
 		try {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
-			if (isVideo(resolved.name)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+			if (isUnplayableVideo(resolved.name)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 			if (!(await deps.getToken())) return { status: "signed_out" };
 			const progress = (sentBytes: number, totalBytes: number) => {
 				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });

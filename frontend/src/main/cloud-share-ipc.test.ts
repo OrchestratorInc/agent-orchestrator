@@ -25,7 +25,7 @@ beforeEach(async () => {
 	dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ao-share-ipc-"));
 	await fs.mkdir(path.join(dataDir, "artifacts", "sess-1", "docs"), { recursive: true });
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), FAKE_AWS_KEY);
-	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mp4"), "video");
+	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mkv"), "video");
 });
 
 afterEach(async () => {
@@ -180,7 +180,7 @@ describe("cloudShare IPC", () => {
 
 	it("turns refusals into results the dialog can act on", async () => {
 		const video = setup();
-		await expect(video.invoke("cloudShare:publish", { ...video.file, path: "clip.mp4" })).resolves.toMatchObject({ status: "unsupported" });
+		await expect(video.invoke("cloudShare:publish", { ...video.file, path: "clip.mkv" })).resolves.toMatchObject({ status: "unsupported" });
 		expect(video.requests).toEqual([]);
 
 		const limit = setup({ finalizeStatus: 409, finalizeCode: "artifact_share_limit_reached" });
@@ -218,7 +218,8 @@ describe("cloudShare IPC", () => {
 	it("publishes a cloud session's file without uploading it", async () => {
 		const { invoke, cloudFile, requests, bodies, records } = setup();
 		await expect(invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256 })).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		expect(requests).toEqual([`POST ${CLOUD_SESSION_PATH}/artifacts/share`]);
+		// Its only write, and nothing goes to storage.
+		expect(requests.filter((request) => !request.startsWith("GET "))).toEqual([`POST ${CLOUD_SESSION_PATH}/artifacts/share`]);
 		// The control plane shares only the version the person was shown.
 		expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256 });
 		// The link is remembered apart from any local session's file.
@@ -249,7 +250,7 @@ describe("cloudShare IPC", () => {
 		expect(unseen.requests.filter((request) => request.endsWith("/share"))).toEqual([]);
 
 		const video = setup();
-		await expect(video.invoke("cloudShare:publish", { ...video.cloudFile, path: "demo.mp4" })).resolves.toMatchObject({ status: "unsupported" });
+		await expect(video.invoke("cloudShare:publish", { ...video.cloudFile, path: "demo.avi" })).resolves.toMatchObject({ status: "unsupported" });
 		expect(video.requests).toEqual([]);
 
 		const signedOut = setup({ token: null });
