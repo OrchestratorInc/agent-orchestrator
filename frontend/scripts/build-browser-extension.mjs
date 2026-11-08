@@ -41,6 +41,9 @@ export async function buildBrowserExtension() {
 	for (const file of ["consent.html", "popup.html", "options.html", "pages.css"]) {
 		copyFileSync(path.join(source, "pages", file), path.join(outDir, file));
 	}
+	for (const size of [16, 32, 48, 128]) {
+		copyFileSync(path.join(source, "icons", `icon-${size}.png`), path.join(outDir, `icon-${size}.png`));
+	}
 	const manifest = JSON.parse(readFileSync(path.join(source, "manifest.json"), "utf8"));
 	writeFileSync(path.join(outDir, "manifest.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
 	return outDir;

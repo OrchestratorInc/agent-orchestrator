@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatFileAnnotationMessages } from "../../shared/file-annotations";
@@ -109,7 +110,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 			params: { path: { sessionId } },
 			body: { message, userAuthored: true },
 		});
-		if (responseError) throw new Error(apiErrorMessage(responseError, t("files.feedbackError")));
+		if (responseError) throw apiErrorException(responseError, t("files.feedbackError"));
 	};
 	const submit = async (target?: ActiveFileAnnotationTarget, text?: string) => {
 		if (statusRef.current === "sending") return;

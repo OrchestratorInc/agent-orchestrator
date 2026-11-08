@@ -326,3 +326,45 @@ func clientKill(addr string) error {
 	}
 	return nil
 }
+
+// clientWatchForeground calls fn for every MsgForegroundState until ctx ends
+// or the host goes away. The replay sent before the request is ignored.
+func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
+	conn, err := dialHostContext(ctx, addr, dialTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	frame, err := EncodeMessage(MsgWatchForegroundReq, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(frame); err != nil {
+		return err
+	}
+	parser := NewMessageParser(func(msgType byte, payload []byte) {
+		if msgType != MsgForegroundState {
+			return
+		}
+		var state ForegroundPayload
+		if json.Unmarshal(payload, &state) == nil {
+			fn(state)
+		}
+	})
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			parser.Feed(buf[:n])
+		}
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return err
+		}
+	}
+}

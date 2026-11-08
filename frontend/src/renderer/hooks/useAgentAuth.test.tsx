@@ -4,6 +4,7 @@ import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
+import { isApiError } from "../lib/reported-errors";
 import { shellTerminalsQueryKey } from "./useShellTerminals";
 import { cancelAgentUILogin, getAgentUILogin, probeAgentAuth, startAgentUILogin, submitAgentUILoginCode, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
 
@@ -123,6 +124,27 @@ describe("agent authentication hooks", () => {
 		await expect(cancelAgentUILogin("codex", "missing")).resolves.toBeUndefined();
 		request.mockResolvedValue({ status: 503, body: { code: "DAEMON_UNAVAILABLE", message: "AO daemon is not reachable." } });
 		await expect(startAgentUILogin("codex", "browser", "")).rejects.toThrow("AO daemon is not reachable.");
+	});
+
+	it.each([
+		["start", () => startAgentUILogin("codex", "browser", "")],
+		["get", () => getAgentUILogin("codex", "login-1")],
+		["cancel", () => cancelAgentUILogin("codex", "login-1")],
+		["code", () => submitAgentUILoginCode("codex", "login-1", "test-code")],
+	] as const)("keeps %s daemon errors transport-owned across IPC and display wrapping", async (_action, invoke) => {
+		const body = { code: "AGENT_AUTH_CANCEL_PENDING", message: "Login is still stopping" };
+		vi.spyOn(aoBridge.agentLogin, "request").mockResolvedValue({ status: 409, body });
+		const error = await invoke().catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(Error);
+		expect(error).toMatchObject({ message: body.message, cause: body });
+		expect(isApiError(error)).toBe(true);
+	});
+
+	it("still reports missing successful IPC data as a client fault", async () => {
+		vi.spyOn(aoBridge.agentLogin, "request").mockResolvedValue({ status: 200, body: undefined });
+		const error = await getAgentUILogin("codex", "login-1").catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(Error);
+		expect(isApiError(error)).toBe(false);
 	});
 
 	it("uses the host client for remote hosts", async () => {

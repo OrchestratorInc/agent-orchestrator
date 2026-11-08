@@ -16,6 +16,7 @@ import { TargetIcon } from "./TopbarOpenEditorButton";
 import {
 	ContextMenuItem,
 	ContextMenuSeparator,
+	ContextMenuShortcut,
 	ContextMenuSub,
 	ContextMenuSubContent,
 	ContextMenuSubTrigger,
@@ -42,11 +43,15 @@ export function SessionContextMenuItems({
 	session,
 	onArchive,
 	onRename,
+	renameShortcut,
 }: {
 	session: WorkspaceSession;
 	/** Absent where the session cannot be archived from here. */
 	onArchive?: () => void;
-	onRename: () => void;
+	/** Absent where the title is not editable here; the row shows disabled. */
+	onRename?: () => void;
+	/** Key hint for the rename row, where a focused trigger takes one. */
+	renameShortcut?: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -90,9 +95,10 @@ export function SessionContextMenuItems({
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
 			{canRenameAndPin ? (
 				<>
-					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} disabled={!onRename} onSelect={onRename}>
 						<Pencil aria-hidden="true" />
 						{t("shell.rename")}
+						{renameShortcut ? <ContextMenuShortcut aria-hidden="true">{renameShortcut}</ContextMenuShortcut> : null}
 					</ContextMenuItem>
 					<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
 						{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}

@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
-import { AgentAvatar } from "./AgentAvatar";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -92,6 +91,7 @@ import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -145,17 +145,19 @@ import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { captureRendererException } from "../lib/telemetry";
 import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
-import { applyOrder } from "../lib/sidebar-order";
+import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -422,48 +424,13 @@ function SidebarSectionScroller({
 	wrapperClassName?: string;
 }) {
 	const scrollerRef = useRef<HTMLDivElement>(null);
-	const [scrollEdges, setScrollEdges] = useState({ top: false, bottom: false });
-	const updateScrollEdges = useCallback(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		const overflow = scroller.scrollHeight - scroller.clientHeight;
-		const next = {
-			top: overflow > 1 && scroller.scrollTop > 1,
-			bottom: overflow > 1 && scroller.scrollTop < overflow - 1,
-		};
-		setScrollEdges((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
-	}, []);
-
-	useLayoutEffect(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		updateScrollEdges();
-		scroller.addEventListener("scroll", updateScrollEdges, { passive: true });
-		const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateScrollEdges);
-		resizeObserver?.observe(scroller);
-		if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-		const mutationObserver =
-			typeof MutationObserver === "undefined"
-				? undefined
-				: new MutationObserver(() => {
-					if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-					updateScrollEdges();
-				});
-		mutationObserver?.observe(scroller, { childList: true, subtree: true });
-		return () => {
-			scroller.removeEventListener("scroll", updateScrollEdges);
-			resizeObserver?.disconnect();
-			mutationObserver?.disconnect();
-		};
-	}, [updateScrollEdges]);
+	useEdgeFade(scrollerRef);
 
 	return (
 		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
-			<div ref={scrollerRef} className={className} data-sidebar-section-scroller="" data-testid={testId} style={style}>
+			<div ref={scrollerRef} className={`edge-fade [--edge-fade-size:var(--space-4)] ${className}`} data-sidebar-section-scroller="" data-testid={testId} style={style}>
 				{children}
 			</div>
-			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
-			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
 		</div>
 	);
 }
@@ -681,7 +648,7 @@ function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean; legacy: boolean }) {
+function SessionStatusDot({ session, working, legacy }: { session: WorkspaceSession; working: boolean; legacy: boolean }) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
@@ -695,19 +662,6 @@ function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: 
 		previous.current = marker;
 	}, [marker]);
 	if (legacy) return <LegacySessionStatusDot session={session} />;
-	if (harnessOnly) {
-		return (
-			// Same 14px box, 10px inset, and 8px gap as a project's avatar. A session
-			// waiting on the user swaps the logo for the red alert.
-			<span aria-hidden="true" className="relative z-[1] mr-0.5 inline-flex size-icon-md shrink-0 items-center justify-center">
-				{!working && sessionNeedsInput(session) ? (
-					<SessionMarkerIcon data-session-status={session.status} marker="attention" />
-				) : (
-					<AgentAvatar className="size-icon-md" decorative provider={session.provider} />
-				)}
-			</span>
-		);
-	}
 	// Rows with nothing to flag still get a quiet dot, so every title starts on
 	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
@@ -945,6 +899,7 @@ export function Sidebar({
 	const projectOrder = useSidebarOrderStore((state) => state.projectOrder);
 	const pendingCreatedProjectIds = useSidebarOrderStore((state) => state.pendingCreatedProjectIds);
 	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
+	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
 	useLayoutEffect(() => {
 		// Preserve absent IDs in place: creation can publish its order before the
 		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
@@ -952,8 +907,8 @@ export function Sidebar({
 		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
 	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
-		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
-		[projectOrder, workspaces],
+		() => pinnedFirst(applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"), (workspace) => workspace.id, pinnedProjectIds),
+		[pinnedProjectIds, projectOrder, workspaces],
 	);
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
@@ -1025,7 +980,9 @@ export function Sidebar({
 		const row = event.currentTarget;
 		const rect = row.getBoundingClientRect();
 		const placement: ProjectDropPlacement = event.clientY <= rect.top + rect.height / 2 ? "before" : "after";
-		if (reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
+		// Pinned and unpinned projects reorder only within their own group.
+		const pinned = useSidebarOrderStore.getState().pinnedProjectIds;
+		if (pinned.includes(activeId) !== pinned.includes(overId) || reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
 			clearProjectDropIndicator();
 			return;
 		}
@@ -1788,6 +1745,7 @@ const ProjectItem = memo(function ProjectItem({
 				selection.goSession(workspace.id, sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
+				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 			} finally {
 				setIsSpawning(false);
 			}
@@ -1804,6 +1762,7 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
+			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 		} finally {
 			setIsSpawning(false);
 		}
@@ -1844,6 +1803,11 @@ const ProjectItem = memo(function ProjectItem({
 		setConfirmOpen(true);
 	};
 	const copyToClipboard = useCopyToClipboard();
+	// Pins are a local list preference; remote host rows and the Scratchpad
+	// have their own sections and are not pinnable.
+	const canPin = !isStandalone && !workspace.hostId;
+	const isPinned = useSidebarOrderStore((state) => canPin && state.pinnedProjectIds.includes(workspace.id));
+	const setProjectPinned = useSidebarOrderStore((state) => state.setProjectPinned);
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
@@ -1857,6 +1821,9 @@ const ProjectItem = memo(function ProjectItem({
 		selection.goHome();
 		try {
 			await onRemoveProject(workspace.id);
+			// Project ids come from the folder name, so a stale pin would come
+			// back if the same folder is added again.
+			if (canPin) setProjectPinned(workspace.id, false);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : t("shell.couldNotRemoveProject");
 			setRemoveError(message);
@@ -1916,7 +1883,7 @@ const ProjectItem = memo(function ProjectItem({
 										// Projects header so icons and labels share one left edge.
 										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
-										"pr-sidebar-project-actions",
+										isPinned ? "pr-sidebar-project-actions-pinned" : "pr-sidebar-project-actions",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
@@ -1976,6 +1943,7 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
+									{workspace.shared ? <SharedProjectMark share={workspace.shared} /> : null}
 									{/* The host badge shrinks and truncates in narrow sidebars so it never
 									    runs under the row actions; half the row stays for the name. */}
 									{hostLabel && (
@@ -2023,6 +1991,24 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
+								{isPinned ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												size="icon-xs"
+												variant="quiet"
+												aria-label={t("shell.unpinProject")}
+												className={HOVER_ACTION_CLASS}
+												data-project-pinned=""
+												onClick={() => setProjectPinned(workspace.id, false)}
+												type="button"
+											>
+												<Pin aria-hidden="true" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.unpinProject")}</TooltipContent>
+									</Tooltip>
+								) : null}
 								{/* A guest may open a shared orchestrator but never start one, and the
 								    project's own actions belong to its organization. */}
 								{!workspace.shared || orchestrator ? (
@@ -2085,7 +2071,13 @@ const ProjectItem = memo(function ProjectItem({
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
-								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+												{canPin ? (
+													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+														{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+														{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+													</DropdownMenuItem>
+												) : null}
+												<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 													<Settings aria-hidden="true" />
 													{t("shell.projectSettings")}
 												</DropdownMenuItem>
@@ -2232,6 +2224,12 @@ const ProjectItem = memo(function ProjectItem({
 					</>
 				) : null}
 				{!isStandalone ? <ContextMenuSeparator /> : null}
+				{canPin ? (
+					<ContextMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+						{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+						{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+					</ContextMenuItem>
+				) : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -2408,7 +2406,6 @@ function ScratchpadSection({
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
 						indented={false}
-						harnessOnly
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
 						onOpen={openSession}
@@ -2450,7 +2447,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
-	harnessOnly,
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
@@ -2461,7 +2457,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
-	harnessOnly?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
@@ -2485,7 +2480,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			session={session}
 			active={active}
 			indented={indented}
-			harnessOnly={harnessOnly}
 			onKilled={onKilled}
 			onOpen={open}
 			layoutDependency={layoutDependency}
@@ -2506,7 +2500,6 @@ function SessionReorderList({
 	sessionIds,
 	activeSessionId,
 	indented = true,
-	harnessOnly = false,
 	plain = false,
 	onReorder,
 	onKilled,
@@ -2519,8 +2512,6 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
-	/** Rows show only the harness logo and the title (the Scratchpad). */
-	harnessOnly?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
 	 *  descendants on drop. */
@@ -2579,7 +2570,6 @@ function SessionReorderList({
 						session={session}
 						active={activeSessionId === session.id}
 						indented={indented}
-						harnessOnly={harnessOnly}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
 					/>
@@ -2607,7 +2597,6 @@ function SessionReorderList({
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
-							harnessOnly={harnessOnly}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
@@ -2633,7 +2622,6 @@ const SessionRow = memo(function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
-	harnessOnly: harnessOnlyRequested = false,
 	layoutDependency,
 	listIsDragging = false,
 	onKilled,
@@ -2644,8 +2632,6 @@ const SessionRow = memo(function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
-	/** Show only the harness logo and the title: no status, spinner, or age. */
-	harnessOnly?: boolean;
 	/** The list order. Present only for rows in a reorderable list: the row then
 	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
@@ -2662,8 +2648,6 @@ const SessionRow = memo(function SessionRow({
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
-	// The Scratchpad's logo-only rows are part of the new design.
-	const harnessOnly = harnessOnlyRequested && newSidebarDesign;
 	const working = isSessionRowWorking(session);
 	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
@@ -2672,8 +2656,8 @@ const SessionRow = memo(function SessionRow({
 		const updated = Date.parse(session.updatedAt);
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
-	const shimmer = newSidebarDesign && working && !active && !harnessOnly;
-	const marker = !newSidebarDesign || harnessOnly || working ? null : getSessionRowMarker(session);
+	const shimmer = newSidebarDesign && working && !active;
+	const marker = !newSidebarDesign || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2697,13 +2681,15 @@ const SessionRow = memo(function SessionRow({
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
+	// A remote chat prefetches its page too; only a local agent can be woken from here.
+	const canPrefetchChat = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
+	const canPrefetch = canPrefetchChat && !session.hostId;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
 	const prefetchConversation = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
-		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
+		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
 	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
@@ -2719,7 +2705,12 @@ const SessionRow = memo(function SessionRow({
 	// A session shared from another organization is the sharer's to name.
 	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		if (renamable) rename.begin();
+		if (!renamable) return;
+		// The editor replaces the row, unmounting a context menu that is still
+		// open. Radix reports that close from an effect the unmount skips, so
+		// contextMenuOpen would stay true and keep the preview off for good.
+		setContextMenuOpen(false);
+		rename.begin();
 	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
@@ -2729,20 +2720,19 @@ const SessionRow = memo(function SessionRow({
 			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
 				<div
 					className={cn(
-						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
-						harnessOnly ? "pl-2.5" : "pl-1.5",
+						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
 						active && "text-foreground",
 					)}
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+					<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2760,7 +2750,7 @@ const SessionRow = memo(function SessionRow({
 						}}
 						value={rename.draft}
 					/>
-					{harnessOnly ? null : <SessionMessageAge session={session} />}
+					<SessionMessageAge session={session} />
 				</div>
 			</SidebarMenuSubItem>
 		);
@@ -2803,9 +2793,8 @@ const SessionRow = memo(function SessionRow({
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
-								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								harnessOnly ? "pl-2.5" : "pl-1.5",
-								!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
+								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2813,9 +2802,9 @@ const SessionRow = memo(function SessionRow({
 							)}
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
-								if (!canPrefetch) return;
+								if (!canPrefetchChat) return;
 								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
-								resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
+								if (canPrefetch) resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
 							onMouseLeave={() => {
 								clearTimeout(hoverTimerRef.current);
@@ -2844,7 +2833,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+							<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
@@ -2877,7 +2866,6 @@ const SessionRow = memo(function SessionRow({
 					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
 						archiveOpen={archiveOpen}
-						hideAge={harnessOnly}
 						isDragging={Boolean(reorder?.isDragging)}
 						onArchiveOpenChange={setArchiveOpen}
 						onKilled={onKilled}
@@ -2903,7 +2891,8 @@ const SessionRow = memo(function SessionRow({
 			</HoverCardContent>
 			</HoverCard>
 			<ContextMenuContent className="min-w-44">
-				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2928,14 +2917,12 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 
 const SessionActions = memo(function SessionActions({
 	session,
-	hideAge = false,
 	isDragging,
 	archiveOpen,
 	onArchiveOpenChange,
 	onKilled,
 }: {
 	session: WorkspaceSession;
-	hideAge?: boolean;
 	isDragging: boolean;
 	archiveOpen: boolean;
 	onArchiveOpenChange: (open: boolean) => void;
@@ -3000,34 +2987,37 @@ const SessionActions = memo(function SessionActions({
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						</Button>}
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<SessionArchiveDialog
-								onConfirm={confirmArchive}
-								onOpenChange={onArchiveOpenChange}
-								open={archiveOpen}
-								session={session}
-								trigger={
-									<Button
-										size="icon-xs"
-										variant="quiet"
-										aria-label={t("shell.archiveSession")}
-										className={SESSION_ACTION_CLASS}
-										disabled={isKilling}
-										onClick={handleArchive}
-										type="button"
-									>
-										<Archive aria-hidden="true" />
-									</Button>
-								}
-							/>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				{session.cloud?.shared ? null : (
+					<SessionArchiveDialog
+						onConfirm={confirmArchive}
+						onOpenChange={onArchiveOpenChange}
+						open={archiveOpen}
+						session={session}
+						trigger={
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											size="icon-xs"
+											variant="quiet"
+											aria-label={t("shell.archiveSession")}
+											className={SESSION_ACTION_CLASS}
+											disabled={isKilling}
+											onClick={handleArchive}
+											type="button"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
+							</Tooltip>
+						}
+					/>
+				)}
 			</div>
-			{hideAge ? null : <SessionMessageAge session={session} />}
+			<SessionMessageAge session={session} />
 		</div>
 	);
 });

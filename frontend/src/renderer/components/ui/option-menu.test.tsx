@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { subscribeBrowserOverlaySync } from "../../lib/browser-overlay-sync";
@@ -52,6 +52,40 @@ it.each(["pointer", "keyboard"])("closes only the opted-in submenu after a %s se
 	expect(screen.queryAllByRole("menu")).toHaveLength(0);
 	await user.click(screen.getByRole("button", { name: "Turn settings" }));
 	expect(screen.getAllByRole("menu")).toHaveLength(1);
+});
+
+it("keeps a submenu a selection closed shut when the hover-open timer from before it fires", () => {
+	vi.useFakeTimers();
+	try {
+		render(
+			<OptionMenu defaultOpen>
+				<OptionMenuTrigger>Turn settings</OptionMenuTrigger>
+				<OptionMenuContent>
+					<OptionMenuSub closeOnSelect>
+						<OptionMenuSubTrigger>Model</OptionMenuSubTrigger>
+						<OptionMenuSubContent>
+							<OptionMenuItem>Opus</OptionMenuItem>
+						</OptionMenuSubContent>
+					</OptionMenuSub>
+				</OptionMenuContent>
+			</OptionMenu>,
+		);
+		const model = screen.getByRole("menuitem", { name: "Model" });
+		// The pointer arrives on the row (Radix starts its 100ms hover-open timer)
+		// and clicks it at once; a choice is made before the timer fires.
+		fireEvent.pointerMove(model, { pointerType: "mouse" });
+		fireEvent.click(model);
+		fireEvent.click(screen.getByRole("menuitem", { name: "Opus" }));
+		act(() => vi.advanceTimersByTime(500));
+		expect(screen.queryByRole("menuitem", { name: "Opus" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menu")).toHaveLength(1);
+		// Asked for again, it opens.
+		fireEvent.click(model);
+		act(() => vi.advanceTimersByTime(50));
+		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("leaves both ancestor menus open after a nested choice", async () => {

@@ -21,6 +21,8 @@ import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
+import { useChatSessionId } from "./chat-image-source";
+import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -77,6 +79,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -563,7 +566,6 @@ export function TurnOutcome({
 	onRollback,
 	rollbackDisabled,
 	timestamp,
-	durationMs,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
@@ -590,7 +592,6 @@ export function TurnOutcome({
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={timestamp}
-					durationMs={durationMs}
 				/>
 			</div>
 		);
@@ -637,19 +638,12 @@ export function TurnOutcome({
 				onRollback={onRollback}
 				rollbackDisabled={rollbackDisabled}
 				timestamp={timestamp}
-				durationMs={durationMs}
 			/>
 		</div>
 	);
 }
 
 interface TurnActionsProps {
-	/**
-	 * How long the turn ran. "Worked for" carries this when the turn has work to
-	 * fold; a turn that went straight to its answer has no fold, so the time leads
-	 * the action row instead and every turn still says how long it took.
-	 */
-	durationMs?: number;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
 	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
@@ -663,17 +657,15 @@ interface TurnActionsProps {
 }
 
 /**
- * The row a turn closes on: how long it ran (when no fold above says so), retry,
- * copy, roll back, then the time on hover.
+ * The row a turn closes on: retry, copy, roll back, then the time on hover. How
+ * long the turn ran heads it instead, in "Worked for".
  *
  * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
  * one — so the controls are always in the same place. The negative margin is on the
  * row rather than its first button, so the leading glyph lines up with the text
- * above whichever control comes first; the duration pads itself back to the text
- * edge for the same reason.
+ * above whichever control comes first.
  */
 export function TurnActions({
-	durationMs,
 	retry,
 	copyText,
 	onRollback,
@@ -681,8 +673,7 @@ export function TurnActions({
 	timestamp,
 	className,
 }: TurnActionsProps & { className?: string }) {
-	const showDuration = durationMs !== undefined && durationMs > 0;
-	if (!retry && copyText === undefined && !onRollback && !showDuration) return null;
+	if (!retry && copyText === undefined && !onRollback) return null;
 	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
@@ -731,8 +722,6 @@ export function TurnActions({
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
 				) : null}
-				{/* After the actions, so copy and roll back sit at the same spot on every reply. */}
-				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -945,7 +934,6 @@ export function HumanMessage({
 	onEdit,
 	editing = false,
 	editText,
-	editReconstructedContext = false,
 	onEditStart,
 	onEditDraftChange,
 	onEditCancel,
@@ -973,7 +961,6 @@ export function HumanMessage({
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
-	editReconstructedContext?: boolean;
 	onEditStart?: () => void;
 	onEditDraftChange?: (text: string) => void;
 	onEditCancel?: () => void;
@@ -1019,7 +1006,6 @@ export function HumanMessage({
 					recoveryLabel={editRecoveryLabel}
 					sendBlocked={editSendBlocked}
 					busy={editBusy}
-					reconstructedContext={editReconstructedContext}
 					error={editError}
 					onDraftChange={onEditDraftChange}
 					onCancel={() => onEditCancel?.()}
@@ -1036,38 +1022,40 @@ export function HumanMessage({
 					data-queued={queued ? "" : undefined}
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
-					{excerptReferences.length > 0 ? (
-						<ChatAnnotationSummary
-							annotations={excerptReferences.map((excerpt) => ({
-								fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
-								text: excerpt.text ?? "",
-								conversationId: excerpt.sourceConversationId,
- messageId: excerpt.sourceMessageId,
-								revision: excerpt.sourceRevision,
-							}))}
-							onSelect={onSelectAnnotation}
-							className="mb-2"
-						/>
-					) : null}
-					{body ? (
-						<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => <SessionLinkedText text={text} />}
+					<CollapsibleHumanBody stateKey={visibleMessageText}>
+						{excerptReferences.length > 0 ? (
+							<ChatAnnotationSummary
+								annotations={excerptReferences.map((excerpt) => ({
+									fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
+									text: excerpt.text ?? "",
+									conversationId: excerpt.sourceConversationId,
+	 messageId: excerpt.sourceMessageId,
+									revision: excerpt.sourceRevision,
+								}))}
+								onSelect={onSelectAnnotation}
+								className="mb-2"
 							/>
-						</p>
-					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Attached files"
-						className={cn(body && "mt-2")}
-					/>
-					<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
+						) : null}
+						{body ? (
+							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+								<ProseWithInlineImages
+									text={body}
+									attachments={attachments}
+									sessionId={sessionId}
+									apiBaseUrl={apiBaseUrl}
+									renderText={(text) => <SessionLinkedText text={text} />}
+								/>
+							</p>
+						) : null}
+						<StagedAttachmentItems
+							paths={attachments}
+							sessionId={sessionId}
+							apiBaseUrl={apiBaseUrl}
+							ariaLabel="Attached files"
+							className={cn(body && "mt-2")}
+						/>
+						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
+					</CollapsibleHumanBody>
 				</div>
 			)}
 			{editing ? null : (
@@ -1187,13 +1175,10 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
-	durationMs,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
-	/** How long the turn ran, for the action row when no "Worked for" fold carries it. */
-	durationMs?: number;
 	/** The enclosing turn is still active, even if its last text chunk has landed. */
 	live?: boolean;
 	/**
@@ -1228,7 +1213,6 @@ export function AssistantMessage({
 				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
-					durationMs={durationMs}
 					copyText={copyReady ? message.text : undefined}
 					onRollback={rollbackReady ? onRollback : undefined}
 					rollbackDisabled={rollbackDisabled}
@@ -1850,11 +1834,25 @@ function CommandOutput({
 }) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
+	const hostId = useContext(ChatHostId);
+	const sessionId = useChatSessionId();
+	// A remote page carries only the head and tail of a long output; outputBytes is its full size.
+	const cutBytes = typeof detail?.outputBytes === "number" ? detail.outputBytes : undefined;
+	const [whole, setWhole] = useState<{ revision: number; output?: string; loading?: boolean }>();
+	const wholeOutput = whole?.revision === activity.revision ? whole.output : undefined;
+	const showWhole = () => {
+		if (!sessionId) return;
+		const revision = activity.revision;
+		setWhole({ revision, loading: true });
+		fetchActivityOutput(sessionId, hostId, activity.sequence, activity.id)
+			.then((output) => setWhole({ revision, output }))
+			.catch(() => setWhole(undefined));
+	};
 	// Older ACP-backed conversations may contain the provider's structured
 	// rawOutput even though AO's view model promises a string. New events are
 	// normalized at the adapter boundary; this compatibility read keeps those
 	// already-durable rows from taking down the entire session surface.
-	const raw = commandOutputText(detail?.output as unknown);
+	const raw = commandOutputText((wholeOutput ?? detail?.output) as unknown);
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
@@ -1895,6 +1893,16 @@ function CommandOutput({
 				<p className="px-2.5 py-1 text-xs text-muted-foreground">
 					Showing the end of this large output.
 				</p>
+			) : null}
+			{cutBytes !== undefined && wholeOutput === undefined && sessionId ? (
+				<button
+					type="button"
+					disabled={whole?.revision === activity.revision && whole.loading}
+					onClick={showWhole}
+					className="self-start px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+				>
+					{whole?.revision === activity.revision && whole.loading ? "Loading the whole output…" : `Show the whole output (${Math.ceil(cutBytes / 1024)} KB)`}
+				</button>
 			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
@@ -2231,9 +2239,10 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			>
 				<strong
 					className={cn(
-						"activity-row-label shrink-0 text-xs font-normal",
+						"activity-row-label min-w-0 truncate text-xs font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
+					title={tool}
 				>
 					<span>{tool}</span>
 				</strong>
@@ -3586,26 +3595,11 @@ function fileBasename(path: string): string {
 /* turn boundary                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Turn wall-clock duration: inline after "Worked for", or on its own at the head of
- * the action row when the turn had no work to fold. On its own it still says what
- * the number is to a screen reader, since nothing visible does.
- */
-export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
+/** Turn wall-clock duration, after "Worked for" at the head of a settled turn. */
+export function TurnDuration({ durationMs }: { durationMs: number }) {
 	if (durationMs <= 0) return null;
-	return (
-		<span
-			className={cn(
-				"shrink-0 font-sans text-sm leading-none tabular-nums",
-				// Inline, the fold's own hover color carries the number with the words.
-				inline ? null : "pl-1.5 pr-0.5 text-muted-foreground",
-			)}
-			data-turn-duration={inline ? undefined : ""}
-		>
-			{inline ? null : <span className="sr-only">Worked for </span>}
-			{formatDuration(durationMs)}
-		</span>
-	);
+	// The summary's own color (and the fold's hover color) carries the number with the words.
+	return <span className="shrink-0 font-sans text-sm leading-none tabular-nums">{formatDuration(durationMs)}</span>;
 }
 
 export { User };

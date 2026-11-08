@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import type { PendingSideClose } from "./shared/side-close";
 import {
@@ -37,7 +38,9 @@ import type {
 	EditorHandoffStateOptions,
 	EditorId,
 	EditorPreferenceState,
+	OpenArtifactInBrowserInput,
 	OpenSessionArtifactsInput,
+	ChatPathActionInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -51,8 +54,9 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
+import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
-import type { CloudAccount } from "./shared/cloud-account";
+import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
@@ -177,12 +181,27 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
-ipcRenderer.on(TELEMETRY_POLICY_CHANGED_CHANNEL, (_event, view: TelemetryPolicyView) => {
+// Errors raised before the first policy arrives (module load, first render)
+// used to be dropped. Hold a few and forward them once the policy is known;
+// main still applies consent, so an opted-out policy discards them there.
+const PENDING_CAPTURE_LIMIT = 20;
+let pendingTelemetryCaptures: RendererTelemetryCaptureInput[] = [];
+function flushPendingTelemetryCaptures(view: TelemetryPolicyView): void {
+	const held = pendingTelemetryCaptures;
+	pendingTelemetryCaptures = [];
+	for (const input of held) void ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: view.consentGeneration }).catch(() => false);
+}
+function applyTelemetryPolicy(view: TelemetryPolicyView): void {
 	currentTelemetryPolicy = view;
+	flushPendingTelemetryCaptures(view);
 	for (const listener of telemetryPolicyListeners) listener(view);
+}
+ipcRenderer.on(TELEMETRY_POLICY_CHANGED_CHANNEL, (_event, view: TelemetryPolicyView) => {
+	applyTelemetryPolicy(view);
 });
 ipcRenderer.on(TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL, (_event, request: unknown) => {
 	if (!isRendererQueuePurgeRequest(request)) return;
+	pendingTelemetryCaptures = [];
 	void Promise.allSettled([...rendererQueuePurgeListeners].map((listener) => Promise.resolve().then(listener)))
 		.then((results) => {
 			ipcRenderer.send(TELEMETRY_RENDERER_QUEUES_CLEARED_CHANNEL, {
@@ -219,6 +238,10 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
+		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
+		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
 		checkAncestorRepo: (path: string) =>
@@ -361,6 +384,17 @@ const api = {
 			};
 		},
 	},
+	artifactZoom: {
+		/** Whether an artifact viewer that can zoom is under the pointer or holds focus; main then claims the zoom chords. */
+		setEngaged: (engaged: boolean) => ipcRenderer.send(SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, engaged),
+		onShortcut: (listener: (action: ArtifactZoomAction) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, action: ArtifactZoomAction) => listener(action);
+			ipcRenderer.on(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+	},
 	window: {
 		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
 		onZoomFactor: (listener: (zoomFactor: number) => void) => {
@@ -413,6 +447,15 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Session and project share links this device made (main/session-share-urls.ts).
+	sessionShareUrls: {
+		remember: (baseUrl: string, linkId: string, url: string) =>
+			ipcRenderer.invoke("sessionShareUrls:remember", { baseUrl, linkId, url }) as Promise<void>,
+		recall: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:recall", { baseUrl, linkIds }) as Promise<Record<string, string>>,
+		forget: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
+	},
 	// Public share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
@@ -433,8 +476,11 @@ const api = {
 	},
 	cloudArtifact: {
 		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
-		/** Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it, or shows `reveal` in it. */
-		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string }) =>
+		/**
+		 * Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it,
+		 * or shows `reveal` in it; with `open: "browser"`, opens the copied `reveal` file in the default browser instead.
+		 */
+		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string; open?: "browser" }) =>
 			ipcRenderer.invoke("cloudArtifact:openFolder", input) as Promise<void>,
 		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
@@ -471,6 +517,7 @@ const api = {
 		},
 	},
 	editorHandoff: {
+		pathAction: (input: ChatPathActionInput) => ipcRenderer.invoke("editorHandoff:pathAction", input) as Promise<void>,
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,
@@ -480,6 +527,8 @@ const api = {
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
 		openArtifacts: (input: OpenSessionArtifactsInput) =>
 			ipcRenderer.invoke("editorHandoff:openArtifacts", input) as Promise<OpenSessionTargetResult>,
+		openArtifactInBrowser: (input: OpenArtifactInBrowserInput) =>
+			ipcRenderer.invoke("editorHandoff:openArtifactInBrowser", input) as Promise<void>,
 		copyWorkspacePath: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
@@ -502,15 +551,17 @@ const api = {
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
-			currentTelemetryPolicy = view;
-			for (const listener of telemetryPolicyListeners) listener(view);
+			applyTelemetryPolicy(view);
 			return view;
 		},
 		setEventsEnabled: (eventsEnabled: boolean) => ipcRenderer.invoke("telemetry:setEventsEnabled", { eventsEnabled, expectedGeneration: currentTelemetryPolicy?.consentGeneration ?? "" }) as Promise<TelemetryPolicyView>,
 		onPolicy: (listener: (view: TelemetryPolicyView) => void) => { telemetryPolicyListeners.add(listener); if (currentTelemetryPolicy) listener(currentTelemetryPolicy); return () => telemetryPolicyListeners.delete(listener); },
 		onClearQueues: (listener: () => void | Promise<void>) => { rendererQueuePurgeListeners.add(listener); return () => rendererQueuePurgeListeners.delete(listener); },
 		capture: (input: RendererTelemetryCaptureInput) => {
-			if (!currentTelemetryPolicy) return Promise.resolve(false);
+			if (!currentTelemetryPolicy) {
+				if (pendingTelemetryCaptures.length < PENDING_CAPTURE_LIMIT) pendingTelemetryCaptures.push(input);
+				return Promise.resolve(false);
+			}
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
 		},
 	},
@@ -888,6 +939,9 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// The context a sign-in that just completed added (CloudSignInContext),
+		// with its account, taken once; null when there is none.
+		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,
 	},
 	// Cloud control-plane transport. The CP has no CORS and the WorkOS bearer
 	// token lives only in the main process, so every CP call is proxied through
@@ -940,5 +994,11 @@ window.addEventListener("pagehide", () => {
 });
 
 contextBridge.exposeInMainWorld("ao", api);
+contextBridge.executeInMainWorld({ func: installRendererErrorHandlers });
+// Entry-module failures cannot ask for policy themselves. Read it from preload
+// so held errors still cross the main-owned consent gate if startup aborts.
+void ipcRenderer.invoke("telemetry:getPolicy").then((view: TelemetryPolicyView | undefined) => {
+	if (view && !currentTelemetryPolicy) applyTelemetryPolicy(view);
+}).catch(() => undefined);
 
 export type AoBridge = typeof api;

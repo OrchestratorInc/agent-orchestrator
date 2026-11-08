@@ -314,9 +314,9 @@ export function shouldHandleAppShortcutInBrowserContext(
   chord: ShortcutChord,
   isMac: boolean,
 ): boolean {
-  if (id === "new-shell-terminal" || id === "close-shell-terminal")
+  if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
-  // Dictation types into the chat composer, never a page; ⌘D belongs to the page.
+  // Dictation types into the chat composer, never a page.
   if (id === "dictate") return false;
   return (
     browserShortcutAction(
@@ -968,8 +968,9 @@ export function createBrowserViewHost(
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
 
-  // A worker without a durable binding starts in the first configured profile;
-  // temporary is used only when no profile exists or the human picked it.
+  // Prefer the worker's choice, then the global default, then Temporary. The
+  // store makes the first profile the default; an explicit Temporary choice
+  // bypasses it.
   const initialProfileIdForSession = (
     sessionId: string,
   ): BrowserProfileId | null => {
@@ -6138,7 +6139,8 @@ async function ensureDebugger(entry: BrowserEntry): Promise<void> {
       );
     }
   }
-  await debug.sendCommand("Runtime.enable");
+  // No Runtime.enable: none of these callers needs it, and an enabled Runtime
+  // is visible to pages and scored as automation by bot managers.
   await debug.sendCommand("DOM.enable");
 }
 

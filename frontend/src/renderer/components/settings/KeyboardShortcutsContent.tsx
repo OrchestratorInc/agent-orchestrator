@@ -5,6 +5,7 @@ import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-map
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	APP_SHORTCUTS,
+	isSplitPaneShortcut,
 	effectiveShortcutBindings,
 	SHORTCUT_CATEGORIES,
 	shortcutBindingKeys,
@@ -30,6 +31,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { SettingsSection } from "./SettingsSection";
 import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS } from "./harness/harness-ui";
 import "./keyboard-shortcuts.css";
+import { useSplitPanesEnabled } from "../../lib/split-panes";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -220,11 +222,13 @@ export function KeyboardShortcutsContent({
 	}, [bounded]);
 
 	const developerMode = useUiStore((state) => state.developerMode);
+	const splitPanes = useSplitPanesEnabled();
 	const filteredShortcuts = useMemo(() => {
 		const needles = searchText(query).split(/\s+/).filter(Boolean);
 		return APP_SHORTCUTS.filter((shortcut) => {
 			// Dictation is in preview behind Developer mode.
 			if (shortcut.id === "dictate" && !developerMode) return false;
+			if (isSplitPaneShortcut(shortcut.id) && !splitPanes) return false;
 			if (modifiedOnly && !Object.hasOwn(overrides, shortcut.id)) return false;
 			const labels = effectiveShortcutBindings(shortcut.id, isMac, overrides)
 				.map((candidate) => `${shortcutBindingLabel(candidate, isMac)} ${bindingDescription(candidate, isMac)}`)
@@ -232,7 +236,7 @@ export function KeyboardShortcutsContent({
 			const haystack = searchText(`${shortcutLabel(shortcut.id, t)} ${shortcutCategoryLabel(shortcut.category, t)} ${labels}`);
 			return needles.every((needle) => haystack.includes(needle));
 		});
-	}, [developerMode, isMac, overrides, query, modifiedOnly, t]);
+	}, [developerMode, isMac, overrides, query, modifiedOnly, splitPanes, t]);
 
 	const mutate = async (id: AppShortcutId, operation: () => Promise<void>) => {
 		if (savingRef.current) return false;

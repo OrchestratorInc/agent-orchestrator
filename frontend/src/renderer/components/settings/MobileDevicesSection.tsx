@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -90,7 +91,7 @@ export function MobileDevicesSection() {
 			const { error } = await apiClient.DELETE("/api/v1/mobile/devices/{installId}", {
 				params: { path: { installId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		onSuccess: async (_data, installId) => {
 			// Drop the row from the cached roster rather than hiding its id, so a

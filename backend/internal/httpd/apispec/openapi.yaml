@@ -5361,6 +5361,38 @@ paths:
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
+  /api/v1/projects/clone/prepare/stream:
+    post:
+      operationId: prepareCloneProjectStream
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneProjectInput'
+        required: true
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ClonePrepareStreamEvent'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Clone a project without registering it, streaming each git step as
+        a server-sent event
+      tags:
+      - projects
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -7289,6 +7321,32 @@ paths:
             along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Read only items newer than this conversation sequence. The response
+          echoes afterSequence when it applied the floor. Omit for a whole page.
+        in: query
+        name: afterSequence
+        schema:
+          description: Read only items newer than this conversation sequence. The
+            response echoes afterSequence when it applied the floor. Omit for a whole
+            page.
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: 'Keep at most this many bytes of each command output: its head
+          and tail. A cut output carries outputBytes, the full size. Omit for whole
+          outputs.'
+        in: query
+        name: outputLimit
+        schema:
+          description: 'Keep at most this many bytes of each command output: its head
+            and tail. A cut output carries outputBytes, the full size. Omit for whole
+            outputs.'
+          maximum: 65536
+          minimum: 64
           type:
           - "null"
           - integer
@@ -10535,6 +10593,16 @@ paths:
           description: When true, serve Markdown files as raw source instead of rendering
             them to HTML for Browser preview.
           type: boolean
+      - description: With source=artifact, serve this saved version of the file instead
+          of its current content.
+        in: query
+        name: artifactVersion
+        schema:
+          description: With source=artifact, serve this saved version of the file
+            instead of its current content.
+          format: int64
+          minimum: 1
+          type: integer
       responses:
         "200":
           content:
@@ -13590,6 +13658,40 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/terminal-shells:
+    get:
+      operationId: listTerminalShells
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellsResponse'
+          description: OK
+      summary: List the shells installed on this machine for new terminals
+      tags:
+      - shellTerminals
+  /api/v1/terminal-shells/check:
+    get:
+      operationId: checkTerminalShell
+      parameters:
+      - description: 'Custom shell: an absolute path, a ~/ path, or a command on PATH.'
+        in: query
+        name: path
+        schema:
+          description: 'Custom shell: an absolute path, a ~/ path, or a command on
+            PATH.'
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellCheckResponse'
+          description: OK
+      summary: Check that a custom shell path is an executable
+      tags:
+      - shellTerminals
   /api/v1/usage/memory/pressure:
     get:
       operationId: getMemoryPressure
@@ -13915,6 +14017,8 @@ components:
           type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
+        loggedIn:
+          type: boolean
         plan:
           type: string
         problem:
@@ -13932,6 +14036,7 @@ components:
       - device
       - default
       - signedIn
+      - loggedIn
       type: object
     AgentAccountUsageByModel:
       properties:
@@ -15569,6 +15674,41 @@ components:
       - path
       - remoteUrl
       - preparationId
+      type: object
+    ClonePrepareStreamEvent:
+      properties:
+        error:
+          $ref: '#/components/schemas/APIError'
+        progress:
+          $ref: '#/components/schemas/CloneProgress'
+        result:
+          $ref: '#/components/schemas/ClonePreparationResult'
+      type: object
+    CloneProgress:
+      properties:
+        attempt:
+          minimum: 1
+          type: integer
+        percent:
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        phase:
+          enum:
+          - enumerating_objects
+          - counting_objects
+          - compressing_objects
+          - receiving_objects
+          - resolving_deltas
+          - updating_files
+          - filtering_content
+          - retrying
+          type: string
+      required:
+      - phase
+      - attempt
       type: object
     CloneProjectInput:
       properties:
@@ -17377,6 +17517,9 @@ components:
           items:
             $ref: '#/components/schemas/ConversationActivityResponse'
           type: array
+        afterSequence:
+          format: int64
+          type: integer
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
@@ -17876,7 +18019,7 @@ components:
           maxLength: 255
           type: string
         brief:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         clientRequestId:
           maxLength: 128
@@ -18735,6 +18878,10 @@ components:
       type: object
     ListArtifactVersionsResponse:
       properties:
+        mediaVersions:
+          description: This daemon serves a version's bytes on the preview route and
+            restores any file type. Absent from an older daemon.
+          type: boolean
         path:
           type: string
         versions:
@@ -19387,8 +19534,8 @@ components:
             that session's tab strip. Omitted makes it a standalone shell.
           type: string
         shell:
-          description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
-            cmd, or a custom executable path. Ignored on macOS and Linux.'
+          description: 'Shell to launch: auto (the user''s default shell), an executable
+            path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl).'
           type: string
         startOnAttach:
           description: Start the shell when the requesting client attaches with its
@@ -19513,6 +19660,10 @@ components:
     Project:
       properties:
         agent:
+          type: string
+        canonicalOwnerAvatarUrl:
+          type: string
+        canonicalRepo:
           type: string
         config:
           $ref: '#/components/schemas/ProjectConfig'
@@ -20527,6 +20678,8 @@ components:
         commits:
           type: integer
         remoteBranch:
+          type: string
+        remoteHead:
           type: string
         unpushed:
           type: integer
@@ -22113,7 +22266,7 @@ components:
         projectId:
           type: string
         prompt:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         requestedOutput:
           enum:
@@ -22579,6 +22732,49 @@ components:
       required:
       - distinctId
       - optedOut
+      type: object
+    TerminalShellCheckResponse:
+      properties:
+        executable:
+          type: boolean
+        message:
+          description: Why the path cannot launch.
+          type: string
+        path:
+          description: Resolved executable path when executable.
+          type: string
+      required:
+      - executable
+      type: object
+    TerminalShellResponse:
+      properties:
+        id:
+          description: 'Value to send as a terminal''s shell: auto, a Windows selector,
+            or the executable path.'
+          type: string
+        name:
+          description: Display name, such as zsh or PowerShell.
+          type: string
+        path:
+          description: Executable path. Empty when the default shell cannot be resolved.
+          type: string
+      required:
+      - id
+      - name
+      type: object
+    TerminalShellsResponse:
+      properties:
+        default:
+          $ref: '#/components/schemas/TerminalShellResponse'
+          description: The shell auto resolves to.
+        shells:
+          description: Installed shells, one per real binary.
+          items:
+            $ref: '#/components/schemas/TerminalShellResponse'
+          type: array
+      required:
+      - default
+      - shells
       type: object
     TrackerIntakeConfig:
       properties:

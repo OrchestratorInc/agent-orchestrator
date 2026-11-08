@@ -30,7 +30,7 @@ const cloudMocks = vi.hoisted(() => ({
 // The control plane's base URL and attachment limit, for the tests that attach files.
 const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
@@ -82,6 +82,15 @@ describe("CloudSessionChatSurface", () => {
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
+	});
+
+	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The composer's agent and model picker reads each agent's list through
+		// this organization's Cloud catalog (AgentSwitchPicker).
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
 	});
 
 	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
@@ -277,6 +286,27 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+			// A malformed one shows nothing.
+			{ sessionId: session.id, sequence: 2, type: "session.model_unavailable", payload: { harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+		];
+		const items = toSnapshot(session, events).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			kind: "activity", activityKind: "system", status: "completed",
+			summary: "claude-opus-5-5 isn't available to your Claude Code account on Cloud, so this session uses the default model.",
+			detail: { event: "session.model_unavailable" },
+		});
+		expect(items[0]?.turnId).toBeUndefined();
+		// Without a harness in the event, the session's own agent names the account.
+		const fallback = toSnapshot({ ...session, provider: "codex" }, [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "gpt-6.1-sol" }, createdAt: "2026-10-01T00:00:00Z" },
+		]).items[0];
+		expect(fallback).toMatchObject({ summary: "gpt-6.1-sol isn't available to your Codex account on Cloud, so this session uses the default model." });
+	});
+
 	it("shows a project setup outcome as a system row outside any turn", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" }, createdAt: "2026-10-01T00:00:00Z" },
@@ -461,6 +491,36 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("has the account's Cloud model lists read again once the session lists the account's own models", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: true, cliVersion: "2.1.287", models: [
+			{ id: "opus", displayName: "Opus", default: true },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-agent-models", cloudSetup.baseUrl, "user-1", "org-1", "claude-code"] }));
+	});
+
+	it("leaves the Cloud model lists alone when the session's list is the CLI's built-in one", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ accountListed: false, models: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", default: true }] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: expect.arrayContaining(["cloud-agent-models"]) }));
 	});
 
 	it("names a Claude alias by the model the session's own list describes, never this computer's", async () => {
