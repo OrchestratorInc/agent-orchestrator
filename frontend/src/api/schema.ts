@@ -6725,6 +6725,8 @@ export interface components {
         };
         Project: {
             agent?: string;
+            canonicalOwnerAvatarUrl?: string;
+            canonicalRepo?: string;
             config?: components["schemas"]["ProjectConfig"];
             defaultBranch: string;
             folderMissing: boolean;

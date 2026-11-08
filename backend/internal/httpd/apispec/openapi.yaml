@@ -19275,6 +19275,10 @@ components:
       properties:
         agent:
           type: string
+        canonicalOwnerAvatarUrl:
+          type: string
+        canonicalRepo:
+          type: string
         config:
           $ref: '#/components/schemas/ProjectConfig'
         defaultBranch:

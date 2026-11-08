@@ -11,7 +11,7 @@ import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { repositoryOwnerAvatar } from "../lib/repository-avatar";
+import { type CanonicalGitHubRepo, repositoryOwnerAvatar } from "../lib/repository-avatar";
 
 function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; url: string }; className: string }) {
 	return (
@@ -71,12 +71,15 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		const details = detailsIndex >= 0 ? localProjectDetails[detailsIndex]?.data : undefined;
 		const primaryRepo = details && "repo" in details && typeof details.repo === "string" ? details.repo : "";
 		const workspaceRepos = details && "workspaceRepos" in details ? details.workspaceRepos ?? [] : project.workspaceRepos ?? [];
-		const repositories = [
-			...(primaryRepo ? [{ repo: primaryRepo }] : []),
+		const canonical = details && "canonicalRepo" in details
+			? { repo: details.canonicalRepo, ownerAvatarUrl: details.canonicalOwnerAvatarUrl }
+			: undefined;
+		const repositories: { repo: string; canonical?: CanonicalGitHubRepo }[] = [
+			...(primaryRepo ? [{ repo: primaryRepo, canonical }] : []),
 			...workspaceRepos,
 		];
-		const avatars = repositories.flatMap(({ repo }) => {
-			const avatar = repositoryOwnerAvatar(repo);
+		const avatars = repositories.flatMap(({ repo, canonical }) => {
+			const avatar = repositoryOwnerAvatar(repo, canonical);
 			if (!avatar) return [];
 			const identity = `${new URL(avatar.url).hostname}/${avatar.owner.toLowerCase()}`;
 			if (seen.has(identity)) return [];
