@@ -1,0 +1,306 @@
+{
+ "before-local": {
+  "mode": "before",
+  "latencyMs": 0,
+  "emptyDockSpansMs": [
+   [
+    4,
+    179
+   ]
+  ],
+  "emptyDockTotalMs": 175,
+  "messageNowhereTotalMs": 175,
+  "dockGoneAtMs": 179,
+  "inTimelineAtMs": 179,
+  "firstDaemonAnswerWithoutQueuedTurnMs": 64,
+  "steerRowCounts": [
+   0,
+   1
+  ],
+  "daemonAnswersAfterClick": [
+   {
+    "at": 64,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 196,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 305,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   }
+  ],
+  "requestsAfterClick": [
+   {
+    "url": "/api/v1/sessions/repo-1/conversation/turns/db5461c8-dc33-445f-9b6d-855cfa9cede5/steer",
+    "start": 4,
+    "end": 12,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 29,
+    "end": 43,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 111,
+    "end": 124,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 270,
+    "end": 295,
+    "bytes": 0
+   }
+  ],
+  "samples": [
+   {
+    "t": 4,
+    "dock": true,
+    "label": "0 Queued Messages",
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": false,
+    "steerRows": 0
+   },
+   {
+    "t": 179,
+    "dock": false,
+    "label": null,
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": true,
+    "steerRows": 1
+   }
+  ]
+ },
+ "after-local": {
+  "mode": "after",
+  "latencyMs": 0,
+  "emptyDockSpansMs": [],
+  "emptyDockTotalMs": 0,
+  "messageNowhereTotalMs": 0,
+  "dockGoneAtMs": 30,
+  "inTimelineAtMs": 30,
+  "firstDaemonAnswerWithoutQueuedTurnMs": 91,
+  "steerRowCounts": [
+   1
+  ],
+  "daemonAnswersAfterClick": [
+   {
+    "at": 91,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 199,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 311,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   }
+  ],
+  "requestsAfterClick": [
+   {
+    "url": "/api/v1/sessions/repo-1/conversation/turns/b2f5b40c-4cf5-4e48-8a06-cba8aa4cdc95/steer",
+    "start": 30,
+    "end": 38,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 61,
+    "end": 72,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 138,
+    "end": 168,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 292,
+    "end": 308,
+    "bytes": 0
+   }
+  ],
+  "samples": [
+   {
+    "t": 30,
+    "dock": false,
+    "label": null,
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": true,
+    "steerRows": 1
+   }
+  ]
+ },
+ "before-slowlink": {
+  "mode": "before",
+  "latencyMs": 250,
+  "emptyDockSpansMs": [
+   [
+    28,
+    911
+   ]
+  ],
+  "emptyDockTotalMs": 883,
+  "messageNowhereTotalMs": 883,
+  "dockGoneAtMs": 911,
+  "inTimelineAtMs": 911,
+  "firstDaemonAnswerWithoutQueuedTurnMs": 381,
+  "steerRowCounts": [
+   0,
+   1
+  ],
+  "daemonAnswersAfterClick": [
+   {
+    "at": 381,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 626,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 1101,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   }
+  ],
+  "requestsAfterClick": [
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": -426,
+    "end": 55,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation/turns/e1e6be13-520c-450b-8d4c-fd1da2ba4eb4/steer",
+    "start": 27,
+    "end": 285,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 108,
+    "end": 590,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 291,
+    "end": 833,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 841,
+    "end": 1311,
+    "bytes": 0
+   }
+  ],
+  "samples": [
+   {
+    "t": 28,
+    "dock": true,
+    "label": "0 Queued Messages",
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": false,
+    "steerRows": 0
+   },
+   {
+    "t": 911,
+    "dock": false,
+    "label": null,
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": true,
+    "steerRows": 1
+   }
+  ]
+ },
+ "after-slowlink": {
+  "mode": "after",
+  "latencyMs": 250,
+  "emptyDockSpansMs": [],
+  "emptyDockTotalMs": 0,
+  "messageNowhereTotalMs": 0,
+  "dockGoneAtMs": 38,
+  "inTimelineAtMs": 38,
+  "firstDaemonAnswerWithoutQueuedTurnMs": 607,
+  "steerRowCounts": [
+   1
+  ],
+  "daemonAnswersAfterClick": [
+   {
+    "at": 203,
+    "steeredTurnState": "queued",
+    "hasSteerRow": false
+   },
+   {
+    "at": 607,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   },
+   {
+    "at": 1029,
+    "steeredTurnState": null,
+    "hasSteerRow": true
+   }
+  ],
+  "requestsAfterClick": [
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": -69,
+    "end": 313,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation/turns/5ab5231b-3bfb-485e-941f-8e0617a6fa82/steer",
+    "start": 37,
+    "end": 293,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 343,
+    "end": 725,
+    "bytes": 0
+   },
+   {
+    "url": "/api/v1/sessions/repo-1/conversation?limit=200",
+    "start": 727,
+    "end": 1108,
+    "bytes": 0
+   }
+  ],
+  "samples": [
+   {
+    "t": 38,
+    "dock": false,
+    "label": null,
+    "rows": 0,
+    "inDock": false,
+    "inTimeline": true,
+    "steerRows": 1
+   }
+  ]
+ }
+}
