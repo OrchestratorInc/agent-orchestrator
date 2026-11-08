@@ -101,13 +101,13 @@ func TestHookAddsTrailerOnce(t *testing.T) {
 
 func TestHookKeepsOtherCoAuthors(t *testing.T) {
 	r := newRepo(t, testCoAuthor, nil)
-	r.commit("-m", "feat: two\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+	r.commit("-m", "feat: two\n\nCo-Authored-By: Agent <agent@example.com>")
 	msg := r.message("HEAD")
-	if !strings.Contains(msg, "Co-Authored-By: Claude <noreply@anthropic.com>") || countTrailer(msg) != 1 {
+	if !strings.Contains(msg, "Co-Authored-By: Agent <agent@example.com>") || countTrailer(msg) != 1 {
 		t.Fatalf("want both co-authors, got:\n%s", msg)
 	}
 	lines := strings.Split(msg, "\n")
-	if !strings.HasPrefix(lines[len(lines)-1], "Co-authored-by: Orchestrator") || !strings.HasPrefix(lines[len(lines)-2], "Co-Authored-By: Claude") {
+	if !strings.HasPrefix(lines[len(lines)-1], "Co-authored-by: Orchestrator") || !strings.HasPrefix(lines[len(lines)-2], "Co-Authored-By: Agent") {
 		t.Fatalf("want one trailer block with Orchestrator last, got:\n%s", msg)
 	}
 }
