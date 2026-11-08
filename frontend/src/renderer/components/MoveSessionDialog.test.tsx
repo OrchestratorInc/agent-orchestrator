@@ -97,6 +97,19 @@ it("keeps the session here and offers a retry when the push fails", async () => 
 	expect(cloud.createSession).not.toHaveBeenCalled();
 });
 
+it("tries again with the same move id and Cloud request after a lost response", async () => {
+	daemon.posts = { ...moveReplies, "/api/v1/sessions/{sessionId}/resume-agent": { data: {} } };
+	cloud.createSession.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to AO Cloud" }));
+	await user.click(await screen.findByRole("button", { name: "Try again" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
+	const [first, second] = cloud.createSession.mock.calls;
+	expect(second).toEqual(first);
+	expect(first[2]).toEqual({ idempotencyKey: expect.any(String) });
+});
+
 it.each([
 	["the worktree cannot move", () => { daemon.preview = { error: { code: "MOVE_LFS", message: "The move includes Git LFS files, which cannot move yet." } }; }, "The move includes Git LFS files, which cannot move yet."],
 	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer AO Cloud"],

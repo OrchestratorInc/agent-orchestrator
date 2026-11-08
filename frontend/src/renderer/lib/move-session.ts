@@ -31,10 +31,20 @@ export class MoveError extends Error {
 	}
 }
 
+/** The body AO Cloud's createSession takes. */
+export type CloudSessionRequest = Parameters<CloudCpClient["createSession"]>[1];
+
 export interface MoveDeps {
 	source: DaemonClient;
 	cloud: Pick<CloudCpClient, "createSession">;
 	onStep?: (step: MoveStep) => void;
+	/**
+	 * Holds the Cloud request of the move's first export. AO Cloud accepts a
+	 * reused idempotency key only with the same body, and a retry's export
+	 * differs (a new note time, a branch already pushed), so a retry under the
+	 * same moveId resends this one.
+	 */
+	cloudRequest?: { current?: CloudSessionRequest };
 }
 
 /**
@@ -72,18 +82,20 @@ export async function moveSession(
 	deps.onStep?.("import");
 	const m = exported.data.manifest;
 	const sameAgent = target.harness === m.harness;
+	const request: CloudSessionRequest = deps.cloudRequest?.current ?? {
+		projectId: target.projectId,
+		kind: "worker",
+		harness: target.harness,
+		displayName: (m.displayName || target.harness).slice(0, 100),
+		prompt: exported.data.handoffNote,
+		branch: m.branch,
+		...(sameAgent && m.model ? { model: m.model } : {}),
+		...(sameAgent && m.effort ? { reasoningEffort: m.effort } : {}),
+	};
+	if (deps.cloudRequest) deps.cloudRequest.current = request;
 	let cloudSessionId: string;
 	try {
-		const { session } = await deps.cloud.createSession(target.orgId, {
-			projectId: target.projectId,
-			kind: "worker",
-			harness: target.harness,
-			displayName: (m.displayName || target.harness).slice(0, 100),
-			prompt: exported.data.handoffNote,
-			branch: m.branch,
-			...(sameAgent && m.model ? { model: m.model } : {}),
-			...(sameAgent && m.effort ? { reasoningEffort: m.effort } : {}),
-		}, { idempotencyKey: moveId });
+		const { session } = await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId });
 		cloudSessionId = session.id;
 	} catch (error) {
 		return rollback("import", error, "Could not start the session in AO Cloud");

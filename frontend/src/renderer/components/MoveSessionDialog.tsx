@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Check, CircleAlert, Loader2 } from "@/components/app-icons";
@@ -10,7 +10,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
-import { MoveError, moveSession, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
+import { MoveError, moveSession, type CloudSessionRequest, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
@@ -57,6 +57,10 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const [result, setResult] = useState<MoveResult>();
 	const [error, setError] = useState<MoveError | Error>();
 	const moving = step !== undefined && !result && !error;
+	// One move per dialog: Try again reuses its id and Cloud request, so a
+	// Cloud session whose response was lost is returned instead of duplicated.
+	const moveId = useRef(crypto.randomUUID()).current;
+	const cloudRequest = useRef<CloudSessionRequest>(undefined);
 
 	const sourceRepo = useQuery({
 		queryKey: ["move-source-repo", sourceHost, session.workspaceId],
@@ -107,8 +111,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		setResult(undefined);
 		try {
 			const moved = await moveSession(
-				{ sessionId: session.id, target, ...(sourceHost !== LOCAL_HOST ? { sourceLabel: labelForHost(sourceHost) } : {}) },
-				{ source: clientForSessionHost(sourceHost), cloud: cloudClient, onStep: setStep },
+				{ sessionId: session.id, moveId, target, ...(sourceHost !== LOCAL_HOST ? { sourceLabel: labelForHost(sourceHost) } : {}) },
+				{ source: clientForSessionHost(sourceHost), cloud: cloudClient, onStep: setStep, cloudRequest },
 			);
 			if (moved.completeError) {
 				setResult(moved);
