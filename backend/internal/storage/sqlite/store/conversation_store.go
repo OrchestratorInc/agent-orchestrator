@@ -1201,6 +1201,17 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 	return hasTurns, nil
 }
 
+// HasConversationBranchActivity includes hidden turns and raw provider events.
+// A replacement may inherit history on other branches while its own provider
+// reservation remains untouched.
+func (s *Store) HasConversationBranchActivity(ctx context.Context, branchID string) (bool, error) {
+	hasActivity, err := s.qr.HasConversationBranchActivity(ctx, branchID)
+	if err != nil {
+		return false, fmt.Errorf("check conversation branch activity %s: %w", branchID, err)
+	}
+	return hasActivity, nil
+}
+
 // LatestConversationTurn reads the latest non-rolled-back turn on the active
 // branch lineage without loading messages or activities.
 func (s *Store) LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {

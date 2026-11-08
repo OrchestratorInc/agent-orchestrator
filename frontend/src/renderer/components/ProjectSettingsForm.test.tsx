@@ -2016,8 +2016,8 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it("restarts when the saved orchestrator agent already differs from the running orchestrator", async () => {
-		getMock.mockResolvedValue({
+	it("does not replace a switched orchestrator when only worker settings change", async () => {
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness" ? agentCatalogResponse : ({
 			data: {
 				status: "ok",
 				project: {
@@ -2034,7 +2034,7 @@ describe("ProjectSettingsForm", () => {
 				},
 			},
 			error: undefined,
-		});
+		}));
 
 		renderSettings("proj-1", [
 			{
@@ -2062,15 +2062,15 @@ describe("ProjectSettingsForm", () => {
 
 		const orchestratorAgent = await screen.findByRole("button", { name: "Orchestrator agent" });
 		expect(orchestratorAgent).toHaveTextContent("Goose");
+		await chooseOption(screen.getByRole("button", { name: "Worker agent" }), "OpenCode");
 
 		submitSettings();
 
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators", {
-			body: { projectId: "proj-1", clean: true },
-		});
-		await expectReplacementWithoutNavigation();
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ worker: expect.objectContaining({ agent: "opencode" }) }) }),
+		}));
+		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("navigates to the replacement orchestrator after changing the default agent", async () => {

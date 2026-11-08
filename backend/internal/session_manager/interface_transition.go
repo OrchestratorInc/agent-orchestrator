@@ -65,6 +65,10 @@ type chatHandoffHistoryStore interface {
 	HasConversationTurns(context.Context, string) (bool, error)
 }
 
+type chatBranchActivityStore interface {
+	HasConversationBranchActivity(context.Context, string) (bool, error)
+}
+
 type runtimeInterrupter interface {
 	Interrupt(context.Context, ports.RuntimeHandle) error
 }
@@ -904,7 +908,7 @@ func (m *Manager) nativeConversationID(
 // provider history into an intentional fresh handoff. A missing file or a
 // reserved native id is not enough: both are also observable when persistence
 // is lagging or broken after real work. Chat requires durable emptiness — an
-// empty root conversation, or no conversation at all; TUI requires an
+// empty root or an unused replacement branch, or no conversation at all; TUI requires an
 // untouched initial composer. AO must have no hook-derived conversation facts
 // that contradict either proof.
 func (m *Manager) nativeConversationNotStarted(
@@ -961,15 +965,31 @@ func (m *Manager) nativeConversationNotStarted(
 			// controller starts, so its absence is fresh, not broken. Any other
 			// read failure stays fail-closed below.
 			return true
-		case err != nil || conversation.SessionID != rec.ID || conversation.LatestSequence != 0:
+		case err != nil || conversation.SessionID != rec.ID:
 			return false
 		}
 		branch, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
-		// A project root's session_id records the orchestrator that created it;
-		// after a rebind the owner is the conversation's current session.
-		if err != nil || branch.ParentBranchID != "" ||
-			(branch.SessionID != rec.ID && conversation.Scope != domain.ConversationScopeProject) ||
+		if err != nil ||
 			branch.ProviderConversationID != rec.Metadata.ProviderConversationID {
+			return false
+		}
+		if branch.ParentBranchID != "" {
+			// A replacement's child branch belongs to the new session. Earlier
+			// project history may have a nonzero global sequence, so inspect only
+			// this branch for evidence of provider work.
+			if conversation.Scope != domain.ConversationScopeProject || branch.SessionID != rec.ID {
+				return false
+			}
+			activityStore, ok := m.store.(chatBranchActivityStore)
+			if !ok {
+				return false
+			}
+			hasActivity, err := activityStore.HasConversationBranchActivity(ctx, branch.ID)
+			return err == nil && !hasActivity
+		}
+		// The root's session_id records its creator. A project conversation
+		// can be rebound to a different current owner while the root persists.
+		if (branch.SessionID != rec.ID && conversation.Scope != domain.ConversationScopeProject) || conversation.LatestSequence != 0 {
 			return false
 		}
 		// A provider can announce a turn before its first message/activity takes

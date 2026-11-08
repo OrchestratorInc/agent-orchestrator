@@ -151,6 +151,16 @@ SELECT * FROM conversations WHERE id = ? LIMIT 1;
 -- name: HasConversationTurns :one
 SELECT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = ?);
 
+-- name: HasConversationBranchActivity :one
+-- Include hidden turns and raw provider events, which can precede a timeline
+-- item. An empty visible branch alone is not proof of an unused provider id.
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns WHERE conversation_turns.branch_id = sqlc.arg(target_branch_id)
+    UNION ALL SELECT 1 FROM conversation_messages WHERE conversation_messages.branch_id = sqlc.arg(target_branch_id)
+    UNION ALL SELECT 1 FROM conversation_activities WHERE conversation_activities.branch_id = sqlc.arg(target_branch_id)
+    UNION ALL SELECT 1 FROM conversation_provider_events WHERE conversation_provider_events.branch_id = sqlc.arg(target_branch_id)
+);
+
 -- Hibernation only needs the latest visible user prompt's outcome. Match the
 -- active-branch and discarded-turn filters used by SelectConversationMessages
 -- without loading the entire conversation timeline.
@@ -208,22 +218,29 @@ WHERE parent_branch_id IS NULL
   );
 
 -- name: ReplaceUntouchedConversationProvider :execrows
--- Same proof as ReleaseUntouchedConversationProvider, but rebinds the empty
--- root to a fresh provider id and keeps its provider scope, which is part of
--- the persistent provider host's identity.
+-- Rebind only an unused branch owned by the current Chat session. A project
+-- replacement may inherit old history, so its new child branch is eligible
+-- even though the conversation's global sequence is nonzero.
 UPDATE conversation_branches
 SET provider_conversation_id = sqlc.arg(provider_conversation_id)
-WHERE parent_branch_id IS NULL
-  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+WHERE conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
   AND conversation_branches.id = (
       SELECT c.active_branch_id FROM conversations AS c
       WHERE c.current_session_id = sqlc.arg(session_id)
         AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
-        AND c.latest_sequence = 0
-        AND NOT EXISTS (
-            SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
+        AND (
+            (conversation_branches.parent_branch_id IS NULL
+                AND c.latest_sequence = 0
+                AND NOT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = c.id))
+            OR (conversation_branches.parent_branch_id IS NOT NULL
+                AND c.scope = 'project'
+                AND conversation_branches.session_id = sqlc.arg(session_id))
         )
-  );
+  )
+  AND NOT EXISTS (SELECT 1 FROM conversation_turns WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_activities WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_provider_events WHERE branch_id = conversation_branches.id);
 
 -- name: InsertConversationBranch :exec
 INSERT INTO conversation_branches (
