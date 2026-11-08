@@ -402,8 +402,7 @@ type Manager struct {
 	workspace ports.Workspace
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
-	agentReadiness ports.AgentReadinessProvider
-	// backgroundTaskUsage is late-bound by SetBackgroundTaskUsage.
+	agentReadiness      ports.AgentReadinessProvider
 	backgroundTaskUsage BackgroundTaskUsage
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
@@ -651,8 +650,7 @@ type BackgroundTaskUsage interface {
 	RecordBackgroundTask(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, workspace string) error
 }
 
-// SetBackgroundTaskUsage completes daemon wiring before request handling
-// begins. Nil leaves background calls uncounted.
+// SetBackgroundTaskUsage completes daemon wiring before request handling begins.
 func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
 	m.backgroundTaskUsage = usage
 }

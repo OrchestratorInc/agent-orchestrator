@@ -222,7 +222,6 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 	if r == nil {
 		return out
 	}
-	// Every window but the session is weekly.
 	add := func(id, label string, w *claudeUsageWindow) {
 		if w == nil || w.Utilization == nil {
 			return

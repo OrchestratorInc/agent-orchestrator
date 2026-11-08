@@ -12,21 +12,11 @@ import (
 )
 
 const (
-	// gooseCostSourceProviderReported marks a cost Goose took from the
-	// provider's response rather than estimating it from its own catalog.
 	gooseCostSourceProviderReported = "provider_reported"
-	// gooseCostSourceCarriedForward marks the synthetic row Goose inserts to
-	// reconcile session totals recorded before the ledger existed. It names no
-	// model and is not a provider call.
-	gooseCostSourceCarriedForward = "carried_forward"
-	// goosePricingVersion labels a cost AO stored as Goose reported it.
-	goosePricingVersion = "goose:provider_reported"
+	gooseCostSourceCarriedForward   = "carried_forward"
+	goosePricingVersion             = "goose:provider_reported"
 )
 
-// gooseLedgerRow is one usage_ledger row joined to its session's provider.
-// Goose inserts exactly one row per provider call and never updates it, so
-// the ledger row ID is a stable, monotonic cursor. The accumulated_* session
-// totals are deliberately not read: they would double count the ledger.
 type gooseLedgerRow struct {
 	ID               int64    `json:"id"`
 	SessionID        string   `json:"session_id"`
@@ -43,9 +33,6 @@ type gooseLedgerRow struct {
 	IsCompaction     bool     `json:"is_compaction"`
 }
 
-// readGooseLedgerRows reads ledger rows for the bound Goose session and every
-// session it spawned. Goose files subagent calls under the child session and
-// links it by parent_session_id, the same tree its own usage totals walk.
 func readGooseLedgerRows(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 WITH RECURSIVE tree(id) AS (
@@ -130,8 +117,6 @@ func parseGoose(source domain.UsageSourceContext, records []jsonlRecord, result 
 	}
 }
 
-// gooseUsageEvent maps one ledger row. Goose normalizes every provider's usage
-// so input_tokens is the whole prompt, cache reads and writes included.
 func gooseUsageEvent(source domain.UsageSourceContext, row gooseLedgerRow, model string) (domain.ModelUsageEvent, bool) {
 	cacheRead := valueOrZero(row.CacheReadTokens)
 	cacheWrite := valueOrZero(row.CacheWriteTokens)

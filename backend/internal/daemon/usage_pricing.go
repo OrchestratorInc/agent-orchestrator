@@ -115,7 +115,6 @@ func (r *usagePricingRuntime) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return errors.New("usage pricing runtime already started")
 	}
-	// The user's prices are live before anything is priced.
 	if err := r.overrides.Load(ctx); err != nil {
 		r.logger.Warn("load usage price overrides", "err", err)
 	}
@@ -148,8 +147,6 @@ func (r *usagePricingRuntime) Wait() {
 	r.backfiller.Wait()
 }
 
-// usagePrices is the user's model prices, or a nil interface without a
-// pricing runtime so the routes answer 501.
 func usagePrices(runtime *usagePricingRuntime) controllers.UsagePriceService {
 	if runtime == nil || runtime.overrides == nil {
 		return nil
@@ -157,9 +154,6 @@ func usagePrices(runtime *usagePricingRuntime) controllers.UsagePriceService {
 	return runtime.overrides
 }
 
-// usageReportReader builds the usage page's report reader. It reads prices from
-// the pricing runtime when one started; without it the report still carries
-// every stored cost.
 func usageReportReader(store *sqlite.Store, runtime *usagePricingRuntime) *usagesvc.ReportReader {
 	if runtime == nil || runtime.Manager() == nil {
 		return usagesvc.NewReportReader(store, nil)

@@ -47,8 +47,6 @@ func TestParseClaudeFinalUsageAndSkipMainSidechain(t *testing.T) {
 	}
 }
 
-// Break caught: a message the user interrupted, which no record ends with
-// stop_reason, dropped from usage; or counted from an early record, or twice.
 func TestParseClaudeCountsAMessageNoRecordEnded(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	assistant := func(id, stop string, output int) string {
@@ -1224,9 +1222,6 @@ func TestParseCodexNullInfoDoesNotResetTheCumulativeBaseline(t *testing.T) {
 	}
 }
 
-// Break caught: Codex reports the tier on thread_settings_applied, not on the
-// token_count it prices, so a tier lost at a chunk boundary, or kept after the
-// thread went back to standard, misprices every later request.
 func TestParseCodexCarriesTheThreadServiceTierAcrossChunks(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	settings := func(tier string) []byte {
@@ -1261,8 +1256,6 @@ func TestParseCodexCarriesTheThreadServiceTierAcrossChunks(t *testing.T) {
 	}
 }
 
-// Break caught: Claude fast mode reported in usage.speed priced at standard
-// rates, or a speed of an unexpected type dropping the whole event.
 func TestParseClaudeRecordsTheReportedSpeed(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	line := func(id, speed string) []byte {

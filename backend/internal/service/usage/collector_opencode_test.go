@@ -43,9 +43,6 @@ func TestDefaultSourceRootsResolvesOpenCodeAndKiloData(t *testing.T) {
 	}
 }
 
-// TestCollectorRegistersOpenCodeFamilyDatabaseForNativeSession catches binding
-// OpenCode or Kilo usage by anything other than the hook's native session ID:
-// one database is shared by every session, so the source must carry that ID.
 func TestCollectorRegistersOpenCodeFamilyDatabaseForNativeSession(t *testing.T) {
 	const nativeID = "ses_1fd2e72e8ffeUicgn3R3RsfdYt"
 	tests := []struct {
@@ -85,9 +82,6 @@ func TestCollectorRegistersOpenCodeFamilyDatabaseForNativeSession(t *testing.T) 
 	}
 }
 
-// TestValidateOpenCodeFamilySourceRejectsOtherDatabases catches a source that
-// points at a database the agent does not keep sessions in, such as the other
-// harness's database or a session export.
 func TestValidateOpenCodeFamilySourceRejectsOtherDatabases(t *testing.T) {
 	root := t.TempDir()
 	openCodeDB := filepath.Join(root, "opencode.db")
@@ -120,8 +114,6 @@ func TestValidateOpenCodeFamilySourceRejectsOtherDatabases(t *testing.T) {
 	}
 }
 
-// writeOpenCodeSessionDB creates a database with a session table listing ids,
-// the part of OpenCode's schema discovery reads.
 func writeOpenCodeSessionDB(t *testing.T, path string, ids ...string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+path)
@@ -135,9 +127,6 @@ func writeOpenCodeSessionDB(t *testing.T, path string, ids ...string) {
 	}
 }
 
-// Break caught: reading only kilo.db. A release-candidate Kilo build writes
-// kilo-rc.db beside it and keeps every session there, so live sessions on
-// that build bound to no database and recorded nothing.
 func TestCollectorFindsTheReleaseChannelDatabaseHoldingTheSession(t *testing.T) {
 	const nativeID = "ses_e5ae49e2cffewYM3wbJnh0EEBm"
 	root := t.TempDir()

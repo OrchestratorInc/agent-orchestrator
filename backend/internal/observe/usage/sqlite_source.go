@@ -10,29 +10,17 @@ import (
 	"path/filepath"
 	"time"
 
-	// Registers the pure-Go "sqlite" driver used to read agent databases.
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // register sqlite driver
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
 const (
-	// defaultSQLiteChunkRows bounds one ingestion pass over a SQLite source,
-	// as ChunkBytes bounds one pass over a JSONL transcript.
-	defaultSQLiteChunkRows = 1000
-	// defaultSQLitePollInterval re-reads an active SQLite source. Agents write
-	// usage rows into the database's WAL, which an exact-file watch on the
-	// main database does not always see until a checkpoint.
+	defaultSQLiteChunkRows    = 1000
 	defaultSQLitePollInterval = 15 * time.Second
 )
 
-// sqliteUsageReader returns up to limit usage rows for the bound native
-// session whose row cursor is greater than after, ordered by that cursor. Each
-// row is encoded as one JSON record whose Offset is its cursor (a row ID, or
-// another strictly increasing per-row key), so the source's durable byte_offset
-// column doubles as the row cursor and the per-kind parser reuses the JSONL
-// parsing contract.
 type sqliteUsageReader func(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
 var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
@@ -42,9 +30,6 @@ var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
 	domain.UsageSourceAgyConversation: readAgyGenerations,
 }
 
-// snapshotUsageReader returns up to limit usage records after the cursor from
-// a file the agent rewrites whole rather than appends to. It shares the row
-// cursor contract of sqliteUsageReader.
 type snapshotUsageReader func(ctx context.Context, path, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
 var snapshotUsageReaders = map[domain.UsageSourceKind]snapshotUsageReader{
@@ -52,8 +37,6 @@ var snapshotUsageReaders = map[domain.UsageSourceKind]snapshotUsageReader{
 	domain.UsageSourceDeepSeekSession: readDeepSeekReplies,
 }
 
-// sqliteUsageSource reports whether the source is read by row cursor (a
-// SQLite database, or a rewritten snapshot file) rather than byte offset.
 func sqliteUsageSource(kind domain.UsageSourceKind) bool {
 	_, ok := sqliteUsageReaders[kind]
 	if !ok {
@@ -62,10 +45,6 @@ func sqliteUsageSource(kind domain.UsageSourceKind) bool {
 	return ok
 }
 
-// openSQLiteUsageDB opens an agent-owned database strictly read-only. The
-// agent keeps writing while AO reads, so the connection never takes a write
-// lock, waits briefly on a busy writer, and refuses any statement that would
-// modify the file.
 func openSQLiteUsageDB(ctx context.Context, path string) (*sql.DB, error) {
 	dsn := "file:" + (&url.URL{Path: filepath.ToSlash(path)}).EscapedPath() +
 		"?mode=ro&_pragma=busy_timeout(1000)&_pragma=query_only(1)"
@@ -81,10 +60,6 @@ func openSQLiteUsageDB(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// ingestSQLite processes one SQLite-backed source from its durable row cursor.
-// It mirrors Ingest's lifecycle (replacement, finalization settling, pricing)
-// without the byte-level integrity checks, which do not apply to a database
-// the agent rewrites in place.
 func (i *Ingestor) ingestSQLite(
 	ctx context.Context,
 	source domain.UsageSourceContext,
@@ -154,8 +129,6 @@ func (i *Ingestor) ingestSQLite(
 	}
 	nextOffset := source.Source.ByteOffset
 	for _, record := range records {
-		// Calls billed in one row share its cursor, so a record may repeat the
-		// one before it; none may go back or repeat the stored cursor.
 		if record.Offset < nextOffset || record.Offset == source.Source.ByteOffset {
 			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, errors.New("usage rows are not ordered by row id"))
 		}
@@ -187,8 +160,6 @@ func (i *Ingestor) ingestSQLite(
 		return i.retrySource(ctx, source.Source, domain.UsageErrorInvalidParserState, now, parsed.err)
 	}
 	if source.BindingState == domain.UsageBindingFinalizing && atEnd {
-		// The agent may still commit its last rows after the stop hook, so a
-		// finalizing source completes only after a quiet pass that read none.
 		finalizationSettled := source.Source.NextRetryAt != nil && !source.Source.NextRetryAt.After(now)
 		if finalizationSettled && !progressed {
 			parsed.Cursor.State = domain.UsageSourceComplete
@@ -198,8 +169,6 @@ func (i *Ingestor) ingestSQLite(
 			result.RetryAt = &settleAt
 		}
 	}
-	// A poll that found nothing new writes nothing: every active source is
-	// polled, and a write to a shared database's WAL queues every source on it.
 	unchanged := !progressed && len(parsed.Events) == 0 &&
 		parsed.Cursor.State == source.Source.State &&
 		parsed.Cursor.ParserStateJSON == source.Source.ParserStateJSON &&
@@ -227,8 +196,6 @@ func (i *Ingestor) ingestSQLite(
 	return result, nil
 }
 
-// snapshotStamp is the size and mtime of a snapshot file, which the agent
-// changes whenever it rewrites the file.
 type snapshotStamp struct {
 	size    int64
 	modTime int64

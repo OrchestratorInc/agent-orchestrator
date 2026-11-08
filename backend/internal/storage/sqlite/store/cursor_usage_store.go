@@ -12,8 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CursorUsageEnabled reports whether Cursor usage is read; an unreadable
-// setting counts as off.
+// CursorUsageEnabled reports whether Cursor usage is read; an unreadable setting counts as off.
 func (s *Store) CursorUsageEnabled(ctx context.Context) bool {
 	enabled, err := s.qr.GetCursorUsage(ctx)
 	return err == nil && enabled
@@ -29,8 +28,7 @@ func (s *Store) SetCursorUsage(ctx context.Context, enabled bool, now time.Time)
 	return nil
 }
 
-// GetUsageCursorRead returns the account Cursor usage was last read for and
-// how far; ok is false before the first read.
+// GetUsageCursorRead returns the account Cursor usage was last read for and how far; ok is false before the first read.
 func (s *Store) GetUsageCursorRead(ctx context.Context) (accountKey string, until time.Time, ok bool, err error) {
 	row, err := s.qr.GetUsageCursorRead(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -42,8 +40,7 @@ func (s *Store) GetUsageCursorRead(ctx context.Context) (accountKey string, unti
 	return row.AccountKey, row.ReadUntil, true, nil
 }
 
-// ReplaceCursorUsage stores one Cursor read: the account's stored events from
-// Since to Until become read.Events, and the read mark moves to Until.
+// ReplaceCursorUsage stores one Cursor read: the account's stored events from Since to Until become read.Events, and the read mark moves to Until.
 func (s *Store) ReplaceCursorUsage(ctx context.Context, read domain.CursorUsageRead) error {
 	if strings.TrimSpace(read.AccountKey) == "" {
 		return errors.New("replace cursor usage: no account")
@@ -86,9 +83,6 @@ func (s *Store) ReplaceCursorUsage(ctx context.Context, read domain.CursorUsageR
 	})
 }
 
-// cursorUsageSource finds or makes the binding and source a Cursor
-// conversation's events belong to. Both stay complete: there is no file for
-// the collector to drain.
 func cursorUsageSource(ctx context.Context, q *gen.Queries, item domain.CursorSessionEvent, path string, now time.Time) (gen.GetUsageSourceWithBindingAndSessionRow, error) {
 	if strings.TrimSpace(item.ConversationID) == "" {
 		return gen.GetUsageSourceWithBindingAndSessionRow{}, errors.New("cursor usage event has no conversation")

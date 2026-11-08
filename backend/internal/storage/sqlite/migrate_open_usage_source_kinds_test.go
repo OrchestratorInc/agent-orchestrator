@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-// TestMigrationOpenUsageSourceKinds verifies the schema stops enumerating usage
-// harnesses and source kinds, and that rollback restores the Claude, Codex,
-// and Kimi constraints while removing only usage the narrower schema cannot
-// hold.
 func TestMigrationOpenUsageSourceKinds(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 20261102164353715)
 	upTo(t, db, 20261103030401452)
@@ -16,8 +12,6 @@ func TestMigrationOpenUsageSourceKinds(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO projects (id, path, display_name, registered_at) VALUES ('usage-migration', '/tmp/usage-migration', 'usage', ?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	// qwen and goose are not in the enumerated lists, so they stand for any
-	// later harness.
 	seeds := []struct{ harness, kind string }{
 		{"qwen", "qwen_monthly"},
 		{"kimi", "kimi_wire"},

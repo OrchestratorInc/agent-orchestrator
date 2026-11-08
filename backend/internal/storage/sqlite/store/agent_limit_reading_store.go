@@ -13,12 +13,9 @@ import (
 
 var _ ports.AgentLimitReadingStore = (*Store)(nil)
 
-// limitReadingRetention is how long limit readings are kept: the usage page
-// reads one week, and a weekly window can open up to a week before that.
 const limitReadingRetention = 14 * 24 * time.Hour
 
-// RecordAgentLimitReadings saves one read of an account's limit windows and
-// deletes readings older than the retention.
+// RecordAgentLimitReadings saves one read of an account's limit windows and deletes readings older than the retention.
 func (s *Store) RecordAgentLimitReadings(ctx context.Context, readings []domain.AgentLimitReading) error {
 	if len(readings) == 0 {
 		return nil
@@ -63,8 +60,7 @@ func (s *Store) ListAgentLimitReadings(ctx context.Context, since time.Time) ([]
 	return out, nil
 }
 
-// LimitHistoryEnabled reports whether limit readings are kept; an unreadable
-// setting counts as off.
+// LimitHistoryEnabled reports whether limit readings are kept; an unreadable setting counts as off.
 func (s *Store) LimitHistoryEnabled(ctx context.Context) bool {
 	enabled, err := s.qr.GetLimitHistory(ctx)
 	return err == nil && enabled

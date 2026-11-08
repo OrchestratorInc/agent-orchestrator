@@ -13,8 +13,6 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-// gooseFixtureDB creates a minimal Goose sessions.db in WAL mode and returns
-// its path plus the writer connection, which stays open like a running Goose.
 func gooseFixtureDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sessions", "sessions.db")
@@ -62,9 +60,6 @@ func insertGooseLedgerRow(t *testing.T, writer *sql.DB, sessionID, model string,
 	mustNoError(t, err)
 }
 
-// TestReadGooseLedgerRowsForSessionTree catches cross-session attribution,
-// double counting of Goose's synthetic carried-forward rows, and losing
-// subagent calls Goose files under a child session.
 func TestReadGooseLedgerRowsForSessionTree(t *testing.T) {
 	path, writer := gooseFixtureDB(t)
 	insertGooseLedgerRow(t, writer, "20261103_1", "claude-sonnet-4-5", 100, 20, 30, 10, 0.0125, "provider_reported")
@@ -147,8 +142,6 @@ func TestParseGooseRejectsCacheExceedingInput(t *testing.T) {
 	}
 }
 
-// TestIngestorReadsGooseLedgerIncrementally catches re-reading rows already
-// stored and stalling on rows the agent commits after the first pass.
 func TestIngestorReadsGooseLedgerIncrementally(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()
@@ -188,8 +181,6 @@ func TestIngestorReadsGooseLedgerIncrementally(t *testing.T) {
 	if !ok || persisted.Source.ByteOffset != 2 || persisted.Source.State != domain.UsageSourceActive {
 		t.Fatalf("source cursor = %+v", persisted.Source)
 	}
-	// A poll with no new rows writes nothing: each write to a shared
-	// database's WAL would queue every source on it again.
 	now = now.Add(time.Minute)
 	_, err = ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)

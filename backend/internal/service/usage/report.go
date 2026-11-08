@@ -21,17 +21,14 @@ type pricingSnapshots interface {
 	Snapshot() *pricing.Snapshot
 }
 
-// ReportReader builds the usage page's report: tokens and estimated cost over a
-// window, bucketed by day or hour in the reader's time zone.
+// ReportReader builds the usage page's report: tokens and estimated cost over a window, bucketed by day or hour in the reader's time zone.
 type ReportReader struct {
 	store   usageReportStore
 	pricing pricingSnapshots
 	now     func() time.Time
 }
 
-// NewReportReader constructs a report reader. Without a pricing source the
-// report still carries every stored cost; it only cannot split out cache
-// writes, speed premiums and cache savings.
+// NewReportReader constructs a report reader.
 func NewReportReader(store usageReportStore, prices pricingSnapshots) *ReportReader {
 	return &ReportReader{store: store, pricing: prices, now: time.Now}
 }
@@ -41,10 +38,7 @@ const (
 	reportHourLayout = "2006-01-02T15:00"
 )
 
-// Report reads the last days of usage. One day reads the last 24 hours by hour;
-// more read whole days, today included. offset steps back that many whole
-// windows, so offset 1 with 7 days is the week before this one. An empty
-// projectID reads every project.
+// Report reads the last days of usage.
 func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error) {
 	if r == nil || r.store == nil {
 		return domain.UsageReport{}, fmt.Errorf("usage report store is unavailable")
@@ -73,8 +67,6 @@ func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone st
 	var periodOf func(time.Time) string
 	if days == 1 {
 		report.Resolution = "hour"
-		// time.Truncate works on absolute time, which misplaces the hour in
-		// zones with a half-hour offset, so the boundary is built locally.
 		report.Until = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, loc).Add(time.Hour)
 		report.Since = report.Until.Add(-24 * time.Hour)
 		periodOf = func(t time.Time) string { return t.In(loc).Format(reportHourLayout) }
@@ -156,8 +148,6 @@ func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone st
 		split := splits[priceKeyOf(event)]
 		total := *costs.EstimatedCostNanos
 		row.PricedEvents++
-		// An agent that reports one figure per call (OpenCode, Kilo Code) has
-		// no per-type split; its call still counts toward the total.
 		if costs.InputCostNanos != nil && costs.CachedInputCostNanos != nil && costs.OutputCostNanos != nil {
 			input := *costs.InputCostNanos
 			writeCost := min(roundNanos(float64(input)*split.writeShare), input)
@@ -204,7 +194,6 @@ func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone st
 	return report, nil
 }
 
-// priceKey groups events that one catalog row prices the same way.
 type priceKey struct {
 	provider domain.UsageProviderID
 	billing  string
@@ -216,14 +205,6 @@ func priceKeyOf(event domain.UsageReportEvent) priceKey {
 	return priceKey{provider: event.ProviderID, billing: event.BillingProviderID, model: event.ModelID, tier: event.ServiceTier}
 }
 
-// costSplit says how a stored cost divides for display. Stored events keep only
-// input, cache-read and output components, so the cache-write part of input,
-// the speed premium and the cache savings are worked out from the catalog over
-// each price key's summed tokens, then applied to the stored totals. The parts
-// therefore always add up to what was stored.
-//
-// ponytail: one split per price key, not per event; store a cache-write cost
-// column per event if a key's events ever need different splits.
 type costSplit struct {
 	writeShare            float64
 	premiumShare          float64
@@ -249,9 +230,6 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 		sum.uncached += uncached
 		sum.output += tokenValue(event.Tokens.OutputTokens)
 		sum.write += write
-		// ponytail: a write without a reported 5m/1h split counts as 5m, the
-		// API's default lifetime; read the split from the transcript if this
-		// ever matters for old rows.
 		sum.write1h += min(max(tokenValue(event.CacheWrite1hTokens), 0), write)
 	}
 	out := make(map[priceKey]costSplit, len(sums))
@@ -260,9 +238,6 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 	}
 	for key, sum := range sums {
 		event := func(tier string, cached, uncached int64) domain.ModelUsageEvent {
-			// InputTokens stays nil: it only picks a long-context row, and these
-			// sums span many requests, so their total says nothing about the
-			// size of any one of them.
 			return domain.ModelUsageEvent{
 				ProviderID: key.provider, BillingProviderID: key.billing, ModelID: key.model, ServiceTier: tier,
 				Tokens: domain.UsageTokenMetrics{
@@ -295,8 +270,6 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 	return out
 }
 
-// syntheticProviderUsage writes summed cache-write counts under the ao_ keys
-// the pricer reads for either token vocabulary.
 func syntheticProviderUsage(write, write1h int64) string {
 	return fmt.Sprintf(`{"ao_derived_cache_write_input_tokens":%d,"ao_derived_cache_write_1h_input_tokens":%d}`, write, write1h)
 }

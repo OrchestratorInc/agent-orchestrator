@@ -231,8 +231,6 @@ func TestCostBackfillerSupersedesActiveJobBetweenBatches(t *testing.T) {
 		t.Fatalf("activate/enqueue new version: %v", err)
 	}
 	<-store.complete
-	// The old page, the new version's two unpriced pages, then the reprice of
-	// the page the old version priced.
 	for range 4 {
 		<-store.applied
 	}
@@ -254,9 +252,6 @@ func TestCostBackfillerSupersedesActiveJobBetweenBatches(t *testing.T) {
 	}
 }
 
-// Break caught: a cost stored under an older catalog stayed at its old rate
-// forever, because only unpriced rows were ever candidates. An agent-reported
-// cost must still never be repriced.
 func TestCostBackfillerRepricesRowsAnOlderCatalogPriced(t *testing.T) {
 	oldSnapshot := backfillTestSnapshot(t, "0.000001")
 	newSnapshot := backfillTestSnapshot(t, "0.000002")
@@ -302,8 +297,6 @@ func TestCostBackfillerRepricesRowsAnOlderCatalogPriced(t *testing.T) {
 	}
 }
 
-// Break caught: a model the newer catalog dropped would lose the cost an
-// older catalog gave it.
 func TestCostBackfillerKeepsACostTheCatalogCanNoLongerPrice(t *testing.T) {
 	backfiller := NewCostBackfiller(newFakeBackfillStore(0), CostBackfillerConfig{})
 	stored := int64(1000)
@@ -313,7 +306,6 @@ func TestCostBackfillerKeepsACostTheCatalogCanNoLongerPrice(t *testing.T) {
 	if _, ok := backfiller.costUpdate(backfillTestSnapshot(t, "0.000002"), candidate, costBackfillJob{providerID: "openai", version: "v2"}); ok {
 		t.Fatal("an unpriceable row with a stored cost was rewritten")
 	}
-	// An override pass clears it instead: the cost was the removed override's.
 	if update, ok := backfiller.costUpdate(backfillTestSnapshot(t, "0.000002"), candidate, costBackfillJob{modelID: "gpt-dropped"}); !ok || update.Costs.EstimatedCostNanos != nil {
 		t.Fatalf("override pass update = %+v, %v; want the stored cost cleared", update, ok)
 	}
@@ -325,8 +317,6 @@ func TestCostBackfillerKeepsACostTheCatalogCanNoLongerPrice(t *testing.T) {
 	}
 }
 
-// Break caught: setting or removing a model's price override left its stored
-// rows at the old price.
 func TestCostBackfillerRepricesAModelWhenItsOverrideChanges(t *testing.T) {
 	snapshot := backfillTestSnapshot(t, "0.000001")
 	manager := pricing.NewManager(snapshot)
@@ -363,14 +353,12 @@ func TestCostBackfillerRepricesAModelWhenItsOverrideChanges(t *testing.T) {
 		return row.PricingVersion, *row.EstimatedCostNanos
 	}
 
-	// $1000 per million input tokens: the row's one token costs $0.001.
 	if version := setOverrides([]domain.UsagePriceOverride{{ModelID: "gpt-test", Input: "1000", Output: "1000"}}); !strings.HasPrefix(version, pricing.PriceOverrideVersionPrefix) {
 		t.Fatalf("override pass version = %q", version)
 	}
 	if _, got := cost(); got != 1_000_000 {
 		t.Fatalf("overridden cost = %d nanos, want 1000000", got)
 	}
-	// Removed, the row is back at the catalog's $0.000001 a token.
 	if version := setOverrides(nil); version != snapshot.ProviderVersion("openai") {
 		t.Fatalf("removal pass version = %q, want the catalog's", version)
 	}

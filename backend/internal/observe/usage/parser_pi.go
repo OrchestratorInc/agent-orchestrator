@@ -14,41 +14,26 @@ import (
 
 const (
 	piUnattributedUsageModel = "Tools/summaries"
-	// piPricingVersion labels a cost AO stored as Pi computed it.
-	piPricingVersion = "pi:reported"
-	// ompPricingVersion and kimchiPricingVersion label a cost the Pi fork
-	// computed with its own model registry.
+	piPricingVersion         = "pi:reported"
 	ompPricingVersion        = "omp:reported"
 	kimchiPricingVersion     = "kimchi:reported"
 	primeAgentPricingVersion = "prime-agent:reported"
 )
 
-// piDialect is what differs between Pi and the forks that write its session
-// format: the namespace of their event keys, the label on the cost they
-// report, and any extra record type that carries usage.
 type piDialect struct {
-	eventKeyPrefix string
-	pricingVersion string
-	// sideUsageType names a top-level record with Pi's "usage" shape (a
-	// provider, model and usage block) that the fork writes for a model call
-	// outside the conversation; empty when the fork writes none.
-	sideUsageType string
-	// gatewayProviders are the fork's own billing gateways. A zero cost the
-	// fork reports for a call through one is the price it charged, not a
-	// missing one, and no catalog lists the gateway to price it otherwise.
+	eventKeyPrefix   string
+	pricingVersion   string
+	sideUsageType    string
 	gatewayProviders []string
 }
 
 var (
-	piSessionDialect = piDialect{eventKeyPrefix: "pi", pricingVersion: piPricingVersion}
-	// OMP records each auxiliary model call (its auto-thinking judge, for
-	// one) as a model_usage entry beside the conversation.
+	piSessionDialect     = piDialect{eventKeyPrefix: "pi", pricingVersion: piPricingVersion}
 	ompSessionDialect    = piDialect{eventKeyPrefix: "omp", pricingVersion: ompPricingVersion, sideUsageType: "model_usage"}
 	kimchiSessionDialect = piDialect{
 		eventKeyPrefix: "kimchi", pricingVersion: kimchiPricingVersion,
 		gatewayProviders: []string{"kimchi", "kimchi-dev"},
 	}
-	// prime-agent writes Pi's session format unchanged.
 	primeAgentSessionDialect = piDialect{eventKeyPrefix: "prime-agent", pricingVersion: primeAgentPricingVersion}
 )
 
@@ -69,12 +54,6 @@ type piSessionRecord struct {
 	} `json:"message"`
 }
 
-// piProviderMessageID names the call an entry bills across files. Pi's /fork
-// writes the parent's entries, unchanged, into a new session file that AO
-// reads as one more source, so the entry's ID and time (which the copy keeps)
-// name the call. Entry IDs are unique only within a session, hence the hash
-// with the time. They come before the provider's response ID because the
-// gateways Pi calls need not issue unique ones, and the index is global.
 func piProviderMessageID(native piSessionRecord, dialect piDialect) string {
 	if native.ID != "" && native.Timestamp != "" {
 		sum := sha256.Sum256([]byte(native.Type + "\x00" + native.ID + "\x00" + native.Timestamp))
@@ -86,21 +65,15 @@ func piProviderMessageID(native piSessionRecord, dialect piDialect) string {
 	return ""
 }
 
-// piNativeUsage is Pi's provider-neutral usage: Pi normalizes every provider
-// to the same shape, with input excluding both cache counters and output
-// already including reasoning.
 type piNativeUsage struct {
-	Input      int64 `json:"input"`
-	Output     int64 `json:"output"`
-	CacheRead  int64 `json:"cacheRead"`
-	CacheWrite int64 `json:"cacheWrite"`
-	// CacheWrite1H is the part of CacheWrite Pi wrote at Anthropic's 1-hour
-	// lifetime; absent when Pi did not split it.
+	Input        int64         `json:"input"`
+	Output       int64         `json:"output"`
+	CacheRead    int64         `json:"cacheRead"`
+	CacheWrite   int64         `json:"cacheWrite"`
 	CacheWrite1H *int64        `json:"cacheWrite1h"`
 	Cost         *piNativeCost `json:"cost"`
 }
 
-// piNativeCost is the USD cost Pi computed from its own model registry.
 type piNativeCost struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
@@ -112,8 +85,6 @@ func parsePi(source domain.UsageSourceContext, records []jsonlRecord, result *pa
 	parsePiFamily(source, records, piSessionDialect, result)
 }
 
-// parsePiFamily parses a Pi-format session transcript, written by Pi or by a
-// fork of it (OMP, Kimchi), which keep Pi's records and usage normalization.
 func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dialect piDialect, result *parseResult) {
 	eventsByKey := make(map[string]domain.ModelUsageEvent)
 	for _, record := range records {
@@ -167,8 +138,6 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			continue
 		}
 		if input == 0 && usage.Output == 0 {
-			// A failed or aborted request: Pi records a zeroed usage block
-			// for it, and there is nothing to bill.
 			continue
 		}
 		providerID := routedUsageProvider(provider)
@@ -203,12 +172,6 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 	}
 }
 
-// piReportedCosts converts the cost Pi computed into AO's cost columns, under
-// the dialect's pricingVersion. Pi prices providers AO's catalog does not list
-// (a z.ai coding plan, OpenRouter), so its figure is kept as stored. A missing
-// cost, or a zero one through another provider, means Pi had no price either,
-// and the catalog is left to try. Through the agent's own gateway a zero cost
-// is what the gateway charged, so it is kept.
 func piReportedCosts(cost *piNativeCost, pricingVersion string, ownGateway bool) domain.UsageEventCosts {
 	if cost == nil {
 		return domain.UsageEventCosts{}
@@ -232,7 +195,6 @@ func piReportedCosts(cost *piNativeCost, pricingVersion string, ownGateway bool)
 	}
 }
 
-// usdToNanos rounds a nonnegative USD amount to whole nano-dollars.
 func usdToNanos(usd float64) (int64, bool) {
 	nanos := math.Round(usd * 1e9)
 	if math.IsNaN(nanos) || nanos < 0 || nanos >= math.MaxInt64 {

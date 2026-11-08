@@ -15,20 +15,13 @@ import (
 const (
 	ompTestNativeID    = "01a048bb-551d-7000-8b7e-1a07961198e0"
 	kimchiTestNativeID = "019ffc6e-fcb3-7f68-a162-85693427d059"
-	// ompTestTitleSlot is OMP's padded line-1 title record, which precedes
-	// the session header and is rewritten in place when the session is named.
-	ompTestTitleSlot = `{"type":"title","v":1,"title":"Fix the flaky watcher test","source":"auto","updatedAt":"2026-08-28T14:17:13.741Z","pad":"          "}` + "\n"
+	ompTestTitleSlot   = `{"type":"title","v":1,"title":"Fix the flaky watcher test","source":"auto","updatedAt":"2026-08-28T14:17:13.741Z","pad":"          "}` + "\n"
 )
 
 func piFamilyTestHeader(nativeID string) string {
 	return `{"type":"session","version":3,"id":"` + nativeID + `","timestamp":"2026-08-28T14:17:11.709Z","cwd":"/repo"}` + "\n"
 }
 
-// Break caught: the Pi override leaking into Pi's root, or a fork's override
-// being ignored. AO launches Pi with --session-dir under its data dir, while
-// OMP and Kimchi write to their own agent dirs, which PI_CODING_AGENT_DIR and
-// KIMCHI_CODING_AGENT_DIR move; a relative override has no fixed base and
-// falls back to the default.
 func TestDefaultSourceRootsResolvesOMPAndKimchiAgentDirs(t *testing.T) {
 	home := t.TempDir()
 	dataDir := filepath.Join(home, "ao-data")
@@ -71,8 +64,6 @@ func TestSupportedHarnessIncludesPiForks(t *testing.T) {
 	}
 }
 
-// Break caught: looking for prime-agent transcripts anywhere but the
-// --session-dir AO starts it with, so its binding never found a source.
 func TestCollectorDiscoversPrimeAgentSessionInSessionDir(t *testing.T) {
 	const nativeID = "01a0ae4c-6550-718c-86e5-6e83f11144a6"
 	dataDir := t.TempDir()
@@ -101,10 +92,6 @@ func TestCollectorDiscoversPrimeAgentSessionInSessionDir(t *testing.T) {
 	}
 }
 
-// Break caught: prime-agent sessions never binding. prime-agent 0.10 has no
-// --extension flag, so no hook names its native ID; the transcript in AO's own
-// --session-dir binds to the one live session in its cwd instead, but never to
-// a session that started after it or shares the workspace with another.
 func TestCollectorBindsPrimeAgentTranscriptByWorkspace(t *testing.T) {
 	const nativeID = "01a1a5fd-b108-772d-b336-2f25529fe6fb"
 	started := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
@@ -164,10 +151,6 @@ func TestCollectorBindsPrimeAgentTranscriptByWorkspace(t *testing.T) {
 	}
 }
 
-// Break caught: DeepSeek Harness sessions never binding. Terminal sessions
-// expose no hook that names the native ID, so the session log binds to the one
-// live session in its recorded cwd; a Chat session carries the ID as its ACP
-// session and binds by it. Both logs are zstd frames two levels below the root.
 func TestCollectorBindsDeepSeekSessionLogs(t *testing.T) {
 	const nativeID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"
 	ctx := context.Background()
@@ -200,7 +183,6 @@ func TestCollectorBindsDeepSeekSessionLogs(t *testing.T) {
 			dir := filepath.Join(root, "--repo--", nativeID)
 			path := filepath.Join(dir, "session.v4.jsonl.zstd")
 			writeLog(t, path, header(workspace))
-			// The older log format beside it must never become a source.
 			writeLog(t, filepath.Join(dir, "session.jsonl.zstd"), header(workspace))
 			collector := NewCollector(store, SourceRoots{DeepSeekSessions: root}, nil)
 
@@ -218,9 +200,6 @@ func TestCollectorBindsDeepSeekSessionLogs(t *testing.T) {
 	}
 }
 
-// Break caught: reading only line 1 for the session header. OMP keeps a
-// title slot there, so a Pi-only reader never matched OMP's header and the
-// binding stayed discovering.
 func TestCollectorDiscoversOMPSessionBehindTitleSlot(t *testing.T) {
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessOMP, ompTestNativeID, false)
@@ -243,8 +222,6 @@ func TestCollectorDiscoversOMPSessionBehindTitleSlot(t *testing.T) {
 	}
 }
 
-// Break caught: OMP's title-slot allowance leaking into Pi. Pi's header is
-// always its first record; anything else there is not a Pi transcript.
 func TestCollectorPiStillRequiresHeaderOnFirstLine(t *testing.T) {
 	const nativeID = "pi-behind-title"
 	store := collectorTestStore(t)
@@ -266,9 +243,6 @@ func TestCollectorPiStillRequiresHeaderOnFirstLine(t *testing.T) {
 	}
 }
 
-// Break caught: discovery covering only one of Kimchi's layouts. Kimchi's
-// default nests sessions under --<cwd>--, and a --session-dir launch writes
-// them flat into the root, as Pi's does.
 func TestCollectorDiscoversKimchiSessionsInNestedAndFlatLayouts(t *testing.T) {
 	const flatID = "01a17cc6-65b8-7704-a3a5-2d821b9c973c"
 	store := collectorTestStore(t)
@@ -304,9 +278,6 @@ func TestCollectorDiscoversKimchiSessionsInNestedAndFlatLayouts(t *testing.T) {
 	}
 }
 
-// Break caught: one Pi-format harness binding another's transcript. The
-// forks share Pi's format, so only the harness's own root may supply it,
-// even when a header there carries the same native id.
 func TestCollectorKeepsPiFamilyRootsApart(t *testing.T) {
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessOMP, ompTestNativeID, false)
@@ -329,9 +300,6 @@ func TestCollectorKeepsPiFamilyRootsApart(t *testing.T) {
 	}
 }
 
-// Break caught: the late-transcript sweep covering Pi alone. A Kimchi
-// transcript that appears after session-start must still be found by
-// ReconcileSources.
 func TestCollectorReconcilesKimchiTranscriptCreatedAfterHook(t *testing.T) {
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessKimchi, kimchiTestNativeID, false)
@@ -356,9 +324,6 @@ func TestCollectorReconcilesKimchiTranscriptCreatedAfterHook(t *testing.T) {
 	}
 }
 
-// Break caught: startup backfill skipping a live OMP session whose hook ran
-// before the daemon restarted; its durable native id must still find the
-// transcript by header.
 func TestCollectorBackfillActiveBindsOMPSessionByHeaderID(t *testing.T) {
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessOMP, ompTestNativeID, false)

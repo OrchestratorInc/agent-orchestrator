@@ -4,13 +4,10 @@ export type UsageReport = components["schemas"]["UsageReportResponse"];
 export type UsageReportRow = components["schemas"]["UsageReportRowResponse"];
 export type UsageReportSession = components["schemas"]["UsageReportSessionResponse"];
 
-/** What the Cost and Tokens views measure. */
 export type UsageUnit = "cost" | "tokens";
 
-/** The four disjoint token types. Costs use the same parts, in nano-USD. */
 export type UsageParts = { input: number; cacheRead: number; cacheWrite: number; output: number };
 
-/** Priority, fast and ultrafast all bill above standard, so they read as one "Fast". */
 export type SpeedGroup = "standard" | "fast" | "flex" | "unknown";
 
 export function speedGroup(speed: string): SpeedGroup {
@@ -75,7 +72,6 @@ export function partsTotal(parts: UsageParts): number {
 
 export type HarnessUsage = { harness: string; sessions: number; costNanos: number; tokens: number; pricedEvents: number };
 
-/** One line per agent, the largest first in the unit being read. */
 export function usageByHarness(report: Pick<UsageReport, "rows" | "sessions">, unit: UsageUnit): HarnessUsage[] {
 	const byHarness = new Map<string, HarnessUsage>();
 	const entry = (harness: string) => {
@@ -99,7 +95,6 @@ export function usageByHarness(report: Pick<UsageReport, "rows" | "sessions">, u
 	});
 }
 
-/** values[period][harness], zero-filled for periods with no usage. */
 export type UsageSeries = { periods: string[]; harnesses: string[]; values: number[][] };
 
 export function usageSeries(report: Pick<UsageReport, "periods" | "rows" | "sessions">, unit: UsageUnit): UsageSeries {
@@ -123,13 +118,10 @@ export type ModelUsage = {
 	tokens: number;
 	events: number;
 	pricedEvents: number;
-	/** Share of input tokens served from the cache, 0–1. */
 	cacheHitRate: number;
-	/** nano-USD per million processed tokens over the priced events; null when none were priced. */
 	costPerMillionNanos: number | null;
 };
 
-/** One entry per agent and model: two agents running the same model are billed apart and keep separate rows. */
 export function usageByModel(rows: readonly UsageReportRow[], unit: UsageUnit): ModelUsage[] {
 	const byModel = new Map<string, ModelUsage & { input: number; cacheRead: number; pricedTokens: number }>();
 	for (const row of rows) {
@@ -159,7 +151,6 @@ export function usageByModel(rows: readonly UsageReportRow[], unit: UsageUnit): 
 
 export type PeriodUsage = { period: string; costNanos: number; tokens: number; events: number; pricedEvents: number };
 
-/** Periods with usage, newest first. */
 export function usageByPeriod(report: Pick<UsageReport, "periods" | "rows">): PeriodUsage[] {
 	const byPeriod = new Map<string, PeriodUsage>();
 	for (const row of report.rows) {
@@ -196,7 +187,6 @@ export function usageByProject(sessions: readonly UsageReportSession[], unit: Us
 	return [...byProject.values()].sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens) || a.projectId.localeCompare(b.projectId));
 }
 
-/** An axis maximum on a 1/2/2.5/5 × 10ⁿ step, with evenly spaced ticks from 0. */
 export function niceScale(peak: number, tickCount = 4): { max: number; ticks: number[] } {
 	if (!Number.isFinite(peak) || peak <= 0) return { max: 1, ticks: [0, 1] };
 	const raw = peak / tickCount;

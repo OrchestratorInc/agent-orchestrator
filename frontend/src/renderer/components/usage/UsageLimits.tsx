@@ -11,12 +11,10 @@ import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Button } from "../ui/button";
 
-/** Low reads as a warning and none as an error, as in the account settings; otherwise the agent's colour. */
 function remainingTone(remaining: number): string | null {
 	return remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : null;
 }
 
-/** Subscription windows for every signed-in account, one block per account under its provider. */
 export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount[]; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const providers = useMemo(() => groupAccounts(accounts), [accounts]);
@@ -46,7 +44,6 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 							<span className="ms-auto text-xs text-muted-foreground">{t("usage.limits.checked", { value: formatRelativeTime(entry.checkedAt, now, i18n.language) })}</span>
 						) : null}
 					</div>
-					{/* One grid for every account, so bars and figures line up down the provider. */}
 					<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
 						{entry.accounts.map((account, index) => (
 							<AccountLimitRows key={account.id} account={account} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
@@ -64,13 +61,11 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 	const plan = formatPlanName(account.plan);
 	const resetCredits = account.limits?.resetCredits ?? 0;
 	const meta = [
-		// Two logins can share an email, so say which one is this computer's own.
 		account.device ? t("usage.limits.thisComputer") : null,
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
 		account.default ? t("settings.agentAccounts.default") : null,
 		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
 	].filter(Boolean).join(" · ");
-	// A failed probe also reports signed out; its problem says what actually went wrong.
 	const issue = account.problem || (account.signedIn ? null : t("usage.limits.signedOut"));
 	return (
 		<>
@@ -115,7 +110,6 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 				className="relative h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
 			>
 				<div className={cn("h-full rounded-full", tone)} style={{ width: `${remaining}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
-				{/* Where what is left lands at the reset if the pace so far holds. */}
 				{leftAtReset !== null && leftAtReset < remaining ? (
 					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `${leftAtReset}%` }} />
 				) : null}

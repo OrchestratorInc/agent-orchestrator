@@ -40,8 +40,6 @@ func TestCacheInstallsPrivateManifestLastAndLoadsLKG(t *testing.T) {
 	}
 }
 
-// Break caught: shutdown cancellation was dropped at the cache boundary, so a
-// refresh kept walking provider files and could still commit its manifest.
 func TestCacheHonorsCancellationBeforeLoadAndBetweenProviderInstalls(t *testing.T) {
 	fixture := testCandidate(t, testBaseModels("0.1"))
 	catalog, err := ParseCatalog(fixture.manifest, fixture.providers)
@@ -142,11 +140,6 @@ func TestCacheMissingOrCorruptLKGIsUnavailable(t *testing.T) {
 	}
 }
 
-// A content-addressed path whose bytes no longer hash to it is corrupt, and the
-// refresher's only route back is to reinstall the validated remote copy. If
-// Install refused that write, every retry would download the same valid bytes
-// and fail again, leaving pricing permanently unavailable until the user
-// deleted AO state by hand.
 func TestCacheInstallRepairsCorruptProviderBlob(t *testing.T) {
 	dataDir := t.TempDir()
 	fixture := testCandidate(t, testBaseModels("0.1"))

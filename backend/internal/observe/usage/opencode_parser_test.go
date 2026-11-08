@@ -18,13 +18,9 @@ const (
 	openCodeTestRoot  = "ses_root"
 	openCodeTestChild = "ses_child"
 	openCodeTestOther = "ses_other"
-	// openCodeTestTime is a plausible OpenCode time_created in milliseconds.
-	openCodeTestTime = int64(1793465755757)
+	openCodeTestTime  = int64(1793465755757)
 )
 
-// openCodeFixtureDB creates the session, message and part tables of a real
-// OpenCode 1.19 (and Kilo Code 7.4) database in WAL mode and returns its path
-// plus the writer connection, which stays open like a running agent.
 func openCodeFixtureDB(t *testing.T, name string) (string, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data", name)
@@ -73,9 +69,6 @@ INSERT INTO session (id, parent_id) VALUES
 	return path, writer
 }
 
-// insertOpenCodeStep writes one assistant message and its step-finish part the
-// way OpenCode does: the message names the provider and model, the part
-// carries the call's tokens and cost.
 func insertOpenCodeStep(
 	t *testing.T, writer *sql.DB, sessionID, id, provider, model string, at int64,
 	input, output, reasoning, cacheRead, cacheWrite int64, cost float64,
@@ -99,10 +92,6 @@ func openCodeTestSource(kind domain.UsageSourceKind) domain.UsageSourceContext {
 	return source
 }
 
-// TestReadOpenCodeStepsForSessionTree catches cross-session attribution,
-// losing sub-agent calls OpenCode files under a child session, counting a
-// sub-agent twice when the child is bound too, reading non-usage parts, and a
-// reader that writes to the agent's database.
 func TestReadOpenCodeStepsForSessionTree(t *testing.T) {
 	path, writer := openCodeFixtureDB(t, "opencode.db")
 	insertOpenCodeStep(t, writer, openCodeTestRoot, "a", "anthropic", "claude-sonnet-4-5", openCodeTestTime, 70, 15, 5, 20, 10, 0.0125)
@@ -157,7 +146,6 @@ func TestReadOpenCodeStepsForSessionTree(t *testing.T) {
 		!root.CreatedAt.Equal(time.UnixMilli(openCodeTestTime).UTC()) {
 		t.Fatalf("root event = %+v", root)
 	}
-	// input 70 excludes both cache counters; output 15 excludes reasoning 5.
 	if tokenValue(root.Tokens.InputTokens) != 100 || tokenValue(root.Tokens.CachedInputTokens) != 20 ||
 		tokenValue(root.Tokens.UncachedInputTokens) != 80 || tokenValue(root.Tokens.OutputTokens) != 20 {
 		t.Fatalf("root tokens = %+v", root.Tokens)
@@ -169,9 +157,6 @@ func TestReadOpenCodeStepsForSessionTree(t *testing.T) {
 	if providerUsageTokens(t, root.ProviderUsageJSON, "tokens", "reasoning") != 5 {
 		t.Fatalf("provider usage = %s", root.ProviderUsageJSON)
 	}
-	// Break caught: the cache-write count left nested under tokens.cache,
-	// where pricing never looks, so a cache-write-rated model priced its
-	// input as unknown.
 	if providerUsageTokens(t, root.ProviderUsageJSON, derivedCacheWriteKey) != 10 {
 		t.Fatalf("provider usage cache-write count missing: %s", root.ProviderUsageJSON)
 	}
@@ -186,9 +171,6 @@ func TestReadOpenCodeStepsForSessionTree(t *testing.T) {
 	}
 }
 
-// TestReadOpenCodeStepsAfterUndo catches a row-ID cursor: OpenCode undo deletes
-// the newest messages, SQLite hands their row IDs to the next ones, and a call
-// made after the undo would sit behind the cursor forever.
 func TestReadOpenCodeStepsAfterUndo(t *testing.T) {
 	path, writer := openCodeFixtureDB(t, "opencode.db")
 	insertOpenCodeStep(t, writer, openCodeTestRoot, "a", "zai", "glm-4.5", openCodeTestTime, 10, 1, 0, 0, 0, 0)
@@ -220,9 +202,6 @@ func TestReadOpenCodeStepsAfterUndo(t *testing.T) {
 	}
 }
 
-// TestParseOpenCodeSkipsFailedAndMalformedSteps catches billing a call that
-// failed before usage arrived and silently accepting counters that cannot
-// be a real call.
 func TestParseOpenCodeSkipsFailedAndMalformedSteps(t *testing.T) {
 	records := []jsonlRecord{
 		{Offset: 1, Data: []byte(`{"part_id":"prt_1","session_id":"ses_root","provider_id":"zai","model_id":"glm-4.5","step":{"type":"step-finish","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}`)},
@@ -239,8 +218,6 @@ func TestParseOpenCodeSkipsFailedAndMalformedSteps(t *testing.T) {
 	}
 }
 
-// TestParseKiloStepsKeepKiloCost catches Kilo rows borrowing OpenCode's cost
-// label or event keys, and Kilo's own cost for its gateway being dropped.
 func TestParseKiloStepsKeepKiloCost(t *testing.T) {
 	record := jsonlRecord{Offset: 1, Data: []byte(`{"part_id":"prt_1","session_id":"ses_root","time_created":1793465755757,"provider_id":"zai","model_id":"glm-4.5","step":{"reason":"stop","type":"step-finish","tokens":{"total":12650,"input":12593,"output":13,"reasoning":1,"cache":{"write":0,"read":43}},"cost":0.00759133}}`)}
 	kilo := parseRecords(openCodeTestSource(domain.UsageSourceKiloDB), []jsonlRecord{record}, 1, time.Now())
@@ -262,10 +239,6 @@ func TestParseKiloStepsKeepKiloCost(t *testing.T) {
 	}
 }
 
-// Break caught: a free model on the agent's own gateway (OpenCode Zen's
-// big-pickle, Kilo's kilo-auto/free) shown as not priced. The agent's zero
-// cost is what its gateway charged, and no catalog lists the gateway, so it is
-// kept as $0; a zero through any other provider is still left to the catalog.
 func TestParseOpenCodeKeepsZeroCostOnOwnGateway(t *testing.T) {
 	step := `"step":{"type":"step-finish","tokens":{"input":100,"output":2,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}`
 	for _, tt := range []struct {
@@ -293,9 +266,6 @@ func TestParseOpenCodeKeepsZeroCostOnOwnGateway(t *testing.T) {
 	}
 }
 
-// TestIngestorReadsOpenCodeStepsIncrementally catches re-reading steps already
-// stored, counting the message row OpenCode rewrites as a call streams, and
-// stalling on steps the agent commits after the first pass.
 func TestIngestorReadsOpenCodeStepsIncrementally(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()
@@ -326,7 +296,6 @@ func TestIngestorReadsOpenCodeStepsIncrementally(t *testing.T) {
 	}
 	assertTokenAggregate(t, store, session.ID, 120)
 
-	// A streaming message is rewritten in place before its step finishes.
 	_, err = writer.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
     ('msg_streaming', 'ses_root', ?, ?, '{"role":"assistant","providerID":"zai","modelID":"glm-4.5","tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}')`,
 		openCodeTestTime+5, openCodeTestTime+5)

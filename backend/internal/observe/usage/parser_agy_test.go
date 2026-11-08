@@ -31,9 +31,6 @@ func agyConcat(parts ...[]byte) []byte {
 	return out
 }
 
-// agyGeneration builds a gen_metadata blob as the agy CLI writes it. A zero
-// configName leaves the request config without the model's name, as on every
-// call after a conversation's first.
 func agyUsage(model, input, output, cacheRead, thinking uint64, responseID string) []byte {
 	usage := agyConcat(agyVarint(1, model), agyVarint(2, input), agyVarint(3, output))
 	if cacheRead > 0 {
@@ -43,8 +40,6 @@ func agyUsage(model, input, output, cacheRead, thinking uint64, responseID strin
 		agyVarint(9, thinking), agyVarint(10, output-thinking), agyBytes(11, []byte(responseID)))
 }
 
-// agyGeneration builds a gen_metadata blob: the call's usage, repeated in its
-// retry_infos as agy writes it, plus any earlier attempts that billed apart.
 func agyGeneration(model, input, output, cacheRead, thinking uint64, responseID, configName string, retries ...[]byte) []byte {
 	usage := agyUsage(model, input, output, cacheRead, thinking, responseID)
 	chat := agyBytes(4, usage)
@@ -58,7 +53,6 @@ func agyGeneration(model, input, output, cacheRead, thinking uint64, responseID,
 	return agyConcat(agyBytes(1, chat), agyBytes(3, config))
 }
 
-// agyStep builds a steps.metadata blob recording the response at a time.
 func agyStep(responseID string, at time.Time) []byte {
 	stamp := agyConcat(agyVarint(1, uint64(at.Unix())), agyVarint(2, uint64(at.Nanosecond())))
 	return agyConcat(agyBytes(1, stamp), agyBytes(8, stamp), agyBytes(9, agyBytes(11, []byte(responseID))))
@@ -66,8 +60,6 @@ func agyStep(responseID string, at time.Time) []byte {
 
 var agyTestStepAt = time.Date(2026, 11, 4, 11, 6, 3, 250_000_000, time.UTC)
 
-// agyFixtureDB creates a conversation database whose first call's response has
-// a step at agyTestStepAt, and returns an insert for its gen_metadata rows.
 func agyFixtureDB(t *testing.T) (string, func(idx int64, data []byte)) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), agyTestConversationID+".db")
@@ -87,14 +79,6 @@ func agyFixtureDB(t *testing.T) (string, func(idx int64, data []byte)) {
 	}
 }
 
-// Break caught: an Antigravity conversation read as JSON, or its later calls
-// left without a model. The agy CLI keeps one protobuf gen_metadata row per
-// call and names the model only on the conversation's first calls, so the
-// reader learns the name from those, prices cache reads as input, strips the
-// thinking level for the catalog, counts a retry once unless it billed apart,
-// takes each call's time from its step (or from the call before it, so no call
-// is left out of every report period), waits on a newest row without usage,
-// and never skips the conversation's first call, whose idx is 0.
 func TestReadAndParseAgyConversation(t *testing.T) {
 	path, insert := agyFixtureDB(t)
 	stepAt := agyTestStepAt
@@ -102,7 +86,7 @@ func TestReadAndParseAgyConversation(t *testing.T) {
 	insert(1, agyGeneration(1318, 7678, 75, 16627, 19, "2VLbaordO", "",
 		agyUsage(1318, 7000, 0, 0, 0, "failedFirstTry")))
 	insert(2, agyGeneration(4242, 100, 10, 0, 0, "unknownModel", ""))
-	insert(3, agyConcat(agyBytes(3, agyVarint(1, 1318)))) // still streaming
+	insert(3, agyConcat(agyBytes(3, agyVarint(1, 1318))))
 
 	ctx := context.Background()
 	db, err := openSQLiteUsageDB(ctx, path)
@@ -131,7 +115,6 @@ func TestReadAndParseAgyConversation(t *testing.T) {
 			t.Fatalf("call %s at %v, want the step's time or the previous call's", event.SourceEventKey, event.CreatedAt)
 		}
 	}
-	// A later read whose calls match no step takes the conversation's latest.
 	later, err := readAgyGenerations(ctx, db, agyTestConversationID, 1, 10)
 	mustNoError(t, err)
 	laterResult := parseRecords(source, later, later[len(later)-1].Offset, time.Now())
@@ -161,10 +144,6 @@ func TestReadAndParseAgyConversation(t *testing.T) {
 	}
 }
 
-// Break caught: a gen_metadata row whose call also billed a retry apart yields
-// two records with the row's cursor. The SQLite source rejected the repeated
-// cursor as out of order and retried the same read forever, so the
-// conversation stored nothing, its earlier rows included.
 func TestIngestorReadsAgyRowWithSeparatelyBilledRetry(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()
@@ -192,7 +171,6 @@ func TestIngestorReadsAgyRowWithSeparatelyBilledRetry(t *testing.T) {
 
 	_, err = ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)
-	// 8214+532, then 7678+16627+75 and the retry's 7000.
 	assertTokenAggregate(t, store, session.ID, 40126)
 	persisted, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
 	mustNoError(t, err)

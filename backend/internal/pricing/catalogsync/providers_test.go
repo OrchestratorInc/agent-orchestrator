@@ -10,11 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
-// A table shaped like LiteLLM's: the three required providers, a provider a
-// harness routes to directly (minimax), Vertex's per-publisher providers,
-// Bedrock's converse provider, a reseller listing a first-party model name, and
-// a doubled prefix the live table carries (perplexity/perplexity/...), which
-// must cost that row alone rather than the whole catalog.
 const everyProviderTable = `{
 "anthropic/claude-test":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000003,"output_cost_per_token":0.000015},
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.00001},
@@ -29,9 +24,6 @@ const everyProviderTable = `{
 "bad/provider":{"litellm_provider":"../escape","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`
 
-// Break caught: a catalog that prices only anthropic, openai and zai. Qwen,
-// Pi, Goose and Codex bill through MiniMax, Vertex, Bedrock and the rest, and
-// those events were recorded with tokens and a provider but never a cost.
 func TestRuntimeCatalogPricesEveryProviderTheTableDoes(t *testing.T) {
 	catalog, err := catalogsync.Catalog([]byte(everyProviderTable))
 	if err != nil {
@@ -58,8 +50,6 @@ func TestRuntimeCatalogPricesEveryProviderTheTableDoes(t *testing.T) {
 		t.Fatalf("minimax total = %v, want 420000", estimate.TotalNanos)
 	}
 
-	// Vertex's partner and first-party models are one vertex_ai provider, and
-	// a harness's own spelling of a provider reaches the same rows.
 	for _, lookup := range []struct{ provider, model string }{
 		{"vertex_ai", "claude-test@20260101"},
 		{"google-vertex", "gemini-test"},
@@ -75,9 +65,6 @@ func TestRuntimeCatalogPricesEveryProviderTheTableDoes(t *testing.T) {
 	}
 }
 
-// Break caught: inferring the provider from the model name across every
-// provider. Resellers list first-party names (azure's gpt-test), so the lookup
-// a Claude session relies on before its first hook went ambiguous.
 func TestProviderForModelIgnoresResellers(t *testing.T) {
 	catalog, err := catalogsync.Catalog([]byte(everyProviderTable))
 	if err != nil {
@@ -91,9 +78,6 @@ func TestProviderForModelIgnoresResellers(t *testing.T) {
 	}
 }
 
-// Break caught: committing the wide catalog to the repository. Releases that
-// read the repository copy accept exactly the required providers and would
-// reject every later catalog.
 func TestSyncKeepsTheRepositoryCatalogToTheRequiredProviders(t *testing.T) {
 	root := t.TempDir()
 	if _, err := catalogsync.Sync(root, []byte(everyProviderTable), catalogsync.Source{

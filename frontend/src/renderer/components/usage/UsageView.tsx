@@ -31,7 +31,6 @@ const PERIODS = [
 	{ days: 90, label: "usage.period.quarter" },
 ] as const;
 
-/** Re-renders on an interval so reset countdowns stay current. */
 function useNow(intervalMs: number): Date {
 	const [now, setNow] = useState(() => new Date());
 	useEffect(() => {
@@ -41,17 +40,14 @@ function useNow(intervalMs: number): Date {
 	return now;
 }
 
-/** Estimated cost, token use and subscription limits for AO's agent sessions. */
 export function UsageView() {
 	const { t, i18n } = useTranslation();
 	const [chosenTab, setTab] = useState<UsageTab>("spend");
-	// The experimental Windows tab, and the readings behind it, exist only in Developer Mode.
 	const developerMode = useUiStore((state) => state.developerMode);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const tab = chosenTab === "windows" && !developerMode ? "spend" : chosenTab;
 	const [unit, setUnit] = useState<UsageUnit>("cost");
 	const [days, setDays] = useState(7);
-	// Whole periods stepped back from now; 0 is the current one.
 	const [offset, setOffset] = useState(0);
 	const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
 	const [refreshingLimits, setRefreshingLimits] = useState(false);
@@ -66,7 +62,6 @@ export function UsageView() {
 		() => new Map(projects.map((project) => [project.id, project.id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : project.name])),
 		[projects, t],
 	);
-	// Standalone sessions carry no project ID, so the report cannot filter to them; All projects includes them.
 	const filterProjects = useMemo(() => projects.filter((project) => project.id !== STANDALONE_WORKSPACE_ID), [projects]);
 	const hasCursorSessions = useMemo(
 		() => projects.some((project) => project.sessions.some((session) => session.provider === "cursor")),
@@ -100,7 +95,6 @@ export function UsageView() {
 	const refreshing = isWindows ? limitWindows.isFetching : isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
 	const loading = <p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>;
 	const failed = (error: Error) => <p role="alert" className="py-16 text-center text-sm text-destructive">{error.message}</p>;
-	// A failed refetch keeps the data it had: say so above it rather than replace the page (and any open dialog).
 	const staleError = (error: Error | null) => (error ? <p role="alert" className="mb-4 text-xs text-destructive">{error.message}</p> : null);
 	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
 
@@ -138,7 +132,6 @@ export function UsageView() {
 									triggerClassName="h-(--size-control-md)! text-xs!"
 									renderTrigger={(selected) => (
 										<span className="min-w-0 truncate">
-											{/* An earlier period is named by its dates alone: "Last 7 days" would no longer be true. */}
 											{offset === 0 || !range ? selected?.label : null}
 											{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
 										</span>
@@ -160,7 +153,6 @@ export function UsageView() {
 					</>
 				}
 			/>
-			{/* The page tabs stay put while the view under them scrolls. */}
 			<div className="shrink-0">
 				<div className="mx-auto w-full max-w-6xl px-6">
 					<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)}>

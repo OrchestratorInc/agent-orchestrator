@@ -731,9 +731,7 @@ type ActiveTurnSteerer interface {
 	SteersActiveTurn() bool
 }
 
-// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed
-// session metadata onto SessionRef without adapters hard-coding domain JSON
-// vocabulary.
+// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed session metadata onto SessionRef without adapters hard-coding domain JSON vocabulary.
 const (
 	MetadataKeyAgentSessionID       = "agentSessionId"
 	MetadataKeyNativeTranscriptPath = "nativeTranscriptPath"

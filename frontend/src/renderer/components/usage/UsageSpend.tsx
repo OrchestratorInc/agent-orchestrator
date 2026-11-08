@@ -42,10 +42,8 @@ const SPEED_LABELS = {
 	unknown: "usage.speed.unknown",
 } as const satisfies Record<SpeedGroup, string>;
 const SESSION_ROWS = 50;
-/** Breakdown rows shown before "Show all". */
 const BREAKDOWN_ROWS = 10;
 
-/** The Cost and Tokens views: one layout, measured in dollars or in tokens. */
 export function UsageSpend({
 	report,
 	unit,
@@ -104,13 +102,11 @@ export function UsageSpend({
 							{unit === "cost" && unpriced > 0 ? ` · ${t("usage.unpricedNote", { value: unpriced.toLocaleString(locale) })}` : null}
 						</p>
 					</div>
-					{/* Beside the chart the list takes the height the chart sets and scrolls, rather than stretching the row. */}
 					<div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pe-2 lg:[contain:size]">
 						<ul className="flex flex-col gap-2.5" aria-label={t("usage.byAgent")}>
 							{harnesses.map((harness) => {
 								const value = unit === "cost" ? harness.costNanos : harness.tokens;
 								const share = total > 0 ? value / total : 0;
-								// An agent with no priced usage is unknown, not free: no $0.00, no 0% share.
 								const unpricedAgent = unit === "cost" && harness.pricedEvents === 0;
 								const detail = unpricedAgent
 									? t("usage.harnessUnpricedLine", { tokens: formatTokens(harness.tokens, locale) })
@@ -190,7 +186,6 @@ export function UsageSpend({
 	);
 }
 
-/** A thin share-of-total bar, in an agent's colour or neutral. */
 function ShareBar({ fraction, tone, className }: { fraction: number; tone?: string; className?: string }) {
 	return (
 		<span aria-hidden="true" className={cn("block h-1 overflow-hidden rounded-full bg-muted", className)}>
@@ -256,13 +251,10 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 		setShowAll(false);
 	};
 	const navigateToSession = useNavigateToSession();
-	// The model the prices dialog opened for, or "" for the whole list; null is closed.
 	const [pricesFor, setPricesFor] = useState<string | null>(null);
 	const customPrices = new Set((useUsagePrices().data?.overrides ?? []).map((override) => override.modelId));
 	const seenModels = useMemo(() => [...new Set(report.rows.map((row) => row.model))].sort(), [report.rows]);
 	const fraction = (cost: number, tokens: number) => (total > 0 ? (unit === "cost" ? cost : tokens) / total : 0);
-	// A bar in the agent's colour where the row belongs to one agent, neutral where it mixes them.
-	// A row with no priced usage has no cost share: unknown is not 0%.
 	const share = (cost: number, tokens: number, pricedEvents: number, harness?: string) =>
 		unit === "cost" && pricedEvents === 0 ? (
 			<span className="block text-end">—</span>
@@ -272,7 +264,6 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 				<span className="w-12 text-end">{formatShare(fraction(cost, tokens), locale)}</span>
 			</span>
 		);
-	// An unpriced row reads "Not priced", as the agent list and model table do, never $0.00.
 	const costCell = (costNanos: number, pricedEvents: number) =>
 		pricedEvents === 0 ? <span className="text-muted-foreground">{t("usage.notPriced")}</span> : formatUsd(costNanos, locale);
 	const projectName = (projectId: string | undefined) => (projectId ? projectNames.get(projectId) ?? projectId : t("usage.noProject"));

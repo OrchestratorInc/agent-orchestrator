@@ -52,15 +52,6 @@ func TestGeneratedFractionalRatesLoadInRuntime(t *testing.T) {
 	}
 }
 
-// TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache checks the daemon's
-// catalog path end to end: LiteLLM table -> Fetcher -> last-known-good cache.
-// The table builds to the same provider versions as the repository catalog
-// Sync writes from it, so released builds that still download that catalog
-// price exactly what the daemon prices. A 304 stands in for the table only
-// when a cached catalog exists to serve.
-//
-// Set AO_PRICING_SOURCE to a LiteLLM table to run the same contract against
-// it, as CI does with the live one; unset, the test uses a small fixture.
 func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/claude-sonnet-4":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000003,"output_cost_per_token":0.000015,"cache_read_input_token_cost":0.0000003,"cache_creation_input_token_cost":0.00000375},

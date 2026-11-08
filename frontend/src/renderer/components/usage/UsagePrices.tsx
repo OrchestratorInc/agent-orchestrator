@@ -28,7 +28,6 @@ const RATE_LABELS = {
 	cacheWriteUsdPerMillion: "usage.type.cacheWrite",
 } as const satisfies Record<(typeof RATE_FIELDS)[number], string>;
 
-/** A row with a price or a target set; one without either is left out on save. */
 function hasValues(row: Draft): boolean {
 	return row.priceAs.trim() !== "" || RATE_FIELDS.some((field) => row[field].trim() !== "");
 }
@@ -47,10 +46,6 @@ function draftOf(override: Partial<UsagePriceOverride>): Draft {
 	};
 }
 
-/**
- * The user's own model prices: rates per million tokens, or another catalog
- * model to price as. Opening it for a model adds that model's row.
- */
 export function UsagePricesDialog({
 	open,
 	onOpenChange,
@@ -59,9 +54,7 @@ export function UsagePricesDialog({
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	/** A model to add a row for when it has none. */
 	model?: string;
-	/** Model IDs the report shows, offered when adding a row. */
 	seenModels: readonly string[];
 }) {
 	const { t } = useTranslation();
@@ -71,12 +64,10 @@ export function UsagePricesDialog({
 	const [drafts, setDrafts] = useState<Draft[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Set by a save that found priced rows with no model; those rows stay marked until named.
 	const [checked, setChecked] = useState(false);
 	const listId = useId();
 	const loaded = prices.data;
 
-	// Each opening starts from the saved prices.
 	useEffect(() => {
 		if (!open || !loaded) return;
 		const rows = loaded.overrides.map(draftOf);
@@ -99,7 +90,6 @@ export function UsagePricesDialog({
 		setBusy(true);
 		setError(null);
 		try {
-			// An empty field is unset; a mapped row sends no rates.
 			await save(
 				drafts
 					.filter((row) => row.modelId.trim() !== "")

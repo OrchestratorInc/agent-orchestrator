@@ -18,18 +18,11 @@ import (
 )
 
 const (
-	// maxDeepSeekSessionBytes bounds the compressed session log one read opens.
 	maxDeepSeekSessionBytes = 64 << 20
-	// maxDeepSeekDecodedBytes bounds the decompressed log one read walks; a
-	// reply's streamed deltas make records far larger than their usage.
 	maxDeepSeekDecodedBytes = 512 << 20
-	// maxDeepSeekRecordBytes bounds one decompressed record.
-	maxDeepSeekRecordBytes = 32 << 20
+	maxDeepSeekRecordBytes  = 32 << 20
 )
 
-// deepseekLogRecord is the part of a DeepSeek Harness session log record the
-// reader needs. Every record but the leading session header carries a seq
-// that rises by one per record.
 type deepseekLogRecord struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -49,8 +42,6 @@ type deepseekLogRecord struct {
 	} `json:"data"`
 }
 
-// deepseekReplyRecord is one assistant reply's usage, as the reader hands it
-// to parseDeepSeek.
 type deepseekReplyRecord struct {
 	Seq       int64           `json:"seq"`
 	Time      int64           `json:"time"`
@@ -62,8 +53,6 @@ type deepseekReplyRecord struct {
 	Usage     json.RawMessage `json:"usage"`
 }
 
-// deepseekUsage is DeepSeek Harness's per-reply usage. inputTokens excludes
-// the cache-read and cache-write tokens; totalTokens is all four together.
 type deepseekUsage struct {
 	InputTokens      *int64 `json:"inputTokens"`
 	OutputTokens     *int64 `json:"outputTokens"`
@@ -71,11 +60,6 @@ type deepseekUsage struct {
 	CacheWriteTokens int64  `json:"cacheWriteTokens"`
 }
 
-// readDeepSeekReplies reads the assistant replies after the cursor from a
-// DeepSeek Harness session.v4.jsonl.zstd log. Harness appends one zstd frame
-// per flush, so the log is decompressed from the start and the record seq,
-// not a byte offset, is the cursor. A record still being written is ignored
-// until its line is complete.
 func readDeepSeekReplies(ctx context.Context, path, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -106,8 +90,6 @@ func readDeepSeekReplies(ctx context.Context, path, nativeSessionID string, afte
 		}
 		line, readErr := readDeepSeekLine(reader)
 		if readErr != nil {
-			// The last frame may still be partly written, and a record
-			// without its newline is not complete yet.
 			if lineIndex == 0 {
 				return nil, errors.New("deepseek session log has no header")
 			}
@@ -142,7 +124,6 @@ func readDeepSeekReplies(ctx context.Context, path, nativeSessionID string, afte
 	return records, nil
 }
 
-// readDeepSeekLine returns one complete, newline-terminated record.
 func readDeepSeekLine(reader *bufio.Reader) ([]byte, error) {
 	var line []byte
 	for {
@@ -184,8 +165,6 @@ func parseDeepSeek(source domain.UsageSourceContext, records []jsonlRecord, resu
 			recordMalformed(result)
 			continue
 		}
-		// The cache-write count goes under AO's key, which a write-rated model
-		// needs to price its input at all.
 		providerUsage, _ := json.Marshal(map[string]int64{
 			"inputTokens": *usage.InputTokens, "outputTokens": *usage.OutputTokens,
 			"cacheReadTokens": usage.CacheReadTokens, derivedCacheWriteKey: usage.CacheWriteTokens,

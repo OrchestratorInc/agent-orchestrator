@@ -740,9 +740,6 @@ INSERT INTO model_usage_events (
 	}
 }
 
-// Break caught: a stored service tier dropped on insert, missing from the
-// backfill candidate (so a priority event is priced at standard), or a backfill
-// estimate made at one tier landing on a row that has since recorded another.
 func TestUsageServiceTierPersistsAndGuardsBackfill(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -797,10 +794,6 @@ func TestUsageServiceTierPersistsAndGuardsBackfill(t *testing.T) {
 	}
 }
 
-// Break caught: a time range over created_at's stored text that drops or
-// leaks events at the edges, cache writes read from the wrong provider field
-// (including the ao_ keys every agent other than Claude and Codex stores them
-// under), or a session title that does not match the one the UI shows.
 func TestListUsageReportEventsReadsWindowCacheWritesAndTitle(t *testing.T) {
 	s := sqlitetest.MustOpen(t)
 	ctx := context.Background()
@@ -1961,9 +1954,6 @@ func TestPiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
-// Break caught: the store accepting only one provider vocabulary for a Pi
-// fork. OMP and Kimchi normalize Anthropic replies to Anthropic counters and
-// every other provider to OpenAI's, exactly as Pi does, so both must land.
 func TestPiForkUsageEventsRoundTrip(t *testing.T) {
 	for _, test := range []struct {
 		harness domain.AgentHarness
@@ -2068,9 +2058,6 @@ func TestGooseUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
-// TestOpenCodeFamilyUsageEventRoundTrip catches the store rejecting OpenCode
-// and Kilo events in either token vocabulary: both route any provider, so an
-// Anthropic call and a z.ai call can land in one chunk.
 func TestOpenCodeFamilyUsageEventRoundTrip(t *testing.T) {
 	for _, tt := range []struct {
 		harness domain.AgentHarness
@@ -2460,8 +2447,6 @@ WHERE source_event_key = 'provider-promotion'`).Scan(
 	}
 }
 
-// TestUsageStoreRejectsUnknownHarnessAndKind covers the store guard that
-// replaced the schema's enumerated harness and source-kind CHECK lists.
 func TestUsageStoreRejectsUnknownHarnessAndKind(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)

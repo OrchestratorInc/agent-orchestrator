@@ -42,8 +42,6 @@ func TestReplaceCursorUsageReplacesItsRangeAndStaysOutOfTheCollector(t *testing.
 		}))
 	}
 	read(base, base.Add(2*time.Hour), event("early", base.Add(10*time.Minute), 100), event("late", base.Add(90*time.Minute), 200))
-	// The next read covers the last hour again: Cursor finalized the late
-	// event, and the early one is outside the range.
 	read(base.Add(time.Hour), base.Add(3*time.Hour), event("late-final", base.Add(90*time.Minute), 250))
 
 	events, err := s.ListUsageReportEvents(ctx, base, base.Add(4*time.Hour))
@@ -63,7 +61,6 @@ func TestReplaceCursorUsageReplacesItsRangeAndStaysOutOfTheCollector(t *testing.
 		t.Fatalf("read mark = %q %v %v %v, want account at %v", account, until, ok, err, base.Add(3*time.Hour))
 	}
 
-	// The transcript collector neither watches nor finalizes Cursor usage.
 	watchable, err := s.ListWatchableUsageSources(ctx)
 	mustNoError(t, err)
 	for _, source := range watchable {

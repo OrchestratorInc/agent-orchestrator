@@ -116,7 +116,6 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
-	/** Developer Mode is on; the Usage page is shown only then for now. */
 	developerMode?: boolean;
 };
 

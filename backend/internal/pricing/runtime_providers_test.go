@@ -25,9 +25,6 @@ func providerManifest(ids ...string) catalogManifest {
 	return manifest
 }
 
-// Break caught: a manifest pinned to exactly anthropic, openai and zai. The
-// runtime catalog carries every provider LiteLLM prices, so that check
-// rejected each one the daemon built.
 func TestRuntimeManifestAcceptsAnyProviderSetWithTheRequiredOnes(t *testing.T) {
 	if err := validateRuntimeManifest(providerManifest("anthropic", "minimax", "openai", "vertex_ai", "zai")); err != nil {
 		t.Fatalf("wide manifest: %v", err)
@@ -51,8 +48,7 @@ func TestCanonicalProviderIDMapsHarnessSpellings(t *testing.T) {
 	for raw, want := range map[string]string{
 		"Z.AI": "zai", "google": "gemini", "google-vertex": "vertex_ai", "amazon-bedrock": "bedrock",
 		"github-copilot": "github_copilot", "moonshotai": "moonshot", "minimax": "minimax",
-		"aws_bedrock": "bedrock", "gcp_vertex_ai": "vertex_ai", // Goose's ids
-		// Regional and plan endpoints bill at rates the catalog does not carry.
+		"aws_bedrock": "bedrock", "gcp_vertex_ai": "vertex_ai",
 		"minimax-cn": "minimax-cn", "zai-coding-cn": "zai-coding-cn",
 	} {
 		if got := CanonicalProviderID(raw); got != want {

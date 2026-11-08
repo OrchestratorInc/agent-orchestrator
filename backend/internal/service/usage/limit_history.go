@@ -15,8 +15,7 @@ type limitReadingStore interface {
 	ListAgentLimitReadings(ctx context.Context, since time.Time) ([]domain.AgentLimitReading, error)
 }
 
-// LimitHistoryReader turns the limit readings AO took into the windows each
-// login went through. Everything it reports was read; nothing is inferred.
+// LimitHistoryReader turns the limit readings AO took into the windows each login went through.
 type LimitHistoryReader struct {
 	store limitReadingStore
 	now   func() time.Time
@@ -28,18 +27,12 @@ func NewLimitHistoryReader(store limitReadingStore) *LimitHistoryReader {
 }
 
 const (
-	// sameResetWithin merges readings whose reset times differ by this much:
-	// providers report a window's reset with a few seconds of jitter.
 	sameResetWithin = 2 * time.Minute
-	// finalWithin is how close to its reset a window's last reading must be for
-	// its peak to count as how full it got.
-	finalWithin = 6 * time.Minute
-	// pointsFrom is the shortest window that carries a reading series.
-	pointsFrom = 24 * time.Hour
+	finalWithin     = 6 * time.Minute
+	pointsFrom      = 24 * time.Hour
 )
 
-// History reads the last days of limit windows, at most 14, which is as long as
-// readings are kept.
+// History reads the last days of limit windows, at most 14, which is as long as readings are kept.
 func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.UsageLimitHistory, error) {
 	if r == nil || r.store == nil {
 		return domain.UsageLimitHistory{}, fmt.Errorf("limit reading store is unavailable")
@@ -63,7 +56,6 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 	return out, nil
 }
 
-// limitLogins groups readings by login, then by window and reset time.
 func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.UsageLimitLogin {
 	type loginKey struct {
 		provider domain.AgentAccountProvider
@@ -71,7 +63,6 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 	}
 	byLogin := map[loginKey][]domain.AgentLimitReading{}
 	for _, reading := range readings {
-		// A reading with no reset is a window with nothing used yet: no window is open.
 		if reading.ResetsAt == nil {
 			continue
 		}
@@ -87,7 +78,6 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		latest := group[len(group)-1]
 		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
-		// The latest reading that names a plan says which plan the login is on now.
 		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
 			login.Plan = group[i].Plan
 		}
@@ -114,10 +104,9 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 	return logins
 }
 
-// limitSpans splits one window's readings, oldest first, at each new reset.
 func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.UsageLimitSpan {
 	var spans []domain.UsageLimitSpan
-	var hours []string // the hour key of each span's last point
+	var hours []string
 	for _, reading := range readings {
 		reset := reading.ResetsAt.UTC()
 		last := len(spans) - 1
@@ -157,8 +146,6 @@ func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.Usa
 			start := span.ResetsAt.Add(-time.Duration(span.DurationMinutes) * time.Minute)
 			span.StartsAt = &start
 		}
-		// A provider can start a new window before the old one's reset (Codex
-		// does when a week restarts early); the old one ended when the next began.
 		if i+1 < len(spans) && spans[i+1].FirstReadAt.Before(span.ResetsAt) {
 			if spans[i+1].FirstReadAt.Sub(span.LastReadAt) <= finalWithin {
 				span.State = domain.UsageLimitSpanFinal

@@ -50,10 +50,9 @@ type Service struct {
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
 	stopAgents func(context.Context, string) error
-	// limitLog keeps every limits read for the usage page's window history.
-	limitLog ports.AgentLimitReadingStore
-	log      *slog.Logger
-	now      func() time.Time
+	limitLog   ports.AgentLimitReadingStore
+	log        *slog.Logger
+	now        func() time.Time
 
 	mu       sync.Mutex
 	readings map[string]*reading
@@ -132,9 +131,7 @@ func (s *Service) SetLimitLog(log ports.AgentLimitReadingStore) {
 	s.limitLog = log
 }
 
-// KeepReadingLimits reads each account's limits again once its last reading is
-// stale, so the window history keeps going while no screen asks for limits. It
-// returns when ctx ends.
+// KeepReadingLimits reads each account's limits again once its last reading is stale, so the window history keeps going while no screen asks for limits.
 func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -153,8 +150,6 @@ func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
 	}
 }
 
-// keepingLimits reports whether limit readings are kept: only while the app
-// has the limit history turned on.
 func (s *Service) keepingLimits(ctx context.Context) bool {
 	s.mu.Lock()
 	log := s.limitLog
@@ -162,8 +157,6 @@ func (s *Service) keepingLimits(ctx context.Context) bool {
 	return log != nil && log.LimitHistoryEnabled(ctx)
 }
 
-// recordLimits keeps one read's windows. A failed write loses one point of
-// history, never the read itself.
 func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
 	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
 		return

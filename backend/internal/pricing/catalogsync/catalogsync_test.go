@@ -472,12 +472,6 @@ func optionalRateString(value *string) string {
 	return *value
 }
 
-// Break caught: a priority or fast request priced at the standard rate, a tier
-// row whose missing cache rate was filled from the standard row, or tier rates
-// shipped as new rate fields, which installed daemons decode strictly and reject.
-// Break caught: long-context rates dropped from the catalog, a tier's
-// long-context rates not tied to the tier, or an incomplete size shipped with a
-// gap the base rate would silently fill.
 func TestSyncEmitsCompleteLongContextRows(t *testing.T) {
 	root := t.TempDir()
 	upstream := []byte(`{
@@ -580,8 +574,6 @@ func TestSyncEmitsCompleteServiceTierRows(t *testing.T) {
 	for _, model := range openai.Models {
 		openaiIDs = append(openaiIDs, model.ModelID)
 	}
-	// Flex publishes no cache-read rate while the standard row does, so it
-	// must not ship at all.
 	if got, want := strings.Join(openaiIDs, ","), "gpt-test,gpt-test#priority"; got != want {
 		t.Fatalf("openai models = %s, want %s", got, want)
 	}

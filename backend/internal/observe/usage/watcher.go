@@ -90,8 +90,7 @@ func resolveWatchRoots(ctx context.Context, roots []string) ([]string, error) {
 	return normalized, nil
 }
 
-// SetRoots refreshes the allowed provider directories before Rebuild updates
-// exact-file watches. The coordinator calls it when session inventory changes.
+// SetRoots refreshes the allowed provider directories before Rebuild updates exact-file watches.
 func (w *TranscriptWatcher) SetRoots(ctx context.Context, roots []string) error {
 	resolved, err := resolveWatchRoots(ctx, roots)
 	if err != nil {
@@ -216,8 +215,6 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 		emit = path
 		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
 	}
-	// A SQLite source commits into its write-ahead log first, so a change to
-	// either file is a change to the registered database.
 	if database := sqliteDatabaseForPath(path); database != "" &&
 		event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
 		withinRoot {
@@ -307,8 +304,6 @@ func (w *TranscriptWatcher) desiredWatchSetLocked(ctx context.Context) (map[stri
 
 const sqliteWALSuffix = "-wal"
 
-// sqliteDatabaseForPath maps a SQLite database or its write-ahead log to the
-// database path that sources register, or returns "" for any other file.
 func sqliteDatabaseForPath(path string) string {
 	if strings.HasSuffix(path, ".db"+sqliteWALSuffix) {
 		return strings.TrimSuffix(path, sqliteWALSuffix)

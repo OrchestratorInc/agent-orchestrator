@@ -35,8 +35,6 @@ func parseQwen(source domain.UsageSourceContext, records []jsonlRecord, result *
 		}
 		model := firstNonEmpty(native.Model)
 		identity := firstNonEmpty(native.ID)
-		// Qwen's current validator accepts versions through 1. A future version
-		// needs review before its fields can be mapped into AO's token buckets.
 		if native.SchemaVersion != 1 || model == "" || identity == "" ||
 			native.InputTokens < 0 || native.OutputTokens < 0 ||
 			native.CachedTokens < 0 || native.ThoughtsTokens < 0 {
@@ -53,8 +51,6 @@ func parseQwen(source domain.UsageSourceContext, records []jsonlRecord, result *
 			recordMalformed(result)
 			continue
 		}
-		// AO requires cached input to be a subset of input so uncached input
-		// remains non-negative, even though Qwen's validator is more permissive.
 		tokens, ok := normalizeOpenAIUsage(
 			native.InputTokens, native.CachedTokens, 0, output,
 		)
@@ -80,15 +76,6 @@ func parseQwen(source domain.UsageSourceContext, records []jsonlRecord, result *
 	}
 }
 
-// qwenOutputTokens returns the record's billed output. Qwen copies Gemini's
-// usage shape into its log, but what candidatesTokenCount holds depends on the
-// backend that filled it. The OpenAI-compatible converters (openai,
-// openai-responses, qwen-oauth) store completion_tokens, which already
-// includes reasoning, and the Anthropic converter stores output_tokens, which
-// includes thinking; thoughtsTokens there is a breakdown, not an addition.
-// Only Gemini's native API (gemini, vertex-ai) reports thoughts outside
-// candidatesTokenCount. An auth type Qwen did not record falls back to the
-// reported total, which counts thoughts once whichever convention applied.
 func qwenOutputTokens(native qwenUsageRecord) (int64, bool) {
 	switch strings.TrimSpace(native.AuthType) {
 	case "gemini", "vertex-ai":
@@ -105,9 +92,6 @@ func qwenOutputTokens(native qwenUsageRecord) (int64, bool) {
 	return native.OutputTokens, true
 }
 
-// qwenBillingProvider takes the route the collector resolved from Qwen's
-// settings; Qwen's own log names only the auth type, which says nothing about
-// which OpenAI-compatible endpoint answered.
 func qwenBillingProvider(hint string) string {
 	hint = strings.TrimSpace(hint)
 	if hint == "" || hint == pricing.UnidentifiedBillingRoute {
@@ -116,12 +100,6 @@ func qwenBillingProvider(hint string) string {
 	return pricing.CanonicalProviderID(hint)
 }
 
-// qwenCacheWriteTokens is the cache-write count AO can derive for a record, or
-// nil when it cannot. The OpenAI-compatible and Gemini usage objects Qwen reads
-// carry no separate write bucket, so their writes are zero, and a catalog row
-// that publishes a write rate (z.ai's does, at 0) can still price the input.
-// Qwen's Anthropic converter folds cache creation into input without saying
-// how much, so its write count stays unknown rather than understated.
 func qwenCacheWriteTokens(native qwenUsageRecord) *int64 {
 	switch strings.TrimSpace(native.AuthType) {
 	case "openai", "openai-responses", "qwen-oauth", "gemini", "vertex-ai":

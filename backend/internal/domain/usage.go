@@ -28,15 +28,10 @@ const (
 	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
 	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
 	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
-	// UsageSourceCursorDashboard is Cursor's account usage, read from
-	// cursor.com rather than a file. Its artifact path names the account, so
-	// the transcript watcher and session finalizer skip it.
-	UsageSourceCursorDashboard UsageSourceKind = "cursor_dashboard"
+	UsageSourceCursorDashboard   UsageSourceKind = "cursor_dashboard"
 )
 
-// AllUsageSourceKinds lists every certified usage artifact shape. The schema no
-// longer enumerates source kinds, so a new usage source adds its kind here and
-// the store rejects anything else.
+// AllUsageSourceKinds lists every certified usage artifact shape.
 var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceClaudeMain,
 	UsageSourceClaudeSubagent,
@@ -243,18 +238,6 @@ type UsageEventCosts struct {
 // ProviderUsageJSON is the bounded usage object the CLI emitted, stored
 // verbatim so optional and future provider fields survive. It is empty when the
 // event predates the capture or the object exceeded its size bound.
-//
-// ServiceTier is the provider's own word for the tier that served the request:
-// Codex's thread service_tier ("default", "priority") or Claude's usage speed
-// ("standard", "fast"). It is empty when nothing reported one, which prices at
-// standard rates. It is a column rather than a member of ProviderUsageJSON
-// because Codex reports it on a different line, and a stored usage object is
-// immutable: adding it would make every replay of an older event a conflict.
-//
-// ProviderMessageID is the provider's id for the billed response, such as
-// Anthropic's msg_... id. A response is stored once across every source, so a
-// forked transcript's copy of its parent's history is not billed again. It is
-// empty when the transcript names no id.
 type ModelUsageEvent struct {
 	ProviderID            UsageProviderID
 	BillingProviderID     string
@@ -270,38 +253,26 @@ type ModelUsageEvent struct {
 	SourceEventKey        string
 }
 
-// UsagePriceOverride is the user's own price for one stored model ID: either
-// their own rates in USD per million tokens, or the rates of a catalog model to
-// price as. It covers every row AO prices itself; a cost an agent reported
-// stays the agent's.
+// UsagePriceOverride is the user's own price for one stored model ID: either their own rates in USD per million tokens, or the rates of a catalog model to price as.
 type UsagePriceOverride struct {
-	ModelID string
-	// Input and Output are set together. CacheRead defaults to Input; without
-	// CacheWrite, cache writes bill at Input, as for a provider that does not
-	// bill them apart.
+	ModelID                              string
 	Input, Output, CacheRead, CacheWrite string
-	// PriceAs names a catalog row: "provider/model", or a model one of the
-	// required providers lists.
-	PriceAs string
+	PriceAs                              string
 }
 
-// UsageCostCandidate is one event selected for a catalog or override pricing
-// attempt. Source facts remain immutable and are carried back to storage as
-// compare-and-swap guards.
+// UsageCostCandidate is one event selected for a catalog or override pricing attempt.
 type UsageCostCandidate struct {
-	ID                int64
-	BindingID         int64
-	ProviderID        UsageProviderID
-	BillingProviderID string
-	ModelID           string
-	MeasurementKind   UsageMeasurementKind
-	Tokens            UsageTokenMetrics
-	ProviderUsageJSON string
-	ServiceTier       string
-	PricingVersion    string
-	SourceEventKey    string
-	// EstimatedCostNanos is the stored total, nil while unpriced. A reprice
-	// swaps it only if it is still this value.
+	ID                 int64
+	BindingID          int64
+	ProviderID         UsageProviderID
+	BillingProviderID  string
+	ModelID            string
+	MeasurementKind    UsageMeasurementKind
+	Tokens             UsageTokenMetrics
+	ProviderUsageJSON  string
+	ServiceTier        string
+	PricingVersion     string
+	SourceEventKey     string
 	EstimatedCostNanos *int64
 }
 
@@ -342,10 +313,8 @@ type LegacyUsageRepair struct {
 	BillingProviderID       string
 	BillingProviderSource   UsageBillingProviderSource
 	ProviderUsageJSON       string
-	// ServiceTier fills a tier the stored row lacks; the repair's cost is
-	// estimated at it. A tier already stored is never replaced.
-	ServiceTier string
-	Costs       UsageEventCosts
+	ServiceTier             string
+	Costs                   UsageEventCosts
 }
 
 // EstimatedCostCoverage describes how much of a usage scope has a durable
@@ -573,9 +542,7 @@ type SessionStep struct {
 	Failed  bool
 }
 
-// CursorUsageRead is one read of a Cursor account's usage, attributed to the
-// AO sessions it was for. It replaces every event stored for the account from
-// Since to Until, both whole seconds and inclusive.
+// CursorUsageRead is one read of a Cursor account's usage, attributed to the AO sessions it was for.
 type CursorUsageRead struct {
 	AccountKey   string
 	Since, Until time.Time
@@ -590,13 +557,10 @@ type CursorSessionEvent struct {
 	Event          ModelUsageEvent
 }
 
-// CursorUsageStatus is whether AO reads Cursor usage and how the last read
-// went.
+// CursorUsageStatus is whether AO reads Cursor usage and how the last read went.
 type CursorUsageStatus struct {
-	// Supported is false off macOS, where AO cannot read the Cursor login.
 	Supported bool       `json:"supported"`
 	Enabled   bool       `json:"enabled"`
 	ReadAt    *time.Time `json:"readAt,omitempty"`
-	// Error is why the last read failed.
-	Error string `json:"error,omitempty" enum:"signed_out,keychain,failed"`
+	Error     string     `json:"error,omitempty" enum:"signed_out,keychain,failed"`
 }

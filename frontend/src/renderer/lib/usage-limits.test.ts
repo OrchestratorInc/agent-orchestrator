@@ -53,7 +53,6 @@ describe("spanPace", () => {
 	});
 
 	it("projects the pace since the window opened to the reset", () => {
-		// 10% in the first of seven days lands at 70%; 25% in it runs out three days later.
 		const pace = spanPace(span({ peakUsedPercent: 10 }));
 		expect(pace?.atReset).toBeCloseTo(70);
 		expect(pace?.runsOutAt).toBeNull();
@@ -72,11 +71,9 @@ describe("limitWindowPace", () => {
 	const window = { id: "five_hour", label: "Session (5h)", durationMinutes: 300, resetsAt: "2026-10-30T12:00:00Z", usedPercent: 30 };
 
 	it("projects a live reading from when its window opened", () => {
-		// Opened at 07:00; 30% by 09:00 is 15% an hour, so about 75% by the reset.
 		const pace = limitWindowPace(window, "2026-10-30T09:00:00Z");
 		expect(pace?.atReset).toBeCloseTo(75);
 		expect(pace?.runsOutAt).toBeNull();
-		// 50% by 09:00 reaches 100% two hours later, before the reset.
 		const runsOut = limitWindowPace({ ...window, usedPercent: 50 }, "2026-10-30T09:00:00Z")?.runsOutAt?.getTime() ?? 0;
 		expect(Math.abs(runsOut - Date.parse("2026-10-30T11:00:00Z"))).toBeLessThan(1000);
 	});

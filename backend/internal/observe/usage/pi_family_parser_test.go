@@ -7,9 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The fixtures below are live OMP 18.12 and Kimchi 1.24 transcript records
-// with their message content removed. Every model_usage call on record failed,
-// so ompJudgeCall keeps that record's shape with illustrative counts.
 const (
 	ompTitleSlotRecord    = `{"type":"title","v":1,"title":"Fix the flaky watcher test","source":"auto","updatedAt":"2026-08-28T14:17:13.741Z","pad":"                                        "}`
 	ompSessionRecord      = `{"type":"session","version":3,"id":"01a048bb-551d-7000-8b7e-1a07961198e0","timestamp":"2026-08-28T14:17:11.709Z","cwd":"/repo","title":"Fix the flaky watcher test","titleSource":"auto"}`
@@ -24,11 +21,6 @@ const (
 	kimchiAbortedReply    = `{"type":"message","id":"a80fef52","parentId":"15ce2ec0","timestamp":"2026-08-13T19:49:52.916Z","message":{"role":"assistant","api":"openai-completions","provider":"kimchi-dev","model":"kimi-k2.7","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"aborted","timestamp":1786650590656}}`
 )
 
-// Break caught: OMP's transcript differs from Pi's in two places a copied Pi
-// parser misses. Line 1 is a title slot ahead of the session header, which
-// must parse as noise rather than malformed JSONL, and auxiliary model calls
-// (the auto-thinking judge) are top-level model_usage records whose tokens
-// would otherwise go uncounted. OMP's own cost is kept as omp:reported.
 func TestParseOMPSessionRecordsRepliesAndAuxiliaryCalls(t *testing.T) {
 	source := usageSource(domain.UsageSourceOMPSession)
 	source.NativeRootID = "01a048bb-551d-7000-8b7e-1a07961198e0"
@@ -52,7 +44,6 @@ func TestParseOMPSessionRecordsRepliesAndAuxiliaryCalls(t *testing.T) {
 		reply.CreatedAt != time.Date(2026, 8, 28, 14, 25, 56, 303_000_000, time.UTC) {
 		t.Fatalf("reply event = %+v", reply)
 	}
-	// 41368 input = 472 uncached + 40896 cache read.
 	assertPiTokens(t, reply.Tokens, 41368, 40896, 472, 426)
 	if costs := reply.Costs; costs.PricingVersion != ompPricingVersion ||
 		costs.EstimatedCostNanos == nil || *costs.EstimatedCostNanos != 13_168_160 ||
@@ -73,8 +64,6 @@ func TestParseOMPSessionRecordsRepliesAndAuxiliaryCalls(t *testing.T) {
 	}
 }
 
-// Break caught: the OMP model_usage rule leaking into Pi, whose transcripts
-// must keep parsing exactly as before.
 func TestParsePiIgnoresOMPAuxiliaryRecords(t *testing.T) {
 	source := usageSource(domain.UsageSourcePiSession)
 	source.NativeRootID = "pi-session"
@@ -103,12 +92,6 @@ func TestParseOMPAnthropicReplyUsesAnthropicCounters(t *testing.T) {
 	}
 }
 
-// Break caught: dropping usage from Kimchi's own gateway, or counting its
-// reasoning twice. Kimchi reports a reasoning subset already inside output
-// (83 output holds 66 reasoning) and a zero cost for its own gateway, which is
-// what the gateway charged: no catalog lists kimchi-dev, so leaving it to the
-// catalog showed every gateway call as not priced. A reply it did price
-// (openai-codex) keeps Kimchi's cost as kimchi:reported.
 func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 	source := usageSource(domain.UsageSourceKimchiSession)
 	source.NativeRootID = "019ffc6e-fcb3-7f68-a162-85693427d059"
@@ -139,7 +122,6 @@ func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 		t.Fatalf("gateway provider usage = %s", gateway.ProviderUsageJSON)
 	}
 
-	// Kimchi's "auto" router names the model that answered.
 	routed := result.Events[1]
 	if routed.ModelID != "deepseek-v4-flash-0731" || routed.BillingProviderID != "kimchi-dev" {
 		t.Fatalf("routed event = %+v", routed)
@@ -160,9 +142,6 @@ func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 	}
 }
 
-// Break caught: a fork's events colliding with Pi's, or its cost filed under
-// Pi's label. The same record must produce the same tokens for every Pi-format
-// harness, with the event key and pricing version naming the harness.
 func TestParsePiFamilySharesNormalizationButNotIdentity(t *testing.T) {
 	record := jsonlRecord{Data: []byte(ompZaiCachedReply)}
 	kinds := map[domain.UsageSourceKind]string{

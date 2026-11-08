@@ -1,7 +1,4 @@
-// Package catalogsync builds AO's content-addressed pricing catalog from
-// LiteLLM's model price table. The daemon builds it at runtime from the live
-// table (Fetcher); Sync writes the copy in the repository that releases before
-// the runtime build still download.
+// Package catalogsync builds AO's content-addressed pricing catalog from LiteLLM's model price table.
 package catalogsync
 
 import (
@@ -94,30 +91,18 @@ type upstreamRecord struct {
 	Provider string `json:"litellm_provider"`
 	Mode     string `json:"mode"`
 	upstreamRates
-	// Tiers holds the rates published under a service tier's field suffix,
-	// such as input_cost_per_token_priority.
-	Tiers map[string]upstreamRates
-	// FastMultiple is provider_specific_entry.fast: a fast mode billed as a
-	// multiple of every standard rate.
+	Tiers        map[string]upstreamRates
 	FastMultiple *json.Number
-	// LongContext holds the rates published for prompts over a size, keyed by
-	// that size in thousands of tokens: input_cost_per_token_above_272k_tokens
-	// is LongContext[272].
-	LongContext map[int64]longContextRates
+	LongContext  map[int64]longContextRates
 }
 
-// longContextRates are a model's rates for a prompt over one size, and each
-// service tier's rates over that size.
 type longContextRates struct {
 	upstreamRates
 	Tiers map[string]upstreamRates
 }
 
-// longContextInputField matches the input rate that announces a size, such as
-// input_cost_per_token_above_272k_tokens.
 var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
 
-// suffixTiers are the service tiers LiteLLM prices with their own rate fields.
 var suffixTiers = []string{pricing.ServiceTierPriority, pricing.ServiceTierFlex, pricing.ServiceTierUltrafast}
 
 func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
@@ -162,8 +147,6 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 		}
 		u.LongContext[aboveK] = long
 	}
-	// The entry also carries values that are not rates, such as a Bedrock
-	// invocation schema, so only its fast member is read.
 	var entry map[string]json.RawMessage
 	if raw := fields["provider_specific_entry"]; len(raw) > 0 && json.Unmarshal(raw, &entry) == nil {
 		if u.FastMultiple, err = decodeNumber(entry["fast"]); err != nil {
@@ -173,8 +156,6 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// decodeTiers reads the rates each suffix tier publishes after suffix, or nil
-// when no tier publishes any.
 func decodeTiers(fields map[string]json.RawMessage, suffix string) (map[string]upstreamRates, error) {
 	var tiers map[string]upstreamRates
 	for _, tier := range suffixTiers {
@@ -237,9 +218,7 @@ func decodeNumber(raw json.RawMessage) (*json.Number, error) {
 	return &number, nil
 }
 
-// Sync generates a catalog under root, with only the required providers: the
-// repository copy is read by releases that accept exactly those. Existing,
-// hash-addressed provider blobs
+// Sync generates a catalog under root. Existing, hash-addressed provider blobs
 // are never modified or removed. A source revision change with identical
 // provider payload hashes is a semantic no-op and leaves the manifest intact.
 func Sync(root string, upstream []byte, source Source) (Result, error) {
@@ -317,14 +296,6 @@ type generatedCatalog struct {
 	blobs    map[string][]byte
 }
 
-// build generates a catalog from the upstream table. With every set it keeps
-// each provider the table prices; otherwise it keeps only the required ones,
-// which is the copy committed to the repository for releases that accept no
-// other.
-//
-// ponytail: the committed copy, cmd/pricingcatalog and the every flag exist
-// only for releases that download pricing/catalog/v1 instead of building the
-// catalog at runtime. Delete all three once no supported release does.
 func build(upstream []byte, source Source, every bool) (generatedCatalog, error) {
 	if source.Repository != "BerriAI/litellm" || source.Path != "model_prices_and_context_window.json" || !isSHA(source.Revision) {
 		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
@@ -338,12 +309,8 @@ func build(upstream []byte, source Source, every bool) (generatedCatalog, error)
 		return generatedCatalog{}, errors.New("upstream catalog must contain one JSON object")
 	}
 	modelsByProvider := map[string]map[string]rates{}
-	// conflicted holds rows two entries price differently. Neither ships: AO
-	// cannot tell which one is right, and an unpriced model beats a guess.
 	conflicted := map[string]map[string]bool{}
 	for name, data := range records {
-		// The table is live and nobody reviews it first, so an entry AO cannot
-		// read leaves that one model unpriced instead of every model.
 		var record upstreamRecord
 		if json.Unmarshal(data, &record) != nil {
 			continue
@@ -397,7 +364,6 @@ func build(upstream []byte, source Source, every bool) (generatedCatalog, error)
 	}
 	providers := make([]string, 0, len(modelsByProvider))
 	for providerID, models := range modelsByProvider {
-		// A provider whose every row conflicted has nothing left to price.
 		if len(models) > 0 {
 			providers = append(providers, providerID)
 		}
@@ -436,13 +402,6 @@ func build(upstream []byte, source Source, every bool) (generatedCatalog, error)
 	return generated, nil
 }
 
-// serviceTierRows prices the service tiers one record publishes, keyed by
-// pricing.TierModelID.
-//
-// A suffix tier ships only when it is complete: it must carry every rate the
-// standard row carries. Filling a gap with the standard rate would bill a
-// premium request's cache reads at the standard price as fact, and leaving the
-// row out prices that tier as unknown instead.
 func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map[string]rates, error) {
 	rows := make(map[string]rates)
 	for tier, upstream := range record.Tiers {
@@ -474,18 +433,12 @@ func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map
 	return rows, nil
 }
 
-// coversCacheRates reports whether r carries every cache rate base carries.
 func coversCacheRates(r, base rates) bool {
 	return (base.CacheReadUSDPerToken == nil || r.CacheReadUSDPerToken != nil) &&
 		(base.CacheWriteUSDPerToken == nil || r.CacheWriteUSDPerToken != nil) &&
 		(base.CacheWrite1HUSDPerToken == nil || r.CacheWrite1HUSDPerToken != nil)
 }
 
-// addLongContextRows prices the sizes over which one record bills a prompt at
-// other rates, keyed by pricing.LongContextModelID. Each extends a row already
-// in rows: the standard row, or a service tier's. Like a tier, a size ships
-// only when it carries every rate the row it extends carries; leaving it out
-// prices that request at the base row instead of mixing two sets of rates.
 func addLongContextRows(rows map[string]rates, modelID string, record upstreamRecord) error {
 	for aboveK, long := range record.LongContext {
 		extend := func(rowID string, upstream upstreamRates) error {
@@ -544,9 +497,6 @@ func scaleRates(r rates, multiple string) (rates, error) {
 	return scaled, nil
 }
 
-// multiplyDecimals multiplies two canonical decimals exactly. The product of
-// two terminating decimals terminates within their combined fraction digits,
-// so FloatString at that precision never rounds.
 func multiplyDecimals(left, right string) (string, error) {
 	x, okX := new(big.Rat).SetString(left)
 	y, okY := new(big.Rat).SetString(right)
@@ -681,10 +631,6 @@ func normalizeDecimal(input string) (string, error) {
 	return strings.TrimSuffix(result, "."), nil
 }
 
-// canonicalProvider names the catalog provider of one LiteLLM entry. LiteLLM
-// files Vertex's partner models under one provider per publisher
-// (vertex_ai-anthropic_models), all billed by the one Vertex account, so they
-// are priced as vertex_ai, which is what a harness reports.
 func canonicalProvider(value string) (string, bool) {
 	provider := strings.ToLower(strings.TrimSpace(value))
 	if strings.HasPrefix(provider, "vertex_ai-") {
@@ -703,9 +649,6 @@ func canonicalModel(providerID, value string) (string, error) {
 	if modelID == "" {
 		return "", fmt.Errorf("%s: empty model identifier", providerID)
 	}
-	// The runtime strips one prefix from a stored row too, so a key that
-	// still carries one (perplexity/perplexity/...) is a row no lookup can
-	// reach, and one the runtime rejects along with the whole catalog.
 	if pricing.CanonicalModelID(providerID, modelID) != modelID {
 		return "", fmt.Errorf("%s: model identifier %q is not canonical", providerID, modelID)
 	}

@@ -10,9 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The shape of a real z.ai Qwen setup: the default model and every configured
-// model point at the z.ai coding endpoint, and AO may launch a model the list
-// does not name (glm-5.3), which Qwen sends to the default endpoint.
 const qwenZaiSettings = `{
   "model": {"name": "GLM-5.2", "baseUrl": "https://api.z.ai/api/coding/paas/v4"},
   "security": {"auth": {"selectedType": "openai"}},
@@ -31,11 +28,11 @@ func TestQwenProviderHintResolvesSettingsRoute(t *testing.T) {
 	collector := NewCollector(collectorTestStore(t), SourceRoots{}, nil)
 
 	for _, tc := range []struct{ model, want string }{
-		{"", "zai"},        // Qwen's default model
-		{"glm-5.2", "zai"}, // a configured model, matched case-insensitively
-		{"glm-5.3", "zai"}, // unlisted: Qwen uses the default endpoint
+		{"", "zai"},
+		{"glm-5.2", "zai"},
+		{"glm-5.3", "zai"},
 		{"gpt-test", "openai"},
-		{"GLM-5.2(openai)", "zai"}, // Qwen's ACP model ID carries the auth type
+		{"GLM-5.2(openai)", "zai"},
 	} {
 		session := domain.SessionRecord{Harness: domain.HarnessQwen}
 		session.Metadata.Model = tc.model
@@ -45,8 +42,6 @@ func TestQwenProviderHintResolvesSettingsRoute(t *testing.T) {
 	}
 }
 
-// Break caught: reading only the user's settings. Qwen lets a workspace
-// override the route, and the session's own endpoint is the one that billed.
 func TestQwenProviderHintPrefersWorkspaceSettings(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -64,8 +59,6 @@ func TestQwenProviderHintPrefersWorkspaceSettings(t *testing.T) {
 	}
 }
 
-// An endpoint AO cannot name must leave the route empty: guessing would price a
-// self-hosted or proxied model at some public provider's list rate.
 func TestQwenRouteProviderLeavesUnknownEndpointsEmpty(t *testing.T) {
 	for _, tc := range []struct {
 		settings, want string
@@ -100,9 +93,6 @@ func mustWriteQwenSettings(t *testing.T, path, contents string) {
 	}
 }
 
-// Break caught: re-reading Qwen's shared settings on every hook. Qwen rewrites
-// the default model whenever any session picks one, so a z.ai session's later
-// hook resolved the MiniMax session's route and billed its next reply there.
 func TestQwenProviderHintSurvivesAnotherSessionsSelection(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -131,7 +121,6 @@ func TestQwenProviderHintSurvivesAnotherSessionsSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Another session selects MiniMax, and Qwen writes it as the default.
 	mustWriteQwenSettings(t, settingsPath, `{
   "model": {"name": "MiniMax-M3"},
   "security": {"auth": {"selectedType": "openai"}},
@@ -145,12 +134,8 @@ func TestQwenProviderHintSurvivesAnotherSessionsSelection(t *testing.T) {
 	}
 }
 
-// Break caught: a fixed list of a dozen hosts. Qwen talks to any compatible
-// server, and every endpoint off that list was recorded with no provider, so
-// a Fireworks or Together session could never be priced.
 func TestQwenEndpointProviderNamesAnyCompatibleServer(t *testing.T) {
 	for baseURL, want := range map[string]string{
-		// Named by the host itself, in the catalog's spelling.
 		"https://api.fireworks.ai/inference/v1":     "fireworks_ai",
 		"https://api.together.xyz/v1":               "together_ai",
 		"https://api.deepinfra.com/v1/openai":       "deepinfra",
@@ -174,10 +159,8 @@ func TestQwenEndpointProviderNamesAnyCompatibleServer(t *testing.T) {
 		"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/endpoints/openapi": "vertex_ai",
 		"https://my-res.openai.azure.com/openai/v1":                                                           "azure",
 		"https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1":                                           "bedrock",
-		"https://api.x.ai/v1":          "xai",
-		"https://api.z.ai/api/paas/v4": "zai",
-		// Mainland-China platforms and subscription plans bill apart from the
-		// provider's list price, so they never borrow it.
+		"https://api.x.ai/v1":                                                "xai",
+		"https://api.z.ai/api/paas/v4":                                       "zai",
 		"https://dashscope-intl.aliyuncs.com/compatible-mode/v1":             "dashscope",
 		"https://dashscope.aliyuncs.com/compatible-mode/v1":                  "dashscope-cn",
 		"https://coding-intl.dashscope.aliyuncs.com/v1":                      "dashscope-coding-plan",
@@ -189,12 +172,11 @@ func TestQwenEndpointProviderNamesAnyCompatibleServer(t *testing.T) {
 		"https://api.moonshot.ai/v1":                                         "moonshot",
 		"https://api.example.com.cn/v1":                                      "example-cn",
 		"https://llm.acme.co.uk/v1":                                          "acme",
-		// Local and private servers have no list price.
-		"http://localhost:11434/v1":    "",
-		"http://127.0.0.1:8000/v1":     "",
-		"http://vllm.internal:8000/v1": "",
-		"http://gpu-box:1234/v1":       "",
-		"":                             "",
+		"http://localhost:11434/v1":                                          "",
+		"http://127.0.0.1:8000/v1":                                           "",
+		"http://vllm.internal:8000/v1":                                       "",
+		"http://gpu-box:1234/v1":                                             "",
+		"":                                                                   "",
 	} {
 		if got := qwenEndpointProvider(baseURL); got != want {
 			t.Errorf("qwenEndpointProvider(%q) = %q, want %q", baseURL, got, want)
@@ -202,9 +184,6 @@ func TestQwenEndpointProviderNamesAnyCompatibleServer(t *testing.T) {
 	}
 }
 
-// Qwen lets a model live under a custom provider id mapped to a protocol by
-// providerProtocol, reads the deprecated security.auth.baseUrl, and an
-// Anthropic auth type takes its endpoint from ANTHROPIC_BASE_URL.
 func TestQwenRouteFollowsEveryPlaceQwenReadsAnEndpoint(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("ANTHROPIC_BASE_URL", "")
@@ -216,8 +195,6 @@ func TestQwenRouteFollowsEveryPlaceQwenReadsAnEndpoint(t *testing.T) {
 		{`{"security":{"auth":{"selectedType":"openai","baseUrl":"https://api.groq.com/openai/v1"}}}`, "", "", "groq"},
 		{`{"security":{"auth":{"selectedType":"anthropic"}},"env":{"ANTHROPIC_BASE_URL":"https://api.minimax.io/anthropic"}}`, "", "", "minimax"},
 		{`{"security":{"auth":{"selectedType":"anthropic"}},"env":{"OPENAI_BASE_URL":"https://api.groq.com/openai/v1"}}`, "", "", "anthropic"},
-		// Two providers serving one model id: the session's model alone
-		// cannot say which billed, so the default endpoint decides.
 		{`{"model":{"baseUrl":"https://api.deepseek.com/v1"},"modelProviders":{"a":[{"id":"m","baseUrl":"https://api.together.xyz/v1"}],"b":[{"id":"m","baseUrl":"https://api.fireworks.ai/inference/v1"}]}}`, "m", "openai", "deepseek"},
 	} {
 		var route qwenRoute

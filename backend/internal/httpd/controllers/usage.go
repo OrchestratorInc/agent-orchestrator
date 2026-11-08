@@ -44,8 +44,7 @@ type UsagePriceService interface {
 	Replace(ctx context.Context, overrides []domain.UsagePriceOverride) error
 }
 
-// UsageCursorService reads Cursor usage from cursor.com while the user has it
-// turned on.
+// UsageCursorService reads Cursor usage from cursor.com while the user has it turned on.
 type UsageCursorService interface {
 	Status(ctx context.Context) domain.CursorUsageStatus
 	SetEnabled(ctx context.Context, enabled bool) (domain.CursorUsageStatus, error)
@@ -81,17 +80,12 @@ type UsageController struct {
 	// Steps is optional: without it rows carry no activity.
 	Steps SessionStepsReader
 	// Pressure is optional: without it the pressure route is 501.
-	Pressure MemoryPressureReader
-	// Report is optional: without it the report route is 501.
-	Report UsageReportService
-	// LimitHistory is optional: without it the limit windows route is 501.
-	LimitHistory UsageLimitHistoryService
-	// LimitHistorySetting is optional: without it the limit history route is 501.
+	Pressure            MemoryPressureReader
+	Report              UsageReportService
+	LimitHistory        UsageLimitHistoryService
 	LimitHistorySetting UsageLimitHistorySetting
-	// Prices is optional: without it the prices routes are 501.
-	Prices UsagePriceService
-	// Cursor is optional: without it the Cursor usage routes are 501.
-	Cursor UsageCursorService
+	Prices              UsagePriceService
+	Cursor              UsageCursorService
 }
 
 // Register mounts usage routes on the supplied router.

@@ -140,12 +140,8 @@ type stableTailStateV1 struct {
 }
 
 type claudeParserStateV1 struct {
-	ModelID  string `json:"model_id,omitempty"`
-	Provider string `json:"billing_provider,omitempty"`
-	// Unfinished is the latest record of a message that no record has ended
-	// yet. Claude writes stop_reason on the record that ends a message, and a
-	// turn the user interrupts never gets one. The message is counted from this
-	// record once the next user record, or another message, shows it is over.
+	ModelID    string                  `json:"model_id,omitempty"`
+	Provider   string                  `json:"billing_provider,omitempty"`
 	Unfinished *claudeTranscriptRecord `json:"unfinished,omitempty"`
 	// LegacyProvider is the retired "provider" key. A build before #2928 filled
 	// it with the harness name — "claude-code", "openai" — not a billing route,
@@ -162,8 +158,6 @@ type codexParserStateV1 struct {
 	Provider       string           `json:"billing_provider,omitempty"`
 	LegacyProvider string           `json:"provider,omitempty"` // see claudeParserStateV1
 
-	// ServiceTier is the tier from the thread's latest settings. Codex reports
-	// it on thread_settings_applied, not on the token_count it prices.
 	ServiceTier string `json:"service_tier,omitempty"`
 
 	NativeSessionID     string   `json:"native_session_id,omitempty"`
@@ -259,8 +253,6 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			DiscoveredChildIDs:  []string{},
 		}
 	default:
-		// Every other format carries replay-stable native IDs, so no
-		// provider-specific cumulative baseline is required.
 		if !kind.IsKnown() {
 			return nil, fmt.Errorf("unsupported source kind %q", kind)
 		}
@@ -317,14 +309,12 @@ type claudeTranscriptRecord struct {
 }
 
 type claudeNativeUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	// Raw so a speed of an unexpected type cannot fail the whole usage object
-	// and drop the event as malformed.
-	Speed         json.RawMessage `json:"speed"`
-	CacheCreation *struct {
+	InputTokens              int64           `json:"input_tokens"`
+	CacheCreationInputTokens int64           `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64           `json:"cache_read_input_tokens"`
+	OutputTokens             int64           `json:"output_tokens"`
+	Speed                    json.RawMessage `json:"speed"`
+	CacheCreation            *struct {
 		Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
 		Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 	} `json:"cache_creation"`
@@ -370,8 +360,6 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 			continue
 		}
 		if native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
-			// A record without an id cannot be matched to the record that ends
-			// its message, so it is left to that record, as before.
 			if strings.TrimSpace(native.Message.ID) != "" {
 				held := native
 				state.Unfinished = &held
@@ -383,7 +371,6 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 	}
 }
 
-// emitClaudeEvent counts one Claude message from the record that settles it.
 func emitClaudeEvent(
 	source domain.UsageSourceContext,
 	native claudeTranscriptRecord,
@@ -685,11 +672,6 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		return
 	}
-	// Codex 0.163 writes this line when a thread starts and whenever its
-	// settings change. Older CLIs wrote it only on a change, so their earlier
-	// turns carry no tier and price at standard rates. Codex omits service_tier
-	// when no tier was requested, which bills as standard, so an omission
-	// clears the tier too.
 	if payload.Type == "thread_settings_applied" && payload.ThreadSettings != nil {
 		state.ServiceTier = reportedServiceTier(payload.ThreadSettings.ServiceTier)
 		return
@@ -853,10 +835,6 @@ func normalizeOpenAIUsage(input, cachedInput, cacheWriteInput, output int64) (do
 	}, true
 }
 
-// routedUsageProvider is the token vocabulary for an agent that has already
-// normalized every provider's usage to one set of counters (Pi, OpenCode,
-// Goose): Anthropic keeps its own, and the OpenAI one holds every other
-// provider. BillingProviderID still records who billed the call.
 func routedUsageProvider(provider string) domain.UsageProviderID {
 	if strings.EqualFold(strings.TrimSpace(provider), "anthropic") {
 		return domain.UsageProviderAnthropic
@@ -864,8 +842,6 @@ func routedUsageProvider(provider string) domain.UsageProviderID {
 	return domain.UsageProviderOpenAI
 }
 
-// normalizeRoutedUsage maps those counters, where input excludes both caches,
-// into providerID's vocabulary.
 func normalizeRoutedUsage(providerID domain.UsageProviderID, input, cacheRead, cacheWrite, output int64) (domain.UsageTokenMetrics, bool) {
 	if providerID == domain.UsageProviderAnthropic {
 		return normalizeAnthropicUsage(input, cacheWrite, cacheRead, output, nil, nil)
@@ -924,19 +900,6 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
-// providerUsageWithCacheWrite stores an agent's own usage object plus AO's
-// per-event cache-write counts, under the ao_ keys that pricing and the usage
-// report read for every agent. Claude reports the count as
-// cache_creation_input_tokens and Codex in last_token_usage; every other agent
-// names it differently, or not at all.
-//
-// The estimator needs a per-event write bucket to price a model that publishes
-// a cache-write rate. Codex omits last_token_usage from a record carrying only
-// cumulative totals; there the counters AO stores are already a delta of two
-// native cumulative readings, and the write count is that same subtraction over
-// the same readings, so it is derived rather than invented. The keys are
-// namespaced instead of folded into the native object: a reader must still be
-// able to tell what the provider said from what AO worked out.
 func providerUsageWithCacheWrite(raw json.RawMessage, write, write1h *int64) string {
 	stored := boundedProviderUsage(raw)
 	if stored == "" || write == nil {
@@ -957,11 +920,6 @@ func providerUsageWithCacheWrite(raw json.RawMessage, write, write1h *int64) str
 	return string(encoded)
 }
 
-// derivedCacheWriteKey and derivedCacheWrite1HKey name the members AO adds to a
-// stored provider usage object: the cache-write count, and the part of it
-// written at the 1-hour lifetime when the agent reports that split. The ao_
-// prefix is the whole point: nothing reading this object should mistake them
-// for something a provider reported.
 const (
 	derivedCacheWriteKey   = "ao_derived_cache_write_input_tokens"
 	derivedCacheWrite1HKey = "ao_derived_cache_write_1h_input_tokens"
@@ -998,10 +956,6 @@ func codexVectorMatchesDelta(last codexTokenVector, input, cachedInput, cacheWri
 		(last.TotalTokens == 0 || total == 0 || last.TotalTokens == total)
 }
 
-// reportedServiceTier keeps a provider's tier word as reported, normalized for
-// lookup. Pricing maps it to a catalog row; a word it does not know prices as
-// unknown rather than standard. Anything longer than the column allows is not a
-// tier name and is dropped.
 func reportedServiceTier(raw string) string {
 	tier := strings.ToLower(strings.TrimSpace(raw))
 	if len(tier) > 64 {
@@ -1026,8 +980,6 @@ func parseUsageTimestamp(raw string) time.Time {
 	return parsed.UTC()
 }
 
-// addEvent appends event unless its source key was already emitted. A repeated
-// key with different content is a source conflict, counted as an anomaly.
 func (r *parseResult) addEvent(seen map[string]domain.ModelUsageEvent, event domain.ModelUsageEvent) {
 	if existing, duplicate := seen[event.SourceEventKey]; duplicate {
 		if !usageEventsEqual(existing, event) {
@@ -1082,9 +1034,6 @@ func int64Ptr(value int64) *int64 {
 	return &value
 }
 
-// providerMessageID is the provider's response ID as an event's
-// provider_message_id. The column holds at most 256 bytes, so a longer ID is
-// hashed: a copy of the response still matches, and the row still inserts.
 func providerMessageID(id string) string {
 	id = strings.TrimSpace(id)
 	if len(id) <= 256 {

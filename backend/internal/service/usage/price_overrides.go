@@ -17,13 +17,10 @@ type priceOverrideStore interface {
 	ReplaceUsagePriceOverrides(context.Context, []domain.UsagePriceOverride, time.Time) error
 }
 
-// maxPriceOverrides bounds one saved set; a person sets a handful.
 const maxPriceOverrides = 500
 
-// PriceOverrides keeps the user's model prices: stored, live in the pricing
-// snapshot, and applied to stored usage.
+// PriceOverrides keeps the user's model prices: stored, live in the pricing snapshot, and applied to stored usage.
 type PriceOverrides struct {
-	// mu keeps the stored set and the published set the same save.
 	mu         sync.Mutex
 	store      priceOverrideStore
 	manager    *pricing.Manager
@@ -35,8 +32,7 @@ func NewPriceOverrides(store priceOverrideStore, manager *pricing.Manager, backf
 	return &PriceOverrides{store: store, manager: manager, backfiller: backfiller}
 }
 
-// Load publishes the stored overrides. It runs before usage is priced, so
-// nothing is priced without them.
+// Load publishes the stored overrides.
 func (p *PriceOverrides) Load(ctx context.Context) error {
 	overrides, err := p.store.ListUsagePriceOverrides(ctx)
 	if err != nil {

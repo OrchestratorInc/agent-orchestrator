@@ -13,21 +13,12 @@ import (
 )
 
 const (
-	// grokPricingVersion labels a cost AO stored as Grok Build reported it.
-	grokPricingVersion = "grok:reported"
-	// grokCursorModelBits leaves room in a turn's cursor for each model the
-	// turn called, so one turn can yield several strictly ordered records.
+	grokPricingVersion  = "grok:reported"
 	grokCursorModelBits = 8
-	// grokTicksPerNano converts Grok's costUsdTicks (1e-10 USD) to nano-USD.
-	grokTicksPerNano = 10
-	// maxGrokUsageBytes bounds one read of usage.json, which grows by one
-	// entry per turn.
-	maxGrokUsageBytes = 16 << 20
+	grokTicksPerNano    = 10
+	maxGrokUsageBytes   = 16 << 20
 )
 
-// grokUsageCounters are the per-turn and per-model counters in usage.json.
-// inputTokens includes the cached and cache-creation tokens; outputTokens
-// includes reasoning.
 type grokUsageCounters struct {
 	InputTokens         int64  `json:"inputTokens"`
 	OutputTokens        int64  `json:"outputTokens"`
@@ -49,7 +40,6 @@ type grokUsageFile struct {
 	} `json:"turns"`
 }
 
-// grokTurnRecord is one model's share of one completed Grok turn.
 type grokTurnRecord struct {
 	TurnNumber int64             `json:"turn_number"`
 	EndedAt    string            `json:"ended_at"`
@@ -57,10 +47,6 @@ type grokTurnRecord struct {
 	Usage      grokUsageCounters `json:"usage"`
 }
 
-// readGrokTurns reads the completed turns in Grok Build's usage.json after
-// the cursor. Grok rewrites the whole file after each turn rather than
-// appending, so the file is read as a snapshot and the cursor is the turn
-// number (with the model's index as a tie break), not a byte offset.
 func readGrokTurns(ctx context.Context, path, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -88,8 +74,6 @@ func readGrokTurns(ctx context.Context, path, nativeSessionID string, after int6
 		if turn.TurnNumber <= 0 || turn.TurnNumber >= 1<<(63-grokCursorModelBits) {
 			continue
 		}
-		// A turn that called one model reports it under modelUsage; one
-		// without that breakdown is the primary model's alone.
 		models := make([]string, 0, len(turn.ModelUsage))
 		for model := range turn.ModelUsage {
 			models = append(models, model)
@@ -162,8 +146,6 @@ func parseGrok(source domain.UsageSourceContext, records []jsonlRecord, result *
 	}
 }
 
-// grokReportedCosts keeps the cost Grok Build computed for the turn. A missing
-// or zero figure is left for the catalog to price.
 func grokReportedCosts(ticks *int64) domain.UsageEventCosts {
 	if ticks == nil || *ticks <= 0 {
 		return domain.UsageEventCosts{}

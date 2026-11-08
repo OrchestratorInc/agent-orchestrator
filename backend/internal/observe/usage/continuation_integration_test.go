@@ -35,8 +35,6 @@ func TestPipelineIngestsDiscoveredClaudeContinuation(t *testing.T) {
 			strconv.Itoa(in) + `,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":` + strconv.Itoa(out) + `}}}` + "\n"
 	}
 	writeLine(t, filepath.Join(projectDir, "old-root.jsonl"), assistantLine("msg-1", 8, 2))
-	// A fork opens with a copy of its parent's messages. msg-1 was billed once
-	// and is already counted from old-root.jsonl.
 	writeLine(t, filepath.Join(projectDir, "continuation-root.jsonl"),
 		`{"type":"last-prompt","sessionId":"continuation-root"}`+"\n"+
 			`{"type":"user","sessionId":"continuation-root","cwd":"`+session.Metadata.WorkspacePath+`"}`+"\n"+
@@ -80,10 +78,6 @@ func writeLine(t *testing.T, path, content string) {
 	}
 }
 
-// Break caught: titles and prompt suggestions run as separate Claude calls in
-// a temporary workspace. No session claims that workspace's project folder, so
-// their tokens were never counted, and a session-end style hook would have
-// finalized the worker's own binding with them.
 func TestCollectorCountsABackgroundTaskWithoutFinalizingTheWorker(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()

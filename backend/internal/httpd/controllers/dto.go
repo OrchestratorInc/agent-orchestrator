@@ -1997,9 +1997,7 @@ type UsageReportQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
 }
 
-// UsagePriceOverride is the user's own price for one stored model ID: rates in
-// USD per million tokens, or a catalog model to price as. It applies to every
-// cost AO estimates; a cost an agent reported is kept.
+// UsagePriceOverride is the user's own price for one stored model ID: rates in USD per million tokens, or a catalog model to price as.
 type UsagePriceOverride struct {
 	ModelID    string `json:"modelId" required:"true" maxLength:"256" description:"Model ID as usage rows store it."`
 	Input      string `json:"inputUsdPerMillion,omitempty" description:"Decimal USD per million uncached input tokens. Set with output."`
@@ -2009,8 +2007,7 @@ type UsagePriceOverride struct {
 	PriceAs    string `json:"priceAs,omitempty" maxLength:"256" description:"Catalog model to price as, provider/model, in place of rates."`
 }
 
-// UsagePricesResponse is the saved model prices and the catalog models a
-// model can price as.
+// UsagePricesResponse is the saved model prices and the catalog models a model can price as.
 type UsagePricesResponse struct {
 	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
 	Models    []string             `json:"models" required:"true" description:"Catalog models a model can price as, provider/model."`
@@ -2041,19 +2038,15 @@ type UsageLimitWindowsQuery struct {
 	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
 }
 
-// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a
-// period, built only from the limit readings AO took itself.
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a period, built only from the limit readings AO took itself.
 type UsageLimitWindowsResponse struct {
-	Since time.Time `json:"since"`
-	Until time.Time `json:"until"`
-	// FirstReadingAt is the oldest reading in the period; absent when there is none.
+	Since          time.Time                `json:"since"`
+	Until          time.Time                `json:"until"`
 	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
 	Logins         []domain.UsageLimitLogin `json:"logins"`
 }
 
-// UsageReportResponse is token and estimated-cost usage over a window, by day
-// or by hour in the requested time zone. Costs are API-equivalent estimates in
-// nano-USD, not a subscription bill.
+// UsageReportResponse is token and estimated-cost usage over a window, by day or by hour in the requested time zone.
 type UsageReportResponse struct {
 	Days       int                          `json:"days"`
 	TimeZone   string                       `json:"timeZone"`
@@ -2065,9 +2058,7 @@ type UsageReportResponse struct {
 	Sessions   []UsageReportSessionResponse `json:"sessions"`
 }
 
-// UsageReportRowResponse is one period's usage for one harness, model and
-// speed tier. Token counts are disjoint. The four category costs add up to
-// costNanos; premiumNanos and cacheSavingsNanos are views of it.
+// UsageReportRowResponse is one period's usage for one harness, model and speed tier.
 type UsageReportRowResponse struct {
 	Period              string `json:"period"`
 	Harness             string `json:"harness"`

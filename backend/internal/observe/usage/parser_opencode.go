@@ -12,26 +12,14 @@ import (
 )
 
 const (
-	// openCodeStepFinish is the part OpenCode writes once per provider call,
-	// carrying that call's tokens and cost.
-	openCodeStepFinish = "step-finish"
-	// openCodeCursorTieBits orders steps committed in the same millisecond by
-	// the low bits of their row ID.
-	openCodeCursorTieBits = 10
-	// openCodePricingVersion and kiloPricingVersion label a cost AO stored as
-	// the agent computed it.
+	openCodeStepFinish     = "step-finish"
+	openCodeCursorTieBits  = 10
 	openCodePricingVersion = "opencode:reported"
 	kiloPricingVersion     = "kilocode:reported"
 )
 
-// openCodeGatewayProviders are OpenCode's and Kilo Code's own billing
-// gateways (OpenCode Zen, the Kilo gateway). A zero cost reported for a call
-// through one is the price charged, often a free model, not a missing price,
-// and no catalog lists the gateway to price it otherwise.
 var openCodeGatewayProviders = []string{"opencode", "kilo", "kilocode"}
 
-// openCodeStepRow is one step-finish part joined to its assistant message's
-// provider and model. Kilo Code is an OpenCode fork and keeps the same schema.
 type openCodeStepRow struct {
 	PartID      string          `json:"part_id"`
 	SessionID   string          `json:"session_id"`
@@ -42,8 +30,6 @@ type openCodeStepRow struct {
 	Step        json.RawMessage `json:"step"`
 }
 
-// openCodeStepFinishPart is the step-finish part body. input excludes both
-// cache counters, and reasoning is billed as output but counted apart from it.
 type openCodeStepFinishPart struct {
 	Type   string `json:"type"`
 	Tokens *struct {
@@ -58,18 +44,6 @@ type openCodeStepFinishPart struct {
 	Cost *float64 `json:"cost"`
 }
 
-// readOpenCodeSteps reads step-finish parts for the bound OpenCode or Kilo
-// session and every sub-agent session it spawned. The assistant message row is
-// rewritten as a call streams, but its step-finish part is written once the
-// call completes, so the parts form a per-call ledger.
-//
-// The cursor is the part's creation time in milliseconds with the low row ID
-// bits as a tie break. A bare row ID would not do: OpenCode undo deletes the
-// newest messages, and SQLite then reuses their row IDs for the next ones.
-//
-// A bound session that is itself a sub-agent reads nothing. Its parent's
-// binding already reads it, and the AO plugin reports the child's session ID
-// too whenever OpenCode switches to it.
 func readOpenCodeSteps(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 WITH RECURSIVE tree(id) AS (
@@ -150,7 +124,6 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 			continue
 		}
 		if input == 0 && output == 0 {
-			// A call that failed before the provider reported usage.
 			continue
 		}
 		provider := strings.TrimSpace(row.ProviderID)
@@ -180,11 +153,6 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 	}
 }
 
-// openCodeReportedCosts keeps the USD cost OpenCode computed for the call from
-// its own model catalog, which prices providers AO's catalog does not list.
-// Through another provider a zero cost means a plan-billed model or one
-// OpenCode has no price for, so the catalog is left to try. Through the
-// agent's own gateway a zero cost is what the gateway charged, so it is kept.
 func openCodeReportedCosts(cost *float64, pricingVersion string, ownGateway bool) domain.UsageEventCosts {
 	if cost == nil {
 		return domain.UsageEventCosts{}

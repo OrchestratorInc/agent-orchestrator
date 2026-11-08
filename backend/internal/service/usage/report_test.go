@@ -23,8 +23,6 @@ type snapshotStub struct{ snapshot *pricing.Snapshot }
 
 func (s snapshotStub) Snapshot() *pricing.Snapshot { return s.snapshot }
 
-// repoCatalog loads the reviewed catalog the repository ships, which carries
-// the tier rows these tests price against.
 func repoCatalog(t *testing.T) *pricing.Snapshot {
 	t.Helper()
 	catalog, err := pricing.NewCache("../../../..").Load(context.Background())
@@ -55,9 +53,6 @@ func pricedEvent(t *testing.T, snapshot *pricing.Snapshot, event domain.UsageRep
 
 func int64p(value int64) *int64 { return &value }
 
-// Break caught: hour buckets misplaced in a half-hour time zone, a window that
-// drops today, a priority premium or cache-write share that does not add up
-// to the stored cost, or an unpriced event counted as free.
 func TestReportBucketsSplitsAndFilters(t *testing.T) {
 	snapshot := repoCatalog(t)
 	kolkata, err := time.LoadLocation("Asia/Kolkata")
@@ -171,9 +166,6 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 	}
 }
 
-// Break caught: an agent that reports one cost per call (OpenCode, Kilo Code)
-// shown as not priced, its paid calls and its free gateway calls alike,
-// because the report required a per-type split.
 func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	event := func(model string, cost int64) domain.UsageReportEvent {
@@ -207,10 +199,6 @@ func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
 	}
 }
 
-// Break caught: cache savings priced at a long-context rate no request paid.
-// The split sums a model's tokens across events, and two 200k requests sum
-// past 272k, so the synthetic estimate took gpt-5.5's #above272k row and
-// doubled the saving per cached token.
 func TestReportCacheSavingsIgnoreSummedLongContext(t *testing.T) {
 	snapshot := repoCatalog(t)
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -220,7 +208,6 @@ func TestReportCacheSavingsIgnoreSummedLongContext(t *testing.T) {
 		Tokens:  domain.UsageTokenMetrics{CachedInputTokens: int64p(180_000), UncachedInputTokens: int64p(20_000), OutputTokens: int64p(100)},
 		Harness: domain.HarnessCodex, SessionID: "app-1", ProjectID: "app", CacheWriteTokens: int64p(0),
 	}, providerUsage)
-	// What caching saved one request: its input all uncached, less its cost.
 	input := int64(200_000)
 	uncachedOnly, err := snapshot.Estimate(domain.ModelUsageEvent{
 		ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: "gpt-5.5",

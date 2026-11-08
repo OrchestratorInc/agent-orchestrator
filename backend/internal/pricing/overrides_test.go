@@ -33,13 +33,11 @@ func TestPriceOverridesPriceTheirModelAndSurviveActivation(t *testing.T) {
 		return got
 	}
 	custom := estimate("custom-model")
-	// $2 per million input and $8.50 per million output, one million of each.
 	assertCost(t, "custom total", custom.TotalNanos, 10_500_000_000)
 	if !strings.HasPrefix(custom.PricingVersion, PriceOverrideVersionPrefix) {
 		t.Fatalf("custom version = %q", custom.PricingVersion)
 	}
 	proxy := estimate("proxy-gpt")
-	// gpt-test bills $0.1 a token; the event names no provider of its own.
 	assertCost(t, "proxy total", proxy.TotalNanos, 200_000_000_000_000)
 	if proxy.PricingVersion != manager.Snapshot().ProviderVersion("openai") {
 		t.Fatalf("proxy version = %q, want openai's", proxy.PricingVersion)

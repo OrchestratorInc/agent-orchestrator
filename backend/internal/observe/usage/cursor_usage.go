@@ -22,15 +22,11 @@ type cursorUsageStore interface {
 }
 
 const (
-	// cursorRefetch is how far before the last read's end the next one
-	// starts: Cursor can finalize an event after it was first listed.
 	cursorRefetch      = time.Hour
 	cursorReadInterval = 5 * time.Minute
 )
 
-// CursorUsage reads the usage of the Cursor sessions AO started from the
-// user's Cursor account, while the user has it turned on. Only events for AO
-// sessions' conversations are kept.
+// CursorUsage reads the usage of the Cursor sessions AO started from the user's Cursor account, while the user has it turned on.
 type CursorUsage struct {
 	store    cursorUsageStore
 	client   *http.Client
@@ -130,10 +126,6 @@ func (c *CursorUsage) record(err error) {
 	c.logger.Warn("read cursor usage", "err", err)
 }
 
-// read stores the Cursor events of AO's sessions since the last read, less
-// the refetch margin; the first read for an account starts at the oldest AO
-// Cursor session. It reads nothing, not even the Keychain, while no AO Cursor
-// session could have new usage.
 func (c *CursorUsage) read(ctx context.Context) error {
 	sessions, err := c.store.ListAllSessions(ctx)
 	if err != nil {
@@ -169,7 +161,6 @@ func (c *CursorUsage) read(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Whole seconds: the store replaces stored events by their second.
 	until := c.now().UTC().Truncate(time.Second)
 	since := earliest.UTC().Truncate(time.Second)
 	if resume := readUntil.Add(-cursorRefetch).UTC().Truncate(time.Second); haveRead && account == accountKey && resume.After(since) {
@@ -193,8 +184,6 @@ func (c *CursorUsage) read(ctx context.Context) error {
 	return c.store.ReplaceCursorUsage(ctx, read)
 }
 
-// cursorConversationID is the Cursor conversation a session drives: the chat
-// session for a chat, the hook-reported conversation for a terminal session.
 func cursorConversationID(session domain.SessionRecord) string {
 	if domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat {
 		if id := strings.TrimSpace(session.Metadata.ProviderConversationID); id != "" {

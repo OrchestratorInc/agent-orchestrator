@@ -1,11 +1,5 @@
 import type { AgentId } from "./agent-options";
 
-/**
- * Each agent's hue in oklch, taken from its brand. null is a black-and-white
- * brand mark, which reads as neutral. Lightness and chroma come from the theme
- * (--agent-tone-lightness / --agent-tone-chroma), so every agent holds the same
- * contrast in light and dark.
- */
 const AGENT_HUES: Record<AgentId, number | null> = {
 	"claude-code": 40,
 	codex: 299,
@@ -47,7 +41,6 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	hermes: 75,
 };
 
-/** The agent's theme colour as a CSS value; unknown harnesses read as neutral. */
 export function agentTone(harness: string): string {
 	const hue = AGENT_HUES[harness as AgentId] ?? null;
 	return hue === null

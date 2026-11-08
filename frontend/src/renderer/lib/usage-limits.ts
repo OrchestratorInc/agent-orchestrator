@@ -5,23 +5,18 @@ export type UsageLimitWindows = components["schemas"]["UsageLimitWindowsResponse
 export type UsageLimitLogin = components["schemas"]["UsageLimitLogin"];
 export type UsageLimitSpan = components["schemas"]["UsageLimitSpan"];
 
-/** Windows a day or longer are weekly limits; shorter ones are sessions. */
 export const DAY_MINUTES = 24 * 60;
 
 export type ProviderAccounts = {
 	provider: AgentAccountProvider;
-	/** The default account first, then by id, so the order holds across refreshes. */
 	accounts: AgentAccount[];
-	/** The newest reading among the provider's accounts. */
 	checkedAt: string | null;
 };
 
 const PROVIDER_ORDER: AgentAccountProvider[] = ["codex", "claude"];
 
-/** The harness whose avatar and colour stand for each account provider. */
 export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
 
-/** Groups signed-in accounts per provider. Each account keeps its own limit windows. */
 export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccounts[] {
 	return PROVIDER_ORDER.flatMap((provider) => {
 		const providerAccounts = accounts
@@ -33,12 +28,10 @@ export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccoun
 	});
 }
 
-/** Percent of a window still available, 0–100. */
 export function remainingPercent(usedPercent: number): number {
 	return Math.max(0, Math.min(100, 100 - usedPercent));
 }
 
-/** "3h 45m", "6d 0h" or "12m" until a reset; null once it has passed. */
 export function formatCountdown(resetsAt: string | null | undefined, now: Date): string | null {
 	if (!resetsAt) return null;
 	const ms = new Date(resetsAt).getTime() - now.getTime();
@@ -52,20 +45,12 @@ export function formatCountdown(resetsAt: string | null | undefined, now: Date):
 }
 
 export type LimitPace = {
-	/** Percent used at the reset if the pace so far holds, capped at 100. */
 	atReset: number;
-	/** When it reaches 100% at that pace, if before the reset. */
 	runsOutAt: Date | null;
 };
 
 const HOUR_MS = 3_600_000;
 
-/**
- * Where a window lands at its reset if it keeps the pace it has had since it
- * opened. null while nothing is used, once it is already at the limit, or
- * until a tenth of the window (at most an hour) has passed, when one reading
- * would say little.
- */
 export function paceToReset(startMs: number, resetMs: number, atMs: number, used: number): LimitPace | null {
 	const elapsed = atMs - startMs;
 	if (!(elapsed >= Math.min(HOUR_MS, (resetMs - startMs) / 10)) || !(resetMs > atMs) || !(used > 0) || used >= 100) return null;
@@ -75,7 +60,6 @@ export function paceToReset(startMs: number, resetMs: number, atMs: number, used
 	return { atReset, runsOutAt: runsOut < resetMs ? new Date(runsOut) : null };
 }
 
-/** The pace of a window from AO's reading history, as of its last reading. */
 export function spanPace(span: UsageLimitSpan): LimitPace | null {
 	if (!span.startsAt) return null;
 	const last = span.points?.at(-1);
@@ -87,7 +71,6 @@ export function spanPace(span: UsageLimitSpan): LimitPace | null {
 	);
 }
 
-/** The pace of a window from one live reading: its length gives when it opened. */
 export function limitWindowPace(window: AgentAccountLimitWindow, fetchedAt: string): LimitPace | null {
 	if (!window.resetsAt || !window.durationMinutes) return null;
 	const reset = Date.parse(window.resetsAt);

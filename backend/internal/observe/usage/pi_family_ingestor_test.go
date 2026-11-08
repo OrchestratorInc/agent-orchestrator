@@ -12,8 +12,6 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-// ompTitleSlot renders OMP's line-1 title record, padded to the fixed width
-// OMP reserves so it can rewrite the title in place.
 func ompTitleSlot(t *testing.T, title string) string {
 	t.Helper()
 	const width = 255
@@ -24,11 +22,6 @@ func ompTitleSlot(t *testing.T, title string) string {
 	return strings.Replace(line, `"pad":""`, `"pad":"`+strings.Repeat(" ", width-len(line))+`"`, 1) + "\n"
 }
 
-// Break caught: counting an OMP reply twice, or losing its cost, once OMP
-// renames the session. OMP rewrites its line-1 title slot in place, so a
-// short transcript's integrity checkpoint no longer matches and the source is
-// re-read as a new generation; replayed replies must dedupe onto their stored
-// events and only the appended call may add tokens.
 func TestIngestorDedupesOMPTranscriptAfterTitleSlotRewrite(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -66,8 +59,6 @@ func TestIngestorDedupesOMPTranscriptAfterTitleSlotRewrite(t *testing.T) {
 	ingestSourceFully(ctx, t, ingestor, source.ID)
 	assertTokenAggregate(t, store, session.ID, 41368+426)
 
-	// OMP names the session and keeps working: the slot changes in place and
-	// an auxiliary judge call is appended.
 	mustNoError(t, os.WriteFile(path, []byte(ompTitleSlot(t, "Fix the flaky watcher test")+body+ompJudgeCall+"\n"), 0o600))
 	result, err := ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)

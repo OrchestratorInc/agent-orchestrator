@@ -27,8 +27,7 @@ var overrideRatePattern = regexp.MustCompile(`^\d{1,9}(\.\d{1,12})?$`)
 
 var perMillion = big.NewRat(1_000_000, 1)
 
-// ValidatePriceOverride checks one override against this snapshot: rates must
-// be decimals and a price-as target must name a row the catalog prices.
+// ValidatePriceOverride checks one override against this snapshot: rates must be decimals and a price-as target must name a row the catalog prices.
 func (s *Snapshot) ValidatePriceOverride(override domain.UsagePriceOverride) error {
 	if _, err := parseOverride(override); err != nil {
 		return err
@@ -41,9 +40,6 @@ func (s *Snapshot) ValidatePriceOverride(override domain.UsagePriceOverride) err
 	return nil
 }
 
-// parseOverride checks only the override's own shape, so a stored override
-// still loads after a catalog drops its price-as target; that model is then
-// unpriced until the catalog lists it again.
 func parseOverride(override domain.UsagePriceOverride) (modelOverride, error) {
 	model := strings.TrimSpace(override.ModelID)
 	if model == "" || len(model) > 256 {
@@ -87,7 +83,6 @@ func parseOverride(override domain.UsagePriceOverride) (modelOverride, error) {
 	return modelOverride{rates: &rates, version: PriceOverrideVersionPrefix + "sha256:" + hex.EncodeToString(digest.Sum(nil))}, nil
 }
 
-// priceAsRow finds the catalog row a price-as target names.
 func (s *Snapshot) priceAsRow(target string) (providerID, modelID string, ok bool) {
 	if s == nil {
 		return "", "", false
@@ -124,8 +119,7 @@ func (s *Snapshot) PriceAsModels() []string {
 	return out
 }
 
-// SetPriceOverrides publishes the current catalog with these overrides in place
-// of the last set, and returns the stored model IDs whose price changed.
+// SetPriceOverrides publishes the current catalog with these overrides in place of the last set, and returns the stored model IDs whose price changed.
 func (m *Manager) SetPriceOverrides(ctx context.Context, overrides []domain.UsagePriceOverride) ([]string, error) {
 	release, err := m.fence.Acquire(ctx)
 	if err != nil {

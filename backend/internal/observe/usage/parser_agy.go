@@ -13,19 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Antigravity stores one gen_metadata row per model call in each
-// conversation's database: a CortexStepGeneratorMetadata protobuf, whose
-// schema is extracted from the language server rather than published.
-//
-//	1 chat_model        -> 4 usage, 17 retry_infos (each 2 usage)
-//	3 planner_config    -> 1 model enum, 28 model name (first calls only)
-//	ModelUsageStats     -> 1 model enum, 2 input (excluding cache reads),
-//	                       3 output (thinking + response), 4 cache write,
-//	                       5 cache read, 7 message id, 9 thinking output,
-//	                       11 response id
-//
-// The calls carry no time of their own; the steps row that records the same
-// usage (CortexStepMetadata: 1 created_at, 8 completed_at, 9 model_usage) does.
 const (
 	agyFieldGeneration     = 1
 	agyFieldUsage          = 4
@@ -45,15 +32,9 @@ const (
 	agyUsageMessageID      = 7
 	agyUsageThinkingOutput = 9
 	agyUsageResponseID     = 11
-	// agyModelLearnRows bounds the leading calls read to learn the
-	// conversation's model names, which only its first calls carry.
-	agyModelLearnRows = 8
+	agyModelLearnRows      = 8
 )
 
-// agyKnownModels names the model enums the agy CLI has written, for a
-// conversation whose leading calls no longer carry the name.
-// The leading entries were seen in agy conversations; the rest follow the
-// tables ccusage and T3 Code keep from Antigravity's model catalog.
 var agyKnownModels = map[uint64]string{
 	1020: "gemini-3.5-flash-low",
 	1071: "gemini-3.6-flash-high",
@@ -77,16 +58,12 @@ var agyKnownModels = map[uint64]string{
 	1402: "claude-opus-5-5",
 }
 
-// agyCatalogAliases maps names agy writes that the catalog spells otherwise.
 var agyCatalogAliases = map[string]string{
 	"gemini-3.1-pro": "gemini-3.1-pro-preview",
 }
 
-// agyThinkingSuffixes are the thinking levels agy appends to a model name;
-// the catalog prices the model without them.
 var agyThinkingSuffixes = []string{"-extra-low", "-minimal", "-low", "-medium", "-high"}
 
-// agyCallRecord is one model call's usage, as the reader hands it to parseAgy.
 type agyCallRecord struct {
 	Model          string `json:"model"`
 	ModelEnum      uint64 `json:"model_enum,omitempty"`
@@ -97,15 +74,9 @@ type agyCallRecord struct {
 	ThinkingOutput int64  `json:"thinking_output"`
 	MessageID      string `json:"message_id,omitempty"`
 	ResponseID     string `json:"response_id,omitempty"`
-	// CreatedAt is the call's time in Unix milliseconds, from its step.
-	CreatedAt int64 `json:"created_at,omitempty"`
+	CreatedAt      int64  `json:"created_at,omitempty"`
 }
 
-// readAgyGenerations reads the model calls after the cursor from one
-// Antigravity conversation database. The database holds that conversation
-// alone, so the native session ID selects the file, not rows. Its rows count
-// from idx 0, which a new source's cursor already names, so a row's cursor is
-// its idx plus one.
 func readAgyGenerations(ctx context.Context, db *sql.DB, _ string, after int64, limit int) ([]jsonlRecord, error) {
 	names, err := learnAgyModelNames(ctx, db)
 	if err != nil {
@@ -126,8 +97,6 @@ func readAgyGenerations(ctx context.Context, db *sql.DB, _ string, after int64, 
 		cursor := idx + 1
 		calls := decodeAgyCalls(data)
 		if len(calls) == 0 {
-			// A row without usage is passed over only once a later row
-			// exists; the newest one may still be getting its usage.
 			pending = append(pending, jsonlRecord{Data: []byte(`{}`), Offset: cursor})
 			continue
 		}
@@ -155,11 +124,6 @@ func readAgyGenerations(ctx context.Context, db *sql.DB, _ string, after int64, 
 	return stampAgyCalls(ctx, db, records)
 }
 
-// stampAgyCalls gives each call the time of the step that recorded its
-// response, matched by response ID. A call no step records (a cache hit, a
-// retry) takes the time of the call before it, or of the first stamped call
-// after it, or else the conversation's latest step: an untimed event would
-// count toward no period of the usage report.
 func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]jsonlRecord, error) {
 	rows, err := db.QueryContext(ctx, `SELECT metadata FROM steps WHERE metadata IS NOT NULL`)
 	if err != nil {
@@ -209,7 +173,6 @@ func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]js
 		}
 		calls[index] = &call
 	}
-	// Only calls before the first stamped one are still untimed.
 	next := latest
 	for index := len(calls) - 1; index >= 0; index-- {
 		call := calls[index]
@@ -235,7 +198,6 @@ func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]js
 	return records, nil
 }
 
-// agyTimestamp reads a google.protobuf.Timestamp field as Unix milliseconds.
 func agyTimestamp(message []byte, number protowire.Number) (int64, bool) {
 	raw, ok := protoFirstBytes(message, number)
 	if !ok {
@@ -260,8 +222,6 @@ func agyTimestamp(message []byte, number protowire.Number) (int64, bool) {
 	return int64(seconds)*1000 + int64(nanos)/1e6, true //nolint:gosec // bounded above.
 }
 
-// learnAgyModelNames maps the conversation's model enums to the names its
-// leading calls record.
 func learnAgyModelNames(ctx context.Context, db *sql.DB) (map[uint64]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT data FROM gen_metadata ORDER BY idx LIMIT ?`, agyModelLearnRows)
 	if err != nil {
@@ -303,8 +263,6 @@ func agyConfigModel(data []byte) (uint64, string, bool) {
 	return enum, name, name != ""
 }
 
-// decodeAgyCalls returns the row's call and each retried attempt that billed
-// separately. A retry entry repeating the call's own response is the same call.
 func decodeAgyCalls(data []byte) []agyCallRecord {
 	generation, ok := protoFirstBytes(data, agyFieldGeneration)
 	if !ok {
@@ -389,8 +347,6 @@ func decodeAgyUsage(usage []byte) (agyCallRecord, bool) {
 }
 
 func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *parseResult) {
-	// rowCall counts the calls already read from the row at rowOffset, so two
-	// calls of one row without IDs keep distinct keys.
 	rowOffset, rowCall := int64(-1), 0
 	for _, record := range records {
 		if record.Offset == rowOffset {
@@ -457,8 +413,6 @@ func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *p
 	}
 }
 
-// agyCatalogModel is the catalog's name for an agy model: agy appends the
-// thinking level, which does not change the per-token price.
 func agyCatalogModel(name string) string {
 	model := strings.ToLower(strings.TrimSpace(name))
 	for _, suffix := range agyThinkingSuffixes {
@@ -473,8 +427,6 @@ func agyCatalogModel(name string) string {
 	return model
 }
 
-// agyBillingProvider names the catalog provider for a model Antigravity
-// serves; an unrecognised family stays unpriced.
 func agyBillingProvider(model string) string {
 	switch {
 	case strings.HasPrefix(model, "gemini-"):
@@ -523,7 +475,6 @@ func protoFields(data []byte) ([]protoField, error) {
 	return fields, nil
 }
 
-// protoFirstBytes returns the first length-delimited field with the number.
 func protoFirstBytes(data []byte, number protowire.Number) ([]byte, bool) {
 	fields, err := protoFields(data)
 	if err != nil {

@@ -9,12 +9,6 @@ DROP TRIGGER IF EXISTS usage_bindings_cdc_insert;
 DROP TRIGGER IF EXISTS usage_bindings_cdc_update;
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
 
--- Stop enumerating harnesses and source kinds in the schema. Every usage
--- harness used to widen these CHECK lists with its own table rebuild, so
--- parallel harness changes each dropped the others' kinds. The Go store now
--- validates both (domain.AgentHarness.IsKnown, domain.UsageSourceKind.IsKnown)
--- and the collector only binds harnesses usage.SupportedHarness accepts.
--- Rebuild only the two collection tables; model_usage_events is untouched.
 CREATE TABLE usage_bindings_next (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id         TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
@@ -106,9 +100,6 @@ DROP TRIGGER IF EXISTS usage_bindings_cdc_insert;
 DROP TRIGGER IF EXISTS usage_bindings_cdc_update;
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
 
--- Restore the enumerated constraints. Usage owned by any harness or source
--- kind outside that list is removed first; Claude, Codex, and Kimi events
--- retain their IDs and facts.
 DELETE FROM model_usage_events
 WHERE binding_id IN (
     SELECT id FROM usage_bindings

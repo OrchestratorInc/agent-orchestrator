@@ -36,11 +36,6 @@ func TestDefaultSourceRootsIncludesPiSessions(t *testing.T) {
 	}
 }
 
-// Break caught: Pi Chat sessions recording no usage. pi-acp starts Pi without
-// a session directory, so its transcripts land in Pi's own agent folder
-// (PI_CODING_AGENT_DIR/sessions/<cwd>/), which AO neither searched nor
-// accepted; a terminal session restored without --session-dir reported a hook
-// path there and was rejected with artifact_path_rejected.
 func TestCollectorBindsPiTranscriptsInPiAgentFolder(t *testing.T) {
 	ctx := context.Background()
 	store := collectorTestStore(t)
@@ -76,8 +71,6 @@ func TestCollectorBindsPiTranscriptsInPiAgentFolder(t *testing.T) {
 	assertSource(restored.ID, restoredPath)
 }
 
-// TestCollectorDiscoversPiSessionByHeaderID catches filename-only discovery:
-// Pi's native session identity lives in the first JSONL record.
 func TestCollectorDiscoversPiSessionByHeaderID(t *testing.T) {
 	const nativeID = "pi-session-1"
 	store := collectorTestStore(t)
@@ -101,9 +94,6 @@ func TestCollectorDiscoversPiSessionByHeaderID(t *testing.T) {
 	}
 }
 
-// Break caught: discovery searching only Pi's nested default layout. AO starts
-// Pi with --session-dir, so the transcript sits directly in the root, and the
-// binding stayed discovering with source_discovery_pending.
 func TestCollectorDiscoversPiSessionInSessionDirRoot(t *testing.T) {
 	const nativeID = "pi-flat-session"
 	store := collectorTestStore(t)
@@ -170,8 +160,6 @@ func TestCollectorReconcilePiPathMatchesDurableNativeID(t *testing.T) {
 	}
 }
 
-// TestCollectorPiBackfillRejectsUnrelatedSameWorkspaceSession catches binding
-// a later manual Pi invocation merely because it shares the live AO workspace.
 func TestCollectorPiBackfillRejectsUnrelatedSameWorkspaceSession(t *testing.T) {
 	store := collectorTestStore(t)
 	workspace := t.TempDir()

@@ -178,10 +178,6 @@ func TestEstimateLeavesInputUnknownWhenAPricedWriteSplitIsMissing(t *testing.T) 
 	assertCost(t, "total", priced.TotalNanos, 4_995_000)
 }
 
-// TestEstimateReadsAOCacheWriteUsage catches pricing an agent's own usage
-// object (Pi's camelCase one here) without the cache-write count the usage
-// parser stores beside it. A model with a distinct write rate cannot be priced
-// unless that count survives, in either token vocabulary.
 func TestEstimateReadsAOCacheWriteUsage(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "0.000001", Read: strptr("0.0000001"), Write: strptr("0.000002"), Output: "0.000003"}},
@@ -286,8 +282,6 @@ func TestEstimateKeepsUnknownBucketsUnknownAndZeroBucketsKnown(t *testing.T) {
 	}
 }
 
-// Break caught: a priority or fast request priced at standard rates, or a tier
-// the catalog cannot price billed at standard rates instead of left unknown.
 func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {
@@ -307,7 +301,7 @@ func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
 		billing  string
 		model    string
 		tier     string
-		want     int64 // -1 is unknown
+		want     int64
 	}{
 		{"codex reported no tier", domain.UsageProviderOpenAI, "openai", "gpt-test", "", standard},
 		{"codex default", domain.UsageProviderOpenAI, "openai", "gpt-test", "default", standard},
@@ -338,8 +332,6 @@ func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
 	}
 }
 
-// Break caught: a request past the model's long-context size priced at the base
-// rates, or a request at exactly the size priced at the long-context ones.
 func TestEstimatePricesLongContextPastItsSize(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "0.000001", Output: "0.000002"}},

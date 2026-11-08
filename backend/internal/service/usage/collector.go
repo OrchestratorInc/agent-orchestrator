@@ -64,28 +64,21 @@ type HookSignal struct {
 // SourceRoots are the provider-owned directories from which AO may read usage
 // transcripts.
 type SourceRoots struct {
-	ClaudeProjects string
-	CodexSessions  string
-	CodexArchived  string
-	KimiHome       string
-	PiSessions     string
-	// PiAgentSessions is Pi's own sessions folder, under PI_CODING_AGENT_DIR
-	// (default ~/.pi/agent). pi-acp starts Pi without a session directory, so
-	// Chat sessions write here, as does a terminal session restored without
-	// --session-dir.
-	PiAgentSessions string
-	QwenUsage       string
-	OMPSessions     string
-	KimchiSessions  string
-	// PrimeAgentSessions is the --session-dir AO starts prime-agent with.
-	PrimeAgentSessions string
-	GooseSessions      string
-	OpenCodeData       string
-	KiloData           string
-	GrokSessions       string
-	DeepSeekSessions   string
-	// AgyCLIConversations and AgyACPConversations hold one SQLite database per
-	// Antigravity conversation, for the terminal CLI and the ACP server.
+	ClaudeProjects      string
+	CodexSessions       string
+	CodexArchived       string
+	KimiHome            string
+	PiSessions          string
+	PiAgentSessions     string
+	QwenUsage           string
+	OMPSessions         string
+	KimchiSessions      string
+	PrimeAgentSessions  string
+	GooseSessions       string
+	OpenCodeData        string
+	KiloData            string
+	GrokSessions        string
+	DeepSeekSessions    string
 	AgyCLIConversations string
 	AgyACPConversations string
 }
@@ -117,9 +110,6 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if err != nil {
 		return SourceRoots{}, err
 	}
-	// AO launches OMP and Kimchi without a session directory, so both write
-	// to their own agent directory, which an absolute environment override
-	// moves exactly as it moves the CLI's.
 	ompAgentDir := piFamilyAgentDir(home, "PI_CODING_AGENT_DIR", ".omp", "agent")
 	kimchiAgentDir := piFamilyAgentDir(home, "KIMCHI_CODING_AGENT_DIR", ".config", "kimchi", "harness")
 	return SourceRoots{
@@ -143,9 +133,6 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	}, nil
 }
 
-// gooseDataDir mirrors Goose's Paths::data_dir: an absolute GOOSE_PATH_ROOT
-// wins, otherwise the etcetera app strategy for Block/goose (XDG data home on
-// macOS and Linux, the roaming app-data folder on Windows).
 func gooseDataDir(home string) string {
 	if root := strings.TrimSpace(os.Getenv("GOOSE_PATH_ROOT")); root != "" && filepath.IsAbs(root) {
 		return filepath.Join(root, "data")
@@ -163,14 +150,8 @@ func gooseDataDir(home string) string {
 	return filepath.Join(home, ".local", "share", "goose")
 }
 
-// gooseSessionsDBName is the one SQLite database Goose keeps for every
-// session; per-call usage lives in its usage_ledger table.
 const gooseSessionsDBName = "sessions.db"
 
-// openCodeFamilyDataDir mirrors the data directory OpenCode and its Kilo Code
-// fork resolve, as the AO adapters do: an explicit data-dir variable, then
-// XDG_DATA_HOME, then ~/.local/share on every platform. AO launches both with
-// the daemon's environment, so the daemon resolves the same directory.
 func openCodeFamilyDataDir(home, dataDirEnv, app string) string {
 	if dataDir := strings.TrimSpace(os.Getenv(dataDirEnv)); dataDir != "" && filepath.IsAbs(dataDir) {
 		return dataDir
@@ -181,16 +162,11 @@ func openCodeFamilyDataDir(home, dataDirEnv, app string) string {
 	return filepath.Join(home, ".local", "share", app)
 }
 
-// openCodeApp and kiloApp name each agent's session databases: <app>.db on
-// the default release channel, <app>-<channel>.db on another. Step-finish
-// parts carry the per-call usage.
 const (
 	openCodeApp = "opencode"
 	kiloApp     = "kilo"
 )
 
-// grokHome mirrors Grok Build's GROK_HOME override for its local state, as
-// the AO adapter does; otherwise ~/.grok.
 func grokHome(home string) string {
 	if dir := strings.TrimSpace(os.Getenv("GROK_HOME")); dir != "" && filepath.IsAbs(dir) {
 		return dir
@@ -198,8 +174,6 @@ func grokHome(home string) string {
 	return filepath.Join(home, ".grok")
 }
 
-// deepseekHome mirrors DeepSeek Harness's DSH_HOME override for its whole
-// home, as the AO adapter does; otherwise ~/.dsh.
 func deepseekHome(home string) string {
 	if dir := strings.TrimSpace(os.Getenv("DSH_HOME")); dir != "" && filepath.IsAbs(dir) {
 		return dir
@@ -207,8 +181,6 @@ func deepseekHome(home string) string {
 	return filepath.Join(home, ".dsh")
 }
 
-// agyGeminiHome mirrors Antigravity's GEMINI_HOME override, as the AO adapter
-// does; otherwise ~/.gemini.
 func agyGeminiHome(home string) string {
 	if dir := strings.TrimSpace(os.Getenv("GEMINI_HOME")); dir != "" && filepath.IsAbs(dir) {
 		return dir
@@ -216,34 +188,19 @@ func agyGeminiHome(home string) string {
 	return filepath.Join(home, ".gemini")
 }
 
-// The Antigravity storage roots under GEMINI_HOME for the terminal CLI and
-// the ACP server; each keeps conversations/<conversation id>.db.
 const (
 	agyCLIStorageDir = "antigravity-cli"
 	agyACPStorageDir = "antigravity-acp"
 )
 
-// deepseekSessionLogName is the session log DeepSeek Harness appends a zstd
-// frame to per flush, under sessions/<encoded cwd>/<session id>/.
 const deepseekSessionLogName = "session.v4.jsonl.zstd"
 
-// deepseekSnapshotIdentity is the fixed identity of a DeepSeek session log. The
-// log is decompressed whole on every read and its record seq is the cursor, so
-// the file's own identity decides nothing.
 const deepseekSnapshotIdentity = "deepseek-session-log"
 
-// grokUsageFileName is the per-session snapshot Grok Build rewrites after each
-// turn, under sessions/<encoded cwd>/<session id>/.
 const grokUsageFileName = "usage.json"
 
-// grokSnapshotIdentity is the fixed identity of a Grok usage snapshot. Grok
-// replaces the file after every turn, so its filesystem ID changes by design
-// and must not read as the source being replaced.
 const grokSnapshotIdentity = "grok-usage-snapshot"
 
-// piFamilyAgentDir resolves a Pi fork's agent directory: the environment
-// override when it names an absolute directory (after expanding a leading
-// ~), else the fork's default under home.
 func piFamilyAgentDir(home, envName string, defaultParts ...string) string {
 	dir := strings.TrimSpace(os.Getenv(envName))
 	switch {
@@ -273,9 +230,6 @@ func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, er
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			// Settings are optional: a missing or unreadable settings file
-			// must not fail provider-root resolution, which would disable the
-			// whole usage pipeline. Fall back to the default runtime base.
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -296,9 +250,6 @@ func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, er
 	return qwenHome, nil
 }
 
-// qwenSettingsPaths returns Qwen's home (QWEN_HOME, default ~/.qwen) and its
-// settings files in the order Qwen applies them: user settings, then the
-// workspace's, which override them.
 func qwenSettingsPaths(home, workspace string) (qwenHome string, paths []string) {
 	qwenHome = filepath.Join(home, ".qwen")
 	if configured := strings.TrimSpace(os.Getenv("QWEN_HOME")); configured != "" {
@@ -358,7 +309,7 @@ type Collector struct {
 	codexLogicalSourceLimit int
 	now                     func() time.Time
 	logger                  *slog.Logger
-	mu                      *semaphore.Weighted // one holder; waiting honors ctx
+	mu                      *semaphore.Weighted
 	// discoveryAfterID is where the next bounded reconcile pass resumes,
 	// guarded by mu. Unchanged bindings are not rewritten, so their updated_at
 	// cannot rotate the pass through more bindings than one limit holds.
@@ -378,8 +329,7 @@ func (c *Collector) qwenUsageRoot(ctx context.Context, sessionID domain.SessionI
 	return c.qwenUsageRootForSession(ctx, session)
 }
 
-// QwenWatchRoots makes registered workspace sources eligible for exact-file
-// watches, including when the workspace differs from the global Qwen root.
+// QwenWatchRoots makes registered workspace sources eligible for exact-file watches, including when the workspace differs from the global Qwen root.
 func (c *Collector) QwenWatchRoots(ctx context.Context) ([]string, error) {
 	sessions, err := c.store.ListAllSessions(ctx)
 	if err != nil {
@@ -606,9 +556,6 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 			return err
 		}
 	}
-	// A hook that names no transcript is resolved by native session ID. Claude
-	// falls back to that only when a finalizing hook arrives for a session
-	// never bound.
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness != domain.HarnessClaudeCode || finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
@@ -668,7 +615,6 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	case finalizing:
 		state = domain.UsageBindingFinalizing
 	case signal.Event == BackgroundTaskEvent:
-		// The call has returned, so its transcript is whole: drain it once.
 		state = domain.UsageBindingFinalizing
 	case reactivating:
 		state = domain.UsageBindingActive
@@ -805,24 +751,16 @@ func trustedClaudeProviderHint(harness domain.AgentHarness, raw string) string {
 	return pricing.TrustedClaudeRoute(boundedUsageMetadata(raw))
 }
 
-// BackgroundTaskEvent records a provider call AO made for a session, such as
-// a title or a prompt suggestion. Unlike session-end it finalizes only the
-// call's own binding, never the worker's.
+// BackgroundTaskEvent records a provider call AO made for a session, such as a title or a prompt suggestion.
 const BackgroundTaskEvent = "background-task"
 
-// RecordBackgroundTask counts a finished background call against the session
-// it served. Claude keeps the call's transcript under the project directory of
-// the temporary workspace it ran in, and no session claims that directory, so
-// without this the call's tokens are never collected. Call it before the
-// workspace is removed: Claude names the directory from the resolved path.
+// RecordBackgroundTask counts a finished background call against the session it served.
 func (c *Collector) RecordBackgroundTask(
 	ctx context.Context,
 	sessionID domain.SessionID,
 	harness domain.AgentHarness,
 	workspace string,
 ) error {
-	// ponytail: Claude only. Codex runs these calls ephemeral, so it writes no
-	// rollout to collect.
 	if harness != domain.HarnessClaudeCode {
 		return nil
 	}
@@ -834,7 +772,6 @@ func (c *Collector) RecordBackgroundTask(
 	if err != nil || len(paths) == 0 {
 		return err
 	}
-	// The call ran with the worker's environment, so it billed the same route.
 	bindings, err := c.store.ListUsageBindingsForSession(ctx, sessionID)
 	if err != nil {
 		return err
@@ -858,9 +795,6 @@ func (c *Collector) RecordBackgroundTask(
 	return errors.Join(errs...)
 }
 
-// claudeProjectDirName is Claude Code's name for a working directory's
-// project folder: every character that is not an ASCII letter or digit
-// becomes '-'.
 func claudeProjectDirName(path string) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
@@ -1135,7 +1069,7 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 		errs = append(errs, err)
 	} else {
 		if sessions == nil {
-			sessions = []domain.SessionRecord{} // Listed once: nil would make each family list again.
+			sessions = []domain.SessionRecord{}
 		}
 		for _, family := range piFamilyHarnesses {
 			if err := c.backfillPiFamilyPaths(ctx, family, sessions); err != nil {
@@ -1189,8 +1123,6 @@ func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Pi and OMP both honour PI_CODING_AGENT_DIR, so one folder can be both
-	// families' root; each family binds only its own sessions, so try all.
 	piFamily := false
 	var piErrs []error
 	for _, family := range piFamilyHarnesses {
@@ -1272,7 +1204,7 @@ func (c *Collector) reconcilePiFamilyPath(
 	sessions []domain.SessionRecord,
 ) error {
 	if family.transcriptName != "" && filepath.Base(path) != family.transcriptName {
-		return nil // Another file in the session directory, such as its lock.
+		return nil
 	}
 	resolved, _, _, err := c.validateSourcePath(ctx, family.harness, "", path)
 	if err != nil {
@@ -1295,7 +1227,7 @@ func (c *Collector) reconcilePiFamilyPath(
 			continue
 		}
 		if match != nil {
-			return nil // Native identity must resolve to exactly one live AO session.
+			return nil
 		}
 		candidate := session
 		match = &candidate
@@ -1335,16 +1267,8 @@ func (c *Collector) reconcilePiFamilyPath(
 	return nil
 }
 
-// piFamilyWorkspaceClockSkew tolerates a harness clock slightly behind the
-// daemon's when comparing a transcript's start with its AO session's.
 const piFamilyWorkspaceClockSkew = 5 * time.Second
 
-// piFamilyWorkspaceMatch returns the one live AO session of the harness that
-// has no native ID yet and whose workspace is the transcript's recorded cwd.
-// Only a root AO alone writes may bind this way: a transcript a user started
-// by hand in the same workspace would otherwise be billed to the AO session.
-// The transcript must also start after the session did, so one left by an
-// earlier AO session in the same worktree is never claimed.
 func piFamilyWorkspaceMatch(family piFamilyHarness, meta piSessionMeta, sessions []domain.SessionRecord) *domain.SessionRecord {
 	started, ok := meta.startedAt()
 	if strings.TrimSpace(meta.CWD) == "" || !ok {
@@ -1359,7 +1283,7 @@ func piFamilyWorkspaceMatch(family piFamilyHarness, meta piSessionMeta, sessions
 			continue
 		}
 		if match != nil {
-			return nil // The workspace must resolve to exactly one live AO session.
+			return nil
 		}
 		candidate := session
 		match = &candidate
@@ -2302,10 +2226,6 @@ func (c *Collector) registerDiscoveredKimiAgents(
 	return errors.Join(errs...)
 }
 
-// registerDiscoveredQwenMonths registers every monthly Qwen usage file for the
-// binding, not only the newest one. Qwen rolls one shared file per month, so a
-// session first observed after a month boundary still has earlier months
-// ingested; discoverQwenPath alone would return only the latest file.
 func (c *Collector) registerDiscoveredQwenMonths(
 	ctx context.Context,
 	binding domain.UsageBindingRecord,
@@ -2573,10 +2493,6 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if len(path) > maxUsagePathBytes {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
-	// Most harnesses append to a JSONL transcript read by byte offset. The rest
-	// keep usage in a SQLite database, or a snapshot file they rewrite whole,
-	// read by row or generation cursor; a snapshot's identity is pinned so a
-	// rewrite stays the same source.
 	wantExt, whole, pinnedIdentity := ".jsonl", false, ""
 	switch harness {
 	case domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode, domain.HarnessAgy:
@@ -2633,10 +2549,6 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if !whole {
 		return resolved, identity, info.Size(), nil
 	}
-	// A whole-file source's cursor is a row ID or generation, which the file's
-	// byte length says nothing about (new SQLite rows may still sit in the
-	// WAL). Only the identity decides whether a registered generation is
-	// still current.
 	if pinnedIdentity != "" {
 		identity = pinnedIdentity
 	}
@@ -2712,8 +2624,6 @@ func validateSourceAttribution(
 			return rejected()
 		}
 	case domain.UsageSourceGooseLedger:
-		// One database holds every Goose session; the parser selects the
-		// bound session's rows, so the source must carry that native ID.
 		if binding.Harness != domain.HarnessGoose || nativeSessionID != binding.NativeRootID ||
 			subagentID != "" || filepath.Base(resolved) != gooseSessionsDBName {
 			return rejected()
@@ -2724,7 +2634,6 @@ func validateSourceAttribution(
 			return rejected()
 		}
 	case domain.UsageSourceAgyConversation:
-		// Each conversation has its own database, named for the conversation.
 		if binding.Harness != domain.HarnessAgy || nativeSessionID != binding.NativeRootID ||
 			subagentID != "" || filepath.Base(resolved) != nativeSessionID+".db" {
 			return rejected()
@@ -2952,8 +2861,6 @@ func qwenUsageFilename(name string) bool {
 	return err == nil
 }
 
-// discoverDatabasePath returns the agent's one global usage database under
-// root, or "" until the agent has created it.
 func discoverDatabasePath(ctx context.Context, root, name string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -2980,7 +2887,6 @@ func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.Sessi
 	return months[len(months)-1], nil
 }
 
-// qwenMonthFiles lists Qwen's monthly usage files under root, oldest first.
 func qwenMonthFiles(ctx context.Context, root string) ([]string, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, nil
@@ -3053,39 +2959,20 @@ func (c *Collector) discoverKimiPath(ctx context.Context, nativeID string) (stri
 	return paths[0], nil
 }
 
-// piFamilyHarness is one harness that writes Pi-format session transcripts:
-// Pi itself, the forks that kept its session manager (OMP, Kimchi,
-// prime-agent), and DeepSeek Harness, whose zstd session log holds the same
-// records.
 type piFamilyHarness struct {
-	harness domain.AgentHarness
-	kind    domain.UsageSourceKind
-	// preambleType names one record the harness may write ahead of the
-	// session header. OMP reserves line 1 for a padded title slot it rewrites
-	// in place, so its header is line 2; Pi and Kimchi start with the header.
-	preambleType string
-	// bindByWorkspace marks a harness whose terminal sessions never report a
-	// native ID to AO, so a transcript binds to the one live AO session in its
-	// recorded workspace that started no later than it did. AO sessions run in
-	// AO-created workspaces, so a transcript there is the AO session's.
+	harness         domain.AgentHarness
+	kind            domain.UsageSourceKind
+	preambleType    string
 	bindByWorkspace bool
-	// transcriptName, when set, is the fixed file name of each transcript,
-	// two levels below the root (<encoded cwd>/<session id>/); otherwise
-	// transcripts are <id>.jsonl files in the root or one level below it.
-	transcriptName string
-	// compressed marks a transcript stored as concatenated zstd frames.
-	compressed bool
+	transcriptName  string
+	compressed      bool
 }
 
 var piFamilyHarnesses = []piFamilyHarness{
 	{harness: domain.HarnessPi, kind: domain.UsageSourcePiSession},
 	{harness: domain.HarnessOMP, kind: domain.UsageSourceOMPSession, preambleType: "title"},
 	{harness: domain.HarnessKimchi, kind: domain.UsageSourceKimchiSession},
-	// prime-agent releases without --extension cannot load AO's activity
-	// extension, so no hook reports their native session ID.
 	{harness: domain.HarnessPrimeAgent, kind: domain.UsageSourcePrimeAgentSession, bindByWorkspace: true},
-	// DeepSeek Harness has no lifecycle hook surface, so a terminal session's
-	// native ID is never known; Chat sessions carry it as the ACP session ID.
 	{
 		harness: domain.HarnessDeepSeek, kind: domain.UsageSourceDeepSeekSession, bindByWorkspace: true,
 		transcriptName: deepseekSessionLogName, compressed: true,
@@ -3115,8 +3002,6 @@ func isPiFamilyHarness(harness domain.AgentHarness) bool {
 	return ok
 }
 
-// piFamilyRoots are the folders a family's transcripts are written under; an
-// unset root is left out, so it never globs the daemon's working directory.
 func (c *Collector) piFamilyRoots(family piFamilyHarness) []string {
 	var roots []string
 	switch family.harness {
@@ -3138,12 +3023,10 @@ type piSessionMeta struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
 	Timestamp string `json:"timestamp"`
-	// CreatedAt is DeepSeek Harness's header time, in Unix milliseconds.
 	CreatedAt int64  `json:"createdAt"`
 	CWD       string `json:"cwd"`
 }
 
-// startedAt reports when the transcript's session began.
 func (meta piSessionMeta) startedAt() (time.Time, bool) {
 	if meta.CreatedAt > 0 {
 		return time.UnixMilli(meta.CreatedAt).UTC(), true
@@ -3152,9 +3035,6 @@ func (meta piSessionMeta) startedAt() (time.Time, bool) {
 	return started, err == nil
 }
 
-// readPiFamilySessionMeta reads the session header that names a Pi-format
-// transcript's native identity: the first record, or the second when the
-// first is the harness's preamble record.
 func readPiFamilySessionMeta(ctx context.Context, path string, family piFamilyHarness) (piSessionMeta, bool) {
 	if ctx.Err() != nil {
 		return piSessionMeta{}, false
@@ -3230,9 +3110,6 @@ func newestPiPaths(ctx context.Context, family piFamilyHarness, root string, lim
 			return nil, err
 		}
 	} else {
-		// AO launches Pi with --session-dir, which writes sessions directly into
-		// root; Pi's own default layout, which OMP and Kimchi keep, nests them one
-		// directory deeper per cwd.
 		var err error
 		paths, err = filepath.Glob(filepath.Join(root, "*.jsonl"))
 		if err != nil {

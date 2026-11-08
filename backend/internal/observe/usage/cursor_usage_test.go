@@ -103,7 +103,6 @@ func TestCursorUsageKeepsAOSessionsAndResumesBeforeTheLastRead(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Every AO Cursor session ended before the margin: there is nothing new.
 	for index := range store.sessions {
 		store.sessions[index].IsTerminated = true
 		store.sessions[index].UpdatedAt = now.Add(-2 * time.Hour)

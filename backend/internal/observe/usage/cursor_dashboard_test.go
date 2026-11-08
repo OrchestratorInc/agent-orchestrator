@@ -31,8 +31,6 @@ func cursorTestEvent(index int) map[string]any {
 
 func TestReadCursorDashboardReconcilesPagesAndMapsEvents(t *testing.T) {
 	token := cursorTestToken("auth0|user_123")
-	// 1,003 events. Page two repeats page one's last event, which the count
-	// of 1,003 reveals; event 5 billed no tokens.
 	events := make([]map[string]any, 1003)
 	for index := range events {
 		events[index] = cursorTestEvent(index)
@@ -76,7 +74,7 @@ func TestReadCursorDashboardReconcilesPagesAndMapsEvents(t *testing.T) {
 		keys[event.Event.SourceEventKey] = true
 	}
 
-	claude := got[6] // events 0-4, then 6, then 7
+	claude := got[6]
 	tokens := claude.Event.Tokens
 	if claude.ConversationID != "chat" || claude.Event.ProviderID != domain.UsageProviderAnthropic ||
 		claude.Event.BillingProviderID != "cursor" || !claude.Event.CreatedAt.Equal(time.UnixMilli(1_000_007)) ||

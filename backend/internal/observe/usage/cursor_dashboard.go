@@ -22,38 +22,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Cursor keeps no token counts on disk. Its account dashboard lists every
-// billed request with the conversation it was for, so that is where AO reads
-// the usage of the Cursor sessions it started.
+// Cursor keeps no token counts on disk.
 const (
-	// CursorDashboardURL lists an account's billed requests.
-	CursorDashboardURL = "https://cursor.com/api/dashboard/get-filtered-usage-events"
-	// cursorPricingVersion labels a cost Cursor itself reported.
-	cursorPricingVersion = "cursor:reported"
-	// cursorBillingProvider is who bills a Cursor request, whichever model ran.
+	CursorDashboardURL    = "https://cursor.com/api/dashboard/get-filtered-usage-events"
+	cursorPricingVersion  = "cursor:reported"
 	cursorBillingProvider = "cursor"
-	// cursorPageSize is the most events Cursor returns in one page.
 	cursorPageSize        = 1000
 	cursorPageTimeout     = 10 * time.Second
 	cursorKeychainTimeout = 30 * time.Second
 	maxCursorPageBytes    = 64 << 20
-	// maxCursorCount bounds a token count or cent amount; anything larger is
-	// not a real request.
-	maxCursorCount = 1e15
+	maxCursorCount        = 1e15
 )
 
 var (
-	// ErrCursorSignedOut means there is no usable Cursor login: no Keychain
-	// item, or cursor.com refused the token.
+	// ErrCursorSignedOut means there is no usable Cursor login: no Keychain item, or cursor.com refused the token.
 	ErrCursorSignedOut = errors.New("cursor is not signed in")
-	// ErrCursorKeychain means the Keychain item could not be read, most often
-	// because macOS access was denied or not answered.
+	// ErrCursorKeychain means the Keychain item could not be read, most often because macOS access was denied or not answered.
 	ErrCursorKeychain = errors.New("cursor keychain item could not be read")
 )
 
-// CursorKeychainToken reads the access token cursor-agent's login keeps in the
-// macOS Keychain. macOS may ask the user to allow the read; the timeout leaves
-// time to answer and fails the read instead of hanging.
+// CursorKeychainToken reads the access token cursor-agent's login keeps in the macOS Keychain. macOS may ask the user to allow the read; the timeout leaves time to answer and fails the read instead of hanging.
 func CursorKeychainToken(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cursorKeychainTimeout)
 	defer cancel()
@@ -62,7 +50,7 @@ func CursorKeychainToken(ctx context.Context) (string, error) {
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:
-	case ctx.Err() == nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 44: // errSecItemNotFound
+	case ctx.Err() == nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 44:
 		return "", ErrCursorSignedOut
 	default:
 		return "", errors.Join(ErrCursorKeychain, err)
@@ -103,17 +91,13 @@ func cursorAccount(token string) (userID, accountKey string, err error) {
 	return userID, hex.EncodeToString(sum[:]), nil
 }
 
-// CursorDashboardEvent is one billed Cursor request and the conversation it
-// was for.
+// CursorDashboardEvent is one billed Cursor request and the conversation it was for.
 type CursorDashboardEvent struct {
 	ConversationID string
 	Event          domain.ModelUsageEvent
 }
 
-// ReadCursorDashboard returns the account's billed requests from since to
-// until, inclusive to the millisecond. Event keys count identical requests in
-// order within this read only, so a caller stores a read by replacing the
-// whole range it covers.
+// ReadCursorDashboard returns the account's billed requests from since to until, inclusive to the millisecond.
 func ReadCursorDashboard(ctx context.Context, client *http.Client, endpoint, token string, since, until time.Time) ([]CursorDashboardEvent, error) {
 	userID, accountKey, err := cursorAccount(token)
 	if err != nil {
@@ -123,8 +107,6 @@ func ReadCursorDashboard(ctx context.Context, client *http.Client, endpoint, tok
 	if sinceMs < 0 || sinceMs > untilMs {
 		return nil, fmt.Errorf("invalid cursor usage window %v to %v", since, until)
 	}
-	// The cookie carries the login, so the request must never follow a
-	// redirect off cursor.com.
 	noRedirect := *client
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("cursor usage request was redirected")
@@ -134,8 +116,6 @@ func ReadCursorDashboard(ctx context.Context, client *http.Client, endpoint, tok
 	var pages [][]json.RawMessage
 	total := -1
 	for page := 1; ; page++ {
-		// A count can include overlapping page boundaries; leave room to
-		// reconcile them without imposing an account-size limit.
 		limit := 1000
 		if total >= 0 {
 			limit = (total+cursorPageSize-1)/cursorPageSize*2 + 1
@@ -174,8 +154,6 @@ func ReadCursorDashboard(ctx context.Context, client *http.Client, endpoint, tok
 	occurrences := map[string]int{}
 	var previous []string
 	for _, events := range pages {
-		// A page can repeat the previous page's last events; the count says
-		// how many repeats there are to drop.
 		var keys []string
 		if removals > 0 {
 			keys = make([]string, len(events))
@@ -277,8 +255,6 @@ type cursorNativeUsage struct {
 	TotalCents       *float64 `json:"totalCents"`
 }
 
-// cursorUsageEvent maps one dashboard event; ok is false for an event that
-// billed no tokens or falls outside the window.
 func cursorUsageEvent(raw json.RawMessage, accountKey string, sinceMs, untilMs int64, occurrences map[string]int) (CursorDashboardEvent, bool, error) {
 	invalid := errors.New("invalid cursor usage event")
 	var native cursorNativeEvent
@@ -297,7 +273,6 @@ func cursorUsageEvent(raw json.RawMessage, accountKey string, sinceMs, untilMs i
 			return CursorDashboardEvent{}, false, invalid
 		}
 	}
-	// Cursor sends the time as milliseconds, in a string or a number.
 	whenMs, err := strconv.ParseFloat(strings.Trim(strings.TrimSpace(string(native.Timestamp)), `"`), 64)
 	model := strings.TrimSpace(native.Model)
 	if err != nil || math.IsNaN(whenMs) || math.IsInf(whenMs, 0) || model == "" || len(model) > 256 {
@@ -327,7 +302,6 @@ func cursorUsageEvent(raw json.RawMessage, accountKey string, sinceMs, untilMs i
 		}
 	}
 	conversation := strings.TrimSpace(native.ConversationID)
-	// Cursor gives no event ID: identical requests keep their order instead.
 	identity := stableSourceEventKey("cursor", accountKey, strconv.FormatInt(at, 10), model, conversation,
 		strconv.FormatInt(input, 10), strconv.FormatInt(cacheRead, 10), strconv.FormatInt(cacheWrite, 10),
 		strconv.FormatInt(output, 10), cents)
@@ -350,7 +324,6 @@ func cursorUsageEvent(raw json.RawMessage, accountKey string, sinceMs, untilMs i
 	}, true, nil
 }
 
-// cursorTokens reads a count as whole tokens; a missing one is zero.
 func cursorTokens(value *float64) int64 {
 	if value == nil || *value <= 0 {
 		return 0
@@ -358,7 +331,6 @@ func cursorTokens(value *float64) int64 {
 	return int64(*value)
 }
 
-// canonicalJSONHash hashes a JSON value independently of its key order.
 func canonicalJSONHash(raw json.RawMessage) (string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -366,7 +338,7 @@ func canonicalJSONHash(raw json.RawMessage) (string, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return "", err
 	}
-	canonical, err := json.Marshal(value) // map keys marshal sorted
+	canonical, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}
@@ -374,9 +346,6 @@ func canonicalJSONHash(raw json.RawMessage) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// cursorBoundaryOverlap is the length of the longest tail of previous that
-// current starts with: the prefix function over current, a separator no key
-// equals, then previous.
 func cursorBoundaryOverlap(previous, current []string) int {
 	sequence := make([]string, 0, len(current)+1+len(previous))
 	sequence = append(append(append(sequence, current...), ""), previous...)

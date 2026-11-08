@@ -155,8 +155,6 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 		Permissions:   config.Permissions,
 		SystemPrompt:  systemPrompt,
 	}, prompt)
-	// A failed or timed-out call may still have been billed, so count it either
-	// way, and while the workspace exists: the transcript is found by its path.
 	if m.backgroundTaskUsage != nil {
 		if usageErr := m.backgroundTaskUsage.RecordBackgroundTask(
 			context.WithoutCancel(ctx), rec.ID, rec.Harness, workspace,

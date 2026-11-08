@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TestAgentLimitReadingsRoundTripAndExpire pins the reading history: a reading
-// comes back as it was saved, a repeated save of the same read is ignored, and
-// a save drops readings older than 14 days.
 func TestAgentLimitReadingsRoundTripAndExpire(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -50,8 +47,6 @@ func TestAgentLimitReadingsRoundTripAndExpire(t *testing.T) {
 	}
 }
 
-// TestLimitHistoryOffUntilTurnedOn pins that limit readings are kept only once
-// the app turns the history on, and stop when it turns it off.
 func TestLimitHistoryOffUntilTurnedOn(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -10,15 +10,10 @@ import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const HOUR_MS = 3_600_000;
-/** A weekly window not read for this long is shown as stale. */
 const STALE_MS = HOUR_MS;
 
 type Sessions = { login: UsageLimitLogin; spans: UsageLimitSpan[] };
 
-/**
- * The experimental Windows view: each login's five-hour windows and weekly
- * allowance, drawn only from the limit readings AO took. Nothing is inferred.
- */
 export function UsageWindows({ history, now }: { history: UsageLimitWindows; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.language;
@@ -27,18 +22,14 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 	const sessions: Sessions[] = history.logins
 		.map((login) => ({ login, spans: login.windows.filter((span) => (span.durationMinutes ?? 0) > 0 && (span.durationMinutes ?? 0) < DAY_MINUTES) }))
 		.filter((entry) => entry.spans.length > 0);
-	// A weekly limit with nothing used says nothing; only ones in use are drawn.
 	const weekly = history.logins.flatMap((login) =>
 		login.windows
 			.filter((span) => (span.durationMinutes ?? 0) >= DAY_MINUTES && span.state === "open" && span.peakUsedPercent > 0)
 			.map((span) => ({ login, span })),
 	);
 	const firstReading = history.firstReadingAt ? Date.parse(history.firstReadingAt) : null;
-	// The timeline starts on the day readings start, not on empty days before it.
 	const firstDay = firstReading === null ? since : new Date(firstReading).setHours(0, 0, 0, 0);
 	const timelineStart = Math.max(since, firstDay);
-	// It ends at the latest open window's reset, so that window is drawn whole
-	// with "now" marked inside it, not cut off at now.
 	const timelineEnd = Math.max(until, ...sessions.flatMap(({ spans }) => spans.filter((span) => span.state === "open").map((span) => Date.parse(span.resetsAt))));
 	const dateTime = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -55,7 +46,6 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 		<div className="flex flex-col gap-10">
 			<p className="text-xs text-muted-foreground">
 				{t("usage.windows.about")}
-				{/* Say when recording began only when it began inside the period. */}
 				{firstReading !== null && firstReading - since > HOUR_MS ? ` ${t("usage.windows.recordingSince", { value: dateTime.format(firstReading) })}` : null}
 			</p>
 			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={timelineEnd} now={now} dateTime={dateTime} /> : null}
@@ -85,7 +75,6 @@ function LoginName({ login }: { login: UsageLimitLogin }) {
 	);
 }
 
-/** Fill colour of a window: the agent's, or the warning tone once it hit the limit. */
 function spanTone(login: UsageLimitLogin, span: UsageLimitSpan): string {
 	return span.peakUsedPercent >= 100 ? "var(--color-warning)" : agentTone(PROVIDER_HARNESS[login.provider]);
 }
@@ -99,7 +88,6 @@ function spanSummary(span: UsageLimitSpan, dateTime: Intl.DateTimeFormat, t: TFu
 	});
 }
 
-/** A section title with the one line that says how to read it. */
 function SectionHeading({ id, title, help, aside }: { id: string; title: string; help: string; aside?: string }) {
 	return (
 		<div className="flex flex-col gap-1">
@@ -112,7 +100,6 @@ function SectionHeading({ id, title, help, aside }: { id: string; title: string;
 	);
 }
 
-/** What a window's tooltip says: when, how full, and how sure that number is. */
 function SpanDetails({ span, now, dateTime }: { span: UsageLimitSpan; now: Date; dateTime: Intl.DateTimeFormat }) {
 	const { t } = useTranslation();
 	const start = span.startsAt ? Date.parse(span.startsAt) : Date.parse(span.firstReadAt);
@@ -141,7 +128,6 @@ function SpanDetails({ span, now, dateTime }: { span: UsageLimitSpan; now: Date;
 	);
 }
 
-/** A legend key drawn like the window it names. */
 function LegendBlock({ state }: { state: UsageLimitSpan["state"] }) {
 	return (
 		<span aria-hidden="true" className={cn("relative h-3 w-4 overflow-hidden rounded-xs bg-foreground/15", state === "partial" && "border border-dashed border-foreground/60")}>
@@ -158,7 +144,6 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 	const day = new Date(since);
 	day.setHours(24, 0, 0, 0);
 	for (; day.getTime() < until; day.setDate(day.getDate() + 1)) midnights.push(day.getTime());
-	// A timeline that starts at midnight labels its first day too.
 	const labels = new Date(since).getHours() === 0 && new Date(since).getMinutes() === 0 ? [since, ...midnights] : midnights;
 	const dayLabel = new Intl.DateTimeFormat(i18n.language, { weekday: "short", day: "numeric" });
 	return (
@@ -201,7 +186,6 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 													className={cn("absolute inset-x-0 bottom-0", window.state === "open" && "opacity-60")}
 													style={{ height: `${used}%`, backgroundColor: tone }}
 												/>
-												{/* The projection: where the open window lands at its reset if its pace holds. */}
 												{pace && pace.atReset > used ? (
 													<div
 														aria-hidden="true"
@@ -212,7 +196,6 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 												<span aria-hidden="true" className="absolute inset-x-0 top-0.5 truncate text-center text-2xs font-medium tabular-nums text-foreground">
 													{Math.round(window.peakUsedPercent)}%
 												</span>
-												{/* The projection gets its own line: a five-hour block is narrow on a week. */}
 												{pace && pace.atReset > used ? (
 													<span aria-hidden="true" className="absolute inset-x-0 top-4 truncate text-center text-2xs tabular-nums text-foreground/70">
 														→ {Math.round(pace.atReset)}%

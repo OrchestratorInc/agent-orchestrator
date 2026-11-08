@@ -20,11 +20,6 @@ func (f fakeLimitReadings) ListAgentLimitReadings(_ context.Context, since time.
 	return out, nil
 }
 
-// TestLimitHistoryWindows pins how readings become windows: one window per
-// reset (jitter merged), final only when read near its reset, the computer's
-// login split when it changes accounts, two accounts on one login merged, and
-// an hourly series for weekly windows, and a week restarted early closing the
-// old one.
 func TestLimitHistoryWindows(t *testing.T) {
 	now := time.Date(2026, 10, 28, 20, 0, 0, 0, time.UTC)
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 28, h, m, 0, 0, time.UTC) }
@@ -41,25 +36,16 @@ func TestLimitHistoryWindows(t *testing.T) {
 	}
 	jitter := at(5, 0).Add(700 * time.Millisecond)
 	readings := fakeLimitReadings{
-		// Max on this computer: a window read up to 3 minutes before its reset,
-		// with a reset that jitters by under a second.
 		read("device-claude", "max@example.com", "five_hour", 300, 10, ptr(at(5, 0)), at(1, 0)),
 		read("device-claude", "max@example.com", "five_hour", 300, 15, &jitter, at(4, 57)),
-		// The computer's login switches to Team; a Team account folder reads the
-		// same login too.
 		read("device-claude", "team@example.com", "five_hour", 300, 20, ptr(at(12, 0)), at(8, 0)),
 		read("acct-team", "Team@Example.com", "five_hour", 300, 46, ptr(at(12, 0)), at(9, 0)),
-		// Readings stop two hours before the next reset: at least 30%.
 		read("device-claude", "team@example.com", "five_hour", 300, 30, ptr(at(18, 0)), at(16, 0)),
 		read("device-claude", "team@example.com", "five_hour", 300, 5, ptr(at(23, 0)), at(19, 0)),
-		// Nothing used yet: no reset, no window.
 		read("device-claude", "team@example.com", "model:Fable", 10080, 0, nil, at(19, 0)),
-		// A weekly window read twice in one hour and once in the next.
 		read("device-claude", "team@example.com", "seven_day", 10080, 40, ptr(at(23, 0).AddDate(0, 0, 3)), at(18, 10)),
 		read("device-claude", "team@example.com", "seven_day", 10080, 41, ptr(at(23, 0).AddDate(0, 0, 3)), at(18, 50)),
 		read("device-claude", "team@example.com", "seven_day", 10080, 43, ptr(at(23, 0).AddDate(0, 0, 3)), at(19, 5)),
-		// Codex restarts the week early: the old week, due to reset in four days,
-		// ends when the new one is first read five minutes later.
 		{AccountID: "device-codex", Provider: domain.AgentAccountProviderCodex, Email: "c@example.com", WindowID: "codex:Weekly",
 			DurationMinutes: 10080, UsedPercent: 69, ResetsAt: ptr(at(6, 0).AddDate(0, 0, 4)), ReadAt: at(6, 30)},
 		{AccountID: "device-codex", Provider: domain.AgentAccountProviderCodex, Email: "c@example.com", WindowID: "codex:Weekly",

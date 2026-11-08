@@ -19,9 +19,6 @@ import (
 
 const deepseekTestSessionID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"
 
-// deepseekTestFrames is a DeepSeek Harness 0.x session.v4 log as Harness
-// writes it: one zstd frame per flush, the last one cut off mid-record while
-// the next reply is still being written.
 var deepseekTestFrames = []string{
 	`{"type":"session","version":4,"id":"` + deepseekTestSessionID + `","createdAt":1792333057101,"cwd":"/repo","isSeeded":false,"delegationDepth":0}` + "\n" +
 		`{"type":"request/context","seq":13,"time":1792333057468,"data":{"provider":"deepseek-official","model":"deepseek-v4-flash","contextWindow":1000000}}` + "\n",
@@ -43,11 +40,6 @@ func writeDeepSeekTestLog(t *testing.T, path string, frames []string) {
 	mustNoError(t, os.WriteFile(path, log.Bytes(), 0o600))
 }
 
-// Break caught: reading DeepSeek Harness's zstd session log as a plain JSONL
-// transcript. Harness appends a zstd frame per flush, so the reader
-// decompresses every frame, uses the record seq as the cursor, ignores a
-// record still being written, and prices each reply from the catalog with
-// its cache-read tokens counted as input.
 func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
 	writeDeepSeekTestLog(t, path, deepseekTestFrames)
@@ -90,10 +82,6 @@ func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 	}
 }
 
-// Break caught: every 15 s poll decompressed the whole DeepSeek log, up to
-// 512 MiB decoded, and wrote the unchanged cursor back. A log with the size
-// and mtime of a read that left nothing unread is not decoded again, and a
-// pass that finds nothing new writes nothing.
 func newDeepSeekTestIngestion(t *testing.T, clock *time.Time) (path string, store *sqlite.Store, session domain.SessionRecord, source domain.UsageSourceRecord) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")

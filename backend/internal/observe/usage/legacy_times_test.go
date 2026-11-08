@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
-// Break caught: events stored before the parser read record times have no
-// created_at, so the usage report placed them in no period. Codex compresses
-// old rollouts, so the transcript may only survive as a .zst sibling.
 func TestLegacyRepairerFillsEventTimesFromACompressedRollout(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -35,8 +32,6 @@ func TestLegacyRepairerFillsEventTimesFromACompressedRollout(t *testing.T) {
 	mustNoError(t, os.WriteFile(path+".zst", encoder.EncodeAll([]byte(content), nil), 0o600))
 	mustNoError(t, os.Remove(path))
 
-	// Through Start, as the daemon runs it: the repair must be wired in, not
-	// only correct.
 	runCtx, cancel := context.WithCancel(ctx)
 	repairer := NewLegacyRepairer(store, pricing.NewManager(testPricingSnapshot(t, "0.000001")), LegacyRepairerConfig{})
 	mustNoError(t, repairer.Start(runCtx))
@@ -65,10 +60,6 @@ func TestLegacyRepairerFillsEventTimesFromACompressedRollout(t *testing.T) {
 	}
 }
 
-// Break caught: rows stored before the parser recorded a service tier priced
-// every Codex priority turn at standard rates forever. The reread must fill
-// only the tier the transcript reports, clear that row's cost for repricing,
-// leave a turn with no tier alone, and run once per queued source.
 func TestLegacyRepairerFillsServiceTiersOnceFromTheTranscript(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -81,7 +72,6 @@ func TestLegacyRepairerFillsServiceTiersOnceFromTheTranscript(t *testing.T) {
 	mustNoError(t, os.WriteFile(path, []byte(content), 0o600))
 	ingestSourceFully(ctx, t, NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }}), source.ID)
 
-	// As an older build stored them: no tier, priced at standard.
 	db := openUsageRawDB(t, dataDir)
 	_, err := db.Exec(`UPDATE model_usage_events SET service_tier = NULL, estimated_cost_nanos = 7, pricing_version = 'ao-catalog:openai:old' WHERE usage_source_id = ?`, source.ID)
 	mustNoError(t, err)

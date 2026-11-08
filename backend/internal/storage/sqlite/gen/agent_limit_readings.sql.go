@@ -20,7 +20,6 @@ func (q *Queries) DeleteAgentLimitReadingsBefore(ctx context.Context, readAtMs i
 }
 
 const insertAgentLimitReading = `-- name: InsertAgentLimitReading :exec
-
 INSERT INTO agent_limit_readings (
     account_id, provider, email, plan, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -40,7 +39,6 @@ type InsertAgentLimitReadingParams struct {
 	ReadAtMs        int64
 }
 
-// Limit window readings, one row per window each time an account's limits are read.
 func (q *Queries) InsertAgentLimitReading(ctx context.Context, arg InsertAgentLimitReadingParams) error {
 	_, err := q.db.ExecContext(ctx, insertAgentLimitReading,
 		arg.AccountID,

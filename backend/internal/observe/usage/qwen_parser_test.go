@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TestParseQwenUsageForBoundSession catches cross-session attribution and
-// preserves Qwen's cached and reasoning token buckets.
 func TestParseQwenUsageForBoundSession(t *testing.T) {
 	source := usageSource(domain.UsageSourceQwenMonthly)
 	source.NativeRootID = "qwen-session"
@@ -78,10 +76,6 @@ func TestParseQwenAllowsOmittedTotalTokens(t *testing.T) {
 	}
 }
 
-// TestParseQwenCountsThoughtsOnceByAuthType catches adding thoughtsTokens to
-// output for backends whose output already contains them. The openai record is
-// a live z.ai reply: Qwen's own total (5951 = 5697 + 254) shows its 191
-// thoughts are inside the 254.
 func TestParseQwenCountsThoughtsOnceByAuthType(t *testing.T) {
 	source := usageSource(domain.UsageSourceQwenMonthly)
 	source.NativeRootID = "qwen-session"
@@ -110,9 +104,6 @@ func TestParseQwenCountsThoughtsOnceByAuthType(t *testing.T) {
 	}
 }
 
-// TestParseQwenBillsTheResolvedRoute catches leaving Qwen events unpriced: the
-// log names only the auth type, so the billing provider comes from the route
-// the collector resolved from Qwen's settings, and stays empty without one.
 func TestParseQwenBillsTheResolvedRoute(t *testing.T) {
 	record := jsonlRecord{Data: []byte(`{"schemaVersion":1,"id":"turn-1","sessionId":"qwen-session","model":"glm-5.3","authType":"openai","inputTokens":18472,"outputTokens":3,"cachedTokens":0,"thoughtsTokens":0,"totalTokens":18475}`)}
 	for _, tc := range []struct{ hint, want string }{

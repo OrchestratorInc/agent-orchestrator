@@ -12,9 +12,6 @@ import (
 
 const grokTestSessionID = "01a1a16e-c4c7-7c51-92d5-bf8beef81073"
 
-// grokUsageSnapshot is the shape of Grok Build 0.9's usage.json: session
-// totals plus one entry per completed turn, numbered from 2 here as Grok does
-// after a resumed first turn.
 const grokUsageSnapshot = `{"sessionId":"` + grokTestSessionID + `","updatedAt":"2026-11-03T12:44:10.000000+00:00",
 "session":{"inputTokens":61997,"outputTokens":283,"cachedReadTokens":42752,"cacheCreationTokens":0,"reasoningTokens":256,"totalTokens":62280,"modelCalls":3,"costUsdTicks":735380000,"turnCount":2,"primaryModelId":"grok-4.7"},
 "turns":[
@@ -23,10 +20,6 @@ const grokUsageSnapshot = `{"sessionId":"` + grokTestSessionID + `","updatedAt":
  {"turnNumber":3,"endedAt":"2026-11-03T12:44:10.000000+00:00","inputTokens":41427,"outputTokens":236,"cachedReadTokens":41088,"cacheCreationTokens":0,"reasoningTokens":130,"totalTokens":41663,"modelCalls":2,"turnCount":1,"primaryModelId":"grok-4.7"}
 ]}`
 
-// Break caught: reading Grok's usage.json as an append-only transcript. Grok
-// rewrites the whole file after each turn, so the reader works from the turn
-// number, keeps Grok's own cost (1e-10 USD ticks), prices a turn without one
-// from the catalog, and never re-reads a turn behind the cursor.
 func TestReadAndParseGrokUsageSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "%2Frepo", grokTestSessionID, "usage.json")
 	mustNoError(t, os.MkdirAll(filepath.Dir(path), 0o700))

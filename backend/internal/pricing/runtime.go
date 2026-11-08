@@ -77,10 +77,8 @@ type exactRates struct {
 }
 
 type providerSnapshot struct {
-	version string
-	models  map[string]exactRates
-	// longContext lists, largest first, the sizes in thousands of input tokens
-	// over which a row bills at other rates, keyed by the row they extend.
+	version     string
+	models      map[string]exactRates
 	longContext map[string][]int64
 }
 
@@ -88,8 +86,6 @@ type providerSnapshot struct {
 // and exact rational rates are never exposed or mutated after construction.
 type Snapshot struct {
 	providers map[string]providerSnapshot
-	// overrides are the user's prices, by stored model ID. They survive a
-	// catalog activation.
 	overrides map[string]modelOverride
 }
 
@@ -340,11 +336,6 @@ func (s *Snapshot) ProviderVersion(providerID string) string {
 // Ambiguity resolves to "". Sentinels like "unknown" and "<synthetic>" appear in
 // no catalog and fall out here for free, as does any model AO has no rates for,
 // which is exactly the event that must stay unpriced anyway.
-//
-// Only the required providers answer. Every gateway and cloud resells the same
-// models under the same names (azure's gpt-5, github_copilot's claude models),
-// so a model's name says which lab made it, not who billed it, and counting
-// the resellers would make every such lookup ambiguous.
 func (s *Snapshot) ProviderForModel(modelID string) string {
 	if s == nil || strings.TrimSpace(modelID) == "" {
 		return ""
@@ -395,8 +386,7 @@ type cacheWriteSplit struct {
 	oneH  *int64
 }
 
-// Estimate prices one normalized usage event against this immutable snapshot,
-// at the rates of the service tier that served it.
+// Estimate prices one normalized usage event against this immutable snapshot, at the rates of the service tier that served it.
 func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	providerID := CanonicalProviderID(event.BillingProviderID)
 	modelID := CanonicalModelID(providerID, event.ModelID)
@@ -405,7 +395,6 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 		override = s.overrides[event.ModelID]
 	}
 	if override.priceAs != "" {
-		// An unresolvable target, after a catalog drops it, leaves the row unpriced.
 		providerID, modelID, _ = s.priceAsRow(override.priceAs)
 	}
 	tier, knownTier := catalogServiceTier(event.ProviderID, event.ServiceTier)
@@ -415,7 +404,6 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	var rates exactRates
 	version := ""
 	if override.rates != nil {
-		// The user's own rate is one rate: no tier or long-context rows.
 		rates, version = *override.rates, override.version
 	} else if s != nil {
 		if provider, ok := s.providers[providerID]; ok {
@@ -456,9 +444,6 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	return estimate, nil
 }
 
-// longContextRow is the row that prices a request of input tokens on rowID: the
-// largest size the request passes, or rowID itself. A request with an unknown
-// input count stays on rowID.
 func (p providerSnapshot) longContextRow(rowID string, input *int64) string {
 	if input == nil {
 		return rowID
@@ -471,15 +456,13 @@ func (p providerSnapshot) longContextRow(rowID string, input *int64) string {
 	return rowID
 }
 
-// Speed tiers a report groups usage by. Unknown is a tier word AO has no
-// pricing rule for.
+// Speed tiers a report groups usage by.
 const (
 	SpeedStandard = "standard"
 	SpeedUnknown  = "unknown"
 )
 
-// SpeedTier names the tier an event was billed at for reports: "standard", a
-// catalog tier (priority, flex, ultrafast, fast), or "unknown".
+// SpeedTier names the tier an event was billed at for reports: "standard", a catalog tier (priority, flex, ultrafast, fast), or "unknown".
 func SpeedTier(providerID domain.UsageProviderID, reported string) string {
 	tier, known := catalogServiceTier(providerID, reported)
 	switch {
@@ -492,11 +475,6 @@ func SpeedTier(providerID domain.UsageProviderID, reported string) string {
 	}
 }
 
-// catalogServiceTier maps the tier word a provider reported for one event to
-// the catalog row that prices it. "" is the model's standard row, which is also
-// what an unreported tier means. known is false for a word AO has no rule for:
-// it prices as unknown, because billing a premium tier at standard rates would
-// record a wrong number as fact.
 func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tier string, known bool) {
 	if reported == "" {
 		return "", true
@@ -506,7 +484,6 @@ func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tie
 		switch reported {
 		case "default", "standard":
 			return "", true
-		// Codex's own config spells priority processing "fast".
 		case "priority", "fast":
 			return ServiceTierPriority, true
 		case "flex":
@@ -525,9 +502,6 @@ func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tie
 	return "", false
 }
 
-// estimateInput charges every non-cache-read input token, and reports the part
-// of that charge the cache writes make up.
-//
 // A catalog without a cache-write rate for the model is not missing data: the
 // provider does not bill writes separately, so the whole uncached bucket is
 // charged at the plain input rate. Only when a distinct write rate exists — as
@@ -587,10 +561,6 @@ func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {
 // cacheWriteSplitFor reads the write buckets back out of the bounded provider
 // usage object. An event stored before that object was captured, or one whose
 // object omits the counters, simply reports an unknown split.
-//
-// Claude and Codex report the count in their own vocabulary. Every other agent,
-// and a Codex record carrying only cumulative totals, has it under the ao_ keys
-// the usage parser adds (see providerUsageWithCacheWrite).
 func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 	if event.ProviderUsageJSON == "" {
 		return cacheWriteSplit{}

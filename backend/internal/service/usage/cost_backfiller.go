@@ -45,15 +45,12 @@ type CostBackfiller struct {
 
 type costBackfillJob struct {
 	providerID string
-	// modelID marks a pass over one model's events after its price override
-	// changed, in place of a provider's catalog pass.
 	modelID    string
 	version    string
 	sequence   uint64
 	retryDelay time.Duration
 }
 
-// key names the job's slot: a newer job for the same key supersedes it.
 func (j costBackfillJob) key() string {
 	if j.modelID != "" {
 		return "model:" + j.modelID
@@ -112,9 +109,7 @@ func (b *CostBackfiller) Enqueue(
 	return b.enqueue(ctx, snapshot, activations, false)
 }
 
-// Rerun queues a pass for every provider at its active version, even one that
-// already ran, because stored rows changed underneath it: a repair cleared
-// their costs, or a price override moved.
+// Rerun queues a pass for every provider at its active version, even one that already ran, because stored rows changed underneath it: a repair cleared their costs, or a price override moved.
 func (b *CostBackfiller) Rerun(ctx context.Context, snapshot *pricing.Snapshot) error {
 	if snapshot == nil {
 		return errors.New("usage cost backfill snapshot is nil")
@@ -157,8 +152,7 @@ func (b *CostBackfiller) enqueue(
 	return nil
 }
 
-// RepriceModels queues a pass over each model's events after its price
-// override changed: rows AO priced, or could not, take the new price.
+// RepriceModels queues a pass over each model's events after its price override changed: rows AO priced, or could not, take the new price.
 func (b *CostBackfiller) RepriceModels(ctx context.Context, modelIDs []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -282,11 +276,6 @@ func (b *CostBackfiller) process(ctx context.Context, job costBackfillJob) error
 	if b.superseded(job) {
 		return nil
 	}
-	// Rows an older catalog priced are repriced at this one, so a corrected
-	// or changed rate reaches history instead of only new usage.
-	// ponytail: rewrites every row of the provider once per catalog version,
-	// which LiteLLM changes a few times a week. Diff the old and new rates per
-	// model if that write volume ever matters.
 	versions, err := b.store.ListUsagePricedVersions(ctx, job.providerID)
 	if err != nil {
 		return err
@@ -304,8 +293,6 @@ func (b *CostBackfiller) process(ctx context.Context, job costBackfillJob) error
 	return nil
 }
 
-// pricePages prices every page list returns, while a provider job's version
-// stays active.
 func (b *CostBackfiller) pricePages(
 	ctx context.Context,
 	job costBackfillJob,
@@ -352,9 +339,6 @@ func (b *CostBackfiller) pricePages(
 	}
 }
 
-// costUpdate prices one candidate. On a catalog pass a row that already has a
-// cost keeps it when the snapshot cannot price it any more, rather than losing
-// a known number. An override pass clears it: that number was the override's.
 func (b *CostBackfiller) costUpdate(snapshot *pricing.Snapshot, candidate domain.UsageCostCandidate, job costBackfillJob) (domain.UsageCostUpdate, bool) {
 	estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
 		ProviderID:        candidate.ProviderID,

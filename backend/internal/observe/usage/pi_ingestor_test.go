@@ -13,10 +13,6 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-// Break caught: live ingestion repricing every event from the catalog. A z.ai
-// coding-plan reply is one no catalog lists, so overwriting the cost Pi
-// computed would store it unpriced; a reply Pi left unpriced must still get
-// the catalog's figure.
 func TestIngestorKeepsPiReportedCostAndPricesTheRest(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -78,7 +74,6 @@ FROM model_usage_events WHERE usage_source_id = ?`, source.ID)
 	}
 	mustNoError(t, rows.Err())
 
-	// 10 input at the catalog's $0.000001 plus 2 output at $0.000002.
 	if got := costs["openai"]; !got.total.Valid || got.total.Int64 != 14_000 ||
 		got.version != snapshot.ProviderVersion("openai") {
 		t.Fatalf("openai cost = %+v, want the catalog's 14000 nanos", got)
@@ -89,11 +84,6 @@ FROM model_usage_events WHERE usage_source_id = ?`, source.ID)
 	}
 }
 
-// Break caught: Pi's /fork writes the parent's entries, usage and cost
-// included, unchanged into a new session file, which AO registers under a new
-// binding and reads from offset 0. Keyed by session alone, every copied reply
-// and compaction was stored twice. The provider's response ID (or a copied
-// entry's ID and time) names the call, so the copy is skipped.
 func TestIngestorCountsPiForkCopiesOnce(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -136,6 +126,5 @@ func TestIngestorCountsPiForkCopiesOnce(t *testing.T) {
 		mustNoError(t, err)
 		ingestSourceFully(ctx, t, ingestor, source.ID)
 	}
-	// 10+2, 30+4 and 20+3 from the parent, then only the fork's own 40+5.
 	assertTokenAggregate(t, store, session.ID, 114)
 }

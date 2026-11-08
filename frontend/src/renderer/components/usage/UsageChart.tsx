@@ -4,7 +4,6 @@ import { agentTone } from "../../lib/agent-tone";
 import { niceScale, type UsageSeries } from "../../lib/usage-report";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-/** Neutral series tones, strongest first: colour stays rare and semantic. */
 export const SERIES_TONES = ["bg-foreground/85", "bg-foreground/45", "bg-foreground/25", "bg-foreground/15"] as const;
 
 export function seriesTone(index: number): string {
@@ -14,11 +13,6 @@ export function seriesTone(index: number): string {
 const CHART_HEIGHT = 200;
 const MAX_AXIS_LABELS = 7;
 
-/**
- * Stacked bars, one per period and one segment per agent. Bars rather than a
- * smoothed curve: the data is per day or hour, so a curve would invent values
- * between the buckets.
- */
 export function UsageBarChart({
 	series,
 	formatValue,

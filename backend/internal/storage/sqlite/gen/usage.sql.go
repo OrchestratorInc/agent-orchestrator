@@ -217,9 +217,6 @@ type DeleteCursorUsageEventsInRangeParams struct {
 	UntilUtc     string
 }
 
-// A Cursor read replaces every event it covers: Cursor can finalize an event
-// after it was first read, and its event keys count repeats within one read
-// only. created_at is Go's UTC text, so whole-second prefixes compare as times.
 func (q *Queries) DeleteCursorUsageEventsInRange(ctx context.Context, arg DeleteCursorUsageEventsInRangeParams) error {
 	_, err := q.db.ExecContext(ctx, deleteCursorUsageEventsInRange, arg.ArtifactPath, arg.SinceUtc, arg.UntilUtc)
 	return err
@@ -299,7 +296,6 @@ SET state = 'finalizing',
     END,
     updated_at = ?1
 WHERE usage_bindings.session_id = ?2
-  -- Cursor usage is read from cursor.com, not drained from a file.
   AND usage_bindings.harness <> 'cursor'
   AND EXISTS (
       SELECT 1
@@ -672,9 +668,6 @@ type InsertModelUsageEventParams struct {
 	CreatedAt             sql.NullTime
 }
 
-// The caller has already found no row under this binding and key, so the only
-// conflict left is a provider message another source already stored: a copy,
-// which inserts nothing and returns no row.
 func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsageEventParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, insertModelUsageEvent,
 		arg.BindingID,
@@ -1107,8 +1100,6 @@ WHERE created_at IS NULL
 ORDER BY usage_source_id
 `
 
-// Events stored before the parser read record times. The usage report windows
-// by created_at, so these are invisible to it until a reread fills the time.
 func (q *Queries) ListUntimedUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	rows, err := q.db.QueryContext(ctx, listUntimedUsageSourceIDs)
 	if err != nil {
@@ -1428,7 +1419,6 @@ type ListUsageModelCostCandidatesRow struct {
 	ModelUsageEvent ModelUsageEvent
 }
 
-// One model's events that AO prices itself, for a price override change.
 func (q *Queries) ListUsageModelCostCandidates(ctx context.Context, arg ListUsageModelCostCandidatesParams) ([]ListUsageModelCostCandidatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageModelCostCandidates, arg.ModelID, arg.AfterID)
 	if err != nil {
@@ -1524,9 +1514,6 @@ type ListUsagePricedVersionsParams struct {
 	VersionTo   string
 }
 
-// Versions a provider's priced events carry, read from the partial index
-// idx_model_usage_events_priced_version. The range is one provider's
-// 'ao-catalog:<provider>:' prefix.
 func (q *Queries) ListUsagePricedVersions(ctx context.Context, arg ListUsagePricedVersionsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listUsagePricedVersions, arg.VersionFrom, arg.VersionTo)
 	if err != nil {
@@ -1617,12 +1604,6 @@ type ListUsageReportEventsRow struct {
 	SessionTitle         string
 }
 
-// Every timestamped usage event in a window, with the session it belongs to.
-// created_at is stored as Go's UTC text, so a range over its fixed-width
-// "YYYY-MM-DD HH:MM:SS" prefix is a time range. The cache-write counts are read
-// out of the bounded provider object: Claude and Codex report them in their own
-// vocabulary, and every other agent has them under the ao_ keys the usage
-// parser adds. -1 means the object did not report that count.
 func (q *Queries) ListUsageReportEvents(ctx context.Context, arg ListUsageReportEventsParams) ([]ListUsageReportEventsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageReportEvents, arg.SinceUtc, arg.UntilUtc)
 	if err != nil {
@@ -1810,7 +1791,6 @@ FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  -- Its artifact path names a Cursor account, not a file.
   AND us.kind <> 'cursor_dashboard'
   AND NOT (
       us.state = 'complete'
@@ -1899,8 +1879,6 @@ type PromoteInferredUsageEventToObservedParams struct {
 // A later observation supersedes an inferred billing provider and every cost
 // derived from that inference. ApplyUsageChunk rehomes replacement-generation
 // rows before this statement, so the source guard also prevents promotion on a
-// stale generation. The new cost is estimated at the replayed service tier, so
-// a row stored before tiers were recorded takes that tier with it.
 func (q *Queries) PromoteInferredUsageEventToObserved(ctx context.Context, arg PromoteInferredUsageEventToObservedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, promoteInferredUsageEventToObserved,
 		arg.BillingProviderID,
@@ -1983,8 +1961,6 @@ type SetUntieredUsageEventTierParams struct {
 	SourceEventKey string
 }
 
-// The tier changes the price, so the cost is cleared for the backfiller to
-// price again at the tier's rates.
 func (q *Queries) SetUntieredUsageEventTier(ctx context.Context, arg SetUntieredUsageEventTierParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setUntieredUsageEventTier, arg.ServiceTier, arg.BindingID, arg.SourceEventKey)
 	if err != nil {
@@ -2036,8 +2012,6 @@ SET billing_provider_id = ?1,
     -- The reparse is the only way a pre-capture event can ever gain its bounded
     -- provider object, and it is exactly what makes the event priceable.
     provider_usage_json = ?3,
-    -- Same for the service tier, which Codex reports on another line. The
-    -- repair's cost is estimated at it; a stored tier is never replaced.
     service_tier = COALESCE(service_tier, ?4),
     input_cost_nanos = ?5,
     cached_input_cost_nanos = ?6,
@@ -2210,7 +2184,6 @@ WHERE id = ?6
   AND source_event_key = ?17
   AND pricing_version = ?18
   AND estimated_cost_nanos IS ?19
-  -- AO's own prices only: an agent's reported cost is never overwritten.
   AND (estimated_cost_nanos IS NULL
        OR pricing_version LIKE 'ao-catalog:%'
        OR pricing_version LIKE 'ao-override:%')

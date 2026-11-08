@@ -15,13 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
-// qwenProviderHint names the provider that bills a Qwen session. Qwen's usage
-// log records only its auth type ("openai" for every OpenAI-compatible
-// endpoint), so the route lives in Qwen's settings: the base URL of the
-// configured model, or of the selected auth type's default model. Workspace
-// settings override user settings, as they do for Qwen itself. An endpoint AO
-// cannot name yields "", which leaves the session's cost unknown rather than
-// priced against the wrong provider.
 func (c *Collector) qwenProviderHint(ctx context.Context, session domain.SessionRecord) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -43,8 +36,6 @@ func (c *Collector) qwenProviderHint(ctx context.Context, session domain.Session
 	return route.provider(model, authType)
 }
 
-// splitQwenModelID separates the auth type Qwen's ACP model IDs carry
-// ("GLM-5.2(openai)") from the model ID itself.
 func splitQwenModelID(raw string) (model, authType string) {
 	raw = strings.TrimSpace(raw)
 	open := strings.LastIndex(raw, "(")
@@ -72,16 +63,13 @@ type qwenSettings struct {
 	} `json:"modelProviders"`
 }
 
-// qwenRoute is the merged routing view of Qwen's settings files.
 type qwenRoute struct {
 	authType     string
 	defaultModel string
 	defaultURL   string
-	authURL      string // security.auth.baseUrl, which Qwen still reads
+	authURL      string
 	envURLs      map[string]string
-	// modelURLs is keyed by provider id + "/" + lower-case model id. The
-	// provider id is an auth type or a custom id Qwen maps to one.
-	modelURLs map[string]string
+	modelURLs    map[string]string
 }
 
 func (r *qwenRoute) merge(data []byte) {
@@ -122,11 +110,6 @@ func (r *qwenRoute) merge(data []byte) {
 	}
 }
 
-// provider resolves the route for a session's model. Qwen writes the model a
-// session selects back into the shared settings file, so the default model and
-// its base URL describe whichever session chose last: a session that names a
-// configured model is resolved from that model's own entry, and the collector
-// keeps the first route it resolved for a binding rather than re-reading it.
 func (r qwenRoute) provider(model, authType string) string {
 	if authType != "" {
 		r.authType = authType
@@ -139,7 +122,6 @@ func (r qwenRoute) provider(model, authType string) string {
 		baseURL = r.onlyURLFor(model)
 	}
 	if baseURL == "" {
-		// A model the settings do not list goes to the default endpoint.
 		baseURL = cmp.Or(strings.TrimSpace(r.defaultURL), strings.TrimSpace(r.authURL))
 	}
 	if baseURL == "" {
@@ -150,11 +132,8 @@ func (r qwenRoute) provider(model, authType string) string {
 		baseURL = cmp.Or(strings.TrimSpace(r.envURLs[envName]), strings.TrimSpace(os.Getenv(envName)))
 	}
 	if baseURL != "" {
-		// An endpoint names its provider, or leaves the route unknown: an
-		// auth type is no evidence once a base URL points elsewhere.
 		return qwenEndpointProvider(baseURL)
 	}
-	// No base URL anywhere: the auth type's SDK talks to its own provider.
 	switch r.authType {
 	case "gemini":
 		return "gemini"
@@ -168,9 +147,6 @@ func (r qwenRoute) provider(model, authType string) string {
 	return ""
 }
 
-// onlyURLFor finds a model under any provider id, for a model that a custom
-// provider id (mapped to a protocol by providerProtocol) declares. It answers
-// only when every entry for that model agrees on one endpoint.
 func (r qwenRoute) onlyURLFor(model string) string {
 	found := ""
 	suffix := "/" + strings.ToLower(model)
@@ -186,14 +162,6 @@ func (r qwenRoute) onlyURLFor(model string) string {
 	return found
 }
 
-// qwenEndpointProvider names the provider that bills an endpoint. Qwen can
-// point at any OpenAI-, Anthropic- or Gemini-compatible server, so a fixed host
-// list would leave most of them unnamed: an API host is named after its
-// provider (api.fireworks.ai, api.together.xyz), and that name, in the
-// catalog's spelling, is the route. Hosts whose name says something else, and
-// endpoints whose list price is not the provider's (a mainland-China region, a
-// subscription plan), are named explicitly. A local or private server has no
-// list price and yields "".
 func qwenEndpointProvider(baseURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
@@ -203,7 +171,6 @@ func qwenEndpointProvider(baseURL string) string {
 	if host == "" || privateQwenHost(host) {
 		return ""
 	}
-	// Vertex's regional hosts prefix the region with a dash.
 	if strings.HasSuffix(host, "aiplatform.googleapis.com") {
 		return "vertex_ai"
 	}
@@ -224,11 +191,7 @@ func qwenEndpointProvider(baseURL string) string {
 	return provider
 }
 
-// qwenHostRules name hosts the generic rule would get wrong, longest suffix
-// first where two overlap.
 var qwenHostRules = []struct{ host, provider string }{
-	// Alibaba: pay-as-you-go DashScope internationally and in Beijing, and the
-	// Coding and Token plans, which bill a subscription rather than tokens.
 	{"coding.dashscope.aliyuncs.com", "dashscope-coding-plan-cn"},
 	{"coding-intl.dashscope.aliyuncs.com", "dashscope-coding-plan"},
 	{"maas.aliyuncs.com", "dashscope-token-plan"},
@@ -239,10 +202,8 @@ var qwenHostRules = []struct{ host, provider string }{
 	{"dashscope.aliyuncs.com", "dashscope-cn"},
 	{"qwencloudapi.com", "qwencloud"},
 	{"qianwenaiapi.com", "qwencloud-cn"},
-	// Zhipu: z.ai internationally, bigmodel on the mainland platform.
 	{"z.ai", "zai"},
 	{"open.bigmodel.cn", "bigmodel"},
-	// MiniMax and Moonshot run separate mainland platforms.
 	{"api.minimaxi.com", "minimax-cn"},
 	{"api.minimax.chat", "minimax-cn"},
 	{"x.ai", "xai"},
@@ -253,14 +214,11 @@ var qwenHostRules = []struct{ host, provider string }{
 	{"amazonaws.com", "bedrock"},
 	{"githubcopilot.com", "github_copilot"},
 	{"ai-gateway.vercel.sh", "vercel_ai_gateway"},
-	// Cloudflare's gateway forwards to any upstream; Workers AI is its own.
 	{"gateway.ai.cloudflare.com", "cloudflare-ai-gateway"},
 	{"api.cloudflare.com", "cloudflare"},
 	{"lambdalabs.com", "lambda_ai"},
 }
 
-// privateQwenHost reports a server with no public list price: a loopback or
-// private address, or a name that only resolves on a private network.
 func privateQwenHost(host string) bool {
 	if ip := net.ParseIP(host); ip != nil {
 		return true
@@ -276,10 +234,6 @@ func privateQwenHost(host string) bool {
 	return false
 }
 
-// stickyQwenProviderHint returns the route already recorded for the session's
-// Qwen binding, resolving it from settings only when none is. Qwen rewrites the
-// shared settings whenever any session selects a model, so a later hook could
-// otherwise relabel this session with another session's provider.
 func (c *Collector) stickyQwenProviderHint(ctx context.Context, session domain.SessionRecord) (string, error) {
 	bindings, err := c.store.ListUsageBindingsForSession(ctx, session.ID)
 	if err != nil {

@@ -17,11 +17,6 @@ import (
 
 const legacyTimeBatch = 512
 
-// repairEventTimes fills created_at on events stored before the parser read
-// record times. The report windows by created_at, so until then those events
-// count toward no period at all. Each source is reread from the start and an
-// event gains the time the replay gives the same source event key; the key
-// covers the provider's own identity for the event, so a match is that event.
 func (r *LegacyRepairer) repairEventTimes(ctx context.Context) error {
 	sources, err := r.store.ListUsageSourcesWithUntimedEvents(ctx)
 	if err != nil {
@@ -56,11 +51,6 @@ func (r *LegacyRepairer) replayEventTimes(ctx context.Context, source domain.Usa
 	return times, err
 }
 
-// repairServiceTiers fills the service tier on events stored before the parser
-// recorded one, so a Codex priority or Claude fast turn from then stops pricing
-// at standard rates. Each queued source is reread once and leaves the queue:
-// a NULL tier also means the provider reported none, so the rows alone could
-// never say the reread is done.
 func (r *LegacyRepairer) repairServiceTiers(ctx context.Context) error {
 	sources, err := r.store.ListUsageTierRepairSources(ctx)
 	if err != nil {
@@ -81,7 +71,6 @@ func (r *LegacyRepairer) repairServiceTiers(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// Left queued: a read error may pass, and the next start retries.
 			r.config.OnError(fmt.Errorf("replay tiers for usage source %d: %w", source.Source.ID, err))
 			continue
 		}
@@ -91,17 +80,12 @@ func (r *LegacyRepairer) repairServiceTiers(ctx context.Context) error {
 		}
 		filled += n
 	}
-	// Filled rows lost their cost; the backfiller prices them at their tier.
 	if filled > 0 && r.config.OnTiersFilled != nil {
 		r.config.OnTiersFilled(ctx)
 	}
 	return nil
 }
 
-// replaySource rereads a source from its start and hands visit every event the
-// parser yields. A transcript that is gone, a kind with no parser, or a source
-// read by row cursor (a database or rewritten snapshot, not JSONL) yields
-// nothing.
 func (r *LegacyRepairer) replaySource(ctx context.Context, source domain.UsageSourceContext, visit func(domain.ModelUsageEvent)) error {
 	if sqliteUsageSource(source.Source.Kind) {
 		return nil
@@ -141,8 +125,6 @@ func (r *LegacyRepairer) replaySource(ctx context.Context, source domain.UsageSo
 		return ctx.Err()
 	}
 
-	// The buffer bounds a record: a longer line is skipped whole, as ingestion
-	// skips it, without ever being held in memory.
 	lines := bufio.NewReaderSize(reader, r.config.RecordBytes)
 	oversized := false
 	for {
@@ -174,8 +156,6 @@ func (r *LegacyRepairer) replaySource(ctx context.Context, source domain.UsageSo
 	return flush()
 }
 
-// openUsageArtifact opens a transcript, or the zstd copy Codex leaves in its
-// place when it compresses an old rollout.
 func openUsageArtifact(path string) (io.Reader, func(), error) {
 	file, err := os.Open(path) //nolint:gosec // registered transcript path.
 	if err == nil {

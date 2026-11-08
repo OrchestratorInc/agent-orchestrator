@@ -33,9 +33,7 @@ type LegacyRepairerConfig struct {
 	OnError     func(error)
 	// RaceRetry is the first delay before retrying a pass that lost its cursor
 	// guard to concurrent ingestion. It doubles up to maxRaceRetry.
-	RaceRetry time.Duration
-	// OnTiersFilled runs after the tier repair filled the tier on any event,
-	// whose cost it cleared for repricing.
+	RaceRetry     time.Duration
 	OnTiersFilled func(context.Context)
 	// StartupSettle delays one follow-up pass after the first. Startup
 	// ingestion begins after the repairer does, so the first pass can read the
@@ -114,8 +112,6 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 				settleTimer.Stop()
 			}
 		}()
-		// Times come only from rereading transcripts, and every row that lacks
-		// one was written by an earlier build, so one pass per start suffices.
 		if err := r.repairEventTimes(ctx); err != nil && ctx.Err() == nil {
 			r.config.OnError(err)
 		}

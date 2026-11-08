@@ -29,9 +29,6 @@ func TestDefaultSourceRootsResolvesGooseSessions(t *testing.T) {
 	}
 }
 
-// TestCollectorRegistersGooseLedgerForNativeSession catches binding Goose
-// usage by anything other than the hook's native session ID: the database is
-// shared by every Goose session, so the source must carry that ID.
 func TestCollectorRegistersGooseLedgerForNativeSession(t *testing.T) {
 	const nativeID = "20261103_1"
 	store := collectorTestStore(t)

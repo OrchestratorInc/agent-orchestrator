@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Break caught: Grok's usage.json rejected as neither a JSONL transcript nor
-// a database, or its identity tied to the inode Grok replaces after each turn,
-// which would read every rewrite as a new source and replay its turns.
 func TestCollectorDiscoversGrokUsageSnapshot(t *testing.T) {
 	const nativeID = "01a1a16e-c4c7-7c51-92d5-bf8beef81073"
 	t.Setenv("GROK_HOME", "")

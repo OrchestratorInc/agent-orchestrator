@@ -18,11 +18,6 @@ func CanonicalProviderID(raw string) string {
 	return providerID
 }
 
-// providerAliases maps the names harnesses use for a provider onto the
-// catalog's. An alias is the same account under another spelling, never a
-// sibling: a regional or plan-priced endpoint (minimax-cn, zai-coding-cn,
-// moonshotai-cn) bills at rates the catalog does not carry, so it stays
-// unpriced instead of borrowing its parent's list rate.
 var providerAliases = map[string]string{
 	"z.ai":                   "zai",
 	"google":                 "gemini",
@@ -60,16 +55,12 @@ var providerAliases = map[string]string{
 	"lambda":                 "lambda_ai",
 }
 
-// RequiredProviderIDs are the providers every catalog must price. A catalog
-// missing one is a broken build of the upstream table, not a smaller one.
-// They are also the whole of the catalog committed to the repository: releases
-// that read that copy accept exactly these three.
+// RequiredProviderIDs are the providers every catalog must price.
 var RequiredProviderIDs = []string{"anthropic", "openai", "zai"}
 
 var providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
-// ValidProviderID reports whether id can name a catalog provider: it is also a
-// path segment of the provider's blob.
+// ValidProviderID reports whether id can name a catalog provider: it is also a path segment of the provider's blob.
 func ValidProviderID(id string) bool {
 	return len(id) <= 64 && providerIDPattern.MatchString(id)
 }
@@ -127,9 +118,7 @@ func CanonicalModelID(providerID, raw string) string {
 	return modelID
 }
 
-// Service tiers the catalog prices apart from a model's standard rates. The
-// first three are LiteLLM's field suffixes (input_cost_per_token_priority);
-// fast is its provider_specific_entry multiple of every standard rate.
+// Service tiers the catalog prices apart from a model's standard rates.
 const (
 	ServiceTierPriority  = "priority"
 	ServiceTierFlex      = "flex"
@@ -137,30 +126,18 @@ const (
 	ServiceTierFast      = "fast"
 )
 
-// TierModelID names the catalog row that prices modelID at a service tier:
-// "gpt-6.1-sol#priority".
-//
-// A tier is its own row rather than more rate fields on the model's row because
-// installed daemons decode provider blobs with DisallowUnknownFields and fetch
-// the catalog from main: a new field would make every one of them reject each
-// later catalog, while an extra row is only a model they never look up. "#"
-// appears in no provider's model IDs; Vertex IDs already use "@".
+// TierModelID names the catalog row that prices modelID at a service tier: "gpt-6.1-sol#priority".
 func TierModelID(modelID, tier string) string {
 	return modelID + "#" + tier
 }
 
-// LongContextModelID names the catalog row that prices modelID for a request
-// with more than aboveK thousand input tokens: "gpt-6.1-sol#above272k", and
-// "gpt-6.1-sol#priority#above272k" for a tier's row. It is a row for the same
-// reason a tier is.
+// LongContextModelID names the catalog row that prices modelID for a request with more than aboveK thousand input tokens: "gpt-6.1-sol#above272k", and "gpt-6.1-sol#priority#above272k" for a tier's row.
 func LongContextModelID(modelID string, aboveK int64) string {
 	return modelID + longContextMarker + strconv.FormatInt(aboveK, 10) + "k"
 }
 
 const longContextMarker = "#above"
 
-// longContextThreshold splits a LongContextModelID into the row it extends and
-// its size in thousands of tokens.
 func longContextThreshold(rowID string) (base string, aboveK int64, ok bool) {
 	index := strings.LastIndex(rowID, longContextMarker)
 	if index < 0 || !strings.HasSuffix(rowID, "k") {

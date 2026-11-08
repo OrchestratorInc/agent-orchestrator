@@ -37,13 +37,12 @@ type ingestorStore interface {
 
 // IngestorConfig controls bounded processing of one transcript source.
 type IngestorConfig struct {
-	ChunkBytes       int64
-	RecordBytes      int
-	FinalizationWait time.Duration
-	Clock            func() time.Time
-	Pricing          *pricing.Manager
-	OnPricingError   func(error)
-	// SQLiteChunkRows and SQLitePollInterval bound SQLite-backed sources.
+	ChunkBytes         int64
+	RecordBytes        int
+	FinalizationWait   time.Duration
+	Clock              func() time.Time
+	Pricing            *pricing.Manager
+	OnPricingError     func(error)
 	SQLiteChunkRows    int
 	SQLitePollInterval time.Duration
 	// RequestAttributionRepair asks for a legacy repair pass. See
@@ -78,9 +77,7 @@ type Ingestor struct {
 	requestRepair    func()
 	openTranscript   func(string) (*os.File, error)
 	afterRead        func()
-	// snapshots holds, per snapshot source ID, the file stamp of the last read
-	// that left nothing unread, so an unchanged file is not decoded again.
-	snapshots sync.Map
+	snapshots        sync.Map
 }
 
 // NewIngestor constructs a bounded transcript ingestor.
@@ -342,11 +339,6 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	return result, nil
 }
 
-// applyParsedChunk prices and stores one parsed chunk. done reports that the
-// caller must return result immediately: the chunk failed, or an event
-// conflict settled the source instead. conflict is the file snapshot a
-// conflict is recorded against, so ingestion resumes once the file changes;
-// nil for a source that skips unchanged reads itself.
 func (i *Ingestor) applyParsedChunk(
 	ctx context.Context,
 	source domain.UsageSourceContext,
@@ -369,8 +361,6 @@ func (i *Ingestor) applyParsedChunk(
 		apply = func() error {
 			return i.pricing.WithSnapshot(ctx, func(snapshot *pricing.Snapshot) error {
 				for index := range parsed.Events {
-					// A cost the agent itself reported (its provider's billed
-					// amount) is kept as stored; the catalog prices the rest.
 					if parsed.Events[index].Costs.EstimatedCostNanos != nil {
 						continue
 					}

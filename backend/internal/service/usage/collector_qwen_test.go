@@ -193,10 +193,6 @@ func TestCollectorQwenRegistersLaterMonthlyRollover(t *testing.T) {
 	}
 }
 
-// TestCollectorQwenDiscoversEarlierMonthOnFirstObservation catches losing the
-// prior month's usage when a session is first observed after a month rollover:
-// only the newest monthly file existed when AO first looked, but the earlier
-// month's records for this session must still be ingested.
 func TestCollectorQwenDiscoversEarlierMonthOnFirstObservation(t *testing.T) {
 	const nativeID = "qwen-session-1"
 	store := collectorTestStore(t)

@@ -2,9 +2,7 @@ package domain
 
 import "time"
 
-// UsageReportEvent is one timestamped usage event as the usage report reads
-// it, with the session it belongs to. Cache-write counts are nil when the
-// stored provider object did not report them.
+// UsageReportEvent is one timestamped usage event as the usage report reads it, with the session it belongs to.
 type UsageReportEvent struct {
 	CreatedAt          time.Time
 	ProviderID         UsageProviderID
@@ -21,27 +19,19 @@ type UsageReportEvent struct {
 	SessionTitle       string
 }
 
-// UsageReport is token and estimated-cost usage over a window, bucketed by
-// day or hour in the reader's time zone.
+// UsageReport is token and estimated-cost usage over a window, bucketed by day or hour in the reader's time zone.
 type UsageReport struct {
 	Days       int
 	TimeZone   string
 	Resolution string
 	Since      time.Time
 	Until      time.Time
-	// Periods lists every bucket in the window, oldest first: "2006-01-02" by
-	// day, "2006-01-02T15:00" by hour.
-	Periods  []string
-	Rows     []UsageReportRow
-	Sessions []UsageReportSession
+	Periods    []string
+	Rows       []UsageReportRow
+	Sessions   []UsageReportSession
 }
 
 // UsageReportRow is one period's usage for one harness, model and speed tier.
-//
-// The token counts are disjoint: InputTokens is uncached input that was not
-// written to the cache. Costs cover only the priced events. The four category
-// costs add up to CostNanos; PremiumNanos and CacheSavingsNanos are views of
-// it, never added again.
 type UsageReportRow struct {
 	Period              string
 	Harness             AgentHarness

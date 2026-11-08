@@ -70,7 +70,6 @@ describe("usage report aggregation", () => {
 	});
 
 	it("lists periods with usage newest first and groups sessions by project", () => {
-		// The priced counts let a day or project with no priced usage read "Not priced", not $0.00.
 		expect(usageByPeriod(report).map((entry) => [entry.period, entry.pricedEvents])).toEqual([["2026-10-25", 1], ["2026-10-24", 1]]);
 		expect(usageByProject(report.sessions, "cost")).toEqual([
 			{ projectId: "web", sessions: 1, costNanos: 1600, tokens: 705, pricedEvents: 1 },

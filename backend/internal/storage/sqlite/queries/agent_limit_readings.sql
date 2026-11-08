@@ -1,4 +1,3 @@
--- Limit window readings, one row per window each time an account's limits are read.
 
 -- name: InsertAgentLimitReading :exec
 INSERT INTO agent_limit_readings (

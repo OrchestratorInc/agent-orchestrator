@@ -17,7 +17,6 @@ import (
 // UpsertUsageBinding records or refreshes the association between an AO
 // session and a native root session/thread.
 func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingRecord) (domain.UsageBindingRecord, error) {
-	// The schema no longer enumerates usage harnesses; the store is the guard.
 	if !rec.Harness.IsKnown() {
 		return domain.UsageBindingRecord{}, fmt.Errorf("upsert usage binding: unknown harness %q", rec.Harness)
 	}
@@ -480,8 +479,6 @@ func (s *Store) ApplyUsageChunk(
 			}
 			_, err = q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev))
 			if errors.Is(err, sql.ErrNoRows) {
-				// Another source already stored this provider message: a fork or
-				// resume copied it. It was billed once, so it is counted once.
 				continue
 			}
 			if err != nil {
@@ -553,14 +550,12 @@ func (s *Store) ListUsageCostCandidates(
 	return out, nil
 }
 
-// ListUsagePricedVersions lists the catalog versions that priced a provider's
-// stored events, so a newer version can find the rows an older one priced.
+// ListUsagePricedVersions lists the catalog versions that priced a provider's stored events, so a newer version can find the rows an older one priced.
 func (s *Store) ListUsagePricedVersions(ctx context.Context, providerID string) ([]string, error) {
 	prefix := "ao-catalog:" + providerID + ":"
 	versions, err := s.qr.ListUsagePricedVersions(ctx, gen.ListUsagePricedVersionsParams{
 		VersionFrom: prefix,
-		// ';' sorts right after ':', so this bounds exactly the prefix.
-		VersionTo: "ao-catalog:" + providerID + ";",
+		VersionTo:   "ao-catalog:" + providerID + ";",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list %s priced usage versions: %w", providerID, err)
@@ -581,8 +576,7 @@ func (s *Store) ListUsageRepriceCandidates(ctx context.Context, version string, 
 	return out, nil
 }
 
-// ListUsageModelCostCandidates returns the next page of one model's events
-// that AO prices itself, leaving agent-reported costs out.
+// ListUsageModelCostCandidates returns the next page of one model's events that AO prices itself, leaving agent-reported costs out.
 func (s *Store) ListUsageModelCostCandidates(ctx context.Context, modelID string, afterID int64) ([]domain.UsageCostCandidate, error) {
 	rows, err := s.qr.ListUsageModelCostCandidates(ctx, gen.ListUsageModelCostCandidatesParams{ModelID: modelID, AfterID: afterID})
 	if err != nil {
@@ -718,8 +712,7 @@ func (s *Store) ListLegacyUsageSources(ctx context.Context) ([]domain.UsageSourc
 	return out, nil
 }
 
-// ListUsageSourcesWithUntimedEvents returns the sources that still hold events
-// with no created_at, which the usage report cannot place in any period.
+// ListUsageSourcesWithUntimedEvents returns the sources that still hold events with no created_at, which the usage report cannot place in any period.
 func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain.UsageSourceContext, error) {
 	ids, err := s.qr.ListUntimedUsageSourceIDs(ctx)
 	if err != nil {
@@ -739,8 +732,7 @@ func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain
 	return out, nil
 }
 
-// SetUsageEventTimes fills created_at on a binding's events, by source event
-// key. A time already stored is never replaced. It returns the rows filled.
+// SetUsageEventTimes fills created_at on a binding's events, by source event key.
 func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times map[string]time.Time) (int, error) {
 	if len(times) == 0 {
 		return 0, nil
@@ -771,8 +763,7 @@ func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times m
 	return filled, nil
 }
 
-// ListUsageTierRepairSources returns the sources still queued for one reread
-// to fill the service tier their older events were stored without.
+// ListUsageTierRepairSources returns the sources still queued for one reread to fill the service tier their older events were stored without.
 func (s *Store) ListUsageTierRepairSources(ctx context.Context) ([]domain.UsageSourceContext, error) {
 	ids, err := s.qr.ListUsageTierRepairSourceIDs(ctx)
 	if err != nil {
@@ -792,10 +783,7 @@ func (s *Store) ListUsageTierRepairSources(ctx context.Context) ([]domain.UsageS
 	return out, nil
 }
 
-// CompleteUsageTierRepair fills the tiers a source's reread found, by source
-// event key, and takes the source off the queue in the same transaction. A
-// filled event loses its cost so the backfiller prices it at its tier. It
-// returns the events filled.
+// CompleteUsageTierRepair fills the tiers a source's reread found, by source event key, and takes the source off the queue in the same transaction.
 func (s *Store) CompleteUsageTierRepair(ctx context.Context, sourceID, bindingID int64, tiers map[string]string) (int, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return 0, err
@@ -1102,8 +1090,6 @@ func usageSourceContextFromGen(row gen.GetUsageSourceWithBindingAndSessionRow) d
 	}
 }
 
-// validateUsageSourceKind rejects source kinds the domain does not certify. The
-// schema no longer enumerates them, so this is the only guard.
 func validateUsageSourceKind(kind domain.UsageSourceKind) error {
 	if !kind.IsKnown() {
 		return fmt.Errorf("unknown usage source kind %q", kind)

@@ -883,8 +883,6 @@ func Run(buildVersion string) error {
 			usagePricing.Wait()
 		}()
 	}
-	// Cursor keeps no usage on disk; this reads it from cursor.com, only
-	// while the user has it turned on.
 	cursorUsage := usagepipeline.NewCursorUsage(store, log)
 	go func() {
 		defer sentryobs.RecoverBackground()

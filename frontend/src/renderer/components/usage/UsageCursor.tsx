@@ -9,10 +9,6 @@ const CURSOR_ERRORS = {
 	failed: "usage.cursor.error.failed",
 } as const;
 
-/**
- * Offers to count the usage of AO's Cursor sessions, which AO reads from
- * cursor.com with the Cursor login, and says when the last read failed.
- */
 export function UsageCursor({ hasCursorSessions }: { hasCursorSessions: boolean }) {
 	const { t } = useTranslation();
 	const status = useCursorUsage().data;

@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// TestMigrationUsageRepricingQueuesUntieredSources verifies the tier repair
-// queue holds exactly the Claude and Codex sources with events stored before
-// the parser recorded a tier, and that rollback removes it.
 func TestMigrationUsageRepricingQueuesUntieredSources(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 20261103094403671)
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
