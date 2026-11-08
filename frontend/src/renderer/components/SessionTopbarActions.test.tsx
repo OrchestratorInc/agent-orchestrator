@@ -582,7 +582,7 @@ describe("SessionTopbarActions open-in-editor control", () => {
 	it("shows the open-in-editor control for a local session", async () => {
 		renderTopbarSessions([worker], "sess-1");
 
-		expect(await screen.findByRole("button", { name: "Open workspace options" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Open in Cursor" })).toBeInTheDocument();
 	});
 
 	it("hides the open-in-editor control for a cloud session instead of asking the local daemon for it", async () => {
@@ -594,7 +594,7 @@ describe("SessionTopbarActions open-in-editor control", () => {
 		renderTopbarSessions([worker], "sess-1", undefined, CLOUD_PROJECT_KIND);
 
 		await waitFor(() => {
-			expect(screen.queryByRole("button", { name: "Open workspace options" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Open in Cursor" })).not.toBeInTheDocument();
 			expect(screen.queryByRole("button", { name: "Choose editor" })).not.toBeInTheDocument();
 		});
 	});

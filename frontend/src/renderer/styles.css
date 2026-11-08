@@ -794,16 +794,19 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background-color: var(--color-interactive-hover);
 }
 
+.session-inspector__tab-button[aria-selected="true"],
 .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
 	color: var(--secondary-foreground);
 }
 
 @supports (color: contrast-color(red)) {
+	.session-inspector__tab-button[aria-selected="true"],
 	.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
 		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
 	}
 }
 
+.session-inspector__tab-button[aria-selected="true"],
 .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
 	border-color: color-mix(in oklab, var(--secondary), #000 5%);
@@ -811,6 +814,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	box-shadow: var(--shadow-control-inset);
 }
 
+.session-inspector__tab-button[aria-selected="true"]:hover,
 .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
@@ -822,7 +826,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 /* Muted gray icons wash out on the light chrome; bar icons use the full
  * foreground there. Disabled controls keep their own reduced opacity. */
-html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button {
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]) {
 	color: var(--color-foreground);
 }
 

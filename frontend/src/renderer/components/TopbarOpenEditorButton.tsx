@@ -9,7 +9,7 @@ import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import type { TopbarView } from "../lib/topbar-actions";
-import { Button } from "./ui/button";
+import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -44,12 +44,13 @@ export function TopbarOpenEditorButton({
 	const open = useOpenSessionTarget();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const [copyPending, setCopyPending] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const state = stateQuery.data;
 	const targets = state?.targets ?? [];
 	const editors = targets.filter((target) => target.kind === "editor");
 	const preferred = editors.find((target) => target.id === state?.preferredEditorId);
-	// With no installed editor chosen, show the platform file manager and use it
-	// as the direct-launch shortcut fallback.
+	// With no installed editor chosen, the main button opens the workspace in the
+	// platform file manager (Finder, File Explorer, xdg-open) instead of sitting empty.
 	const fileManager = targets.find((target) => target.kind === "file_manager");
 	const mainTarget = preferred ?? fileManager;
 	const openInTargets = targets.filter((target) => target.kind === "file_manager" || target.kind === "terminal");
@@ -80,7 +81,7 @@ export function TopbarOpenEditorButton({
 	};
 	// Without an explicit target, main opens the preferred editor.
 	const launchMain = () => (preferred ? launch() : mainTarget && launch(mainTarget.id));
-	// Keep ⌘O as a direct launch while the button opens the target menu.
+	// ⌘O does what the main button does.
 	useSessionShortcut("open-in-editor", () => {
 		if (busy || !workspaceAvailable) return;
 		launchMain();
@@ -96,35 +97,54 @@ export function TopbarOpenEditorButton({
 	const workspaceError = !waitingLabel && !workspaceAvailable
 		? state?.unavailableReason ?? t("editor.workspaceUnavailable")
 		: null;
-	const menuLabel = waitingLabel ?? workspaceError ?? t("editor.openOptionsAria");
+	const mainTitle = waitingLabel
+		?? (workspaceError
+			?? (mainTarget ? t("editor.openWorkspaceInTitle", { name: mainTarget.name }) : t("editor.chooseEditorTitle")));
 
 	return (
 		<div
-			className="inline-flex items-center gap-0"
+			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md focus-within:before:inset-0 focus-within:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
+			data-state={menuOpen ? "open" : "closed"}
 			style={style}
 		>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex">
+						<Button type="button" size="icon-sm"
+							aria-label={waitingLabel
+								?? (workspaceError
+									?? (mainTarget ? t("editor.openInAria", { name: mainTarget.name }) : t("editor.chooseEditor")))}
+							disabled={mainDisabled}
+							onClick={() => {
+								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
+								launchMain();
+							}}
+							variant="quiet"
+							className="before:hidden"
+						>
+							<OpenTargetIcon target={mainTarget} className="size-icon-md" />
+						</Button>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
+			</Tooltip>
 			<DropdownMenu onOpenChange={(isOpen) => {
+				setMenuOpen(isOpen);
 				if (isOpen && telemetryView) captureTopbarAction("editor_menu", telemetryView);
 				if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 			}}>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<DropdownMenuTrigger asChild>
-								<Button type="button" size="sm"
-									aria-label={menuLabel}
-									disabled={menuDisabled}
-									variant="quiet"
-									className="gap-1 px-2"
-								>
-									<OpenTargetIcon target={mainTarget} className="size-icon-md" />
-									<ChevronDown className="size-icon-sm" aria-hidden="true" />
-								</Button>
-							</DropdownMenuTrigger>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{menuLabel}</TooltipContent>
-				</Tooltip>
+				<span className="inline-flex">
+					<DropdownMenuTrigger asChild>
+						<Button type="button" size="icon-sm"
+							aria-label={t("editor.openOptionsAria")}
+							disabled={menuDisabled}
+							variant="quiet"
+							className="before:hidden"
+						>
+							<ChevronDown className="size-icon-sm" aria-hidden="true" />
+						</Button>
+					</DropdownMenuTrigger>
+				</span>
 
 				<DropdownMenuContent align="end" className="min-w-52">
 					{[...openInTargets, ...editors].map((target) => (
