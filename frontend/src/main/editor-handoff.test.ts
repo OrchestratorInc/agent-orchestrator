@@ -419,6 +419,42 @@ describe("editor handoff", () => {
 		}
 	});
 
+	it.each(["iterm2", "ghostty"] as const)("discovers registered %s hosts when Settings is opened first", async (terminal) => {
+		const name = terminal === "iterm2" ? "iTerm2" : "Ghostty";
+		const appPath = `/Volumes/Tools/${terminal === "iterm2" ? "iTerm" : "Ghostty"}.app`;
+		const discoverTerminalApps = vi.fn().mockResolvedValue([{ name, appPath, bundleId: `test.${terminal}` }]);
+		const input = deps({ discoverTerminalApps, readNeovimTerminal: async () => terminal,
+			writeNeovimTerminal: vi.fn(), isDirectory: p => p === appPath });
+		const handoff = createEditorHandoff(input);
+
+		expect((await handoff.getEditors()).neovimTerminal).toMatchObject({
+			selected: terminal, targets: expect.arrayContaining([{ id: terminal, name, kind: "terminal" }]),
+		});
+		await expect(handoff.setNeovimTerminal(terminal)).resolves.toBe(terminal);
+		expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		expect(input.writeNeovimTerminal).toHaveBeenCalledWith(terminal);
+	});
+
+	it.each(["iterm2", "ghostty"] as const)("resolves saved registered %s hosts on cold workspace and file launches", async (terminal) => {
+		const appPath = `/Volumes/Tools/${terminal === "iterm2" ? "iTerm" : "Ghostty"}.app`;
+		for (const action of ["workspace", "file", "save"] as const) {
+			const discoverTerminalApps = vi.fn().mockResolvedValue([{ name: terminal, appPath, bundleId: `test.${terminal}` }]);
+			const input = deps({ discoverTerminalApps, readNeovimTerminal: async () => terminal,
+				writeNeovimTerminal: vi.fn(), isExecutable: p => p === "/bin/nvim", isDirectory: p => p === appPath });
+			const handoff = createEditorHandoff(input);
+			const run = () => action === "workspace"
+				? handoff.open({ sessionId: "ao-1", targetId: "neovim" })
+				: action === "file"
+					? handoff.pathAction({ sessionId: "ao-1", path: "/worktrees/ao-1/a.txt", editorId: "neovim", action: "open" })
+					: handoff.setNeovimTerminal(terminal);
+
+			await run();
+			if (action !== "save") expect(JSON.stringify(vi.mocked(input.launch).mock.calls[0])).toContain(appPath);
+			await run();
+			expect(discoverTerminalApps).toHaveBeenCalledTimes(1);
+		}
+	});
+
 	it("validates saved terminal choices and never falls back after removal", async () => {
 		let installed = true;
 		let selected = "terminal" as "terminal" | "iterm2" | "ghostty";

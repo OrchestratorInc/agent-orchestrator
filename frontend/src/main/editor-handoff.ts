@@ -523,9 +523,9 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return icon;
 	};
 
-	// Only an explicit menu refresh queries Launch Services and renders bundle
-	// icons. Readiness polling, CDC invalidations, and launches use this shared
-	// main-process snapshot; file existence is still checked at resolution time.
+	// Explicit menu and Settings reads refresh Launch Services. Readiness polls
+	// reuse this main-process snapshot; Neovim actions refresh only when their
+	// selected host is absent. File existence is checked at resolution time.
 	let macApps: MacTerminalApp[] = [];
 	let terminalRefresh: Promise<void> | undefined;
 	const refreshTerminals = () => {
@@ -549,13 +549,21 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	const selectedNeovimTerminal = async (): Promise<NeovimTerminalId> => deps.platform === "darwin"
 		? await deps.readNeovimTerminal?.() ?? "terminal" : "terminal";
 	const neovimTerminals = () => resolveTerminals().filter(({ target }) => isNeovimTerminalId(target.id));
+	const resolveNeovimTerminal = async (id: NeovimTerminalId) => {
+		let terminal = neovimTerminals().find(({ target }) => target.id === id);
+		if (!terminal) {
+			await refreshTerminals();
+			terminal = neovimTerminals().find(({ target }) => target.id === id);
+		}
+		return terminal;
+	};
 	const withNeovimHost = (target: OpenTarget, selected: NeovimTerminalId): OpenTarget => target.id === "neovim" && deps.platform === "darwin" && selected !== "terminal"
 		? { ...target, name: `${target.name} (${selected === "iterm2" ? "iTerm2" : "Ghostty"})` } : target;
 	// Resolve at launch so removal of a selected app never falls back silently.
 	const editorCommand = async (editorId: EditorId, fallback: ResolvedCommand): Promise<ResolvedCommand> => {
 		if (editorId !== "neovim" || deps.platform !== "darwin") return fallback;
 		const selected = await selectedNeovimTerminal();
-		const terminal = neovimTerminals().find(({ target }) => target.id === selected);
+		const terminal = await resolveNeovimTerminal(selected);
 		const name = selected === "iterm2" ? "iTerm2" : selected === "ghostty" ? "Ghostty" : "Terminal";
 		if (!terminal) throw new Error(`${name} is not installed. Choose another Neovim terminal in Settings.`);
 		const appPath = terminal.command.iconPath;
@@ -710,6 +718,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		},
 
 		async getEditors() {
+			await refreshTerminals();
 			const selected = await selectedNeovimTerminal();
 			const terminals = deps.platform === "darwin" ? await Promise.all(neovimTerminals().map(async ({ target, command }) => {
 				const icon = target.iconDataUrl ?? (command.iconPath ? await readIcon(command.iconPath) : undefined);
@@ -725,7 +734,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		async setNeovimTerminal(terminal) {
 			if (deps.platform !== "darwin" || !deps.writeNeovimTerminal) throw new Error("Neovim terminal selection is not available on this platform.");
 			if (!isNeovimTerminalId(terminal)) throw new Error("That Neovim terminal is not supported.");
-			if (!neovimTerminals().some(({ target }) => target.id === terminal)) throw new Error("That terminal is not installed. Choose another Neovim terminal.");
+			if (!(await resolveNeovimTerminal(terminal))) throw new Error("That terminal is not installed. Choose another Neovim terminal.");
 			await deps.writeNeovimTerminal(terminal);
 			return terminal;
 		},
