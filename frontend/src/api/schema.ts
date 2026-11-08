@@ -6607,6 +6607,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinkRefused: boolean;
             accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
