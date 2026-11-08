@@ -36,6 +36,7 @@ type APIDeps struct {
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
+	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
@@ -194,6 +195,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Svc:                      deps.Sessions,
 			Projects:                 deps.Projects,
 			Activity:                 deps.Activity,
+			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
@@ -284,7 +286,7 @@ func (a *API) Register(root chi.Router) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
-						pattern == "/api/v1/projects/clone/prepare" {
+						pattern == "/api/v1/projects/clone/prepare" || pattern == "/api/v1/projects/clone/prepare/stream" {
 						clone.ServeHTTP(w, req)
 						return
 					}

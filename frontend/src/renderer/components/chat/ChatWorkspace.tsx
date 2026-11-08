@@ -55,6 +55,7 @@ import {
 	useVirtualizer,
 	type Virtualizer,
 } from "@tanstack/react-virtual";
+import { isShownAORender } from "../../lib/mcp-tool";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
@@ -114,7 +115,7 @@ import {
 import { AgentAvatar } from "../AgentAvatar";
 import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
-import { TabContextMenu } from "../TabContextMenu";
+import { TabContextMenu, type TabMenuSpec } from "../TabContextMenu";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -269,7 +270,7 @@ export interface ChatRetryControl {
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
 type ShellTerminalTarget = Extract<TerminalTarget, { kind: "shell" }>;
-type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void; menuItems?: ReactNode };
+type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void; menu?: TabMenuSpec };
 type ChatAuxiliaryTab =
 	| { key: string; kind: "reviewer"; terminal: { handleId: string; harness: string } }
 	| { key: string; kind: "reviewer-chat"; terminal: { reviewId: string; harness: string } }
@@ -390,6 +391,8 @@ export interface ChatWorkspaceProps {
 	accountMoving?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
+	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
+	historyPending?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -475,6 +478,8 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
+	savedCopy?: boolean;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -727,6 +732,7 @@ function ChatWorkspaceContent({
 	controllerTransitioning,
 	accountMoving = false,
 	loadingQuietly,
+	historyPending = false,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -778,6 +784,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	savedCopy = false,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -1675,14 +1682,14 @@ function ChatWorkspaceContent({
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
-	const arrivingInChat = Boolean(controllerTransitioning) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
-	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	const arrivingInChat = (Boolean(controllerTransitioning) || historyPending) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
+	const arrivingPlaceholder = historyPending || snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
-	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	const arrivingWithHistory = arrivingInChat && (historyPending || Boolean(session?.lastUserMessageAt));
 	// A chat started from the new chat page holds the start-up shimmer from the
 	// send until the agent picks the brief up, on that page and on the session's.
 	// Arriving from the new chat page, whose header strip is empty, the session's
@@ -1901,21 +1908,23 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
-						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
-						automaticWakePending={suppressStopped}
-						reconnecting={startupReconnecting}
-						terminated={terminated}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
+					{savedCopy ? null : (
+						<ControllerBanner
+							controller={snapshot.controller}
+							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
+							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+							transitioning={controllerTransitioning || agentResuming}
+							automaticWakePending={suppressStopped}
+							reconnecting={startupReconnecting}
+							terminated={terminated}
+							onResume={newWorkDisabled ? undefined : onResumeAgent}
+							resuming={resumingAgent}
+							resumeError={resumeError}
+							onOpenShell={onOpenShell}
+							openingShell={openingShell}
+							shellError={shellError}
+						/>
+					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner
 						staleBinary={session?.staleBinary}
@@ -2283,6 +2292,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     it would just be the same list twice.
  *   - a plan row the daemon marked superseded: an older copy of a list the agent
  *     keeps across turns, which a later turn or run carries.
+ *   - a completed html_render call. AO records the page it showed as a render row
+ *     right after it, and the call's own answer is a note to the agent.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2302,6 +2313,8 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
+		// The page an html_render call shows is its own row right after it.
+		if (isShownAORender(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -2495,9 +2508,11 @@ function ChatHeader({
 													title={tab.terminal.harness}
 												/>
 											) : (
-												<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
-													{tab.tab.content}
-												</TabContextMenu>
+												tab.tab.menu ? (
+													<TabContextMenu spec={{ ...tab.tab.menu, closeShortcut: tab.key === workspaceActiveTabKey }}>
+														{tab.tab.content}
+													</TabContextMenu>
+												) : tab.tab.content
 											)}
 										</DraggableWorkspaceTab>
 									))}
@@ -5777,9 +5792,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? `${item.turnId}-${item.sequence}` : itemKey(item),
+			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
 			turnId: item.turnId,
-			anchor: item.sequence,
+			// A turn that began above the loaded history sorts where it began.
+			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
 		groupForTurn.set(item.turnId, group);

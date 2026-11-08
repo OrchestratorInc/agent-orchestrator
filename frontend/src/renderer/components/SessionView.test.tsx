@@ -284,6 +284,13 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
 // the split under test.
+// The shared project control stands in as a marker: these tests check where it
+// renders, and SharedProjectPanel.test covers what it shows.
+vi.mock("./SharedProjectPanel", () => ({
+	SharedProjectPanel: ({ orchestrator }: { orchestrator: { id: string } }) => (
+		<button type="button" data-testid="shared-project-control">{orchestrator.id}</button>
+	),
+}));
 vi.mock("./SessionTopbarActions", () => ({
 	SessionTopbarActions: ({
 		sessionAction,
@@ -472,14 +479,25 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 		</div>
 	),
 }));
-// The session tab's menu is stood in for by the switch control it wraps.
-vi.mock("./TerminalAgentControls", () => ({
-	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
-		<>
-			{switchControl}
-		</>
-	),
-}));
+vi.mock("./TerminalAgentControls", () => ({ TerminalAgentPickerRow: () => null }));
+// The session tab's ⋮ menu is stood in for by its interface switch row, as a button.
+vi.mock("./TabContextMenu", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./TabContextMenu")>();
+	const { useContext } = await import("react");
+	return {
+		...actual,
+		SessionTabMenuButton: () => {
+			const menu = useContext(actual.SessionTabAgentMenuContext);
+			const action = menu?.switchAction;
+			if (!action) return null;
+			return (
+				<button disabled={action.disabled} onClick={action.run} title={action.reason} type="button">
+					{menu.switchTarget === "chat" ? "Switch to chat UI" : "Switch to terminal UI"}
+				</button>
+			);
+		},
+	};
+});
 vi.mock("./chat/ReviewerChatSurface", () => ({
 	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
@@ -1221,6 +1239,41 @@ describe("SessionView", () => {
 		];
 		view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 		expect(cloudSessionPoll).toHaveBeenLastCalledWith(false);
+	});
+
+	it.each(["chat", "terminal"] as const)(
+		"puts a Cloud orchestrator's shared project control in the header, not over the %s",
+		(mode) => {
+			const cloudOrchestrator: WorkspaceSession = {
+				...workerSession("sess-orch"),
+				workspaceId: "cloud-project",
+				workspaceName: "Cloud project",
+				mode: mode === "chat" ? "chat" : undefined,
+				cloud: { orgId: "cloud-org" },
+			};
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudOrchestrator] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-orch" />);
+			const controls = screen.getAllByTestId("shared-project-control");
+			expect(controls).toHaveLength(1);
+			expect(controls[0].closest(".session-topbar-session-chrome")).not.toBeNull();
+		},
+	);
+
+	it("shows no shared project control on a Cloud worker or a local orchestrator", () => {
+		const cloudWorker: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudWorker] },
+		];
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
+		view.unmount();
+		workspaceQueryState.data = workspaces;
+		render(<SessionView projectId="proj-1" sessionId="sess-orch" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -5578,14 +5631,14 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 	});
 
-	it("starts the orchestrator Browser closed and opens it with the inspector shortcut", () => {
+	it("starts the orchestrator inspector closed on Summary and opens it with the inspector shortcut", () => {
 		render(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.getByRole("button", { name: "Open Browser" })).toHaveAttribute("aria-pressed", "false");
+		expect(screen.getByRole("button", { name: "Open inspector panel" })).toHaveAttribute("aria-pressed", "false");
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		expect(screen.getByRole("button", { name: "Close Browser" })).toHaveAttribute("aria-pressed", "true");
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
@@ -5681,7 +5734,7 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "open chat basename" }));
 		await waitFor(() => expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument());
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("reveals each explicit orchestrator preview and respects closing it during passive activity", () => {
@@ -5691,11 +5744,11 @@ describe("SessionView", () => {
 		orchestrator.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		orchestrator.previewRevision = 2;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
@@ -5708,7 +5761,7 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
 		expect(screen.getByTestId("orchestrator-browser-unseen-indicator")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 		expect(screen.queryByTestId("orchestrator-browser-unseen-indicator")).not.toBeInTheDocument();
 		expect(browserUnseen("sess-orch")).toBe(false);
 	});

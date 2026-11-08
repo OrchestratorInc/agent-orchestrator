@@ -110,7 +110,9 @@ test('empty core and SQLite selections fail rather than falsely pass', t => {
 test('vitest matrix and command agree on two complete shards', () => {
   const block = job(frontend, 'vitest');
   assert.match(block, /shard: \[1, 2\]/);
-  assert.equal(runStep(block, 'Run vitest shard'), 'npx vitest run --shard=${{ matrix.shard }}/2');
+  const script = runStep(block, 'Run vitest shard');
+  assert.match(script, /^ *npx vitest run --shard=\$\{\{ matrix\.shard \}\}\/2$/m);
+  assert.match(script, /^ *npx vitest related --run --passWithNoTests --shard=\$\{\{ matrix\.shard \}\}\/2 /m);
   assert.match(block, /timeout-minutes: 30/);
   for (const id of ['backend-core', 'chat-race', 'sqlite-race']) {
     assert.match(job(go, id), /timeout-minutes: 50/);

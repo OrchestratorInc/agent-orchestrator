@@ -42,8 +42,7 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
-import { SessionContextMenuItems } from "./SessionContextMenuItems";
-import { ArchiveSessionMenuItem, TabContextMenu } from "./TabContextMenu";
+import { TabContextMenu, TabMenuSpecContext, type TabMenuSpec } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -93,8 +92,8 @@ export type CenterPaneWorkspaceTab = {
 	content: ReactNode;
 	onSelect: () => void;
 	onClose?: () => void;
-	/** The tab's own right-click actions, above Close tab. */
-	menuItems?: ReactNode;
+	/** The tab's menu; absent, the tab draws its own (a split group's tab). */
+	menu?: TabMenuSpec;
 };
 
 type AuxiliaryTab =
@@ -639,9 +638,11 @@ export function CenterPane({
 														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
-													<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
-														{tab.tab.content}
-													</TabContextMenu>
+													tab.tab.menu ? (
+														<TabContextMenu spec={{ ...tab.tab.menu, closeShortcut: tab.key === workspaceActiveTabKey }}>
+															{tab.tab.content}
+														</TabContextMenu>
+													) : tab.tab.content
 												)}
 											</DraggableWorkspaceTab>
 										))}
@@ -818,22 +819,21 @@ export function SessionPaneTab({
 		/>
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
-	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions): an
-	// active local or remote worker. The orchestrator goes with its project.
-	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session));
+	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
+	// an active local or remote worker. The orchestrator goes with its project.
+	const menu: TabMenuSpec = session
+		? {
+				kind: "session",
+				tabKey,
+				session,
+				onRename: renameSession ? rename.begin : undefined,
+				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+			}
+		: { kind: "plain", tabKey };
+	// The ⋮ button in the action slot opens this same spec.
 	return (
-		<TabContextMenu
-			destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
-			items={session ? (
-				<SessionContextMenuItems
-					onRename={renameSession ? rename.begin : undefined}
-					renameShortcut={renameSession ? "F2" : undefined}
-					session={session}
-				/>
-			) : undefined}
-			tabKey={tabKey}
-		>
-			{tabFrame}
-		</TabContextMenu>
+		<TabMenuSpecContext.Provider value={menu}>
+			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>
+		</TabMenuSpecContext.Provider>
 	);
 }

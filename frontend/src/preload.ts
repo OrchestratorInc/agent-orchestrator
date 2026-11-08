@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import type { PendingSideClose } from "./shared/side-close";
 import {
@@ -54,6 +54,7 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
+import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -237,6 +238,9 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
+		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
@@ -359,6 +363,16 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		setMenuAvailability: (availability: AppMenuAvailability) => {
+			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
+		},
+		onMenuAction: (listener: (action: AppMenuActionId) => void) => {
+			const wrapped = (_event: unknown, action: AppMenuActionId) => listener(action);
+			ipcRenderer.on(APP_MENU_ACTION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(APP_MENU_ACTION_CHANNEL, wrapped);
+			};
+		},
 		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
 			const wrapped = (_event: unknown, phase: ScrollPhase) => listener(phase);
 			ipcRenderer.on(SCROLL_PHASE_CHANNEL, wrapped);
@@ -442,6 +456,15 @@ const api = {
 	chatImage: {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
+	},
+	// Session and project share links this device made (main/session-share-urls.ts).
+	sessionShareUrls: {
+		remember: (baseUrl: string, linkId: string, url: string) =>
+			ipcRenderer.invoke("sessionShareUrls:remember", { baseUrl, linkId, url }) as Promise<void>,
+		recall: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:recall", { baseUrl, linkIds }) as Promise<Record<string, string>>,
+		forget: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
 	},
 	// Public share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees

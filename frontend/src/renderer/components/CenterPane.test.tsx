@@ -852,7 +852,13 @@ describe("CenterPane tab context menu", () => {
 		const onClose = vi.fn();
 		renderCenterPane({
 			session: worker,
-			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+			workspaceTabs: [{
+				key: "file:a.ts",
+				content: <button role="tab" type="button">a.ts</button>,
+				onSelect: vi.fn(),
+				onClose,
+				menu: { kind: "file", tabKey: "file:a.ts", onClose, file: { path: "a.ts", sessionId: "sess-1", remote: false } },
+			}],
 		});
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));

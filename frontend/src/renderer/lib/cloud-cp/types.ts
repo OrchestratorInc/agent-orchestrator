@@ -31,6 +31,11 @@ export interface CloudCpOrganization {
 	role: string;
 	/** This org's own offering (`/me` organizations[i].offering); absent on an older control plane. */
 	offering?: CloudCpOffering;
+	/**
+	 * Whose workspace this is: "personal" (one person's own), "team" or
+	 * "enterprise". Absent on an older control plane.
+	 */
+	kind?: string;
 }
 
 /** Sandbox providers a control plane offers (`/me` sandboxProviders). */
@@ -614,6 +619,14 @@ export interface CloudCpSession {
 	mode: string;
 	/** Coding-agent model the session launched with; empty or absent means the harness default. */
 	model?: string;
+	/**
+	 * The model the session runs now: its owner's Chat pick, else `model`.
+	 * The control plane always sends it, "" for the harness default; only an
+	 * older one leaves it out (read `model` then).
+	 */
+	currentModel?: string;
+	/** The reasoning effort its turns run with now; absent for the model's default. */
+	currentReasoningEffort?: string;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
@@ -1391,6 +1404,16 @@ export interface CloudCpChatEventsQuery {
 	 * it with 400; callers filter the page themselves either way.
 	 */
 	types?: readonly string[];
+	/**
+	 * Read back from this sequence instead of forward from `after`: the newest
+	 * `limit` events below it (and above `after`, which must be lower), extended
+	 * back once to where their turns start. 9007199254740991 reads the newest
+	 * page. An older control plane ignores it and reads forward; its page then
+	 * has no `hasOlder`.
+	 */
+	before?: number;
+	/** With `before` only: only events created at or after this ISO time. */
+	since?: string;
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/chat-events */
@@ -1398,6 +1421,10 @@ export interface CloudCpChatEventsResponse {
 	events: CloudCpClientEvent[];
 	hasMore: boolean;
 	nextAfter: number;
+	/** Only on a page read with `before`: older events remain above `after`. */
+	hasOlder?: boolean;
+	/** Only on a page read with `before`: the `before` of the next older page. */
+	nextBefore?: number;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion */
@@ -1811,6 +1838,16 @@ export interface CloudCpShareLink {
 	 * links turned on: the link's 22-character code (letters and digits).
 	 */
 	code?: string;
+	/**
+	 * Only in the creation response, with a code, and only when the control
+	 * plane names a public origin for share links: https://<origin>/s/<code>.
+	 */
+	shortUrl?: string;
+	/**
+	 * How many people hold access because they opened this link. Absent on a
+	 * control plane that predates it, which also can't remove them on revoke.
+	 */
+	joinedCount?: number;
 }
 
 /** A project or session someone shared with the caller. */

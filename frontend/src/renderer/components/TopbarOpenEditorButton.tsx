@@ -2,6 +2,7 @@ import { ChevronDown, Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpenTargetId } from "../../shared/editor-handoff";
+import { useAppMenuAction, useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
@@ -86,6 +87,11 @@ export function TopbarOpenEditorButton({
 	useSessionShortcut("open-in-editor", () => {
 		if (busy || !workspaceAvailable) return;
 		launchMain();
+	});
+	useSessionMenuAvailable("open-in-editor", !mainDisabled);
+	useSessionMenuAvailable("open-in-file-manager", !busy && workspaceAvailable && Boolean(fileManager));
+	useAppMenuAction("open-in-file-manager", () => {
+		if (fileManager) launch(fileManager.id);
 	});
 	const waitingLabel = stateQuery.isPending
 		? t("editor.preparingWorkspace")

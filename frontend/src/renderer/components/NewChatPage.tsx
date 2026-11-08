@@ -458,7 +458,10 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
+	const modelChoices = model.choices.flatMap((choice) => {
+		const listed = catalogModelFor(choice, harness, models);
+		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
+	});
 	const chosen = models.find((item) => item.id === settings.model);
 	const label = chosen ? agentModelDisplayLabel(harness, chosen.displayName) : undefined;
 	const modelValue = modelChoices.find((choice) => choice.value === settings.model)?.value ??

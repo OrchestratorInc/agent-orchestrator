@@ -40,7 +40,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
-import { usePreparedClone } from "../hooks/usePreparedClone";
+import { type CloneProgress, usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -208,6 +208,7 @@ export function CreateProjectFlow({
 	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => initialCloneDetails(hostId));
 	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
 	const [cloneActivity, setCloneActivity] = useState<"cloning" | "validating" | null>(null);
+	const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
 	const [cloneRegistrationFailed, setCloneRegistrationFailed] = useState(false);
 	const preparedClone = usePreparedClone(hostId);
 	const [remoteBrowse, setRemoteBrowse] = useState<RemoteBrowseRequest | null>(null);
@@ -609,9 +610,10 @@ export function CreateProjectFlow({
 		setCloneRegistrationFailed(false);
 		setIsPreparingGit(true);
 		setCloneActivity(preparedClone.current() ? "validating" : "cloning");
+		setCloneProgress(null);
 		let clonedPath: string | null = null;
 		try {
-			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent, setCloneProgress);
 			clonedPath = data.path;
 			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
@@ -647,6 +649,7 @@ export function CreateProjectFlow({
 			setCloneDialogOpen(true);
 		} finally {
 			setCloneActivity(null);
+			setCloneProgress(null);
 			setIsPreparingGit(false);
 		}
 	};
@@ -887,6 +890,7 @@ export function CreateProjectFlow({
 							}}
 							onCancel={preparedClone.cancel}
 							activity={cloneActivity}
+							progress={cloneProgress}
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
 							open={cloneDialogOpen && !settingsOpen}

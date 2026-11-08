@@ -67,7 +67,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false }: {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false }: {
 	text: string;
 	streaming?: boolean;
 	continuousSelection?: boolean;
@@ -85,6 +85,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	resolveImage?: (url: string) => MarkdownImageSource | undefined;
 	/** Draws each image where the document places it, rather than after the text. */
 	imagesInPlace?: boolean;
+	/**
+	 * Android: tables and unwrapped code keep sideways drags when a parent also
+	 * scrolls sideways (the artifact pager). Off elsewhere: a nested-scroll view
+	 * under the finger stops a parent from taking the drag even where it takes
+	 * no touches, as in a filmstrip preview.
+	 */
+	nestedScroll?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -100,7 +107,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
 				: run.kind === "image"
 					? <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />
-					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
+					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />)}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} resolve={resolveImage} />)}
 		</View>;
 	}
@@ -122,9 +129,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		}
 		flushProse();
 		const index = content.length;
-		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} />);
+		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} nestedScroll={nestedScroll} />);
 		else if (block.kind === "image") content.push(<MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} resolve={resolveImage} />);
-		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} />);
+		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
 		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
@@ -247,13 +254,13 @@ function tableColumnWidth(cells: string[]): number {
 	return Math.min(TABLE_COLUMN_MAX, Math.max(TABLE_COLUMN_MIN, Math.ceil(chars * TABLE_CHAR_WIDTH) + space.sm * 2));
 }
 
-function MarkdownTable({ headers, align, rows, selectionColor }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string }) {
+function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string; nestedScroll: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const widths = headers.map((header, column) => tableColumnWidth([header, ...rows.map((row) => row[column] ?? "")]));
 	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
 		<SelectableInlineText value={cells[column] ?? ""} selectionColor={selectionColor} style={[header ? styles.tableHeaderText : styles.tableText, align[column] && { textAlign: align[column] }]} styles={styles} codeStyle={styles.tableCode} />
 	</View>);
-	return <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
+	return <ScrollView horizontal nestedScrollEnabled={nestedScroll} showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
 		<View style={styles.table}>
 			<View style={[styles.tableRow, styles.tableHeader]}>{row(headers, true)}</View>
 			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
@@ -264,7 +271,7 @@ function MarkdownTable({ headers, align, rows, selectionColor }: { headers: stri
 /** How long Copy shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
+function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("icon");
@@ -307,7 +314,7 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 					<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
 				</Pressable>
 			</View>
-			<ScrollView horizontal={!wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
+			<ScrollView horizontal={!wrap} nestedScrollEnabled={nestedScroll && !wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
 				<HighlightedCodeText code={text} language={language} streaming={streaming} style={[styles.codeText, wrap && styles.codeTextWrap]} />
 			</ScrollView>
 		</View>

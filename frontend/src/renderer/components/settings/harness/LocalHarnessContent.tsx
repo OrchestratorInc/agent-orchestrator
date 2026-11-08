@@ -627,14 +627,15 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
 	// Reads the accounts again, so the CLI login's row shows a sign-in that just
-	// changed, and returns whether that login is signed in.
+	// changed, and returns whether the CLI is logged in by any method, an API
+	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
 		const provider = hostId ? null : agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
 		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
 		if (!accounts) return undefined;
 		queryClient.setQueryData(agentAccountsQueryKey, accounts);
-		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
@@ -643,11 +644,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		setAuthWorkflow(authWorkflowRef.current);
 		const signingIn = workflow.action !== "logout";
 		const ownRow = cliLoginOnOwnRow(workflow.agentId);
-		let cliSignedIn: boolean | undefined;
+		let cliLoggedIn: boolean | undefined;
 		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
 			if (ownRow) {
-				cliSignedIn = await refreshCliLogin(workflow.agentId);
-				return cliSignedIn === signingIn;
+				cliLoggedIn = await refreshCliLogin(workflow.agentId);
+				return cliLoggedIn === signingIn;
 			}
 			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		};
@@ -660,7 +661,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		const signedOut = ownRow ? cliLoggedIn === false : result?.agent?.authStatus === "unauthorized";
 		if (done) {
 			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
@@ -777,8 +778,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
-						const cliSignedIn = await refreshCliLogin(agentId);
-						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") return true;
+						const cliLoggedIn = await refreshCliLogin(agentId);
+						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
 					}
 					return false;
 				}}

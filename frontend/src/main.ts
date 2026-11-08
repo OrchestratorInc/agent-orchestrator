@@ -20,6 +20,8 @@ import {
 	Notification as ElectronNotification,
 	powerMonitor,
 	protocol,
+	safeStorage,
+	screen,
 	shell,
 	session,
 	WebContentsView,
@@ -92,7 +94,7 @@ import {
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
-import { attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
+import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
@@ -103,6 +105,14 @@ import {
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL,
+	APP_MENU_ACTION_CHANNEL,
+	APP_MENU_COMMAND_IDS,
+	SET_APP_MENU_AVAILABILITY_CHANNEL,
+	effectiveShortcutBindings,
+	isAppMenuActionId,
+	shortcutBindingAccelerator,
+	type AppMenuAvailability,
+	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
@@ -157,12 +167,15 @@ import {
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
+	protectedStorageAvailable,
+	readAuthStore,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { ShareLinkRecords } from "./main/cloud-share-links";
+import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
@@ -228,6 +241,8 @@ import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-au
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
+import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
+import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
 	dockBounceType,
 	shouldReplaceBounce,
@@ -235,7 +250,7 @@ import {
 	shouldToast,
 	toastSilent,
 } from "./main/notification-signals";
-import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
+import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate, coerceAppMenuAvailability, type AppMenuCommands } from "./main/menu";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
@@ -476,6 +491,7 @@ let browserStreamLink: BrowserStreamLinkHandle | null = null;
 let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
+let appMenuAvailability: AppMenuAvailability = {};
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
 let terminalFontSizeFocused = false;
@@ -653,6 +669,10 @@ function annotatePreloadPath(): string {
 	return path.join(__dirname, "annotate-preload.js");
 }
 
+function privacyGuidePreloadPath(): string {
+	return path.join(__dirname, "privacy-guide-preload.js");
+}
+
 // Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
 // Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
 // the orange "DEV" variant so they are recognisable and never impersonate the
@@ -790,6 +810,55 @@ function appMenuOptions() {
 		allowShellDebugging: isDev,
 		onReload: (ignoreCache: boolean) => reloadAppView(browserViewHost, getShellWebContents, isDev, ignoreCache),
 	};
+}
+
+// A chord normally never reaches the menu: before-input-event consumes it and
+// sends the same message. It falls through while a binding is being recorded,
+// and when the Browser owns the chord; running the item then would double-handle it.
+function menuAcceleratorMayRun(id: AppShortcutId): boolean {
+	if (keybindingRecordingActive) return false;
+	if (!browserViewHost?.isLastUsedBrowser()) return true;
+	const binding = effectiveShortcutBindings(id, true, keybindingOverrides)[0];
+	return !binding || shouldHandleAppShortcutInBrowserContext(id, binding, true);
+}
+
+const appMenuCommands: AppMenuCommands = {
+	accelerator: (id) => {
+		if (isAppMenuActionId(id)) return undefined;
+		const binding = effectiveShortcutBindings(id, true, keybindingOverrides)[0];
+		return binding ? shortcutBindingAccelerator(binding) : undefined;
+	},
+	isEnabled: (id) => appMenuAvailability[id] === true,
+	run: (id, triggeredByAccelerator) => {
+		const shell = getShellWebContents();
+		if (!shell || shell.isDestroyed() || appMenuAvailability[id] !== true) return;
+		if (isAppMenuActionId(id)) {
+			shell.send(APP_MENU_ACTION_CHANNEL, id);
+			return;
+		}
+		if (triggeredByAccelerator && !menuAcceleratorMayRun(id)) return;
+		const { channel, payload } = appShortcutDelivery(id);
+		shell.send(channel, ...payload);
+	},
+};
+
+function applyAppMenuAvailability(next: AppMenuAvailability): void {
+	appMenuAvailability = next;
+	const menu = Menu.getApplicationMenu();
+	for (const id of APP_MENU_COMMAND_IDS) {
+		const item = menu?.getMenuItemById(id);
+		if (item) item.enabled = next[id] === true;
+	}
+}
+
+function installMacAppMenu(): void {
+	Menu.setApplicationMenu(
+		Menu.buildFromTemplate(
+			buildMacAppMenuTemplate(() => {
+				void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
+			}, { appName: app.name, onQuit: quitConfirm.menuQuit }, { ...appMenuOptions(), commands: appMenuCommands }),
+		),
+	);
 }
 
 function buildWindowsAppMenu(): Menu {
@@ -943,9 +1012,13 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
 		quitConfirm.reset();
+		applyAppMenuAvailability({});
 	});
 	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
 	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
+	// did-navigate is main-frame only, so an artifact iframe loading cannot clear this.
+	// The reloaded renderer reports availability again.
+	shellWebContents.on("did-navigate", () => applyAppMenuAvailability({}));
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -958,13 +1031,7 @@ async function createWindowInternal(): Promise<void> {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
 	} else if (process.platform === "darwin") {
-		Menu.setApplicationMenu(
-			Menu.buildFromTemplate(
-				buildMacAppMenuTemplate(() => {
-					void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
-				}, { appName: app.name, onQuit: quitConfirm.menuQuit }, appMenuOptions()),
-			),
-		);
+		installMacAppMenu();
 	} else if (process.platform === "linux") {
 		Menu.setApplicationMenu(buildLinuxAppMenu());
 		mainWindow.setMenuBarVisibility(false);
@@ -2907,6 +2974,93 @@ ipcMain.handle("app:openChromeExtensions", () =>
 	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
 );
 
+// Docks under System Settings while Cua Driver's permissions are missing. It is
+// a non-activating, always-on-top panel so System Settings keeps focus; its only
+// script is a preload that turns a drag of the CuaDriver tile into a native file
+// drag, and its links are intercepted here.
+let privacyGuideContents: WebContents | undefined;
+let privacyGuideIcon: Electron.NativeImage | undefined;
+const privacyGuide = new PrivacyGuide({
+	createWindow: () => {
+		const window = new BrowserWindow({
+			width: 600,
+			height: PRIVACY_GUIDE_HEIGHT,
+			type: process.platform === "darwin" ? "panel" : undefined,
+			show: false,
+			frame: false,
+			transparent: true,
+			resizable: false,
+			movable: false,
+			minimizable: false,
+			maximizable: false,
+			fullscreenable: false,
+			skipTaskbar: true,
+			alwaysOnTop: true,
+			hasShadow: true,
+			webPreferences: { preload: privacyGuidePreloadPath(), sandbox: true, contextIsolation: true, nodeIntegration: false },
+		});
+		window.setAlwaysOnTop(true, "floating");
+		window.setVisibleOnAllWorkspaces(true);
+		window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+		privacyGuideContents = window.webContents;
+		return {
+			loadURL: (url) => window.loadURL(url),
+			setBounds: (bounds) => window.setBounds(bounds),
+			showInactive: () => window.showInactive(),
+			hide: () => window.hide(),
+			isVisible: () => window.isVisible(),
+			isFocused: () => window.isFocused(),
+			close: () => window.close(),
+			isDestroyed: () => window.isDestroyed(),
+			onNavigate: (handler) => window.webContents.on("will-navigate", (event, url) => {
+				event.preventDefault();
+				handler(url);
+			}),
+			onClosed: (handler) => window.on("closed", () => {
+				if (privacyGuideContents === window.webContents) privacyGuideContents = undefined;
+				handler();
+			}),
+		};
+	},
+	openExternal: (url) => openAllowedAppExternalURL(url, shell),
+	// Quick Look renders the app's real icon at a crisp size; getFileIcon only
+	// offers a 32px generic placeholder for it on macOS.
+	readIcon: async (appPath) => {
+		const icon = await nativeImage.createThumbnailFromPath(appPath, { width: 128, height: 128 }).catch(() => undefined);
+		const image = icon && !icon.isEmpty() ? icon : await app.getFileIcon(appPath, { size: "normal" });
+		privacyGuideIcon = image.resize({ width: 64, height: 64 });
+		return image.toDataURL();
+	},
+	watchSettings: watchSettingsWindow,
+	workAreaFor: (bounds) => screen.getDisplayMatching(bounds).workArea,
+	fallbackBounds: () => {
+		const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+		const width = Math.min(600, workArea.width - 32);
+		return { x: workArea.x + Math.round((workArea.width - width) / 2), y: workArea.y + workArea.height - PRIVACY_GUIDE_HEIGHT - 24, width, height: PRIVACY_GUIDE_HEIGHT };
+	},
+	ownPid: process.pid,
+});
+// Dropping CuaDriver.app on a System Settings privacy list adds it there.
+ipcMain.on("privacyGuide:startDrag", (event) => {
+	if (!privacyGuideContents || event.sender !== privacyGuideContents || !privacyGuideIcon || privacyGuideIcon.isEmpty()) return;
+	event.sender.startDrag({ file: CUA_DRIVER_APP_PATH, icon: privacyGuideIcon });
+});
+ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	if (process.platform !== "darwin") return;
+	const request = coercePrivacyGuideRequest(input);
+	if (!request) throw new Error("Invalid privacy guide request.");
+	await privacyGuide.show(request);
+});
+ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+});
+ipcMain.handle("app:closePrivacyGuide", (event) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
+	privacyGuide.close();
+});
+
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
 	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
@@ -2976,6 +3130,11 @@ ipcMain.on("browser:overlay", (event, open: unknown) => {
 
 ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: unknown) => {
 	closeShellTerminalShortcutEnabled = enabled === true;
+});
+
+ipcMain.on(SET_APP_MENU_AVAILABILITY_CHANNEL, (event, availability: unknown) => {
+	if (event.sender !== getShellWebContents()) return;
+	applyAppMenuAvailability(coerceAppMenuAvailability(availability));
 });
 
 ipcMain.on(QUIT_CONFIRM_RESULT_CHANNEL, (event, confirmed: unknown) => {
@@ -3300,7 +3459,8 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 		const rows = JSON.parse(stdout) as GitHubRepoRow[];
 		return rows.flatMap((row) => {
 			const fullName = row.fullName ?? row.full_name;
-			const url = row.url ?? row.html_url;
+			// `gh api user/repos` rows set `url` to the REST API URL, which git cannot clone.
+			const url = row.html_url ?? row.url;
 			if (!fullName || !url) return [];
 			return [{
 				fullName,
@@ -3382,6 +3542,14 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
+// Session and project share links this device made, so Copy link works again
+// later; only the signed-in account's, which the file names.
+const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
+	available: protectedStorageAvailable,
+	encrypt: (text) => safeStorage.encryptString(text),
+	decrypt: (value) => safeStorage.decryptString(value),
+}, async () => (await readAuthStore(cloudDataDir())).session?.user.id);
+registerSessionShareUrlsIpc(ipcMain, sessionShareUrls);
 registerAgentLoginIpc({
 	ipcMain,
 	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
@@ -3467,6 +3635,8 @@ ipcMain.handle("keybindings:set", async (_event, overrides: KeybindingOverrides)
 	const runFile = runFilePath();
 	if (!runFile) return keybindingOverrides;
 	keybindingOverrides = await writeKeybindingOverrides(path.dirname(runFile), overrides);
+	// Menu items show the user's own bindings.
+	if (process.platform === "darwin" && getShellWebContents()) installMacAppMenu();
 	return keybindingOverrides;
 });
 ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
@@ -3714,11 +3884,22 @@ const pendingCloudSignIn = createPendingCloudSignIn();
 
 ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 
+// The account this run last told the renderer about, to notice another one signing in.
+let notifiedCloudUserId: string | undefined;
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
 	pendingCloudSignIn.note(account, signIn);
+	// Share URLs belong to the account that made them: they go when it signs
+	// out or someone else signs in. The first notice of a run has no account
+	// to compare with; the store itself never shows another account's (its
+	// file names the owner), so one who signed in since the last run never sees them.
+	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
+		void sessionShareUrls.clear().catch(() => undefined);
+	}
+	notifiedCloudUserId = account?.user.id;
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();

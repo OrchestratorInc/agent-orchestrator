@@ -113,6 +113,7 @@ const shellMocks = vi.hoisted(() => {
 		queryClient: {
 			ensureQueryData: vi.fn(),
 			fetchQuery: vi.fn(),
+			getQueryCache: () => ({ findAll: () => [] }),
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),

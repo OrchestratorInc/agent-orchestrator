@@ -336,6 +336,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers (wire envelopes)
 	"ControllersListProjectsResponse":                     "ListProjectsResponse",
 	"ControllersProjectResponse":                          "ProjectResponse",
+	"ControllersClonePrepareStreamEvent":                  "ClonePrepareStreamEvent",
 	"ControllersAgentIDParam":                             "AgentIDParam",
 	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
 	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
@@ -668,6 +669,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectCloneInput":                 "CloneProjectInput",
 	"ProjectClonePreparationResult":     "ClonePreparationResult",
 	"ProjectCloneDestination":           "CloneDestination",
+	"ProjectCloneProgress":              "CloneProgress",
 	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
 	"ProjectInitializeRepositoryResult": "InitializeRepositoryResult",
 	"ProjectRemoveResult":               "RemoveProjectResult",
@@ -1113,6 +1115,13 @@ type conversationSnapshotQuery struct {
 	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
 }
 
+type sessionConversationSnapshotQuery struct {
+	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
+	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
+	AfterSequence  *int64 `query:"afterSequence,omitempty" minimum:"1" description:"Read only items newer than this conversation sequence. The response echoes afterSequence when it applied the floor. Omit for a whole page."`
+	OutputLimit    *int64 `query:"outputLimit,omitempty" minimum:"64" maximum:"65536" description:"Keep at most this many bytes of each command output: its head and tail. A cut output carries outputBytes, the full size. Omit for whole outputs."`
+}
+
 func usageOperations() []operation {
 	return []operation{
 		{
@@ -1312,7 +1321,7 @@ func shellTerminalOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation", id: "getSessionConversation", tag: "conversations",
 			summary:    "Read a chat session's durable conversation",
-			pathParams: []any{controllers.SessionIDParam{}, conversationSnapshotQuery{}},
+			pathParams: []any{controllers.SessionIDParam{}, sessionConversationSnapshotQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationSnapshotResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
@@ -2909,6 +2918,17 @@ func projectOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/projects/clone/prepare/stream", id: "prepareCloneProjectStream", tag: "projects",
+			summary: "Clone a project without registering it, streaming each git step as a server-sent event",
+			reqBody: projectsvc.CloneInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ClonePrepareStreamEvent{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/projects/clone/cleanup", id: "cleanupPreparedClone", tag: "projects",

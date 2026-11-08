@@ -79,8 +79,13 @@ export function ConfirmDialog({
 				onClick={(event) => event.stopPropagation()}
 				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
-					// Destructive confirms start on the safe choice, not the close X.
-					const target = destructive ? cancelRef.current : confirmRef.current;
+					// Destructive confirms start on the safe choice, not the close X. A
+					// disabled button can't take focus, which would leave it behind the
+					// dialog: then the other one, or Radix's own choice.
+					const preferred = destructive ? cancelRef.current : confirmRef.current;
+					const target = preferred && !preferred.disabled
+						? preferred
+						: [cancelRef.current, confirmRef.current].find((button) => button && !button.disabled);
 					if (!target) return;
 					event.preventDefault();
 					target.focus();

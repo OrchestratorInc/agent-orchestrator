@@ -166,7 +166,7 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
  * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
-	browserOnly = false,
+	orchestrator = false,
 	session,
 	hostId: hostIdProp,
 	onOpenReviewerTerminal,
@@ -187,7 +187,8 @@ export const SessionInspector = memo(function SessionInspector({
 	view: viewProp,
 	onViewChange,
 }: {
-	browserOnly?: boolean;
+	/** An orchestrator's rail has only Summary and Browser. */
+	orchestrator?: boolean;
 	session?: WorkspaceSession;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -212,7 +213,6 @@ export const SessionInspector = memo(function SessionInspector({
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
-	const onlyBrowser = browserOnly;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -224,7 +224,7 @@ export const SessionInspector = memo(function SessionInspector({
 	);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -263,20 +263,20 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) => entry.id === "summary" || entry.id === "browser")
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			// The tab is contextual: an artifact click opens it; leaving it hides it.
 			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -357,6 +357,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							orchestrator={orchestrator}
 							session={session}
 						/>
 					) : undefined
@@ -391,6 +392,7 @@ const SummaryView = memo(function SummaryView({
 	hostId,
 	onOpenFiles,
 	onOpenReviews,
+	orchestrator,
 	session,
 }: {
 	canOpenReviews: boolean;
@@ -398,6 +400,7 @@ const SummaryView = memo(function SummaryView({
 	hostId?: string;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
+	orchestrator: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -431,7 +434,8 @@ const SummaryView = memo(function SummaryView({
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
-	const artifacts = sessionArtifacts(session);
+	// An orchestrator's rail has no Files or Artifacts view for the branch and artifact cards to open.
+	const artifacts = orchestrator ? [] : sessionArtifacts(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
@@ -445,8 +449,6 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
@@ -455,7 +457,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -477,9 +479,10 @@ const SummaryView = memo(function SummaryView({
 				) : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={
+			branch={orchestrator ? undefined : (
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (
@@ -504,7 +507,7 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 					title={prSectionTitle}
 				/>
-			}
+			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -1046,7 +1049,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"

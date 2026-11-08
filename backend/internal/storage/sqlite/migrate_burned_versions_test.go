@@ -252,6 +252,7 @@ var shippedMigrations = map[int64]string{
 	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
 	20261103094403671: "20261103094403671_backfill_spanning_plan_copies.sql",
 	20261105105237146: "20261105105237146_usage_repricing.sql",
+	20261107181854835: "20261107181854835_session_delete_child_indexes.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

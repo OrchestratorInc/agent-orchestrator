@@ -113,7 +113,7 @@ const menuOf = (element: HTMLElement) => within(element).getByRole("button", { n
 
 async function stopSharing(list: HTMLElement, name: string) {
 	await userEvent.click(menuOf(row(list, name)));
-	await userEvent.click(await screen.findByRole("menuitem", { name: `Stop sharing with ${name}` }));
+	await userEvent.click(await screen.findByRole("menuitem", { name: "Remove access" }));
 }
 
 async function stageCheckout() {
@@ -162,44 +162,50 @@ describe("ShareSessionDialog people and teams", () => {
 		mocks.candidates = [{ kind: "team", teamId: "t-checkout", name: "Checkout", memberCount: 6, memberNames: ["Ben", "Dana"] }];
 	});
 
-	it("lists the owner, teams, people and pending emails, and the project's shares as such", async () => {
+	it("lists access broadest first: owner, workspace, the project's shares, teams, people, pending emails", async () => {
 		renderDialog();
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		expect(within(list).getByText(/Asha Rao/).textContent).toContain("(you)");
 		expect(within(list).getByText("Owner")).toBeInTheDocument();
+		const workspace = list.querySelector("[data-share-workspace-row]")!;
+		expect(workspace.textContent).toContain("People in Northwind");
+		expect(workspace.textContent).toContain("Full access");
 		const rows = [...list.querySelectorAll("[data-share-entry]")];
-		expect(rows.map((element) => element.getAttribute("data-share-entry"))).toEqual(["team", "user", "team", "email"]);
-		expect(rows[0]!.textContent).toContain("6 people");
-		expect(rows[0]!.textContent).toContain("Write to the agent");
-		expect(rows[1]!.textContent).toContain("from a link");
+		expect(rows.map((element) => element.getAttribute("data-share-row"))).toEqual([
+			"project::team:t-data", "session:sess:team:t-platform", "session:sess:email:riya@acme.co", "session:sess:email:sam@contractor.io",
+		]);
 		// The project's share applies here but is changed at project level.
-		expect(rows[2]!.textContent).toContain("from the whole project");
-		expect(rows[2]!.querySelector("[data-access-menu]")).toBeNull();
+		expect(rows[0]!.textContent).toContain("from project");
+		expect(rows[0]!.querySelector("[data-access-menu]")).toBeNull();
+		expect(rows[0]!.querySelector("[data-share-locked]")).toHaveAttribute("aria-disabled", "true");
+		expect(rows[1]!.textContent).toContain("6 people");
+		expect(rows[1]!.textContent).toContain("Can write");
+		expect(rows[2]!.textContent).toContain("via link");
 		expect(rows[3]!.textContent).toContain("Added by email · gets access when they sign in");
 	});
 
-	it("keeps 'from the whole project' whole, so it can be clicked however long the email", async () => {
+	it("keeps 'from project' whole, so it can be clicked however long the email", async () => {
 		mocks.access.entries[2] = entry("g-long", { kind: "user", userId: "u-long", name: "Someone With A Long Name", email: `${"a".repeat(80)}@northwind.dev` }, { scope: "project", sessionId: undefined });
 		renderDialog();
 		const list = await accessList();
-		const button = await within(list).findByRole("button", { name: "from the whole project" });
+		const button = await within(list).findByRole("button", { name: "from project" });
 		// The email shortens; the link never sits in the part that is cut off.
 		expect(button.closest(".truncate")).toBeNull();
 		expect(within(row(list, "Someone With A Long Name")).getByText(/a{80}@northwind\.dev/).closest(".truncate")).not.toBeNull();
 		await userEvent.click(button);
-		await waitFor(() => expect(screen.getByRole("radio", { name: "The whole project" })).toHaveAttribute("aria-checked", "true"));
+		expect(await screen.findByRole("heading", { name: "Share project" })).toBeInTheDocument();
 	});
 
 	it("puts the workspace on top of a project's list, as a session's owner is on top of its own", async () => {
 		mocks.projectAccess = { entries: [entry("g-data", { kind: "team", teamId: "t-data", teamName: "Data infra", memberCount: 4 }, { scope: "project", sessionId: undefined, source: "team" })] };
 		renderDialog();
 		await screen.findByText("Platform");
-		await userEvent.click(screen.getByRole("radio", { name: "The whole project" }));
+		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		const workspace = await screen.findByText("People in Northwind");
 		const first = workspace.closest("li")!;
 		expect(first.hasAttribute("data-share-workspace-row")).toBe(true);
-		expect(first.textContent).toContain("Owner");
+		expect(first.textContent).toContain("Full access");
 		expect(first.parentElement!.firstElementChild).toBe(first);
 	});
 
@@ -210,13 +216,13 @@ describe("ShareSessionDialog people and teams", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Show the people in Platform" }));
 		const line = async (name: string) => (await screen.findAllByText((_text, element) => element?.hasAttribute("data-share-member") ?? false))
 			.find((element) => element.textContent?.includes(name))!.textContent;
-		expect(await line("Ben Ortiz")).toContain("Write to the agent");
+		expect(await line("Ben Ortiz")).toContain("Can write");
 		const list = await accessList();
 		await userEvent.click(menuOf(row(list, "Platform")));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		// Still saving: Ben had his access through Platform, so he now watches;
 		// Chen has more through a link and keeps it.
-		await waitFor(async () => expect(await line("Ben Ortiz")).toContain("Watch"));
+		await waitFor(async () => expect(await line("Ben Ortiz")).toContain("Can watch"));
 		expect(await line("Chen Wei")).toContain("Trusted");
 		await act(async () => saved.open());
 	});
@@ -233,7 +239,7 @@ describe("ShareSessionDialog people and teams", () => {
 		const members = await screen.findAllByText((_text, element) => element?.hasAttribute("data-share-member") ?? false);
 		const lines = members.map((element) => element.textContent);
 		expect(lines[0]).toContain("Ben Ortiz");
-		expect(lines[0]).toContain("Write to the agent");
+		expect(lines[0]).toContain("Can write");
 		expect(lines[1]).toContain("Trusted · shared directly");
 		expect(lines[2]).toContain("Full access · workspace member");
 		expect(lines[3]).toContain("after signing in");
@@ -245,19 +251,19 @@ describe("ShareSessionDialog people and teams", () => {
 		await screen.findByText("Platform");
 		const input = await stageCheckout();
 		// Default level: watch.
-		const summary = await screen.findByText(/Dana Kim and Omar Haddad get Watch\./);
+		const summary = await screen.findByText(/Dana Kim and Omar Haddad get Can watch\./);
 		expect(summary.textContent).toContain("Ben Ortiz already has this or more.");
 		expect(summary.textContent).toContain("Farah Nasser already has full access as a workspace member.");
-		expect(summary.textContent).toContain("sam@contractor.io gets Watch after signing in.");
+		expect(summary.textContent).toContain("sam@contractor.io gets Can watch after signing in.");
 		expect(summary.textContent).not.toContain("Asha");
 		// Raise to writing; the limit appears.
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Watch/ }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Write to the agent/ }));
+		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		// Ben already writes through Platform at the same limit, so he still keeps what he has.
-		const raised = await screen.findByText(/Dana Kim and Omar Haddad get Write to the agent\./);
+		const raised = await screen.findByText(/Dana Kim and Omar Haddad get Can write\./);
 		expect(raised.textContent).toContain("Ben Ortiz already has this or more.");
-		expect(screen.getByRole("button", { name: "Most they can do" })).toHaveTextContent("Standard");
+		expect(screen.getByRole("button", { name: "Agent permissions" })).toHaveTextContent("Standard");
 		await userEvent.click(screen.getByRole("button", { name: "Share" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "createShareGrants")).toBeTruthy());
 		expect(mocks.calls.find((call) => call[0] === "createShareGrants")).toEqual([
@@ -271,7 +277,7 @@ describe("ShareSessionDialog people and teams", () => {
 		renderDialog();
 		await screen.findByText("Platform");
 		const input = await stageCheckout();
-		await screen.findByText(/get Watch/);
+		await screen.findByText(/get Can watch/);
 		await userEvent.click(screen.getByRole("button", { name: "Share" }));
 		// Before the answer: the row is there, waiting, and focus is back in the field.
 		const list = await accessList();
@@ -313,12 +319,12 @@ describe("ShareSessionDialog people and teams", () => {
 		await screen.findByText("Platform");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Watch/ }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Write to the agent/ }));
+		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Share" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("The control plane is unavailable.");
 		expect(field.textContent).toContain("Checkout");
-		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Write to the agent");
+		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can write");
 		expect(document.querySelector("[data-share-row$='team:t-checkout']")).toBeNull();
 	});
 
@@ -328,18 +334,18 @@ describe("ShareSessionDialog people and teams", () => {
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		await userEvent.click(menuOf(row(list, "Platform")));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change access.");
 		// The failed change is undone in place.
-		expect(row(list, "Platform").textContent).toContain("Write to the agent");
+		expect(row(list, "Platform").textContent).toContain("Can write");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Watch/ }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Write to the agent/ }));
+		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(document.activeElement).toBe(input);
 		await stageCheckout();
-		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Watch");
+		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
 		view.reopen(false);
 		view.reopen(true);
 		await screen.findByText("Platform");
@@ -356,8 +362,8 @@ describe("ShareSessionDialog people and teams", () => {
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		await userEvent.click(menuOf(row(list, "Platform")));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
-		await userEvent.click(screen.getByRole("radio", { name: "The whole project" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		const projectList = await accessList();
 		await within(projectList).findByText("Data infra");
 		// The project's list is never read again, so what it shows is what the cache holds.
@@ -373,7 +379,7 @@ describe("ShareSessionDialog people and teams", () => {
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		await userEvent.click(menuOf(row(list, "Platform")));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Write to the agent/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(menuOf(row(list, "Platform")));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Standard" }));
 		expect(mocks.calls.filter((call) => call[0] === "updateShareEntry")).toEqual([]);
@@ -385,7 +391,7 @@ describe("ShareSessionDialog people and teams", () => {
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		await userEvent.click(menuOf(row(list, "Platform")));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "updateShareEntry")).toEqual(["updateShareEntry", "org", "proj", "g-platform", { role: "viewer", modeCap: "read-only" }]));
 
 		await stopSharing(list, "Platform");
@@ -393,7 +399,7 @@ describe("ShareSessionDialog people and teams", () => {
 		// The offer is in the dialog, reachable by keyboard and screen reader, not behind it.
 		const dialog = screen.getByRole("dialog");
 		const notice = await within(dialog).findByRole("status");
-		expect(notice).toHaveTextContent("Stopped sharing with Platform");
+		expect(notice).toHaveTextContent("Removed Platform's access");
 		expect(useUiStore.getState().globalToasts).toHaveLength(0);
 		mocks.created = [entry("g-platform-2", { kind: "team", teamId: "t-platform", teamName: "Platform", memberCount: 6 }, { source: "team" })];
 		await userEvent.click(within(notice).getByRole("button", { name: "Undo" }));
@@ -403,7 +409,7 @@ describe("ShareSessionDialog people and teams", () => {
 			"createShareGrants", "org", "proj", { sessionId: "sess", subjects: [{ teamId: "t-platform" }], role: "viewer", modeCap: "read-only", deniedCommands: ["rm -rf"] },
 		]));
 		expect(within(dialog).queryByRole("status")).toBeNull();
-		expect(row(list, "Platform").textContent).toContain("Watch");
+		expect(row(list, "Platform").textContent).toContain("Can watch");
 	});
 
 	it("says so when Undo fails, and takes the row away again", async () => {
@@ -457,7 +463,7 @@ describe("ShareSessionDialog people and teams", () => {
 		await stopSharing(list, "Platform");
 		await within(screen.getByRole("dialog")).findByRole("status");
 		view.reopen(false);
-		await waitFor(() => expect(useUiStore.getState().globalToasts.at(-1)?.title).toBe("Stopped sharing with Platform"));
+		await waitFor(() => expect(useUiStore.getState().globalToasts.at(-1)?.title).toBe("Removed Platform's access"));
 		await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
 		await waitFor(() => expect(mocks.calls.filter((call) => call[0] === "createShareGrants")).toHaveLength(1));
 		expect(onOpenChange).not.toHaveBeenCalledWith(true);
@@ -475,15 +481,26 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue("Payments");
 	});
 
-	it("shares the whole project without naming a session, and moves between scopes with the arrow keys", async () => {
+	it("shares the whole project without naming a session, and comes back to the session", async () => {
 		renderDialog();
 		await screen.findByText("Platform");
-		const session = screen.getByRole("radio", { name: "This session" });
-		act(() => session.focus());
-		// Keydown alone: Radix moves focus on a timer, before a person's keyup.
-		fireEvent.keyDown(session, { key: "ArrowRight" });
-		await waitFor(() => expect(screen.getByRole("radio", { name: "The whole project" })).toHaveAttribute("aria-checked", "true"));
-		expect(await screen.findByText("Share project")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
+		expect(await screen.findByRole("heading", { name: "Share project" })).toBeInTheDocument();
+		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
 		await waitFor(() => expect(mocks.calls.some((call) => call[0] === "getShareAccess" && call[1] === undefined)).toBe(true));
+		await userEvent.click(screen.getByRole("button", { name: "Share only this session" }));
+		expect(await screen.findByRole("heading", { name: "Share session" })).toBeInTheDocument();
+	});
+
+	it("closes the confirm step with Esc before it closes the dialog", async () => {
+		const onOpenChange = vi.fn();
+		renderDialog({ onOpenChange });
+		await screen.findByText("Platform");
+		await stageCheckout();
+		expect(await screen.findByText("They'll find it under Shared with you.")).toBeInTheDocument();
+		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Share" })).toBeNull());
+		expect(onOpenChange).not.toHaveBeenCalled();
+		expect(await screen.findByRole("region", { name: "General access" })).toBeInTheDocument();
 	});
 });

@@ -26,6 +26,7 @@ import type {
   PRState,
   PullRequestFacts,
   SessionArtifact,
+  SessionBranchState,
   WorkspaceSession,
   WorkspaceSummary,
 } from "../types/workspace";
@@ -382,20 +383,19 @@ afterEach(() => {
 });
 
 describe("SessionInspector tabs", () => {
-  it("shows only Browser content without navigation tabs for an orchestrator", () => {
-    renderWithQuery(<SessionInspector browserOnly session={session([], { kind: "orchestrator" })} />);
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(screen.getByText("Browser")).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Summary" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+  it("gives an orchestrator Summary and Browser, with its account but no branch", () => {
+    renderWithQuery(<SessionInspector orchestrator session={session([], { kind: "orchestrator" })} />);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Browser"]);
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-branch")).not.toBeInTheDocument();
   });
 
-  it("keeps the same Browser-only inspector for a remote orchestrator", () => {
-    renderWithQuery(<SessionInspector browserOnly hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  it("gives a remote orchestrator the same tabs without a local account", () => {
+    renderWithQuery(<SessionInspector orchestrator hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
+    expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
+    expect(screen.queryByTestId("session-account-summary")).not.toBeInTheDocument();
   });
 
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
@@ -4847,9 +4847,11 @@ describe("SessionInspector branch summary", () => {
   function mockGitState({
     uncommitted = [],
     committed = [],
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
+    prs,
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; prs?: SessionPRSummary[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
+      if (prs && path === "/api/v1/sessions/{sessionId}/pr") return { data: { prs, linkedPrs: [] }, error: undefined };
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: {
@@ -5011,6 +5013,37 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByText("pushed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
+  });
+
+  const mergedHead = "a".repeat(40);
+  const mergedPR = () => prSummary(7, "merged", { url: "https://example.com/pr/7", headSha: mergedHead });
+  const renderMerged = (branchState: SessionBranchState) =>
+    renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState })} />, undefined, (client) =>
+      seedPRSummaries(client, [mergedPR()]),
+    );
+
+  it("offers no Create PR once the merged PR has the pushed head", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+
+    expect(await branch().findByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("4 commits")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
+  });
+
+  it("offers a new PR for commits pushed after the merge", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(5), remoteHead: "b".repeat(40) });
+
+    expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+  });
+
+  it("offers a new PR for work made after the merge", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+
+    expect(await screen.findByRole("button", { name: "Commit & create PR" })).toBeInTheDocument();
   });
 
   it("leaves the loading state once the PR appears", async () => {

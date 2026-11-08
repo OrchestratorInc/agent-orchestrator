@@ -231,6 +231,7 @@ type lifecycleRecorder interface {
 	MarkChatReconnected(ctx context.Context, id domain.SessionID, metadata domain.SessionMetadata) error
 	MarkChatSpawned(ctx context.Context, id domain.SessionID, metadata domain.SessionMetadata, boundary domain.ConversationBranch) error
 	CommitControllerEpoch(ctx context.Context, id domain.SessionID, source, target domain.SessionMode, nativeConversationID string, startFresh bool) (bool, error)
+	CommitControllerEpochArchivedChat(ctx context.Context, id domain.SessionID, source, target domain.SessionMode, nativeConversationID string, startFresh bool) (bool, error)
 	RestoreControllerEpoch(ctx context.Context, id domain.SessionID, source, target domain.SessionMode, nativeConversationID string, startFresh bool) (bool, error)
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error
 	MarkTerminated(ctx context.Context, id domain.SessionID) error
@@ -1168,6 +1169,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
+		}
+		// Visible from its first row: without this, a view that opens the session
+		// before beginAsyncChatSpawn reads a ready session with no controller.
+		if asyncChat {
+			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
 		if cfg.ClientRequestID != "" {
 			var fresh bool
