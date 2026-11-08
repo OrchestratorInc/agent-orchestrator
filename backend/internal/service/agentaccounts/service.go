@@ -61,7 +61,7 @@ type Service struct {
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
-	lastOrg        map[string]string
+	lastOrg        map[string]seenOrg
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
 }
@@ -106,7 +106,7 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]string{},
+		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]seenOrg{},
 	}
 }
 
@@ -195,7 +195,10 @@ type AccountView struct {
 	LimitsErr   string
 	SameLoginAs string
 	OrgID       string
+	OrgName     string
 }
+
+type seenOrg struct{ id, name string }
 
 // List returns every account, the computer's own first per provider. refresh
 // reads identity and limits again even when the last reading is fresh.
@@ -218,12 +221,12 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		r := s.readings[account.ID]
 		lastOrg := s.lastOrg[account.ID]
 		s.mu.Unlock()
-		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg}
+		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg.id, OrgName: lastOrg.name}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
 			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
 			if r.identity.SignedIn && r.identity.OrgID != "" {
-				view.OrgID = r.identity.OrgID
+				view.OrgID, view.OrgName = r.identity.OrgID, r.identity.OrgName
 			}
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
@@ -331,7 +334,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Lock()
 	s.readings[account.ID] = r
 	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
-		s.lastOrg[account.ID] = r.identity.OrgID
+		s.lastOrg[account.ID] = seenOrg{id: r.identity.OrgID, name: r.identity.OrgName}
 	}
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()

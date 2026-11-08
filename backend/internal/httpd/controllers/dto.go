@@ -4145,6 +4145,8 @@ type AgentAccountResponse struct {
 	Problem     string                     `json:"problem,omitempty"`
 	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
 	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
+	OrgID       string                     `json:"orgId,omitempty"`
+	OrgName     string                     `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.

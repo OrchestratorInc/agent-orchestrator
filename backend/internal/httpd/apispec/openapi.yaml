@@ -14263,6 +14263,10 @@ components:
           $ref: '#/components/schemas/AgentAccountLimits'
         loggedIn:
           type: boolean
+        orgId:
+          type: string
+        orgName:
+          type: string
         plan:
           type: string
         problem:

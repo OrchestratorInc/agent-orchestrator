@@ -1,7 +1,7 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -79,7 +79,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 					<SelectContent align="end">
 						{/* Only a subscription takes a session: the daemon refuses a move to an API-key login. */}
-						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountName(option, t)}</SelectItem>)}
+						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountLabel(option, options, t)}</SelectItem>)}
 					</SelectContent>
 				</Select>
 			</div>

@@ -83,7 +83,7 @@ func agentAccountResponse(view agentaccounts.AccountView) AgentAccountResponse {
 	out := AgentAccountResponse{
 		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(),
 		Email: view.Account.Email, Plan: view.Account.Plan, Default: view.Default, SignedIn: view.SignedIn, LoggedIn: view.LoggedIn,
-		Problem: view.IdentityErr, Limits: view.Limits, SameLoginAs: view.SameLoginAs,
+		Problem: view.IdentityErr, Limits: view.Limits, SameLoginAs: view.SameLoginAs, OrgID: view.OrgID, OrgName: view.OrgName,
 	}
 	if out.Problem == "" && view.SignedIn {
 		out.Problem = view.LimitsErr

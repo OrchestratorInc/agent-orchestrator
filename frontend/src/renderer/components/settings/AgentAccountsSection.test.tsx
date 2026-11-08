@@ -207,7 +207,8 @@ it("lists a login the CLI and a saved account share once", async () => {
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
 });
 
-it("shows the shared login as the default when the CLI's login is", async () => {
+it("keeps the CLI's login as its own row while it is the default, so the saved account can be made the default", async () => {
+	const user = userEvent.setup();
 	const twin = { ...device, default: true, sameLoginAs: "acct-a" };
 	const savedA = { id: "acct-a", provider: "claude", device: false, default: false, signedIn: true, email: "a@example.com" };
 	getMock.mockImplementation((path: string) => Promise.resolve({
@@ -215,9 +216,25 @@ it("shows the shared login as the default when the CLI's login is", async () => 
 	}));
 	renderPanel();
 
+	const cliRow = await findCliLoginRow();
 	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-a"]')).toBeInTheDocument());
 	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-a"]')!;
-	expect(within(row).getByText("Default for new tasks")).toBeInTheDocument();
-	expect(within(row).queryByRole("button", { name: "Make default" })).not.toBeInTheDocument();
+	expect(cliRow).toHaveTextContent("a@example.com · Claude Code CLI login");
+	expect(within(cliRow).getByText("Default for new tasks")).toBeInTheDocument();
 	expect(screen.getAllByText("Default for new tasks")).toHaveLength(1);
+	await user.click(within(row).getByRole("button", { name: "Make default" }));
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId: "acct-a" } } });
+});
+
+it("names each organization when one email has accounts in several", async () => {
+	const acme = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com", orgName: "Acme" };
+	const personal = { id: "acct-p", provider: "claude", device: false, default: false, signedIn: true, email: "a@example.com", orgName: "Personal" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, signedIn: false, loggedIn: false, default: false, email: undefined }, acme, personal] },
+	}));
+	renderPanel();
+
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-p"]')).toBeInTheDocument());
+	expect(document.querySelector('[data-agent-account="acct-a"]')).toHaveTextContent("a@example.com · Acme");
+	expect(document.querySelector('[data-agent-account="acct-p"]')).toHaveTextContent("a@example.com · Personal");
 });

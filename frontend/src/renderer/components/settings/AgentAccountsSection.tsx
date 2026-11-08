@@ -1,7 +1,7 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
@@ -40,8 +40,8 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
-	const rows = withoutSameLogins(providerAccounts);
-	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id);
+	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
+	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[provider];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
@@ -117,7 +117,8 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 			</div> : null}
 			{rows.map((account) => { const cliTwin = cliTwinOf(account); return <AccountRow
 				key={account.id}
-				account={cliTwin?.default ? { ...account, default: true } : account}
+				account={account}
+				name={agentAccountLabel(account, rows, t)}
 				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
 				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
@@ -129,7 +130,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
-			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
+			description={t("settings.agentAccounts.removeDescription", { email: agentAccountLabel(removing, rows, t) })}
 			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
@@ -139,8 +140,9 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	</>;
 }
 
-function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
+	name: string;
 	aoTokens: number | undefined;
 	busy: string | null;
 	/** Only on the CLI's own login, which has no folder of its own to remove. */
@@ -163,7 +165,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 	return <div className="px-3 py-2.5" data-agent-account={account.id}>
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
-				<p className="truncate text-sm font-medium text-foreground">{agentAccountName(account, t)}</p>
+				<p className="truncate text-sm font-medium text-foreground">{name}</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">

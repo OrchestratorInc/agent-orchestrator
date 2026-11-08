@@ -28,7 +28,7 @@ func TestAgentAccountsListNamesTheSameLogin(t *testing.T) {
 	saved := domain.AgentAccount{ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/acct-a", Email: "a@example.com"}
 	ctrl := &controllers.AgentAccountsController{Svc: listOnlyAgentAccounts{views: []agentaccounts.AccountView{
 		{Account: device, SignedIn: true, SameLoginAs: saved.ID},
-		{Account: saved, SignedIn: true, Default: true},
+		{Account: saved, SignedIn: true, Default: true, OrgID: "org-1", OrgName: "Acme"},
 	}}}
 	r := chi.NewRouter()
 	ctrl.Register(r)
@@ -45,6 +45,9 @@ func TestAgentAccountsListNamesTheSameLogin(t *testing.T) {
 	}
 	if len(out.Accounts) != 2 || out.Accounts[0]["sameLoginAs"] != saved.ID {
 		t.Fatalf("device row = %v", out.Accounts)
+	}
+	if out.Accounts[1]["orgId"] != "org-1" || out.Accounts[1]["orgName"] != "Acme" {
+		t.Fatalf("saved row organization = %v", out.Accounts[1])
 	}
 	if _, ok := out.Accounts[1]["sameLoginAs"]; ok {
 		t.Fatalf("saved row names a same login: %v", out.Accounts[1])

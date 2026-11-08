@@ -344,3 +344,32 @@ func TestSignInAgainAfterRestartIgnoresSignedOutAccountsOfUnknownOrganization(t 
 		t.Fatalf("sign B in again to its own organization = %q %+v", status, view)
 	}
 }
+
+func TestListNamesEachAccountsOrganization(t *testing.T) {
+	ctx := context.Background()
+	svc, claude, _, root := newDuplicateFixture(t, "")
+	claude.orgOf, claude.orgNameOf = map[string]string{}, map[string]string{}
+	_, team := startAdd(t, svc, claude, root, "a@example.com", "org-team")
+	claude.orgNameOf[team.Account.Home] = "Acme"
+	_, personal := startAdd(t, svc, claude, root, "a@example.com", "org-personal")
+	claude.orgNameOf[personal.Account.Home] = "Personal"
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewByID(t, views, team.Account.ID); v.OrgID != "org-team" || v.OrgName != "Acme" {
+		t.Fatalf("team = %+v", v)
+	}
+	if v := viewByID(t, views, personal.Account.ID); v.OrgID != "org-personal" || v.OrgName != "Personal" {
+		t.Fatalf("personal = %+v", v)
+	}
+
+	delete(claude.signedInAs, team.Account.Home)
+	views, err = svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := viewByID(t, views, team.Account.ID); v.SignedIn || v.OrgID != "org-team" || v.OrgName != "Acme" {
+		t.Fatalf("signed-out team keeps its organization: %+v", v)
+	}
+}

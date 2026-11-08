@@ -59,8 +59,17 @@ export function agentAccountName(account: Pick<AgentAccount, "email" | "provider
 export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
 	const ids = new Set(accounts.map((account) => account.id));
 	const twinOf = (account: T) => account.sameLoginAs && ids.has(account.sameLoginAs) ? account.sameLoginAs : undefined;
-	const keptTwin = accounts.map((account) => account.id === keepId ? twinOf(account) : undefined).find(Boolean);
-	return accounts.filter((account) => account.id === keepId || (!twinOf(account) && account.id !== keptTwin));
+	return accounts.filter((account) => account.id === keepId || !twinOf(account));
+}
+
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgName">, peers: Pick<AgentAccount, "id" | "email" | "orgName">[], t: AccountNameT): string {
+	const name = agentAccountName(account, t);
+	const email = account.email?.toLowerCase();
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	if (twins.length === 0) return name;
+	if (account.orgName && twins.every((twin) => twin.orgName !== account.orgName)) return `${name} · ${account.orgName}`;
+	if (account.device) return `${name} · ${t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] })}`;
+	return name;
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */

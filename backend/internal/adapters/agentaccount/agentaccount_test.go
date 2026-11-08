@@ -325,19 +325,19 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 	}
 	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
 	for _, tc := range []struct {
-		name, status       string
-		signedIn, loggedIn bool
-		email, org         string
+		name, status        string
+		signedIn, loggedIn  bool
+		email, org, orgName string
 	}{
-		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max","orgId":"org-1","orgName":"Team"}`, true, true, "a@example.com", "org-1"},
-		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, true, "", ""},
+		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max","orgId":"org-1","orgName":"Team"}`, true, true, "a@example.com", "org-1", "Team"},
+		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, true, "", "", ""},
 		// Not a subscription, but the CLI can launch with it.
-		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, true, "", ""},
-		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, false, "", ""},
+		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, true, "", "", ""},
+		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, false, "", "", ""},
 	} {
 		t.Setenv("FAKE_CLAUDE_STATUS", tc.status)
 		got, err := c.Identity(context.Background(), "")
-		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email || got.OrgID != tc.org {
+		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email || got.OrgID != tc.org || got.OrgName != tc.orgName {
 			t.Fatalf("%s: identity = %+v, %v", tc.name, got, err)
 		}
 	}

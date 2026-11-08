@@ -131,4 +131,5 @@ type AgentAccountIdentityCheck struct {
 	Email    string
 	Plan     string
 	OrgID    string
+	OrgName  string
 }
