@@ -424,6 +424,7 @@ type ConversationAccount struct {
 	ReauthReason string `json:"reauthReason,omitempty"`
 }
 
+// RequireLogin records that the provider refused the login at at.
 func (a *ConversationAccount) RequireLogin(reason, failureID string, at time.Time) {
 	a.AuthenticationState = "required"
 	a.ReauthRequiredAt = &at
