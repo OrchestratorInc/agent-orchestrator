@@ -14,9 +14,6 @@ import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { SettingsSearch } from "../SettingsSearch";
 
-/** Agents whose local chats AO can import. */
-export { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
-
 const folderFilter = "folder:";
 
 /** One agent's chats on this computer, from the daemon's validated preview. A

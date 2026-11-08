@@ -55,7 +55,7 @@ import { HarnessLoginPanel } from "./HarnessLoginPanel";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
-import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab, type HarnessLinkTab } from "./harness-ui";
+import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
 import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
@@ -88,7 +88,7 @@ const INSTALL_STATE_RANK = {
 	not_installed: 2,
 } as const;
 
-export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics, harnessTab }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: HarnessLinkTab; onDetailChange?: (open: boolean) => void }) {
+export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, startLogin = false, showDiagnostics }: { focusAgentId?: string; hostId?: string; search: string; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; onDetailChange?: (open: boolean) => void }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const client = clientForSessionHost(hostId);
@@ -300,11 +300,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		} else {
 			focusPrimaryActionRef.current = true;
 			if (showDiagnostics?.error) setNoticeError({ agentId: targetAgentId, error: showDiagnostics.error, jobStartedAt: targetJob?.startedAt ?? undefined });
-			openDetail(targetAgentId, showDiagnostics ? "health" : harnessTab ?? "account");
+			openDetail(targetAgentId, showDiagnostics ? "health" : "account");
 		}
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
-	}, [agents.isPending, authPlans.isPending, harnessTab, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId]);
+	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, showDiagnostics, targetAgentId]);
 
 	useEffect(() => {
 		if (!focusPrimaryActionRef.current || !selectedAgentId) return;

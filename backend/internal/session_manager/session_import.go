@@ -194,8 +194,7 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 
 // importLaunch returns the folder an imported session launches in: the pinned
 // folder of a relocated import, else the subfolder it ran in. With prepare, the
-// first resume also relocates the provider's copy there, and a fingerprinted
-// preparer refreshes the archive only once its copy is proven.
+// first resume also relocates the provider's copy there.
 func (m *Manager) importLaunch(ctx context.Context, operation string, rec domain.SessionRecord, workspace string, env map[string]string, prepare bool) (domain.SessionRecord, string, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil {
@@ -217,11 +216,6 @@ func (m *Manager) importLaunch(ctx context.Context, operation string, rec domain
 	rec, err := m.relocateImportedSession(ctx, rec, launchPath, env)
 	if err != nil {
 		return rec, "", relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
-	}
-	if m.hasFingerprintImportPreparer(rec) {
-		if err := m.refreshImportArchive(ctx, rec); err != nil {
-			return rec, "", err
-		}
 	}
 	return rec, launchPath, nil
 }

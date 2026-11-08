@@ -2293,7 +2293,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Preview readable local Claude Code and Codex histories for existing projects or Standalone */
+        /** Preview readable local agent histories from Git folders and Standalone */
         get: operations["scanSessionImport"];
         put?: never;
         /** Import selected histories as idle AO sessions without starting providers */

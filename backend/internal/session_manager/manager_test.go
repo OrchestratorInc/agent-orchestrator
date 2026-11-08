@@ -486,6 +486,12 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.FirstSignalAt = time.Now()
 	rec.Metadata = preserveCheckpointOnFakeMarkSpawned(rec.Metadata, metadata)
+	if metadata.RuntimeHandleID == "" {
+		rec.Metadata.RuntimeHandleID = l.store.sessions[id].Metadata.RuntimeHandleID
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && metadata.ControllerGeneration != "" {
+		rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = "", ""
+	}
 	l.store.sessions[id] = rec
 	return nil
 }

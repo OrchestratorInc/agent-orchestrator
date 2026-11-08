@@ -14,7 +14,6 @@ import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAge
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import {
-	agentSignedIn,
 	buildRankedAgentOptions,
 	isLaunchableAgent,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -154,7 +153,9 @@ export function CreateProjectAgentSheet({
 	// whose credentials AO simply cannot validate, which is most of them.
 	const authorizedAgents = useMemo(
 		() =>
-			selectableAgents.filter(agentSignedIn),
+			selectableAgents.filter((agent) =>
+				["authorized", "not_applicable", "configured"].includes(agent.authentication.state),
+			),
 		[selectableAgents],
 	);
 	// Local history is an inference signal only for local projects. A remote

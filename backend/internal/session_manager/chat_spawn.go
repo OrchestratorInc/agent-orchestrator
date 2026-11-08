@@ -537,7 +537,7 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if rec.Metadata.ImportSource != nil && !reconnectOnly {
+	if rec.NeedsImportResume() && !reconnectOnly {
 		// An imported chat runs in a folder the provider was never set up in:
 		// install its workspace hooks and pre-launch config before the ACP
 		// controller starts. Relocation can move the native home, so the config

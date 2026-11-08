@@ -5892,8 +5892,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Preview readable local Claude Code and Codex histories for existing
-        projects or Standalone
+      summary: Preview readable local agent histories from Git folders and Standalone
       tags:
       - import
     post:

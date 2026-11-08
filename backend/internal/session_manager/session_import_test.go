@@ -340,9 +340,15 @@ func TestImportedPendingSessionCanBeArchivedAndRestored(t *testing.T) {
 			if !st.sessions[rec.ID].IsTerminated {
 				t.Fatal("session did not archive")
 			}
+			failedLaunch := st.sessions[rec.ID]
+			failedLaunch.Metadata.RuntimeHandleID = "tmux-failed-first-launch"
+			st.sessions[rec.ID] = failedLaunch
 			restored, err := m.RestoreWithMode(context.Background(), rec.ID)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if handle := st.sessions[rec.ID].Metadata.RuntimeHandleID; handle != "" {
+				t.Fatalf("restore kept the failed launch's runtime handle %q", handle)
 			}
 			if restored.Session.IsTerminated || restored.Session.Activity.State != domain.ActivityIdle || !restored.Session.NeedsImportResume() || restored.Session.Metadata.WorkspacePath != rec.Metadata.WorkspacePath {
 				t.Fatalf("restored import = %#v", restored.Session)

@@ -3110,6 +3110,16 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 		// A failed first launch leaves its runtime ids behind. The session was
 		// terminated, so that runtime is gone; keeping the ids would make every
 		// later open refuse with "agent not exited".
+		if meta.RuntimeHandleID != "" {
+			stale, err := m.getRecord(ctx, id)
+			if err == nil {
+				stale.Metadata.RuntimeHandleID = ""
+				err = m.store.UpdateSession(ctx, stale)
+			}
+			if err != nil {
+				return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+			}
+		}
 		meta.RuntimeHandleID, meta.RuntimeLaunchID = "", ""
 		if err := m.lcm.MarkSpawned(ctx, id, meta); err != nil {
 			return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)

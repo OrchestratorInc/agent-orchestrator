@@ -9,7 +9,6 @@ import { LOCAL_HOST } from "../../lib/hosts";
 import type { HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { CloudHarnessContent } from "./harness/CloudHarnessContent";
 import { LocalHarnessContent } from "./harness/LocalHarnessContent";
-import type { HarnessLinkTab } from "./harness/harness-ui";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsSection } from "./SettingsSection";
 
@@ -21,7 +20,6 @@ export function HarnessSettingsSection({
 	initialView = "local",
 	startLogin = false,
 	showDiagnostics,
-	harnessTab,
 	titleHidden = false,
 }: {
 	focusAgentId?: string;
@@ -31,8 +29,6 @@ export function HarnessSettingsSection({
 	startLogin?: boolean;
 	/** Open focusAgentId's local install or update diagnostics (a shortcut from a failed update notice). */
 	showDiagnostics?: HarnessDiagnosticsRequest;
-	/** Open this tab of focusAgentId's page. */
-	harnessTab?: HarnessLinkTab;
 	titleHidden?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -72,6 +68,6 @@ export function HarnessSettingsSection({
 				triggerClassName="w-fit max-w-full"
 			/> : null}
 		{showToolbar && !cloudView && selectedHostId !== LOCAL_HOST && !remoteOffline ? <p className="text-xs text-muted-foreground">{t("settings.harness.remoteBrowserAuthNote")}</p> : null}
-		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} showDiagnostics={selectedHostId === (hostId ?? LOCAL_HOST) ? showDiagnostics : undefined} harnessTab={harnessTab} />}
+		{cloudView ? <CloudHarnessContent focusAgentId={focusAgentId} search={search} /> : remoteOffline ? <p className="text-xs text-error" role="alert">{t("remote.hostOffline")}</p> : <LocalHarnessContent key={selectedHostId} focusAgentId={focusAgentId} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} search={search} onDetailChange={setDetailOpen} startLogin={startLogin && selectedHostId === (hostId ?? LOCAL_HOST)} showDiagnostics={selectedHostId === (hostId ?? LOCAL_HOST) ? showDiagnostics : undefined} />}
 	</SettingsSection>;
 }

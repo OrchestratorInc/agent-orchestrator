@@ -2474,7 +2474,7 @@ func mobileDeviceOperations() []operation {
 // the routes ImportController.Register mounts (enforced by the parity test).
 func importOperations() []operation {
 	return []operation{
-		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local Claude Code and Codex histories for existing projects or Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local agent histories from Git folders and Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
 		{method: http.MethodPost, path: "/api/v1/session-import", id: "importSelectedSessions", tag: "import", summary: "Import selected histories as idle AO sessions without starting providers", reqBody: controllers.SessionImportRequest{}, resps: []respUnit{{http.StatusOK, controllers.SessionImportResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
 
 		{

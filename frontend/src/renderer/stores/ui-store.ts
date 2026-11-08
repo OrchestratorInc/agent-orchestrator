@@ -5,7 +5,6 @@ import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucen
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
-import type { HarnessLinkTab } from "../components/settings/harness/harness-ui";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -67,8 +66,6 @@ export type SettingsModal =
 			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
 			focusSetting?: string;
-			/** Open this tab of focusAgentId's Harness page. */
-			harnessTab?: HarnessLinkTab;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -282,7 +279,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: HarnessLinkTab; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -591,7 +588,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.startPairing && section === "mobile" ? { startPairing: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
-			...(options?.harnessTab && options.focusAgentId ? { harnessTab: options.harnessTab } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo

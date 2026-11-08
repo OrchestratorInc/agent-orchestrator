@@ -6,7 +6,7 @@ import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
 import { useUiStore } from "../../../stores/ui-store";
-import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
+import { SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
 	apiClient: api,
@@ -18,27 +18,7 @@ vi.mock("../../../lib/navigate-to-session", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../lib/navigate-to-session")>()),
 	useNavigateToSession: () => openSession,
 }));
-it("gates session import to the agents with a readable local history", () => {
-	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("droid")).toBe(false);
-	expect(IMPORTABLE_AGENTS.has("gemini")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("aider")).toBe(true);
-});
 
-it("offers OpenCode imports, which resume from a private copy bound to AO's workspace", () => {
-	expect(IMPORTABLE_AGENTS.has("opencode")).toBe(true);
-});
-
-it("does not offer Kimi imports while resumed tools use the saved directory", () => {
-	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(false);
-});
-
-it("does not offer Droid imports while resumed tool cwd is unverified", () => {
-	expect(IMPORTABLE_AGENTS.has("droid")).toBe(false);
-});
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -159,11 +139,6 @@ it("offers neither a chat nor a project after a bulk import across projects", as
 	expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(2);
 });
 
-it("gates importable harnesses to the ones with a verified resume path", () => {
-	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
-});
-
 it("reports new, existing and failed imports separately", async () => {
 	api.POST.mockResolvedValue({
 		data: {
@@ -211,7 +186,6 @@ it("stops before importing when a folder cannot be added", async () => {
 });
 
 it("imports only selected Copilot chats through the existing import flow", async () => {
-	expect(IMPORTABLE_AGENTS.has("copilot")).toBe(true);
 	api.GET.mockResolvedValue({ data: { candidates: [
 		{ ...chat, id: "copilot-chat", title: "Copilot parser work", harness: "copilot", projectId: "project" },
 		{ ...chat, id: "other-chat", title: "Another agent", harness: "claude-code", projectId: "project" },
