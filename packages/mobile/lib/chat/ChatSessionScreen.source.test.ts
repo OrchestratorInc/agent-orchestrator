@@ -76,7 +76,7 @@ describe("active turn controls", () => {
 		// Serially, so a read slower than the poll interval is never superseded (see serialPoll.test.ts).
 		expect(screenSource).toContain("return startSerialPoll(refreshConversation, STARTUP_POLL_MS);");
 		expect(screenSource).not.toContain("setInterval(() => void refreshConversation()");
-		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
+		expect(screenSource).toContain('disabled={switchingToTerminal || Boolean(failedStart)}');
 	});
 
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
