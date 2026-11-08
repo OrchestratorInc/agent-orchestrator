@@ -76,7 +76,7 @@ describe("AsideRow", () => {
 	});
 
 	const waiting = (suggestedBy: string): CloudCpSuggestion => ({
-		id: "sg-1", orgId: "o", sessionId: "s", kind: "aside", asideId: "a1", text: "Looks right", status: "pending",
+		id: "sg-1", orgId: "o", sessionId: "s", kind: "aside", asideId: "a1", text: "Looks right", mentions: [], status: "pending",
 		suggestedBy: { userId: suggestedBy, name: "Chen Wei" }, author: { userId: "u-chen", name: "Chen Wei" },
 		createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
 	});

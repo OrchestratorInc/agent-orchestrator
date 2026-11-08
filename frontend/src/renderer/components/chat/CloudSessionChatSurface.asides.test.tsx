@@ -95,7 +95,7 @@ const asideEvent = (sequence: number, asideId: string, text: string, authorUserI
 	event(sequence, "chat.aside", { asideId, text, authorUserId, ...(authorName === undefined ? {} : { authorName }), mentions: [] });
 
 const suggestion: CloudCpSuggestion = {
-	id: "sg-1", orgId: "org-1", sessionId: "session-1", kind: "aside", asideId: "a-2", text: "Also cover a refresh after the cookie expires.",
+	id: "sg-1", orgId: "org-1", sessionId: "session-1", kind: "aside", asideId: "a-2", text: "Also cover a refresh after the cookie expires.", mentions: [],
 	suggestedBy: { userId: "user-chen", name: "Chen Wei" }, author: { userId: "user-chen", name: "Chen Wei" }, status: "pending",
 	createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
 };
@@ -611,7 +611,35 @@ describe("suggestions from asides", () => {
 		await waitFor(() => expect(lastProps().composerEdit?.id).toBe("sg-1:2"));
 	});
 
-	it("brings the aside's chips into the edit", async () => {
+	it("brings the chips the suggestion carries into the edit, and sends them through its route, though its aside isn't loaded", async () => {
+		// History loads in windows: the aside is older than what is loaded.
+		const ben = { kind: "person" as const, userId: "user-ben", name: "Ben Ortiz" };
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [{ ...suggestion, text: "@Ben Ortiz also cover expiry", mentions: [ben] }] });
+		mocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit?.mentions).toEqual([{ kind: "person", id: "user-ben", name: "Ben Ortiz" }]));
+		// The composer sends the chips it was seeded with.
+		await act(async () => { await lastProps().onSend("@Ben Ortiz also cover expiry", undefined, "m-7", undefined, undefined, undefined, lastProps().composerEdit!.mentions); });
+		expect(mocks.sendSessionSuggestion.mock.calls[0]![3]).toMatchObject({ text: "@Ben Ortiz also cover expiry", mentions: [{ kind: "person", userId: "user-ben" }] });
+	});
+
+	it("sends no tokens for a suggestion whose aside named nobody, without looking at the aside", async () => {
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [{ ...suggestion, mentions: [] }] });
+		// Even a loaded aside with chips is not consulted: the suggestion's [] is the answer.
+		mocks.listChatEvents.mockResolvedValue({ events: [
+			event(1, "chat.aside", { asideId: "a-2", text: "@Ben Ortiz also cover expiry", authorUserId: "user-chen", authorName: "Chen Wei", mentions: [{ kind: "person", userId: "user-ben", name: "Ben Ortiz" }] }),
+		], hasMore: false, nextAfter: 1 });
+		renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		await waitFor(() => expect(lastProps().composerEdit?.mentions).toEqual([]));
+		await act(async () => { await lastProps().onSend("Also cover expiry", undefined, "m-8"); });
+		expect(mocks.sendSessionSuggestion.mock.calls[0]![3]).not.toHaveProperty("mentions");
+	});
+
+	it("falls back to the loaded aside's chips on a control plane whose suggestions carry no mentions", async () => {
+		const { mentions: _none, ...older } = suggestion;
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [older] });
 		mocks.listChatEvents.mockResolvedValue({ events: [
 			event(1, "chat.aside", { asideId: "a-2", text: "@Ben Ortiz also cover expiry", authorUserId: "user-chen", authorName: "Chen Wei", mentions: [{ kind: "person", userId: "user-ben", name: "Ben Ortiz" }] }),
 		], hasMore: false, nextAfter: 1 });

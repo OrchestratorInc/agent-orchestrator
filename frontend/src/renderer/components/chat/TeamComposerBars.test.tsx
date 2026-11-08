@@ -8,7 +8,7 @@ import { MentionAccessBar, MentionTeamBar, SuggestionBar, SuggestionEditBar, Sug
 const render = (ui: ReactElement) => renderPlain(<TooltipProvider>{ui}</TooltipProvider>);
 
 const suggestion: CloudCpSuggestion = {
-	id: "sg-1", orgId: "org-1", sessionId: "s-1", kind: "aside", asideId: "a1", text: "Also cover a refresh after the cookie expires.",
+	id: "sg-1", orgId: "org-1", sessionId: "s-1", kind: "aside", asideId: "a1", text: "Also cover a refresh after the cookie expires.", mentions: [],
 	suggestedBy: { userId: "u-chen", name: "Chen Wei" }, author: { userId: "u-chen", name: "Chen Wei" }, status: "pending",
 	createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
 };

@@ -228,6 +228,15 @@ export function sentAsides(events: readonly Pick<CloudCpClientEvent, "type" | "p
 	return sent;
 }
 
+/**
+ * The mentions a suggestion carries from its aside ([] when it named nobody),
+ * or undefined from a control plane that predates the field.
+ */
+export function suggestionMentions(suggestion: CloudCpSuggestion): CloudCpMention[] | undefined {
+	const carried = (suggestion as { mentions?: unknown }).mentions;
+	return Array.isArray(carried) ? parseMentions(carried) : undefined;
+}
+
 /** The chips a mention token list draws as, for a draft seeded from recorded text. */
 export function composerMentionsOf(mentions: readonly CloudCpMention[] | undefined): ComposerMention[] {
 	return (mentions ?? []).flatMap((mention): ComposerMention[] => {

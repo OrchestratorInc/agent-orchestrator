@@ -71,7 +71,7 @@ const live = (holder: { userId: string; name: string } | null, epoch = 3): Cloud
 	type: "session.live", viewers: [me, ben], composer: { holder, epoch, waitlist: [] }, canTakeOver: false, you: "user-me", chatSettings: {}, canConfigure: false,
 });
 const suggestion: CloudCpSuggestion = {
-	id: "sg-1", orgId: "org-1", sessionId: "session-real", kind: "aside", asideId: "a-1", text: "Also cover the expired cookie",
+	id: "sg-1", orgId: "org-1", sessionId: "session-real", kind: "aside", asideId: "a-1", text: "Also cover the expired cookie", mentions: [],
 	suggestedBy: { userId: "user-chen", name: "Chen Wei" }, author: { userId: "user-chen", name: "Chen Wei" }, status: "pending",
 	createdAt: "2026-11-07T10:00:00Z", updatedAt: "2026-11-07T10:00:00Z",
 };
@@ -173,6 +173,22 @@ describe("the real composer in a shared cloud session", () => {
 		view.rerender(ui());
 		expect(await screen.findByRole("button", { name: /Allow once/ })).toBeInTheDocument();
 		expect(screen.getByRole("radiogroup", { name: "Write to" })).toBeInTheDocument();
+	});
+
+	it("sends an edited suggestion with the chips it carries, though its aside is older than the loaded history", async () => {
+		mocks.live = live({ userId: "user-me", name: "Asha Rao" }, 7);
+		mocks.listSessionSuggestions.mockResolvedValue({ items: [{ ...suggestion, text: "@Ben Ortiz also cover the expired cookie", mentions: [{ kind: "person", userId: "user-ben", name: "Ben Ortiz" }] }] });
+		mocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		renderSurface();
+		fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+		const editing = await screen.findByRole("combobox", { name: "Message the agent" });
+		await waitFor(() => expect(editing.querySelector('[data-composer-token="person"]')).toHaveTextContent("Ben Ortiz"));
+		fireEvent.keyDown(editing, { key: "Enter" });
+		await waitFor(() => expect(mocks.sendSessionSuggestion).toHaveBeenCalledTimes(1));
+		expect(mocks.sendSessionSuggestion.mock.calls[0]![3]).toMatchObject({
+			text: "@Ben Ortiz also cover the expired cookie",
+			mentions: [{ kind: "person", userId: "user-ben" }],
+		});
 	});
 
 	it("lets a viewer write asides only, with no switch to a dead end", async () => {

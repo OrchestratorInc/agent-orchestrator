@@ -11,6 +11,7 @@ import {
 	mergeFeedHead,
 	mergeSuggestionRead,
 	sentAsides,
+	suggestionMentions,
 	type FeedPages,
 	isPathQuery,
 	MAX_MENTIONS,
@@ -189,7 +190,7 @@ describe("the team feed", () => {
 
 describe("suggestion reads and events", () => {
 	const made = (id: string, status: CloudCpSuggestion["status"] = "pending", asideId = `aside-${id}`): CloudCpSuggestion => ({
-		id, orgId: "o", sessionId: "s", kind: "aside", asideId, text: id, status, createdAt: `2026-11-07T10:0${id.length}:00Z`, updatedAt: "2026-11-07T10:00:00Z",
+		id, orgId: "o", sessionId: "s", kind: "aside", asideId, text: id, mentions: [], status, createdAt: `2026-11-07T10:0${id.length}:00Z`, updatedAt: "2026-11-07T10:00:00Z",
 		suggestedBy: { userId: "u", name: "U" }, author: { userId: "u", name: "U" },
 	});
 
@@ -211,6 +212,14 @@ describe("suggestion reads and events", () => {
 	it("says which asides were last sent to the agent", () => {
 		const event = (status: CloudCpSuggestion["status"], asideId: string) => ({ type: "chat.suggestion_resolved", payload: made(`sg-${asideId}-${status}`, status, asideId) });
 		expect([...sentAsides([event("sent", "a1"), event("dismissed", "a2"), event("sent", "a3"), { type: "chat.suggestion_created", payload: made("sg-again", "pending", "a3") }])]).toEqual(["a1"]);
+	});
+
+	it("reads the mentions a suggestion carries, and says when a control plane sent none", () => {
+		const ben = { kind: "person" as const, userId: "u-ben", name: "Ben Ortiz" };
+		expect(suggestionMentions({ ...made("sg-1"), mentions: [ben] })).toEqual([ben]);
+		expect(suggestionMentions({ ...made("sg-2"), mentions: [] })).toEqual([]);
+		const { mentions: _none, ...older } = made("sg-3");
+		expect(suggestionMentions(older as CloudCpSuggestion)).toBeUndefined();
 	});
 
 	it("draws recorded mention tokens as chips, skipping any without a name", () => {
@@ -253,7 +262,7 @@ describe("mergeFeedHead", () => {
 
 describe("suggestions", () => {
 	const suggestion = (id: string, status: CloudCpSuggestion["status"], createdAt: string): CloudCpSuggestion => ({
-		id, orgId: "o", sessionId: "s", kind: "aside", asideId: `aside-${id}`, text: id, status, createdAt, updatedAt: createdAt,
+		id, orgId: "o", sessionId: "s", kind: "aside", asideId: `aside-${id}`, text: id, mentions: [], status, createdAt, updatedAt: createdAt,
 		suggestedBy: { userId: "u-chen", name: "Chen Wei" }, author: { userId: "u-chen", name: "Chen Wei" },
 	});
 	const event = (type: string, payload: unknown) => ({ type, payload });

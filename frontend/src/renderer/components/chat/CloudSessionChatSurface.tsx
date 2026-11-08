@@ -47,6 +47,7 @@ import {
 	asidePayload,
 	composerLockedError,
 	composerMentionsOf,
+	suggestionMentions,
 	mentionNotAllowedError,
 	mentionToken,
 	namedMentions,
@@ -1725,12 +1726,16 @@ export function CloudSessionChatSurface({
 	const asideEvents = eventsQuery.data;
 	const composerEdit = useMemo(() => {
 		if (!editing || !editingNow || !canDrive) return undefined;
-		const aside = (asideEvents ?? []).map(asidePayload).find((payload) => payload?.asideId === editing.suggestion.asideId);
+		// The aside's chips come along, so an edited send still notifies them.
+		// The suggestion carries them, however old its aside (history loads in
+		// windows, so the aside may not be loaded); a control plane from before
+		// that field leaves only the aside itself, when it is loaded.
+		const carried = suggestionMentions(editing.suggestion);
+		const mentions = carried ?? (asideEvents ?? []).map(asidePayload).find((payload) => payload?.asideId === editing.suggestion.asideId)?.mentions;
 		return {
 			id: `${editing.suggestion.id}:${editing.round}`,
 			text: editing.suggestion.text,
-			// The aside's chips come along, so an edited send still notifies them.
-			mentions: composerMentionsOf(aside?.mentions),
+			mentions: composerMentionsOf(mentions),
 		};
 	}, [asideEvents, canDrive, editing, editingNow]);
 	const composerEditRef = useRef(composerEdit);
