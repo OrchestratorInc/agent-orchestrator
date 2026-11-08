@@ -98,6 +98,8 @@ export interface AOToolView {
 	/** What expanding the row shows. */
 	lines?: AOToolLine[];
 	text?: string;
+	/** Why a call that did not finish has no outcome: the user stopped it, or AO lost track of it. */
+	outcome?: "stopped" | "outcome unknown";
 }
 
 interface Copy {
@@ -106,7 +108,18 @@ interface Copy {
 	failed: string;
 }
 
+/**
+ * A call that was stopped or whose outcome AO lost keeps the present tense
+ * ("Opening Calculator") and says which: reading "Opened Calculator" for a call
+ * the user stopped would claim work that may not have happened.
+ */
 export function aoToolView(activity: ConversationActivity): AOToolView | undefined {
+	const view = describeAOTool(activity);
+	if (!view || view.state !== "unknown") return view;
+	return { ...view, outcome: activity.status === "cancelled" ? "stopped" : "outcome unknown" };
+}
+
+function describeAOTool(activity: ConversationActivity): AOToolView | undefined {
 	if (activity.activityKind !== "mcp_tool") return undefined;
 	const { tool, server } = mcpToolName(activity);
 	if (server !== "ao") return undefined;
@@ -227,7 +240,7 @@ function readableError(value: string | undefined): string | undefined {
 }
 
 function labelFor(copy: Copy, state: AOToolState): string {
-	if (state === "running") return copy.running;
+	if (state === "running" || state === "unknown") return copy.running;
 	if (state === "failed") return copy.failed;
 	return copy.done;
 }

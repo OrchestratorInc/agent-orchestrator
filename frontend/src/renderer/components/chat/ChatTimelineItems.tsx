@@ -2353,6 +2353,8 @@ function AOToolRow({ view }: { view: AOToolView }) {
 				) : null}
 				{view.state === "running" ? (
 					<Loader2 aria-label="running" className="size-3 shrink-0 animate-spin text-muted-foreground/60" />
+				) : view.outcome ? (
+					<span className="shrink-0 text-xs text-muted-foreground/70">{view.outcome}</span>
 				) : hasBody ? (
 					<ChevronRight
 						aria-hidden="true"

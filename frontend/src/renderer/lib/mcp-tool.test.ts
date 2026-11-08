@@ -141,6 +141,23 @@ describe("aoToolView: pages", () => {
 	});
 });
 
+describe("aoToolView: calls that did not finish", () => {
+	it("keeps a stopped call in the present tense and says it was stopped", () => {
+		const view = aoToolView(claude("launch_app", { name: "Calculator" }, [], "cancelled"));
+		expect(view).toMatchObject({ label: "Opening Calculator", state: "unknown", outcome: "stopped" });
+	});
+
+	it("keeps a page whose outcome AO lost visible, and says so", () => {
+		const call = claude("html_render", {}, [], "recovered");
+		expect(isShownAORender(call)).toBe(false);
+		expect(aoToolView(call)).toMatchObject({ label: "Showing the page", outcome: "outcome unknown" });
+	});
+
+	it("adds no outcome to a call that finished", () => {
+		expect(aoToolView(claude("press_key", { key: "return" }, []))?.outcome).toBeUndefined();
+	});
+});
+
 describe("aoToolView: computer use", () => {
 	it.each([
 		["launch_app", { name: "Calculator" }, "Opened Calculator"],
