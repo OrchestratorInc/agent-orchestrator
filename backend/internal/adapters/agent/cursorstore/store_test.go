@@ -83,7 +83,7 @@ func TestReadFollowsNativeActiveGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != testID || got.CWD != cwd || got.Model != "synthetic-model" || len(got.Messages) != 2 {
+	if got.ID != testID || got.CWD != cwd || len(got.Messages) != 2 {
 		t.Fatalf("archive = %#v", got)
 	}
 	if got.Messages[0].Role != "user" || got.Messages[0].Text != "explain the synthetic parser" || got.Messages[1].Role != "assistant" || got.Messages[1].Text != "synthetic answer" {

@@ -175,7 +175,7 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 	});
 
-	it("asks the other owner to close beside the composer before retrying", async () => {
+	it("asks the other owner to close it before retrying", async () => {
 		const retry = vi.fn();
 		render(
 			<ChatWorkspace
@@ -189,16 +189,9 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. AO checks again every 30 seconds.")).toBeVisible();
 		const button = screen.getByRole("button", { name: /^Retry$/ });
 		expect(button).toBeEnabled();
-		expect(button.closest(".cursor-chat-composer-dock")).not.toBeNull();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		await userEvent.click(button);
 		expect(retry).toHaveBeenCalledTimes(1);
-	});
-
-	it("says the chat is resuming while its agent starts", () => {
-		render(<ChatWorkspace snapshot={{ ...chatFixture, controller: { state: "stopped" } }} resumingAgent />);
-		expect(screen.getByText("Resuming chat…")).toBeVisible();
-		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
 	});
 
 	it("reads open elsewhere from the flag, not the message text", () => {

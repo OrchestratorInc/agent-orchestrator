@@ -3970,7 +3970,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, relaunchFailed("deliver prompt", fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err))
 		}
 	}
-
 	if savedNote {
 		m.clearHandoffNote(ctx, rec.ID)
 	}
@@ -6921,7 +6920,7 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // startup hooks can update the already-created session row), then any optional
 // PreLaunch step. Shared by Spawn and Restore.
 func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
-	cfg := ports.WorkspaceHookConfig{
+	if err := agent.GetAgentHooks(ctx, ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
 		DataDir:          m.dataDir,
@@ -6929,8 +6928,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
-	}
-	if err := agent.GetAgentHooks(ctx, cfg); err != nil {
+	}); err != nil {
 		m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 		return fmt.Errorf("install hooks: %w", err)
 	}

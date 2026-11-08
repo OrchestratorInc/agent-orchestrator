@@ -177,7 +177,6 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
-import { ProjectImportOffer } from "../ProjectImportOffer";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -1911,6 +1910,26 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
+					{savedCopy || importBlock ? null : (
+						<ControllerBanner
+							controller={snapshot.controller}
+							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
+							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+							needsResume={session?.needsResume}
+							transitioning={controllerTransitioning || agentResuming}
+							automaticWakePending={suppressStopped}
+							reconnecting={startupReconnecting}
+							terminated={terminated}
+							onResume={newWorkDisabled ? undefined : onResumeAgent}
+							resuming={resumingAgent}
+							resumeError={resumeError}
+							resumeOpenElsewhere={resumeOpenElsewhere}
+							harness={snapshot.harness}
+							onOpenShell={onOpenShell}
+							openingShell={openingShell}
+							shellError={shellError}
+						/>
+					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner
 						staleBinary={session?.staleBinary}
@@ -2003,24 +2022,6 @@ function ChatWorkspaceContent({
 										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
-								{savedCopy || (importBlock && session) ? null : <ControllerBanner
-									controller={snapshot.controller}
-									provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-									quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
-									needsResume={session?.needsResume}
-									automaticWakePending={suppressStopped}
-									transitioning={controllerTransitioning || agentResuming}
-									reconnecting={startupReconnecting}
-									terminated={terminated}
-									onResume={newWorkDisabled ? undefined : onResumeAgent}
-									resuming={resumingAgent}
-									resumeError={resumeError}
-									resumeOpenElsewhere={resumeOpenElsewhere}
-									harness={snapshot.harness}
-									onOpenShell={onOpenShell}
-									openingShell={openingShell}
-									shellError={shellError}
-								/>}
 								<WelcomePromptSuggestions
 									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
@@ -2148,7 +2149,6 @@ function ChatWorkspaceContent({
 										showSteerButton={showSteerButton}
 										canSteer={Boolean(onSteer) && turn?.state === "running"}
 										sendPending={sendPending || agentResuming}
-										waitingForAgent={agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
@@ -2166,7 +2166,6 @@ function ChatWorkspaceContent({
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
-								{conversationEmpty && sessionRole === "orchestrator" && session && !activeRemoteHostId ? <ProjectImportOffer className="mt-2" projectId={session.workspaceId} /> : null}
 								{draftNotice}
 							</div>
 						</div>
@@ -2534,11 +2533,6 @@ function ChatHeader({
 
 const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
 
-/** Starts an action whose failure the banner already shows. */
-function runIgnoringErrors(run?: () => void | Promise<unknown>) {
-	void Promise.resolve().then(() => run?.()).catch(() => {});
-}
-
 /**
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
@@ -2594,7 +2588,9 @@ function ControllerBanner({
 		provisionState !== "provisioning" && provisionState !== "failed";
 	useEffect(() => {
 		if (!recheck) return;
-		const timer = window.setTimeout(() => runIgnoringErrors(resumeRef.current), OPEN_ELSEWHERE_RECHECK_MS);
+		const timer = window.setTimeout(() => {
+			void Promise.resolve().then(() => resumeRef.current?.()).catch(() => {});
+		}, OPEN_ELSEWHERE_RECHECK_MS);
 		return () => window.clearTimeout(timer);
 	}, [recheck]);
 	// Startup failures use the checklist's Retry action.
@@ -2603,7 +2599,9 @@ function ControllerBanner({
 	// Nothing to act on yet: offering Resume here invites a click the daemon is
 	// about to make unnecessary.
 	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
-	const resumeClick = () => runIgnoringErrors(onResume);
+	const resumeClick = () => {
+		void Promise.resolve().then(() => onResume?.()).catch(() => {});
+	};
 
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
@@ -2625,7 +2623,7 @@ function ControllerBanner({
 			title: terminated
 				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
 				: waking
-					? t("chat.controller.resumingChat")
+					? "Waking agent…"
 					: restarting
 						? "Reconnecting to the agent…"
 						: openElsewhere
@@ -2645,8 +2643,7 @@ function ControllerBanner({
 		<div
 			role={actionable && !terminated ? "alert" : "status"}
 			aria-atomic="true"
-			// Docked above the composer, like the queued-message dock, so it takes the same frame.
-			className="flex shrink-0 items-start gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5"
+			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
 			{loading ? (
 				<Loader2
@@ -2685,36 +2682,34 @@ function ControllerBanner({
 								{resumeError ?? shellError}
 							</span>
 						) : null}
+						<div className="mt-1.5 flex flex-wrap gap-2">
+							{onResume ? (
+								<Button
+									type="button"
+									size="sm"
+									variant="outline"
+									onClick={resumeClick}
+									disabled={resuming}
+								>
+									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
+								</Button>
+							) : null}
+							{/* Once the worktree is gone a shell would open in the project root. */}
+							{onOpenShell && !needsResume && !terminated ? (
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									onClick={onOpenShell}
+									disabled={openingShell}
+								>
+									{openingShell ? "Opening shell…" : "Open shell"}
+								</Button>
+							) : null}
+						</div>
 					</>
 				) : null}
 			</div>
-			{actionable ? (
-				<div className="flex shrink-0 flex-wrap justify-end gap-2 self-center">
-					{onResume ? (
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							onClick={resumeClick}
-							disabled={resuming}
-						>
-							{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : resumeError || needsResume ? t("chat.controller.retry") : "Resume agent"}
-						</Button>
-					) : null}
-					{/* Once the worktree is gone a shell would open in the project root. */}
-					{onOpenShell && !needsResume && !terminated ? (
-						<Button
-							type="button"
-							size="sm"
-							variant="ghost"
-							onClick={onOpenShell}
-							disabled={openingShell}
-						>
-							{openingShell ? "Opening shell…" : "Open shell"}
-						</Button>
-					) : null}
-				</div>
-			) : null}
 		</div>
 	);
 }

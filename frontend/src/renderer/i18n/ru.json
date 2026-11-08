@@ -57,7 +57,6 @@
 	"chat.removeAnnotation": "Удалить аннотацию {{count}}",
 	"chat.startup.queuePlaceholder": "Добавьте следующее сообщение в очередь, пока {{agent}} готовится",
 	"chat.archived.body": "История сохранена. Восстановите сессию, чтобы продолжить.",
-	"chat.controller.resumingChat": "Возобновление чата…",
 	"chat.controller.openElsewhere": "Открыт в другом месте",
 	"chat.controller.couldNotConnect": "Не удалось подключиться к агенту",
 	"chat.controller.openElsewhereBody": "Закройте его там, чтобы продолжить здесь.",

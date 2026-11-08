@@ -53,12 +53,6 @@ func TestKimchiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	if got.title != "Hero greeting" {
 		t.Fatalf("title = %q, want session_info name", got.title)
 	}
-	if got.model != "anthropic/claude-opus" {
-		t.Fatalf("model = %q", got.model)
-	}
-	if got.effort != "high" {
-		t.Fatalf("effort = %q", got.effort)
-	}
 }
 
 func TestKimchiTranscriptTitleFallsBackToFirstPrompt(t *testing.T) {
@@ -254,7 +248,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 	if rec.Harness != domain.HarnessKimchi || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.ProjectID != "repo" {
 		t.Fatalf("imported session cannot continue: %+v", rec)
 	}
-	if rec.Metadata.Model != "kimchi-dev/auto" || rec.Metadata.Effort != "high" || rec.Metadata.ProviderConversationID != kimchiSession || rec.Metadata.NativeTranscriptPath != canonical(path) {
+	if rec.Metadata.ProviderConversationID != kimchiSession || rec.Metadata.NativeTranscriptPath != canonical(path) {
 		t.Fatalf("lost continuation metadata: %+v", rec.Metadata)
 	}
 	if source := rec.Metadata.ImportSource; source == nil || source.NativeID != kimchiSession || source.ConfigDir != canonical(root) || source.CWD != canonical(cwd) {

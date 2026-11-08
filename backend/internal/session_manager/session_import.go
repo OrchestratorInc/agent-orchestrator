@@ -89,6 +89,11 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil {
 		return
 	}
+	if model := strings.TrimSpace(rec.Metadata.Model); rec.Harness == domain.HarnessClaudeCode && model != "" && model != "default" && strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")) == "" {
+		if _, set := env["ANTHROPIC_MODEL"]; !set {
+			env["ANTHROPIC_MODEL"] = model
+		}
+	}
 	ref := importedNativeRef(source)
 	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return

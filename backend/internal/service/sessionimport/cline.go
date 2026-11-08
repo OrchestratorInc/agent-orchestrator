@@ -168,14 +168,13 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 	var meta struct {
 		ID      string    `json:"session_id"`
 		CWD     string    `json:"cwd"`
-		Model   string    `json:"model"`
 		Started time.Time `json:"started_at"`
 		Ended   time.Time `json:"ended_at"`
 	}
 	if json.Unmarshal(body, &meta) != nil || meta.ID != t.nativeID || !filepath.IsAbs(meta.CWD) {
 		return t, errors.New("cline identity or working directory invalid")
 	}
-	t.cwd, t.model, t.last = meta.CWD, meta.Model, meta.Started
+	t.cwd, t.last = meta.CWD, meta.Started
 	now := time.Now().Add(time.Hour)
 	if meta.Ended.After(t.last) && meta.Ended.Before(now) {
 		t.last = meta.Ended

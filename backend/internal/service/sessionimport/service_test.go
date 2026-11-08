@@ -142,7 +142,7 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 		t.Fatalf("import: %v %v", results, err)
 	}
 	rec := st.sessions[0]
-	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.WorkspacePath != "" || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.Metadata.Model != "claude-haiku-5-5" {
+	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.WorkspacePath != "" || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.Metadata.Model != "" {
 		t.Fatal(rec)
 	}
 	repeated, err := svc.Import(ctx, []string{oldID})

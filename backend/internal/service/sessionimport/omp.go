@@ -43,8 +43,6 @@ type ompRecord struct {
 	CWD       string    `json:"cwd"`
 	Title     string    `json:"title"`
 	Timestamp time.Time `json:"timestamp"`
-	Model     string    `json:"model"`
-	Effort    string    `json:"thinkingLevel"`
 	// Omitted is set by the oversize-record rewriter when a record was too large
 	// to decode; the dropped parts are reported as shortened history.
 	Omitted bool `json:"aoOmitted"`
@@ -60,8 +58,6 @@ type ompRecord struct {
 type ompNode struct {
 	id, parent string
 	role, text string
-	model      string
-	effort     string
 	at         time.Time
 	message    bool
 	omitted    bool
@@ -129,12 +125,6 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 			return nil
 		}
 		node := ompNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
-		if r.Type == "model_change" {
-			node.model = r.Model
-		}
-		if r.Type == "thinking_level_change" {
-			node.effort = r.Effort
-		}
 		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
 			node.role, node.text, node.message, node.omitted = r.Message.Role, string(r.Message.Content), true, r.Omitted
 		}
@@ -207,12 +197,6 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
 	for _, node := range chain {
-		if node.model != "" {
-			t.model = node.model
-		}
-		if node.effort != "" {
-			t.effort = node.effort
-		}
 		if !node.message {
 			continue
 		}

@@ -55,7 +55,6 @@
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Folgenachricht einreihen, während {{agent}} startet",
 	"chat.archived.body": "Der Verlauf bleibt erhalten. Stellen Sie die Sitzung wieder her, um fortzufahren.",
-	"chat.controller.resumingChat": "Chat wird fortgesetzt…",
 	"chat.controller.openElsewhere": "Dieser Chat ist woanders geöffnet",
 	"chat.controller.couldNotConnect": "Verbindung zum Agenten fehlgeschlagen",
 	"chat.controller.openElsewhereBody": "Schließe ihn dort, um hier weiterzumachen.",

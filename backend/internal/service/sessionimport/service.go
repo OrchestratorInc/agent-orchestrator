@@ -788,15 +788,6 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	}
 	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
-	// Claude, Pi, OMP and Kimchi resume on AO's or the user's default model
-	// unless told otherwise, which may be a provider the chat never used; keep
-	// the chat's own.
-	switch source.harness {
-	case domain.HarnessClaudeCode:
-		rec.Metadata.Model = source.model
-	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi:
-		rec.Metadata.Model, rec.Metadata.Effort = source.model, source.effort
-	}
 	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
 	if createErr != nil {
 		result.Error = fmt.Sprintf("Import failed: %v", createErr)

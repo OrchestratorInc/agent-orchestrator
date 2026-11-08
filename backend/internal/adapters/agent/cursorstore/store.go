@@ -37,7 +37,6 @@ type Archive struct {
 	ID       string
 	CWD      string
 	Title    string
-	Model    string
 	Updated  time.Time
 	Messages []Message
 }
@@ -46,7 +45,6 @@ type metadata struct {
 	ID      string `json:"agentId"`
 	Root    string `json:"latestRootBlobId"`
 	Name    string `json:"name"`
-	Model   string `json:"lastUsedModel"`
 	Created int64  `json:"createdAt"`
 }
 
@@ -262,7 +260,7 @@ func read(ctx context.Context, tx *sql.Tx, path string) (Archive, error) {
 	if !filepath.IsAbs(sidecar.CWD) {
 		return Archive{}, errors.New("cursor native workspace is missing")
 	}
-	out := Archive{ID: meta.ID, CWD: sidecar.CWD, Title: meta.Name, Model: meta.Model, Updated: time.UnixMilli(sidecar.Updated)}
+	out := Archive{ID: meta.ID, CWD: sidecar.CWD, Title: meta.Name, Updated: time.UnixMilli(sidecar.Updated)}
 	if sidecar.Updated == 0 {
 		out.Updated = time.UnixMilli(meta.Created)
 	}

@@ -391,7 +391,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	// Until the controller is ready (sleeping, waking, reconnecting or resuming an import) the bar shows the cached and saved settings.
+	// A background resume keeps the last-known catalogs visible so the model
+	// picker doesn't blank out while the agent spins up.
+	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
 	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;

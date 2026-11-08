@@ -39,17 +39,9 @@ type kimchiRecord struct {
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
 	Message   struct {
-		Role     string      `json:"role"`
-		Content  contentText `json:"content"`
-		Provider string      `json:"provider"`
-		Model    string      `json:"model"`
+		Role    string      `json:"role"`
+		Content contentText `json:"content"`
 	} `json:"message"`
-
-	// model_change and thinking_level_change records name the model and
-	// thinking level Kimchi answers with from that point on the branch.
-	Provider      string `json:"provider"`
-	ModelID       string `json:"modelId"`
-	ThinkingLevel string `json:"thinkingLevel"`
 
 	// session_info records carry the conversation's display name (its title).
 	Name string `json:"name"`
@@ -65,7 +57,7 @@ type kimchiRecord struct {
 // not retained while walking ancestry.
 type kimchiNode struct {
 	id, parent, role, text string
-	model, thinking, name  string
+	name                   string
 	editTarget             string
 	at                     time.Time
 	dropped                bool
@@ -203,10 +195,6 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		}
 		node := kimchiNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
 		switch {
-		case r.Type == "model_change" && r.Provider != "" && r.ModelID != "":
-			node.model = r.Provider + "/" + r.ModelID
-		case r.Type == "thinking_level_change":
-			node.thinking = r.ThinkingLevel
 		case r.Type == "session_info":
 			node.name = strings.TrimSpace(r.Name)
 		case r.Type == "context_edit":
@@ -218,9 +206,6 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
 			node.role = r.Message.Role
 			node.text = string(r.Message.Content)
-			if r.Message.Role == "assistant" && r.Message.Provider != "" && r.Message.Model != "" {
-				node.model = r.Message.Provider + "/" + r.Message.Model
-			}
 		}
 		leaf = r.ID
 		idx, seen := index[r.ID]
@@ -294,13 +279,6 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		}
 		t.shortened = t.shortened || node.dropped
 		add(node.role, node.text, node.at)
-		// The active branch's latest choice is what Kimchi itself resumes with.
-		if node.model != "" {
-			t.model = node.model
-		}
-		if node.thinking != "" {
-			t.effort = node.thinking
-		}
 		if node.name != "" {
 			activeTitle = node.name
 		}

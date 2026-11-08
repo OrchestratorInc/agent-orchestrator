@@ -189,8 +189,8 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, got.messages, "user: start the refactor", "assistant: Working on it.", "user: /review PR 12", "assistant: Review posted.")
-	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened || got.model != "claude-haiku-5-5" {
-		t.Fatalf("title=%q cwd=%q shortened=%v model=%q", got.title, got.cwd, got.shortened, got.model)
+	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened {
+		t.Fatalf("title=%q cwd=%q shortened=%v", got.title, got.cwd, got.shortened)
 	}
 	custom := writeFile(t, path, body[:strings.LastIndex(body, "\n")]+"\n"+`{"type":"custom-title","customTitle":"My rename","sessionId":"`+id+`"}`+"\n")
 	if got, err = readTranscript(context.Background(), domain.HarnessClaudeCode, root, custom); err != nil || got.title != "My rename" {

@@ -58,10 +58,6 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
-	// model is the model the conversation last answered with, in the harness's
-	// own form, such as a Claude model id or a Pi-family provider/model.
-	// effort is a Pi-family thinking level.
-	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
 	// fingerprint is the optional native-input evidence captured by discovery.
@@ -96,7 +92,6 @@ type record struct {
 	Message           struct {
 		ID      string      `json:"id"`
 		Role    string      `json:"role"`
-		Model   string      `json:"model"`
 		Content contentText `json:"content"`
 	} `json:"message"`
 	Payload struct {
@@ -347,9 +342,9 @@ type tagged struct {
 
 // claudeNode keeps only display facts, so tool payloads are not retained while walking ancestry.
 type claudeNode struct {
-	typ, role, id, uuid, parent, logicalParent, cwd, text, model string
-	at                                                           time.Time
-	hidden, omitted, dropped                                     bool
+	typ, role, id, uuid, parent, logicalParent, cwd, text string
+	at                                                    time.Time
+	hidden, omitted, dropped                              bool
 }
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
@@ -485,7 +480,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if title := strings.TrimSpace(r.AITitle); title != "" && own {
 				t.title = title
 			}
-			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, model: r.Message.Model, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
+			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
 			if r.Type == "user" || r.Type == "assistant" {
 				node.text = string(r.Message.Content)
 			}
@@ -603,10 +598,6 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			continue
 		}
 		t.shortened = t.shortened || node.omitted || node.dropped
-		// Claude marks locally generated replies, such as errors, as "<synthetic>".
-		if node.model != "" && node.model != "<synthetic>" {
-			t.model = node.model
-		}
 		role := node.role
 		if role == "" {
 			role = node.typ

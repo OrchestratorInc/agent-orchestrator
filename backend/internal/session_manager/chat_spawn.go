@@ -538,6 +538,10 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, err
 	}
 	if rec.NeedsImportResume() && !reconnectOnly {
+		if rec.Metadata.Model == "" && roleOverride(rec.Kind, project.Config).Harness == rec.Harness {
+			rec.Metadata.Model = effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Model
+			agentConfig.Model = rec.Metadata.Model
+		}
 		// An imported chat runs in a folder the provider was never set up in:
 		// install its workspace hooks and pre-launch config before the ACP
 		// controller starts. Relocation can move the native home, so the config

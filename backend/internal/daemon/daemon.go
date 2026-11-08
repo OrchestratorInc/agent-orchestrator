@@ -17,8 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
-
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
@@ -76,6 +74,7 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"

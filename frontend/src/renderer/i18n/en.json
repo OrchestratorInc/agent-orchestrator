@@ -55,7 +55,6 @@
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Queue a follow-up while {{agent}} gets ready",
 	"chat.archived.body": "History is kept. Restore the session to continue.",
-	"chat.controller.resumingChat": "Resuming chat…",
 	"chat.controller.openElsewhere": "This is open elsewhere",
 	"chat.controller.couldNotConnect": "Could not connect to the agent",
 	"chat.controller.openElsewhereBody": "Close it there to continue here.",

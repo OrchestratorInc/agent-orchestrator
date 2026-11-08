@@ -562,6 +562,29 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	}
 }
 
+func TestImportedClaudeChatKeepsAOModel(t *testing.T) {
+	t.Setenv("ANTHROPIC_MODEL", "")
+	m := &Manager{agents: providerHomeAgents{}}
+	rec := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: t.TempDir()}}
+	pinned := func(model string, env map[string]string) string {
+		rec.Metadata.Model = model
+		m.applyImportedConfigEnv(context.Background(), rec, env)
+		return env["ANTHROPIC_MODEL"]
+	}
+	if got := pinned("claude-haiku-5-5", map[string]string{}); got != "claude-haiku-5-5" {
+		t.Fatalf("AO model not pinned: %q", got)
+	}
+	for _, unset := range []string{"", "default"} {
+		if got := pinned(unset, map[string]string{}); got != "" {
+			t.Fatalf("model %q pinned %q over Claude's default", unset, got)
+		}
+	}
+	if got := pinned("claude-haiku-5-5", map[string]string{"ANTHROPIC_MODEL": "glm-5"}); got != "glm-5" {
+		t.Fatalf("project pin replaced: %q", got)
+	}
+}
+
 // Startup health treats a ready row without a workspace as an interrupted
 // spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {

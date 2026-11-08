@@ -215,24 +215,6 @@ func TestOMPRootOverrideAndDefault(t *testing.T) {
 	}
 }
 
-func TestOMPModelAndEffortFollowTheActiveBranch(t *testing.T) {
-	body := `{"type":"session","id":"` + ompSession + `","cwd":"/work/repo"}
-{"type":"model_change","id":"model","parentId":null,"model":"synthetic/original"}
-{"type":"thinking_level_change","id":"effort","parentId":"model","thinkingLevel":"medium"}
-{"type":"message","id":"m1","parentId":"effort","message":{"role":"user","content":"keep this"}}
-{"type":"model_change","id":"abandoned","parentId":"m1","model":"synthetic/abandoned"}
-{"type":"message","id":"a1","parentId":"m1","message":{"role":"assistant","content":"active answer"}}
-`
-	root := t.TempDir()
-	got, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.model != "synthetic/original" || got.effort != "medium" {
-		t.Fatalf("active settings = %q, %q", got.model, got.effort)
-	}
-}
-
 func TestOMPBoundsHeldTextAcrossAbandonedBranches(t *testing.T) {
 	oldHeld := maxHeldText
 	maxHeldText = 128

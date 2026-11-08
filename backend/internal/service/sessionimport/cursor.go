@@ -33,7 +33,7 @@ func readCursorTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, err
 	}
 	t.path, t.paths, t.nativeID, t.cwd = paths[0], paths, archive.ID, archive.CWD
-	t.title, t.model, t.last = importTitle(archive.Title), archive.Model, archive.Updated
+	t.title, t.last = importTitle(archive.Title), archive.Updated
 	if t.title == cursorPlaceholderTitle {
 		t.title = ""
 	}

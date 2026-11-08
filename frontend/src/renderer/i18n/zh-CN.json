@@ -55,7 +55,6 @@
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
 	"chat.archived.body": "历史记录已保留。恢复会话以继续。",
-	"chat.controller.resumingChat": "正在恢复聊天…",
 	"chat.controller.openElsewhere": "已在其他地方打开",
 	"chat.controller.couldNotConnect": "无法连接到代理",
 	"chat.controller.openElsewhereBody": "请在那里关闭它以在此继续。",

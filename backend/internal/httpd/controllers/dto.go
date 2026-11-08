@@ -6,8 +6,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -20,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 

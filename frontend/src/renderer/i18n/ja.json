@@ -55,7 +55,6 @@
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",
 	"chat.archived.body": "履歴は保持されています。続行するにはセッションを復元してください。",
-	"chat.controller.resumingChat": "チャットを再開しています…",
 	"chat.controller.openElsewhere": "別の場所で開かれています",
 	"chat.controller.couldNotConnect": "エージェントに接続できませんでした",
 	"chat.controller.openElsewhereBody": "続けるには、そちらで閉じてください。",
