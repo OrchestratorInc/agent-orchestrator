@@ -135,6 +135,33 @@ func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	return e.identity
 }
 
+type authEnvironmentKey struct{}
+
+// WithAuthEnvironment returns a context whose authentication checks see
+// overrides on top of AO's own environment, as the harness's sessions do: AO
+// exports every saved provider key to itself, but holds back from a harness a
+// key that would replace its own sign-in. An empty value reads as unset.
+func WithAuthEnvironment(ctx context.Context, overrides map[string]string) context.Context {
+	if len(overrides) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, authEnvironmentKey{}, overrides)
+}
+
+// AuthEnvironmentOverride reports the value an authentication check must use
+// for name instead of AO's environment, if the context carries one.
+func AuthEnvironmentOverride(ctx context.Context, name string) (string, bool) {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	value, ok := overrides[name]
+	return value, ok
+}
+
+// AuthEnvironmentOverrides returns every override the context carries.
+func AuthEnvironmentOverrides(ctx context.Context) map[string]string {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	return overrides
+}
+
 // RecordAuthDiagnostic retains an adapter-authored check outcome, including
 // unsuccessful attempts. Never pass raw errors, credential values or CLI output.
 func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {

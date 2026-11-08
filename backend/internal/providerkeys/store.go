@@ -21,6 +21,10 @@ const (
 	// deviceFilename lists the variable names (never values) that the user
 	// chose to publish to the OS user environment.
 	deviceFilename = "provider-api-keys-device.json"
+	// userValueFilename lists shared names whose value the OS user
+	// environment already held, set by the user, when AO first shared them.
+	// AO never removes those values.
+	userValueFilename = "provider-api-keys-device-user.json"
 )
 
 var mu sync.Mutex
@@ -118,15 +122,42 @@ func SetDevice(ctx context.Context, dataDir, name string, published bool) error 
 	return setDeviceLocked(ctx, dataDir, name, published)
 }
 
+// UserValueNames returns the shared variables whose value the user had
+// already set in the OS user environment when AO shared them.
+func UserValueNames(dataDir string) (map[string]bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadNames(dataDir, userValueFilename)
+}
+
+// SetUserValue records whether name's shared value was the user's own.
+func SetUserValue(ctx context.Context, dataDir, name string, users bool) error {
+	if !validName(name) {
+		return errors.New("invalid provider credential")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return setNameLocked(ctx, dataDir, userValueFilename, name, users)
+}
+
 func setDeviceLocked(ctx context.Context, dataDir, name string, published bool) error {
-	names, err := loadDevice(dataDir)
+	if !published {
+		if err := setNameLocked(ctx, dataDir, userValueFilename, name, false); err != nil {
+			return err
+		}
+	}
+	return setNameLocked(ctx, dataDir, deviceFilename, name, published)
+}
+
+func setNameLocked(ctx context.Context, dataDir, file, name string, on bool) error {
+	names, err := loadNames(dataDir, file)
 	if err != nil {
 		return err
 	}
-	if names[name] == published {
+	if names[name] == on {
 		return nil
 	}
-	if published {
+	if on {
 		names[name] = true
 	} else {
 		delete(names, name)
@@ -136,14 +167,18 @@ func setDeviceLocked(ctx context.Context, dataDir, name string, published bool) 
 		list = append(list, n)
 	}
 	sort.Strings(list)
-	return writeJSON(ctx, dataDir, deviceFilename, list)
+	return writeJSON(ctx, dataDir, file, list)
 }
 
 func loadDevice(dataDir string) (map[string]bool, error) {
+	return loadNames(dataDir, deviceFilename)
+}
+
+func loadNames(dataDir, listFile string) (map[string]bool, error) {
 	if dataDir == "" {
 		return nil, errors.New("AO data directory is empty")
 	}
-	file := filepath.Join(dataDir, deviceFilename)
+	file := filepath.Join(dataDir, listFile)
 	info, err := os.Lstat(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]bool{}, nil

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -596,10 +597,23 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 		}
 		return "terminal_required", "", nil, nil
 	}
-	if nativeInteractiveWords.MatchString(strings.Join(lines[max(0, len(lines)-2):], "\n")) {
+	if nativeInteractiveWords.MatchString(strings.Join(lastTextLines(lines, 2), "\n")) {
 		return "terminal_required", "", nil, nil
 	}
 	return "waiting", "", nil, nil
+}
+
+// lastTextLines returns up to n of the last lines that hold letters, skipping
+// the borders, cursors and input markers a prompt library draws below its
+// question ("└", "_").
+func lastTextLines(lines []string, n int) []string {
+	var out []string
+	for i := len(lines) - 1; i >= 0 && len(out) < n; i-- {
+		if strings.IndexFunc(lines[i], unicode.IsLetter) >= 0 {
+			out = append(out, lines[i])
+		}
+	}
+	return out
 }
 
 // currentNumberedMenu reads the numbered menu that is still the prompt, if

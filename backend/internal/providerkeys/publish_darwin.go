@@ -26,6 +26,9 @@ func Publish(ctx context.Context, name, value, previous string) error {
 	if err != nil {
 		return err
 	}
+	if alreadyUsers(current, value, previous) {
+		return ErrAlreadySet
+	}
 	if !ownedValue(current, value, previous) {
 		return ErrUserValue
 	}

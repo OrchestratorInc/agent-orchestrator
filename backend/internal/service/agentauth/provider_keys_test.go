@@ -327,3 +327,27 @@ func TestPublishUndoRunsAfterTheRequestEnds(t *testing.T) {
 		t.Fatalf("cleanup ran with an ended context: %v", cleanupErr)
 	}
 }
+
+func TestSharingNeverRemovesTheUsersIdenticalValue(t *testing.T) {
+	_, withdrawn := stubDeviceEnvironment(t)
+	// The user's environment already holds exactly this key.
+	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrAlreadySet }
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	key, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-secret", true)
+	if err != nil || !key.Device {
+		t.Fatalf("save = %+v, %v", key, err)
+	}
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := withdrawn["GROQ_API_KEY"]; ok {
+		t.Fatal("removed the user's own value from their environment")
+	}
+	users, _ := providerkeys.UserValueNames(dir)
+	device, _ := providerkeys.DeviceNames(dir)
+	if users["GROQ_API_KEY"] || device["GROQ_API_KEY"] {
+		t.Fatalf("markers left after sharing was turned off: users=%v device=%v", users, device)
+	}
+}

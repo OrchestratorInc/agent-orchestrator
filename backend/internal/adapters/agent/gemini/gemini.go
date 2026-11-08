@@ -153,7 +153,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 			return status, err
 		}
 	}
-	configured, err := hasCachedCredentials()
+	configured, err := hasCachedCredentials(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
@@ -168,8 +168,8 @@ var (
 	statGeminiCredentialFile = os.Stat
 )
 
-func hasCachedCredentials() (bool, error) {
-	if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
+func hasCachedCredentials(ctx context.Context) (bool, error) {
+	if strings.TrimSpace(authprobe.Getenv(ctx, "GEMINI_API_KEY")) != "" {
 		return true, nil
 	}
 	configDir, err := geminiConfigDir()

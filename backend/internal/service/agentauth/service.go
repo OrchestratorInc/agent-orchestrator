@@ -147,6 +147,7 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 	// and model discovery run after a daemon restart.
 	if keys, err := providerkeys.Load(dataDir); err == nil {
 		device, _ := providerkeys.DeviceNames(dataDir)
+		users, _ := providerkeys.UserValueNames(dataDir)
 		republish := map[string]string{}
 		for name, value := range keys {
 			// Recorded first, so a value the user exported before starting AO
@@ -154,11 +155,12 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 			// key AO published itself comes back from the OS user environment
 			// after a restart; that copy is AO's, not the user's.
 			var published []string
-			if device[name] {
+			if device[name] && !users[name] {
 				published = []string{value}
 			}
 			_ = providerkeys.ExportForProbes(name, value, published...)
-			if device[name] && deviceSupported {
+			// A value the user set themselves comes from their own setup.
+			if device[name] && !users[name] && deviceSupported {
 				republish[name] = value
 			}
 		}

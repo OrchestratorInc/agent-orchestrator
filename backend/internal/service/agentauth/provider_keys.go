@@ -241,29 +241,56 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 	if err != nil {
 		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
+	users, err := providerkeys.UserValueNames(s.dataDir)
+	if err != nil {
+		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+	}
 	// fresh holds only names AO actually published here for the first time,
-	// so undo never unsets a value AO did not put in the environment.
-	var fresh []string
+	// so undo never unsets a value AO did not put in the environment;
+	// usersHere the new names whose value the user already had.
+	var fresh, usersHere []string
 	replaced := map[string]string{}
 	undo = func() {
 		// The save may have failed because ctx ended; cleanup still runs.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		s.rollbackPublished(cleanupCtx, fresh, values)
+		for _, n := range usersHere {
+			_ = providerkeys.SetDevice(cleanupCtx, s.dataDir, n, false)
+		}
 		for n, earlier := range replaced {
 			_ = publishProviderKey(cleanupCtx, n, earlier, values[n])
 		}
 	}
 	for _, n := range names {
+		// The value in the environment is AO's earlier copy only when AO
+		// published it; a value the user had is never treated as AO's.
 		previous := ""
-		if before[n] {
+		if before[n] && !users[n] {
 			previous = stored[n]
 		}
 		if err := providerkeys.SetDevice(ctx, s.dataDir, n, true); err != nil {
 			undo()
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
 		}
-		if err := publishProviderKey(ctx, n, values[n], previous); err != nil {
+		err := publishProviderKey(ctx, n, values[n], previous)
+		if errors.Is(err, providerkeys.ErrAlreadySet) {
+			// Shared already, by the user: record it so AO never removes it.
+			if markErr := providerkeys.SetUserValue(ctx, s.dataDir, n, true); markErr != nil {
+				if !before[n] {
+					clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+					_ = providerkeys.SetDevice(clearCtx, s.dataDir, n, false)
+					cancel()
+				}
+				undo()
+				return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
+			}
+			if !before[n] {
+				usersHere = append(usersHere, n)
+			}
+			continue
+		}
+		if err != nil {
 			// Nothing was published for n: drop only the marker it gained.
 			if !before[n] {
 				clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -305,7 +332,12 @@ func (s *Service) withdrawProviderKey(ctx context.Context, name, value string) e
 	if err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
-	if device[name] {
+	users, err := providerkeys.UserValueNames(s.dataDir)
+	if err != nil {
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+	}
+	// A value the user had set before AO shared it stays theirs.
+	if device[name] && !users[name] {
 		_ = unpublishProviderKey(ctx, name, value)
 	}
 	return nil
