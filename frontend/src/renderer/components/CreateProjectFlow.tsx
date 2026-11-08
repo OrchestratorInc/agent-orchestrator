@@ -22,7 +22,7 @@ import {
 	MessageSquarePlus,
 	XCircle,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
 import type { ImportFolderScan } from "../../preload";
@@ -2655,11 +2655,16 @@ function ProjectImportDialog({
 									{latestEvents.length > 0 ? (
 										<div className="space-y-1.5 rounded-md border border-border/70 bg-background/30 p-3" aria-live="polite">
 											{latestEvents.map((event) => (
-												<div key={`${event.repoPath}:${event.action}`} className="flex items-center gap-2 text-[12px]">
-													{event.state === "success" ? <CheckCircle2 className="size-3.5 text-emerald-500" aria-hidden="true" /> : event.state === "error" ? <XCircle className="size-3.5 text-destructive" aria-hidden="true" /> : <CircleDashed className={cn("size-3.5", event.state === "running" ? "animate-spin text-primary" : "text-muted-foreground")} aria-hidden="true" />}
-													<span className="min-w-0 flex-1 truncate">{displayImportPath(event.repoPath)} · {gitActionLabel(event.action)}</span>
-													<span className="text-muted-foreground">{event.state === "success" ? t("createProject.projectSetupComplete", { defaultValue: "Done" }) : event.state === "error" ? t("createProject.projectSetupError", { defaultValue: "Needs attention" }) : event.state === "running" ? t("createProject.projectSetupInProgress", { defaultValue: "In progress" }) : t("createProject.projectSetupQueued", { defaultValue: "Queued" })}</span>
-												</div>
+												<Fragment key={`${event.repoPath}:${event.action}`}>
+													<div className="flex items-center gap-2 text-[12px]">
+														{event.state === "success" ? <CheckCircle2 className="size-3.5 text-emerald-500" aria-hidden="true" /> : event.state === "error" ? <XCircle className="size-3.5 text-destructive" aria-hidden="true" /> : <CircleDashed className={cn("size-3.5", event.state === "running" ? "animate-spin text-primary" : "text-muted-foreground")} aria-hidden="true" />}
+														<span className="min-w-0 flex-1 truncate">{displayImportPath(event.repoPath)} · {gitActionLabel(event.action)}</span>
+														<span className="text-muted-foreground">{event.state === "success" ? t("createProject.projectSetupComplete", { defaultValue: "Done" }) : event.state === "error" ? t("createProject.projectSetupError", { defaultValue: "Needs attention" }) : event.state === "running" ? t("createProject.projectSetupInProgress", { defaultValue: "In progress" }) : t("createProject.projectSetupQueued", { defaultValue: "Queued" })}</span>
+													</div>
+													{event.state === "error" && event.error ? (
+														<p className="pl-[22px] text-[11px] leading-4 text-destructive">{event.error}</p>
+													) : null}
+												</Fragment>
 											))}
 										</div>
 									) : null}
