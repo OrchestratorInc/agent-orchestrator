@@ -261,7 +261,7 @@ describe("shell index route", () => {
 		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Start a standalone agent" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Clone to the cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Create a cloud project" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
 	});
 
@@ -278,7 +278,7 @@ describe("shell index route", () => {
 		routeMocks.cloudEnabled = true;
 		render(<HomePage />);
 
-		fireEvent.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		fireEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 	});
@@ -290,7 +290,7 @@ describe("shell index route", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
 		expect(useUiStore.getState().newTaskRequest?.projectId).toBe(STANDALONE_WORKSPACE_ID);
-		expect(screen.queryByRole("button", { name: "Clone to the cloud" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Create a cloud project" })).not.toBeInTheDocument();
 	});
 
 	it("shows cloud creation when standalone sessions exist without a registered project", () => {
@@ -304,7 +304,7 @@ describe("shell index route", () => {
 		}];
 		render(<HomePage />);
 
-		fireEvent.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		fireEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("cloud");
 	});
 
@@ -324,7 +324,7 @@ describe("shell index route", () => {
 		render(<HomePage />);
 
 		expect(screen.getByText("Jump back right in")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Clone to the cloud" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Create a cloud project" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Connect mobile" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();

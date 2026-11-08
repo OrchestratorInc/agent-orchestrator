@@ -141,7 +141,7 @@ Controle pelo celular os agentes que rodam no seu desktop. Instale o app para [i
 
 ### Cloud Agents
 
-Rode workers em espaços de trabalho hospedados em vez de na sua máquina. Escolha **Clone to the cloud** e um repositório do GitHub para começar.
+Rode workers em espaços de trabalho hospedados em vez de na sua máquina. Escolha **Create a cloud project** e um repositório do GitHub para começar.
 
 - **Continua rodando.** As tarefas seguem mesmo com o notebook fechado.
 - **Acompanhe.** Abra o chat, os arquivos e o terminal pelo app desktop.
