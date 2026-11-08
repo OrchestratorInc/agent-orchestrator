@@ -3742,6 +3742,8 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+	case ports.ChatEventProviderState:
+		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
@@ -3806,6 +3808,32 @@ func settledTurnState(event ports.ChatEvent) domain.TurnState {
 		return domain.TurnStateFailed
 	}
 	return event.TurnState
+}
+
+// reportProviderState covers work the agent runs on its own between AO turns,
+// such as answering a finished background task. While AO has a turn in flight,
+// the turn events own the activity: a provider idle can lag behind the next
+// turn's start, so it must not end that turn early.
+func (c *Controller) reportProviderState(ctx context.Context, state *ports.ChatThreadState, now time.Time) {
+	if state == nil {
+		return
+	}
+	c.mu.Lock()
+	turnInFlight := c.pendingTurnID != "" || c.dispatchingTurnID != "" || c.compactionPending
+	c.mu.Unlock()
+	if turnInFlight {
+		return
+	}
+	switch state.Status {
+	case domain.ThreadStatusActive:
+		c.reportActivity(ctx, domain.ActivityActive, "chat.provider.running", now)
+	case domain.ThreadStatusIdle:
+		// An open approval or question still waits on the user.
+		if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+			return
+		}
+		c.reportActivity(ctx, domain.ActivityIdle, "chat.provider.idle", now)
+	}
 }
 
 func (c *Controller) reportInteractionResolved(ctx context.Context, event string, now time.Time) {
