@@ -941,6 +941,28 @@ func TestWakeHibernatedChatDoesNotRestoreMarkerAfterNativeResumeFailure(t *testi
 	}
 }
 
+func TestResumeChatRefusedLoginAsksForSignIn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		startErr error
+		want     []domain.SessionID
+	}{
+		{"login refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), []domain.SessionID{"mer-1"}},
+		{"provider down", fmt.Errorf("%w: persistent ACP host: exit status 1", ports.ErrChatDriverUnavailable), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, store, _ := newChatManager(&recordingLauncher{startErr: tc.startErr})
+			seedChatResumeSession(store, domain.ActivityExited)
+			if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); !errors.Is(err, tc.startErr) {
+				t.Fatalf("resume error = %v, want %v", err, tc.startErr)
+			}
+			if !slices.Equal(store.loginDemands, tc.want) {
+				t.Fatalf("login demands = %v, want %v", store.loginDemands, tc.want)
+			}
+		})
+	}
+}
+
 func TestResumeExitedChatSessionDoesNotRequireTerminalRuntimeHandle(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)

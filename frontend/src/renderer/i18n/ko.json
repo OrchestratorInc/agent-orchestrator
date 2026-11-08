@@ -3666,6 +3666,7 @@
 	"settings.agentAccounts.signedOut": "로그아웃됨",
 	"settings.agentAccounts.noSubscription": "구독 없이 로그인됨",
 	"settings.agentAccounts.remove": "계정 제거",
+	"settings.agentAccounts.removing": "제거하는 중…",
 	"settings.agentAccounts.removeDescription": "Orchestrator가 {{email}}에서 실행 중인 에이전트를 중지하고, 로그아웃한 뒤 해당 폴더를 삭제합니다. 중지된 세션은 열면 기본 계정으로 계속됩니다. 그런 다음 요약에서 다른 계정으로 옮길 수 있습니다.",
 	"settings.agentAccounts.loginTitle": "{{provider}}에 로그인",
 	"settings.agentAccounts.checkSignIn": "로그인 확인",

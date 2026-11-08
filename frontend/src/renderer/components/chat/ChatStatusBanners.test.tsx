@@ -8,6 +8,12 @@ const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
 }));
+const sessionAccounts = vi.hoisted(() => ({ bound: {} as Record<string, string>, accounts: [] as { id: string; device: boolean }[] }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: (sessionId?: string) => ({ data: sessionId ? sessionAccounts.bound : undefined }),
+	useAgentAccounts: (enabled = true) => ({ data: enabled ? sessionAccounts.accounts : undefined }),
+}));
 vi.mock("../../lib/host-clients", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/host-clients")>()),
 	labelForHost: (hostId: string) => (hostId === "host-air" ? "Macbook Air M1" : undefined),
@@ -25,6 +31,8 @@ describe("ReauthBanner", () => {
 	afterEach(() => {
 		useUiStore.setState({ openGlobalSettings: original });
 		openGlobalSettings.mockReset();
+		sessionAccounts.bound = {};
+		sessionAccounts.accounts = [];
 	});
 
 	it("says the login expired in plain words, without the provider's error", () => {
@@ -39,6 +47,26 @@ describe("ReauthBanner", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
 			focusAgentId: "codex", harnessView: "local", startLogin: true, preserveProject: true,
+		});
+	});
+
+	it("signs in the saved account the session runs on", async () => {
+		sessionAccounts.bound = { claude: "acct-b" };
+		sessionAccounts.accounts = [{ id: "device-claude", device: true }, { id: "acct-b", device: false }];
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "acct-b", preserveProject: true,
+		});
+	});
+
+	it("logs the CLI in when the session runs on this computer's login", async () => {
+		sessionAccounts.bound = { claude: "device-claude" };
+		sessionAccounts.accounts = [{ id: "device-claude", device: true }, { id: "acct-b", device: false }];
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", startLogin: true, preserveProject: true,
 		});
 	});
 

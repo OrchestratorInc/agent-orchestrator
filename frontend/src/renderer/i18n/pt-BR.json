@@ -3733,6 +3733,7 @@
 	"settings.agentAccounts.signedOut": "Desconectado",
 	"settings.agentAccounts.noSubscription": "Conectado sem assinatura",
 	"settings.agentAccounts.remove": "Remover conta",
+	"settings.agentAccounts.removing": "Removendo…",
 	"settings.agentAccounts.removeDescription": "O Orchestrator para os agentes que usam {{email}}, desconecta a conta e apaga a pasta dela. Uma sessão parada continua com a conta padrão quando você a abre. Depois, você pode movê-la para outra conta no Resumo dela.",
 	"settings.agentAccounts.loginTitle": "Entrar no {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Verificar login",

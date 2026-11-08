@@ -1,10 +1,10 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
-import { useResolvedTheme } from "../../stores/ui-store";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
@@ -87,6 +87,12 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
+	const requestedLogin = useUiStore((state) => state.accountLogin);
+	useEffect(() => {
+		if (!requestedLogin || !rows.some((account) => account.id === requestedLogin)) return;
+		useUiStore.setState({ accountLogin: null });
+		void startLogin(requestedLogin);
+	}, [requestedLogin, accounts.data]);
 
 	return <>
 		<HarnessDetailGroup
@@ -120,7 +126,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
 			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
-			confirmLabel={t("settings.agentAccounts.remove")}
+			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
 			onConfirm={() => void run(`remove:${removing.id}`, async () => { await actions.remove(removing.id); setRemoving(null); })}

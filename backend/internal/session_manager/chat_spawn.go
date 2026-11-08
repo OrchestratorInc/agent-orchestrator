@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -692,6 +693,7 @@ func (m *Manager) resumeChatController(
 		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
+		m.requireChatLogin(ctx, rec.ID, err)
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
 
@@ -704,6 +706,21 @@ func (m *Manager) resumeChatController(
 	// Native continuity: the provider still holds the conversation, so the agent
 	// resumes with its own history rather than a replayed prompt.
 	return RestoreResult{Session: restored, Mode: RestoreModeNative}, nil
+}
+
+func (m *Manager) requireChatLogin(ctx context.Context, id domain.SessionID, err error) {
+	if !errors.Is(err, ports.ErrAgentAuthRequired) && !errors.Is(err, ports.ErrChatAuthRequired) {
+		return
+	}
+	store, ok := m.store.(interface {
+		RequireSessionLogin(context.Context, domain.SessionID, string, time.Time) error
+	})
+	if !ok {
+		return
+	}
+	if err := store.RequireSessionLogin(ctx, id, ports.ErrAgentAuthRequired.Error(), m.clock()); err != nil {
+		m.logger.Warn("record chat sign-in demand", "sessionID", id, "error", err)
+	}
 }
 
 type unpersistedChatProviderStore interface {

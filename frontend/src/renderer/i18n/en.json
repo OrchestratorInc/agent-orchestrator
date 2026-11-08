@@ -3648,6 +3648,7 @@
 	"settings.agentAccounts.signedOut": "Signed out",
 	"settings.agentAccounts.noSubscription": "Logged in without a subscription",
 	"settings.agentAccounts.remove": "Remove account",
+	"settings.agentAccounts.removing": "Removing…",
 	"settings.agentAccounts.removeDescription": "Orchestrator stops the agents that run on {{email}}, signs it out and deletes its folder. A stopped session continues on the default account when you open it. You can then move it to another account in its Summary.",
 	"settings.agentAccounts.loginTitle": "Sign in to {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Check sign-in",

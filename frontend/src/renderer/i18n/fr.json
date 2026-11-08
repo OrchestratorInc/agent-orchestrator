@@ -3733,6 +3733,7 @@
 	"settings.agentAccounts.signedOut": "Déconnecté",
 	"settings.agentAccounts.noSubscription": "Connecté sans abonnement",
 	"settings.agentAccounts.remove": "Supprimer le compte",
+	"settings.agentAccounts.removing": "Suppression…",
 	"settings.agentAccounts.removeDescription": "Orchestrator arrête les agents qui utilisent {{email}}, le déconnecte et supprime son dossier. Une session arrêtée reprend avec le compte par défaut quand vous l'ouvrez. Vous pouvez ensuite la déplacer vers un autre compte dans son Résumé.",
 	"settings.agentAccounts.loginTitle": "Se connecter à {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Vérifier la connexion",

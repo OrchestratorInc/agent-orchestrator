@@ -3666,6 +3666,7 @@
 	"settings.agentAccounts.signedOut": "サインアウト済み",
 	"settings.agentAccounts.noSubscription": "サブスクリプションなしでサインイン中",
 	"settings.agentAccounts.remove": "アカウントを削除",
+	"settings.agentAccounts.removing": "削除しています…",
 	"settings.agentAccounts.removeDescription": "Orchestrator は {{email}} で動いているエージェントを停止し、サインアウトしてフォルダーを削除します。停止したセッションは、開くと既定のアカウントで続きます。その後、サマリーで別のアカウントに移せます。",
 	"settings.agentAccounts.loginTitle": "{{provider}} にサインイン",
 	"settings.agentAccounts.checkSignIn": "サインインを確認",

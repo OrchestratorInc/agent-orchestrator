@@ -424,6 +424,16 @@ type ConversationAccount struct {
 	ReauthReason string `json:"reauthReason,omitempty"`
 }
 
+func (a *ConversationAccount) RequireLogin(reason, failureID string, at time.Time) {
+	a.AuthenticationState = "required"
+	a.ReauthRequiredAt = &at
+	a.ReauthReason = reason
+	a.LastAuthFailureAt = &at
+	a.LastAuthFailureReason = reason
+	a.AuthFailureID = failureID
+	a.AuthVerifiedAt = nil
+}
+
 // ThreadStatus is the provider's own lifecycle state for a thread. It is NOT AO's
 // session status, which stays derived from durable facts at read time; this is one
 // more such fact.

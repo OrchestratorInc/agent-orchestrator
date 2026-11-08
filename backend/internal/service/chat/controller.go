@@ -3979,13 +3979,7 @@ func (c *Controller) recordAccount(
 		account.PlanLabel = update.PlanLabel
 	}
 	if update.ReauthRequired {
-		account.AuthenticationState = "required"
-		account.ReauthRequiredAt = &now
-		account.ReauthReason = update.ReauthReason
-		account.LastAuthFailureAt = &now
-		account.LastAuthFailureReason = update.ReauthReason
-		account.AuthFailureID = c.newID()
-		account.AuthVerifiedAt = nil
+		account.RequireLogin(update.ReauthReason, c.newID(), now)
 	}
 	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }
