@@ -770,6 +770,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	pointer-events: none;
 }
 
+/* Leave both sides of the selected pill clear, including the fixed session
+ * tab before the first tab in the reorder group. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
+	content: none;
+}
+
 /* Separators only sit between tabs: the last tab drops its separator and
  * ends one gap before New terminal, the same space a tab leaves before a
  * separator. It is the reorder group's last tab, or the session tab when that
@@ -3630,8 +3638,12 @@ html.sidebar-reordering * {
 
 /* The rail's (transparent) 1px left border sits between the divider and the
  * inspector tabs, so their start padding gives that pixel back. */
-.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar:not(.session-inspector__topbar--browser) {
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar {
 	padding-left: calc(var(--gap-topbar-control) - 1px);
+}
+
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar > .session-inspector__tablist {
+	padding-left: 0;
 }
 
 .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {

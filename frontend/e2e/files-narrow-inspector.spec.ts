@@ -175,3 +175,26 @@ test("@P0 collapsed files keep feedback usable and toggle the all-files icon", a
 	await expect(feedback).toHaveValue("Keep this draft while changing file visibility");
 	await expect(expandAll.locator("svg")).toHaveClass(/lucide-list-chevrons-up-down/);
 });
+
+for (const width of [1200, 1800]) {
+	test(`inspector tabs keep their left edge across views at ${width}px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 900 });
+		await stubWorkspaceFiles(page);
+		await page.addInitScript(() => {
+			Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
+			localStorage.setItem("ao.developerMode", "true");
+		});
+		await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
+		const inspector = await openInspector(page);
+		await expect(page.locator(".center-panel-shell--floating-topbar")).toBeVisible();
+		const summary = inspector.getByRole("tab", { name: "Summary" });
+		await summary.click();
+		const leftOffset = () => summary.evaluate((element) =>
+			element.getBoundingClientRect().left - element.closest("#inspector")!.getBoundingClientRect().left);
+		const left = await leftOffset();
+		for (const name of ["Files", "Browser", "Summary"]) {
+			await inspector.getByRole("tab", { name, exact: true }).click();
+			await expect.poll(leftOffset).toBeCloseTo(left, 2);
+		}
+	});
+}
