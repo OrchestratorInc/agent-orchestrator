@@ -150,6 +150,24 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription("Choose a provider from OpenCode's catalog. The key is saved in OpenCode's own settings.");
 		expect(screen.getAllByText("Loading OpenCode's providers…")).toHaveLength(1);
 	});
+	it("warns that a Crush key replaces Crush's own sign-in for that provider", async () => {
+		const user = userEvent.setup();
+		vi.mocked(fetchCatalogProviders).mockResolvedValue([
+			{ id: "openai", name: "OpenAI", env: "OPENAI_API_KEY", models: 30 },
+			{ id: "groq", name: "Groq", env: "GROQ_API_KEY", models: 1 },
+		]);
+		render(<HarnessLoginPanel agentId="crush" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.click(await screen.findByRole("button", { name: "Provider" }));
+		await user.click(screen.getByRole("menuitem", { name: "Groq" }));
+		expect(screen.queryByText(/stored Groq sign-in/)).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Provider" }));
+		await user.click(screen.getByRole("menuitem", { name: "OpenAI" }));
+		expect(screen.getByText(/removes Crush's stored OpenAI sign-in/)).toBeVisible();
+	});
+	it("says which other agents also get a key saved for Gemini", () => {
+		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} providerKeys={[{ ...unsavedKey("GEMINI_API_KEY"), agents: ["gemini", "opencode", "pi"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.getByText("AO also gives this key to OpenCode, Pi, which read GEMINI_API_KEY.")).toBeVisible();
+	});
 	it("picks a catalog provider from the searchable menu and saves its key", async () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([
@@ -187,6 +205,25 @@ describe("HarnessLoginPanel", () => {
 		await user.click(screen.getByRole("button", { name: "Next option" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "next", undefined);
 		expect(screen.queryByText("Selected: OpenAI")).toBeNull();
+	});
+
+	it("offers the terminal when a native screen stays unrecognized", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const native: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "waiting", loginUrl: undefined, deviceCode: undefined };
+			vi.mocked(startAgentUILogin).mockResolvedValue(native);
+			vi.mocked(getAgentUILogin).mockResolvedValue(native);
+			const onTerminal = vi.fn();
+			render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
+			expect(await screen.findByText("Waiting for the native sign-in flow…")).toBeVisible();
+			await act(async () => { await vi.advanceTimersByTimeAsync(13_000); });
+			expect(screen.getByText("AO can't read this sign-in screen. Continue in the terminal login.")).toBeVisible();
+			// The terminal becomes the one main action; AO does not leave on its own.
+			expect(screen.getAllByRole("button", { name: "Open terminal login" })).toHaveLength(1);
+			expect(onTerminal).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("verifies a native TUI login and stops its hidden PTY while the TUI is still running", async () => {

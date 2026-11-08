@@ -17,6 +17,12 @@ import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyWarning, providerKeyNeedsModel, sa
 import { cn } from "../../../lib/utils";
 
 const CATALOG_METHOD = "provider_key";
+// A native screen AO cannot read stays "waiting"; after this long the panel
+// offers the terminal instead of a silent spinner.
+const NATIVE_STALL_MS = 12_000;
+// Crush providers whose stored sign-in Crush itself removes when a key is
+// saved for them (backend crushSignInFields).
+const CRUSH_SIGN_IN_PROVIDERS = new Set(["openai", "xai", "anthropic"]);
 
 type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
@@ -72,6 +78,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	// Set once the user answers a native menu; until then an unrecognized
 	// screen hands straight off to the terminal instead of asking.
 	const nativeAnswered = useRef(false);
+	const [stalled, setStalled] = useState(false);
 	const verifyRef = useRef(onVerify);
 	verifyRef.current = onVerify;
 	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
@@ -309,7 +316,16 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		void leave(true);
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [operation?.id, operation?.status, operation?.nativePrompt, busy]);
-	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
+	// A screen AO does not recognise reads as "waiting" indefinitely. After a
+	// while, say so and make the terminal login the main action.
+	useEffect(() => {
+		setStalled(false);
+		if (operation?.status !== "running" || operation.method !== "native" || operation.nativePrompt !== "waiting") return;
+		const timer = window.setTimeout(() => setStalled(true), NATIVE_STALL_MS);
+		return () => window.clearTimeout(timer);
+	}, [operation?.id, operation?.status, operation?.method, operation?.nativePrompt]);
+	const needsTerminal = running && (operation?.nativePrompt === "terminal_required" || stalled);
+	const choose =(item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
 		// Clicking an open credential row again collapses it.
 		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
@@ -378,7 +394,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		: operation?.status === "failed" ? t("settings.harness.loginUi.failed")
 		: operation?.status === "timed_out" ? t("settings.harness.loginUi.timedOut")
 		: operation?.status === "cancelled" ? t("settings.harness.loginUi.cancelled")
-		: running ? selectedMethodId === "native" ? t(operation?.nativePrompt === "terminal_required" ? "settings.harness.loginUi.nativeFallback" : operation?.nativePrompt === "menu" ? "settings.harness.loginUi.nativeMenu" : "settings.harness.loginUi.nativeWaiting") : t(method?.secret ? "settings.harness.loginUi.saving" : operation?.deviceCode ? "settings.harness.loginUi.waitingForCode" : "settings.harness.loginUi.waiting") : "";
+		: running ? selectedMethodId === "native" ? t(operation?.nativePrompt === "terminal_required" ? "settings.harness.loginUi.nativeFallback" : operation?.nativePrompt === "menu" ? "settings.harness.loginUi.nativeMenu" : stalled ? "settings.harness.loginUi.nativeStalled" : "settings.harness.loginUi.nativeWaiting") : t(method?.secret ? "settings.harness.loginUi.saving" : operation?.deviceCode ? "settings.harness.loginUi.waitingForCode" : "settings.harness.loginUi.waiting") : "";
 
 	const secretPlaceholder = (id: string) => id === "setup_token" ? t("settings.harness.loginUi.setupTokenPlaceholder")
 		: id === "api_key" ? t(agentId === "claude-code" ? "settings.harness.loginUi.claudeKeyPlaceholder" : "settings.harness.loginUi.openaiKeyPlaceholder")
@@ -414,6 +430,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const fieldTriggerClass = "h-control-form w-full justify-between rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 text-control text-settings-label";
 	// The chosen catalog provider, so its key variable can show beside the key field.
 	const chosenProvider = catalog?.find((provider) => provider.id === catalogProvider);
+	// Gemini's own key method also saves GEMINI_API_KEY in AO's store, which
+	// AO passes to every agent that reads it.
+	const geminiSharedWith = agentId === "gemini" ? (providerKeys?.find((key) => key.name === "GEMINI_API_KEY")?.agents ?? []).filter((id) => id !== "gemini").map((id) => agentLabel(id)) : [];
+	const geminiSharedNote = geminiSharedWith.length > 3
+		? t("settings.harness.loginUi.geminiSharedMore", { names: geminiSharedWith.slice(0, 3).join(", "), extra: geminiSharedWith.length - 3 })
+		: geminiSharedWith.length > 0 ? t("settings.harness.loginUi.geminiShared", { names: geminiSharedWith.join(", ") }) : "";
 	// While a key form is open its errors show inside it, next to the field.
 	const errorInForm = Boolean(method?.secret) && !connected && !running && !verifying;
 
@@ -485,6 +507,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 							</div>
 						</>}
 						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <KeyWarning className="col-start-2">{t("settings.apiKeys.claudeBilling")}</KeyWarning>}
+						{agentId === "crush" && item.id === CATALOG_METHOD && CRUSH_SIGN_IN_PROVIDERS.has(catalogProvider) && <KeyWarning className="col-start-2">{t("settings.harness.loginUi.crushSignOut", { provider: chosenProvider?.name ?? catalogProvider })}</KeyWarning>}
+						{item.id === "gemini_api_key" && geminiSharedNote && <p className="col-start-2 text-xs leading-4 text-settings-muted">{geminiSharedNote}</p>}
 						{error && <p role="alert" className="col-start-2 text-xs leading-4 text-error">{error}</p>}
 						{keyStateUnknown(item.id) && (providerKeysError
 							? <div role="alert" className="col-start-2 flex flex-wrap items-center gap-x-2 text-xs leading-4 text-error">
@@ -505,7 +529,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			{!operation?.deviceCode && <p className="text-xs leading-4 text-settings-muted">{methodLabel}</p>}
 			<div className="space-y-1">
 				<p role="status" aria-live="polite" className={connected ? "flex items-center gap-2.5 text-[15px] leading-5 font-medium text-settings-label" : "flex items-center gap-2 text-[13px] leading-5 text-settings-label"}>
-					{connected ? <span className={`flex size-6 shrink-0 items-center justify-center rounded-full ${configured ? "bg-(--color-bg-tertiary) text-settings-muted" : "bg-success/10 text-success"}`}>{configured ? <KeyRound className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}</span> : running && operation?.nativePrompt === "terminal_required" ? <Terminal className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
+					{connected ? <span className={`flex size-6 shrink-0 items-center justify-center rounded-full ${configured ? "bg-(--color-bg-tertiary) text-settings-muted" : "bg-success/10 text-success"}`}>{configured ? <KeyRound className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}</span> : needsTerminal ? <Terminal className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
 						: <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />}
 					{status}
 				</p>
@@ -550,11 +574,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		{/* The panel's own actions sit together at the trailing edge, as outline
 		    buttons like Log in again and Log out on the Account card. */}
 		<div className="flex flex-wrap items-center justify-end gap-2">
-			{!connected && (availableMethods.length === 0 || operation?.nativePrompt !== "terminal_required") && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+			{!connected && (availableMethods.length === 0 || !needsTerminal) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 			<div className="flex flex-wrap items-center justify-end gap-2">
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
-				{running && operation?.nativePrompt === "terminal_required" && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+				{needsTerminal && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 				<Button variant={connected ? "primary" : "outline"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
 			</div>
 		</div>
