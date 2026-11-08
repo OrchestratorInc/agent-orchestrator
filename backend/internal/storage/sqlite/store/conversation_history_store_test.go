@@ -2062,3 +2062,38 @@ func questionRowsByRequest(
 	}
 	return rows, status
 }
+
+// settleOrphanedWork fails a pending question and its turn in the same pass,
+// so a replay that reopened it would leave a pending question on a failed
+// turn — one the dock never shows, because latestPendingInteraction only
+// docks a question linked to the running turn. A failed row stays failed.
+func TestUpsertActivityReplayDoesNotReopenAFailedQuestion(t *testing.T) {
+	s, _, conversation := conversationFixture(t)
+	ctx := context.Background()
+	activity := domain.ConversationActivity{
+		ID: "question", Kind: domain.ActivityKindUserInput, Status: domain.ActivityStatusPending,
+		Summary: "Questions", RequestID: "replayed-request",
+		Detail: []byte(`{"inputMode":"form","message":"Questions"}`),
+	}
+	if err := s.UpsertActivity(ctx, conversation, "", activity, histClock); err != nil {
+		t.Fatalf("UpsertActivity: %v", err)
+	}
+	if err := s.FailPendingInputs(ctx, conversation, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("FailPendingInputs: %v", err)
+	}
+
+	replay := activity
+	replay.ID = "question-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", replay, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatalf("replayed UpsertActivity: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	rows, status := questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusFailed {
+		t.Fatalf("after replay: rows=%d status=%q, want the one failed row kept", rows, status)
+	}
+}

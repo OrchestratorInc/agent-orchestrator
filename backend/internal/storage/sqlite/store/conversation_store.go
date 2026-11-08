@@ -3271,9 +3271,12 @@ func (s *Store) UpsertActivity(
 	// pending request after a reconnect. Refresh that row rather than inserting
 	// a duplicate the (conversation_id, request_id) index would refuse; a failed
 	// insert here is a fatal projection error and would leave the turn running
-	// with no recoverable controller (#7944). A row the user answered stays
-	// untouched so a late replay cannot reopen it; a row a dead controller
-	// failed comes back, because the replayed request is live again.
+	// with no recoverable controller (#7944). Only an in-flight row is
+	// refreshed: a row the user answered stays untouched so a late replay
+	// cannot reopen it, and so does a row a dead controller failed —
+	// settleOrphanedWork fails that question together with its turn, and
+	// revived it would sit pending on a failed turn, where the dock never
+	// shows it.
 	if activity.RequestID != "" {
 		if _, err := q.SelectConversationActivityByRequest(ctx,
 			gen.SelectConversationActivityByRequestParams{

@@ -2498,6 +2498,10 @@ type SelectConversationActivityByRequestParams struct {
 // what keeps that replay on the row AO already stored: the
 // (conversation_id, request_id) index forbids a second row, and failing the
 // insert stops the whole projection with the turn still running (#7944).
+// Only an in-flight row is refreshed. A settled row stays settled: a replay
+// must not reopen a question the user answered (resolved) or one
+// settleOrphanedWork already failed with its turn - revived, it would sit
+// pending on a failed turn, where the dock never shows it.
 func (q *Queries) SelectConversationActivityByRequest(ctx context.Context, arg SelectConversationActivityByRequestParams) (ConversationActivity, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationActivityByRequest, arg.ConversationID, arg.RequestID)
 	var i ConversationActivity
@@ -5008,7 +5012,7 @@ func (q *Queries) SettleConversationActivity(ctx context.Context, arg SettleConv
 const settleConversationActivityByRequest = `-- name: SettleConversationActivityByRequest :exec
 UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND request_id = ? AND status <> 'resolved'
+WHERE conversation_id = ? AND request_id = ? AND status IN ('pending', 'running')
 `
 
 type SettleConversationActivityByRequestParams struct {
