@@ -170,9 +170,9 @@ func (s *Service) storeProviderKey(ctx context.Context, name, secret string, sha
 			present = append(present, n)
 		}
 	}
-	var fresh []string
+	undoPublish := func() {}
 	if device {
-		if fresh, err = s.publishProviderKeys(ctx, present, values, keys); err != nil {
+		if undoPublish, err = s.publishProviderKeys(ctx, present, values, keys); err != nil {
 			return err
 		}
 	} else {
@@ -183,7 +183,7 @@ func (s *Service) storeProviderKey(ctx context.Context, name, secret string, sha
 		}
 	}
 	if err := providerkeys.Save(ctx, s.dataDir, name, secret); err != nil {
-		s.rollbackPublished(ctx, fresh, values)
+		undoPublish()
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be saved in AO's device credential store.")
 	}
 	if !device {
@@ -229,37 +229,48 @@ func (s *Service) restoreSubscriptionKey(ctx context.Context, agentID, released 
 
 // publishProviderKeys records each name as AO-published before publishing
 // it, so a key in the OS user environment is never untracked: a later
-// withdrawal or removal can always find it. It returns the names AO had not
-// published before; on failure those are withdrawn again. stored holds the
-// values saved before this call, so AO may replace its own earlier copy but
-// never a different value the user set themselves.
-func (s *Service) publishProviderKeys(ctx context.Context, names []string, values, stored map[string]string) ([]string, error) {
+// withdrawal or removal can always find it. stored holds the values saved
+// before this call, so AO may replace its own earlier copy but never a
+// different value the user set themselves. The returned undo, also run on
+// failure here, withdraws the names AO had not published before and puts
+// AO's earlier copy back where this call replaced it, so the OS environment
+// again matches the store when a later save fails.
+func (s *Service) publishProviderKeys(ctx context.Context, names []string, values, stored map[string]string) (undo func(), err error) {
 	before, err := providerkeys.DeviceNames(s.dataDir)
 	if err != nil {
 		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
 	var fresh []string
-	for _, n := range names {
-		if !before[n] {
-			fresh = append(fresh, n)
+	replaced := map[string]string{}
+	undo = func() {
+		s.rollbackPublished(ctx, fresh, values)
+		for n, earlier := range replaced {
+			_ = publishProviderKey(ctx, n, earlier, values[n])
 		}
+	}
+	for _, n := range names {
 		previous := ""
 		if before[n] {
 			previous = stored[n]
+		} else {
+			fresh = append(fresh, n)
 		}
 		if err := providerkeys.SetDevice(ctx, s.dataDir, n, true); err != nil {
-			s.rollbackPublished(ctx, fresh, values)
+			undo()
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
 		}
 		if err := publishProviderKey(ctx, n, values[n], previous); err != nil {
-			s.rollbackPublished(ctx, fresh, values)
+			undo()
 			if errors.Is(err, providerkeys.ErrUserValue) {
 				return nil, apierr.Invalid("AGENT_AUTH_DEVICE_ENV_TAKEN", "Your user environment already sets "+n+" to a different value. AO left it unchanged; remove it there first, or save the key without sharing it.", map[string]any{"name": n})
 			}
 			return nil, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The key could not be added to this device's user environment.")
 		}
+		if previous != "" && previous != values[n] {
+			replaced[n] = previous
+		}
 	}
-	return fresh, nil
+	return undo, nil
 }
 
 // rollbackPublished withdraws names from the OS user environment and clears

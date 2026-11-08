@@ -84,7 +84,7 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 	if raw := providers[route.authType]; len(raw) != 0 && json.Unmarshal(raw, &models) != nil {
 		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's provider models are invalid.", nil)
 	}
-	found := false
+	found, changed := false, false
 	for _, existing := range models {
 		var id, key, baseURL string
 		_ = json.Unmarshal(existing["id"], &id)
@@ -95,6 +95,12 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		}
 		if key != envName || (baseURL != "" && baseURL != route.baseURL) {
 			return apierr.Invalid("AGENT_AUTH_MODEL_CONFLICT", "Qwen already uses this model ID with another credential. Choose another model ID or use native setup.", nil)
+		}
+		// Without the route's endpoint (OpenRouter, DashScope) the model
+		// would send this key to Qwen's default endpoint for its auth type.
+		if baseURL == "" && route.baseURL != "" {
+			existing["baseUrl"], _ = json.Marshal(route.baseURL)
+			changed = true
 		}
 		found = true
 	}
@@ -108,16 +114,19 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		value any
 	}
 	edits := []edit{{[]string{"security", "auth", "selectedType"}, route.authType}, {[]string{"model", "name"}, modelID}}
-	if !found {
-		entry := map[string]string{"id": modelID, "envKey": envName}
-		if route.baseURL != "" {
-			entry["baseUrl"] = route.baseURL
-		}
+	if !found || changed {
 		list := make([]any, 0, len(models)+1)
 		for _, model := range models {
 			list = append(list, model)
 		}
-		edits = append([]edit{{[]string{"modelProviders", route.authType}, append(list, entry)}}, edits...)
+		if !found {
+			entry := map[string]string{"id": modelID, "envKey": envName}
+			if route.baseURL != "" {
+				entry["baseUrl"] = route.baseURL
+			}
+			list = append(list, entry)
+		}
+		edits = append([]edit{{[]string{"modelProviders", route.authType}, list}}, edits...)
 	}
 	for _, change := range edits {
 		raw, err := json.Marshal(change.value)

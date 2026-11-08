@@ -99,3 +99,33 @@ func TestQwenProviderRejectsConflictingRoute(t *testing.T) {
 		t.Fatal("changed Qwen settings after conflict")
 	}
 }
+
+func TestQwenProviderAddsTheRouteEndpointToAnExistingModel(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "qwen")
+	t.Setenv("QWEN_HOME", dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"modelProviders":{"openai":[{"id":"or-model","envKey":"OPENROUTER_API_KEY"}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveQwenProvider(t.Context(), "OPENROUTER_API_KEY", "or-model"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		ModelProviders struct {
+			OpenAI []struct {
+				ID      string `json:"id"`
+				BaseURL string `json:"baseUrl"`
+			} `json:"openai"`
+		} `json:"modelProviders"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil || len(settings.ModelProviders.OpenAI) != 1 || settings.ModelProviders.OpenAI[0].BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("Qwen settings = %s, %v", data, err)
+	}
+}

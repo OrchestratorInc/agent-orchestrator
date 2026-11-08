@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -257,5 +258,30 @@ func TestDeviceWithdrawalNeverBlocksRemoval(t *testing.T) {
 	keys, err := providerkeys.Load(dir)
 	if err != nil || keys["GROQ_API_KEY"] != "" {
 		t.Fatalf("key survived removal: %v, %v", keys, err)
+	}
+}
+
+func TestFailedSaveRestoresTheEarlierSharedValue(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a data directory the test user cannot write")
+	}
+	published, _ := stubDeviceEnvironment(t)
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-old", true); err != nil {
+		t.Fatal(err)
+	}
+	// The device marker is already set, so only the key store write fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-new", true); err == nil {
+		t.Fatal("reported success with an unwritable key store")
+	}
+	keys, _ := providerkeys.Load(dir)
+	if keys["GROQ_API_KEY"] != "groq-old" || published["GROQ_API_KEY"] != "groq-old" {
+		t.Fatalf("store has %q but the user environment has %q", keys["GROQ_API_KEY"], published["GROQ_API_KEY"])
 	}
 }
