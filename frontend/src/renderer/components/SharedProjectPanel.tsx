@@ -233,7 +233,7 @@ function PullRequestRows({ canDecide, guest, hostId, liveSessionId, orgId, proje
 										<Button
 											type="button"
 											size="sm"
-											className="bg-success text-on-foreground hover:bg-success/80"
+											className="bg-success text-on-foreground hover:bg-success/80 active:bg-success/70"
 											disabled={actions.approve.isPending || actions.reject.isPending || !pr.headSha}
 											onClick={() => actions.approve.mutate({ requestId: request.id, expectedHeadSha: pr.headSha })}
 										>

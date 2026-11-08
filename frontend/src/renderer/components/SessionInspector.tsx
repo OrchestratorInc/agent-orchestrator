@@ -1045,7 +1045,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
