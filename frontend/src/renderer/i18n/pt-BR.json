@@ -2082,6 +2082,8 @@
 	"settings.replayOnboarding.label": "Repetir a introdução",
 	"settings.replayOnboarding.hint": "Abre a configuração inicial de novo desde o começo.",
 	"settings.replayOnboarding.open": "Abrir",
+	"settings.simulateNewMachine.label": "Simular uma máquina nova",
+	"settings.simulateNewMachine.hint": "A configuração inicial vê git, a CLI do GitHub e os agentes como ausentes, e as instalações são apenas simuladas. Vale até você fechar o app.",
 	"startup.blockedBodyShort": "Instale o que falta para começar a executar agentes.",
 	"startup.gitPurpose": "Dá a cada agente sua própria worktree.",
 	"startup.ghPurpose": "Opcional. Permite que os agentes abram pull requests.",

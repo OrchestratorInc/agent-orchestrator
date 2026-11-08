@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
@@ -23,6 +24,9 @@ import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { IS_DEV } from "../../lib/is-dev";
+import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
+import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
+import { githubAuthRequirementQueryOptions, systemRequirementsQueryKey } from "../../hooks/useSystemRequirementsGate";
 import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
@@ -504,6 +508,7 @@ export function GeneralSettingsSection({
 				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
 				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
+				{IS_DEV && developerMode && <SimulateNewMachineRow />}
 				{IS_DEV && developerMode && <ReplayOnboardingRow />}
 			</SettingsSection>
 		</>
@@ -657,6 +662,27 @@ function ChromeAgentsRow() {
 				{t("settings.chromeAgents.goTo")}
 				<ArrowRight aria-hidden="true" className="size-icon-sm" />
 			</Button>
+		</SettingsRow>
+	);
+}
+
+/** Dev builds with Developer Mode only: answer as a newly installed machine
+ * (fresh-machine-sim), to walk first-run onboarding on a set-up machine. */
+function SimulateNewMachineRow() {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [on, setOn] = useState(freshMachineSimActive);
+	const change = (next: boolean) => {
+		setFreshMachineSim(next);
+		setOn(next);
+		// Drop what was read before, so every check is asked again under the new answers.
+		for (const queryKey of [systemRequirementsQueryKey, agentReadinessQueryKey, githubAuthRequirementQueryOptions.queryKey]) {
+			void queryClient.resetQueries({ queryKey });
+		}
+	};
+	return (
+		<SettingsRow label={t("settings.simulateNewMachine.label")} description={t("settings.simulateNewMachine.hint")}>
+			<Switch aria-label={t("settings.simulateNewMachine.label")} checked={on} onCheckedChange={change} />
 		</SettingsRow>
 	);
 }

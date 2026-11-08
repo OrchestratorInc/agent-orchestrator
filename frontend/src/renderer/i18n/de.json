@@ -2054,6 +2054,8 @@
 	"settings.replayOnboarding.label": "Onboarding erneut abspielen",
 	"settings.replayOnboarding.hint": "Öffnet die Ersteinrichtung erneut von vorn.",
 	"settings.replayOnboarding.open": "Öffnen",
+	"settings.simulateNewMachine.label": "Neuen Rechner simulieren",
+	"settings.simulateNewMachine.hint": "Das Onboarding sieht git, die GitHub CLI und Agents als fehlend, Installationen werden nur vorgetäuscht. Gilt, bis die App geschlossen wird.",
 	"startup.blockedBodyShort": "Installieren Sie das Fehlende, um Agenten auszuführen.",
 	"startup.gitPurpose": "Gibt jedem Agenten einen eigenen Worktree.",
 	"startup.ghPurpose": "Optional. Damit können Agenten Pull Requests öffnen.",
