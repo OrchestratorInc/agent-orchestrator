@@ -90,6 +90,29 @@ describe("moveSession", () => {
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/move/complete");
 	});
 
+	it("resends the first Cloud request under the same key when a retry's export differs", async () => {
+		const calls: string[] = [];
+		const replies = {
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		};
+		const cloudRequest: MoveDeps["cloudRequest"] = {};
+		// The first create reached AO Cloud, but its response was lost.
+		const cp = cloud(async () => { throw new Error("network error"); });
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
+			.rejects.toMatchObject({ step: "import", rolledBack: true });
+		replies["/api/v1/sessions/{sessionId}/move/export"] = ok({ ...exported, handoffNote: "a later note", manifest: { ...exported.manifest, wip: false } });
+		cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
+			.resolves.toMatchObject({ sessionId: "cloud-9" });
+		const [first, second] = cp.createSession.mock.calls;
+		expect(second).toEqual(first);
+		expect(second[1]).toMatchObject({ prompt: exported.handoffNote });
+		expect(second[2]).toEqual({ idempotencyKey: "m-3" });
+	});
+
 	it("keeps the move when only marking the source fails", async () => {
 		const calls: string[] = [];
 		const source = fakeDaemon({
