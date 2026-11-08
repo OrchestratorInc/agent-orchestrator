@@ -16,7 +16,11 @@ export type MoveInput = {
 	source: { client: Client; hostId: string; sessionId: string; label: string };
 	target: { client: Client; hostId: string; label: string; projectId: string };
 	transferId?: string;
+	/** End a turn in progress instead of refusing to move. */
+	stopTurn?: boolean;
 	onStep?: (step: MoveStep) => void;
+	/** Bytes of the conversation archive copied so far. */
+	onProgress?: (sent: number, total: number) => void;
 };
 
 export type MoveResult = {
@@ -34,7 +38,7 @@ export type MoveResult = {
 
 /** A move that failed before the destination took the session. */
 export class MoveError extends Error {
-	constructor(message: string, readonly step: MoveStep, readonly resumedSource: boolean) {
+	constructor(message: string, readonly step: MoveStep, readonly resumedSource: boolean, readonly code?: string) {
 		super(message);
 		this.name = "MoveError";
 	}
@@ -60,14 +64,21 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	let warnings: string[];
 	let hostLabel: string;
 	let resumed: boolean;
+	let code: string | undefined;
 	input.onStep?.("prepare");
 	await checkDestination(target);
 	try {
 		const prepared = await source.client.POST("/api/v1/sessions/{sessionId}/transfer/prepare", {
 			params: { path: { sessionId: source.sessionId } },
 			// "This computer" means nothing on the destination; empty makes the source daemon use its hostname.
-			body: { transferId, sourceLabel: source.hostId === LOCAL_HOST ? "" : source.label, destination: { hostId: target.hostId, label: target.label, sessionId: "" } },
+			body: {
+				transferId,
+				sourceLabel: source.hostId === LOCAL_HOST ? "" : source.label,
+				destination: { hostId: target.hostId, label: target.label, sessionId: "" },
+				...(input.stopTurn ? { stopTurn: true } : {}),
+			},
 		});
+		code = apiErrorCode(prepared.error);
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
 		// An unfinished earlier move to this host comes back instead of a new one.
@@ -75,14 +86,14 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		if (transfer.native) {
 			step = "copy";
 			input.onStep?.("copy");
-			await copyArchive(source, target.client, transferId);
+			await copyArchive(source, target.client, transferId, input.onProgress);
 		}
 		step = "receive";
 		input.onStep?.("receive");
 		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new MoveError(message, step, await cancelMove(source, transferId));
+		throw new MoveError(message, step, await cancelMove(source, transferId), code);
 	}
 	input.onStep?.("commit");
 	const destinationLabel = target.hostId === LOCAL_HOST && hostLabel ? hostLabel : target.label;
@@ -94,7 +105,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 async function checkDestination(target: MoveInput["target"]): Promise<void> {
 	const res = await target.client.POST("/api/v1/sessions/transfer/receive", { body: {} as never }).catch(() => undefined);
 	if (apiErrorCode(res?.error) === "TRANSFER_INCOMPLETE") return;
-	const message = res ? `${target.label} runs an AO version that cannot receive sessions; update AO there first` : `Could not reach ${target.label}`;
+	const message = res ? `${target.label} runs an AO version that cannot receive sessions; update AO there first` : `${target.label} is not reachable`;
 	throw new MoveError(message, "prepare", true);
 }
 
@@ -109,7 +120,7 @@ async function cancelMove(source: MoveInput["source"], transferId: string): Prom
 	);
 }
 
-async function copyArchive(source: MoveInput["source"], target: Client, transferId: string): Promise<void> {
+async function copyArchive(source: MoveInput["source"], target: Client, transferId: string, onProgress?: MoveInput["onProgress"]): Promise<void> {
 	const archive = await source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/native", {
 		params: { path: { sessionId: source.sessionId, transferId } },
 		parseAs: "arrayBuffer",
@@ -125,6 +136,7 @@ async function copyArchive(source: MoveInput["source"], target: Client, transfer
 			headers: { "Content-Type": "application/octet-stream" },
 		});
 		if (res.error) throw apiErrorException(res.error, "Could not copy the conversation");
+		onProgress?.(Math.min(offset + MOVE_PART_BYTES, bytes.length), bytes.length);
 	}
 }
 

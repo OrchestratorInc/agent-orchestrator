@@ -7830,6 +7830,8 @@ export interface components {
             destination: components["schemas"]["SessionTransferDestination"];
             /** @description This machine's name as the user sees it, for the destination's note; empty uses its hostname. */
             sourceLabel: string;
+            /** @description End a turn in progress instead of refusing with TRANSFER_AGENT_BUSY. */
+            stopTurn?: boolean;
             transferId: string;
         };
         PreviewServerStatusResponse: {

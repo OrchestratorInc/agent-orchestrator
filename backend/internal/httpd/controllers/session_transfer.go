@@ -23,7 +23,7 @@ const maxTransferPartBytes = 64 << 20
 // sessionTransferService moves sessions between machines. It is optional so
 // focused SessionService fakes need not implement it.
 type sessionTransferService interface {
-	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination) (domain.SessionTransfer, error)
+	PrepareTransfer(ctx context.Context, id domain.SessionID, transferID, sourceLabel string, dest domain.SessionTransferDestination, stopTurn bool) (domain.SessionTransfer, error)
 	CancelTransfer(ctx context.Context, id domain.SessionID, transferID string) error
 	TransferArchivePath(id domain.SessionID, transferID string) (string, error)
 	StoreTransferArchivePart(transferID string, part int, r io.Reader) error
@@ -47,6 +47,7 @@ type PrepareTransferRequest struct {
 	TransferID  string                            `json:"transferId" minLength:"8" maxLength:"64"`
 	SourceLabel string                            `json:"sourceLabel" maxLength:"200" description:"This machine's name as the user sees it, for the destination's note; empty uses its hostname."`
 	Destination domain.SessionTransferDestination `json:"destination" description:"The machine the session is moving to; sessionId is not known yet."`
+	StopTurn    bool                              `json:"stopTurn,omitempty" description:"End a turn in progress instead of refusing with TRANSFER_AGENT_BUSY."`
 }
 
 // CancelTransferRequest is the body of POST /sessions/{sessionId}/transfer/cancel.
@@ -113,7 +114,7 @@ func (c *SessionsController) prepareTransfer(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	t, err := svc.PrepareTransfer(r.Context(), sessionID(r), strings.TrimSpace(in.TransferID), in.SourceLabel, in.Destination)
+	t, err := svc.PrepareTransfer(r.Context(), sessionID(r), strings.TrimSpace(in.TransferID), in.SourceLabel, in.Destination, in.StopTurn)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

@@ -112,6 +112,15 @@ describe("moveSession", () => {
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ transferId: "tr-earlier" });
 	});
 
+	it("asks the source to stop a running turn and reports bytes copied", async () => {
+		const { source, input } = hosts();
+		const progress: number[] = [];
+		await moveSession({ ...input, stopTurn: true, onProgress: (sent) => progress.push(sent) });
+
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ stopTurn: true });
+		expect(progress).toEqual([MOVE_PART_BYTES, MOVE_PART_BYTES + 10]);
+	});
+
 	it("reports a move that started from a summary", async () => {
 		const { input } = hosts(undefined, () => ({ data: { ...received.data, resumed: false } }));
 		expect((await moveSession(input)).resumed).toBe(false);
