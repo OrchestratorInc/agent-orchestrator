@@ -102,7 +102,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const previousBranch = useRef(branch);
 	const close = useCallback((restore = true) => {
 		deactivate(); clearHighlights();
-		setOpen(false); setState(initial); setActive(undefined); setAnnouncement(""); setWindowPage(undefined);
+		setOpen(false); setState(initial); setActive(undefined); setAnnouncement("");
 		if (restore) {
 			const target = previousFocus.current;
 			if (target?.isConnected) target.focus({ preventScroll: true });
@@ -365,6 +365,8 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	}, [open, engaged, query, active, state.page, windowPage, root, viewport, t]);
 	useEffect(() => () => { engagedRef.current = false; cancelWork(); clearHighlights(); }, [cancelWork, clearHighlights]);
 
+	// Closing find leaves the reader in place; the jumped-to page goes when they return to the latest.
+	const dropWindow = useCallback(() => setWindowPage(undefined), []);
 	let snapshot = windowPage && windowPage.conversationId === source.conversationId && windowPage.activeBranchId === source.activeBranchId
 		? mergeConversationPages([source, windowPage]) ?? source : source;
 	if (sideChat && snapshot !== source) {
@@ -403,5 +405,5 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
 	</div> : null;
-	return { snapshot, bar, active, open, windowed: Boolean(windowPage), gapBeforeSequence };
+	return { snapshot, bar, active, open, gapBeforeSequence, dropWindow };
 }

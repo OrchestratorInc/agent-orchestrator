@@ -2891,27 +2891,21 @@ export function Timeline({
 		relatchTimer.current = undefined;
 		releaseFollow();
 	};
+	const dropFindWindow = find.dropWindow;
 	const requestGlideToEnd = useCallback(() => {
 		findPausedFollow.current = false;
+		dropFindWindow();
 		glideRequested.current = true;
 		setPinnedNow(true);
-	}, [setPinnedNow]);
-	// Find pauses following while it steers the view; closing hands it back. A jump
-	// into older history is dropped on close, so the reader returns to the latest.
-	const findWindowConversation = useRef<string | undefined>(undefined);
+	}, [setPinnedNow, dropFindWindow]);
+	// Find pauses following while it steers the view; closing hands it back and
+	// leaves the reader where the last match put them.
 	useEffect(() => {
-		if (find.open) {
-			findWindowConversation.current = find.windowed ? sourceSnapshot.conversationId : undefined;
-			return;
-		}
-		const returnToLatest = findWindowConversation.current === sourceSnapshot.conversationId;
-		findWindowConversation.current = undefined;
-		if (!findPausedFollow.current) return;
+		if (find.open || !findPausedFollow.current) return;
 		findPausedFollow.current = false;
-		if (returnToLatest) { requestGlideToEnd(); return; }
 		const node = scroller.current;
 		if (node && node.scrollHeight - node.scrollTop - node.clientHeight <= 2) setPinnedNow(true);
-	}, [find.open, find.windowed, sourceSnapshot.conversationId, requestGlideToEnd, setPinnedNow]);
+	}, [find.open, setPinnedNow]);
 	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
 	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
