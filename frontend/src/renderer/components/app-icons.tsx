@@ -191,6 +191,7 @@ import {
 	Sheet as LucideSheet,
 	ShieldAlert as LucideShieldAlert,
 	ShieldQuestion as LucideShieldQuestion,
+	Settings2 as LucideSettings2,
 	SlidersHorizontal as LucideSlidersHorizontal,
 	Split as LucideSplit,
 	StickyNote as LucideStickyNote,
@@ -428,7 +429,7 @@ export const SearchX = fromMyna(MynaSearchX, "search-x");
 export const Send = fromMyna(MynaSend, "send");
 export const Server = fromMyna(MynaServers, "server");
 export const Settings = fromMyna(MynaCog, "settings");
-export const Settings2 = fromMyna(MynaCog, "settings-2", "full");
+export const Settings2 = fromLucide(LucideSettings2, "settings-2");
 export const Share = fromMyna(MynaShare, "share");
 export const Share2 = fromMyna(MynaShare, "share-2");
 export const Sheet = fromLucide(LucideSheet, "sheet");
