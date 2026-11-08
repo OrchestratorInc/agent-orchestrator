@@ -4130,5 +4130,18 @@
 	"teams.sharedToastWithYou": "{{name}} a partagé {{thing}} avec vous",
 	"teams.open": "Ouvrir",
 	"shortcut.find-in-chat": "Rechercher dans le chat",
-	"chat.find.incomplete": "Recherche incomplète"
+	"chat.find.incomplete": "Recherche incomplète",
+	"chat.find.gap": "Les messages intermédiaires ne sont pas chargés",
+	"chat.find.historyUnavailable": "L'historique est indisponible.",
+	"chat.find.resultChanged": "Ce résultat a changé. Relancez la recherche.",
+	"chat.find.transportUnavailable": "La recherche dans tout l'historique n'est pas disponible pour cette connexion de chat.",
+	"chat.find.queryTooLong": "La recherche accepte jusqu'à 512 caractères.",
+	"chat.find.searchUnavailable": "La recherche dans tout l'historique n'est pas disponible pour ce chat.",
+	"chat.find.activeChanged": "La correspondance active a changé. Passage à la correspondance disponible la plus proche.",
+	"chat.find.searchFailed": "Impossible de rechercher dans tout l'historique. Réessayez.",
+	"chat.find.resultsChanged": "Les résultats ont changé. Mise à jour des correspondances.",
+	"chat.find.nextFailed": "Impossible de charger les correspondances suivantes.",
+	"chat.find.wrappedFirst": "Retour à la première correspondance.",
+	"chat.find.wrappedLast": "Retour à la dernière correspondance.",
+	"chat.find.notRevealed": "Impossible d'afficher cette correspondance. Relancez la recherche."
 }

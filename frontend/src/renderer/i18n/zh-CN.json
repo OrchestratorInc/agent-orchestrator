@@ -4024,5 +4024,18 @@
 	"teams.sharedToastWithYou": "{{name}} 已与你共享 {{thing}}",
 	"teams.open": "打开",
 	"shortcut.find-in-chat": "在聊天中查找",
-	"chat.find.incomplete": "搜索未完成"
+	"chat.find.incomplete": "搜索未完成",
+	"chat.find.gap": "中间的消息尚未加载",
+	"chat.find.historyUnavailable": "历史记录不可用。",
+	"chat.find.resultChanged": "此结果已更改。请重新搜索。",
+	"chat.find.transportUnavailable": "此聊天连接不支持搜索完整历史记录。",
+	"chat.find.queryTooLong": "搜索最多支持 512 个字符。",
+	"chat.find.searchUnavailable": "此聊天无法搜索完整历史记录。",
+	"chat.find.activeChanged": "当前匹配项已更改，已移至最近的可用匹配项。",
+	"chat.find.searchFailed": "无法搜索完整历史记录。请重试。",
+	"chat.find.resultsChanged": "结果已更改，正在更新匹配项。",
+	"chat.find.nextFailed": "无法加载后续匹配项。",
+	"chat.find.wrappedFirst": "已回到第一个匹配项。",
+	"chat.find.wrappedLast": "已回到最后一个匹配项。",
+	"chat.find.notRevealed": "无法显示此匹配项。请重新搜索。"
 }

@@ -3,6 +3,7 @@ package chat
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -10,6 +11,55 @@ import (
 var findAttachmentSuffix = regexp.MustCompile(`(?:\n\n|^)(?:Attached files \(read these files in the workspace(?: for context)?\)|Attached images \(read these files in the workspace for visual context\)):\n((?:- [^\n]+(?:\n|$))+)$`)
 var findStagedPath = regexp.MustCompile(`^\.ao/attachments/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var findInlineImage = regexp.MustCompile(`\.ao/attachments/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*\.(?i:png|jpe?g|gif|webp|bmp)`)
+
+const maxFindBlockCacheBytes = 16 << 20
+
+type findBlockKey struct {
+	id       string
+	revision int64
+	size     int
+}
+
+// findBlockCache keeps parsed settled replies, so a re-search of a long
+// transcript does not run Markdown over all of it again. Cached slices are shared
+// and read-only.
+var findBlockCache = struct {
+	sync.Mutex
+	blocks map[findBlockKey][]string
+	bytes  int
+}{blocks: map[findBlockKey][]string{}}
+
+func findMessageBlocks(message domain.ConversationMessage) []string {
+	source := findMessageText(message)
+	markdown := message.Role == domain.MessageRoleAssistant
+	if !markdown || message.Streaming {
+		return FindBlocks(source, markdown)
+	}
+	key := findBlockKey{id: message.ID, revision: message.Revision, size: len(source)}
+	findBlockCache.Lock()
+	blocks, ok := findBlockCache.blocks[key]
+	findBlockCache.Unlock()
+	if ok {
+		return blocks
+	}
+	blocks = FindBlocks(source, true)
+	size := len(key.id)
+	for _, block := range blocks {
+		size += len(block)
+	}
+	if size <= maxFindBlockCacheBytes {
+		findBlockCache.Lock()
+		if findBlockCache.bytes+size > maxFindBlockCacheBytes {
+			findBlockCache.blocks, findBlockCache.bytes = map[findBlockKey][]string{}, 0
+		}
+		if _, exists := findBlockCache.blocks[key]; !exists {
+			findBlockCache.blocks[key] = blocks
+			findBlockCache.bytes += size
+		}
+		findBlockCache.Unlock()
+	}
+	return blocks
+}
 
 func findMessageText(message domain.ConversationMessage) string {
 	source := message.Text

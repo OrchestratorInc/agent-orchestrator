@@ -18,6 +18,12 @@ describe("chat find shared contract", () => {
 		expect(findRange(blocks[0].nodes, hit.start, hit.end)?.toString()).toBe("hello world");
 	});
 
+	it("does not count the whitespace of a loose list item as a block", () => {
+		const root = document.createElement("div");
+		root.innerHTML = "<ol>\n<li>\n<p>first</p>\n</li>\n<li>\n<p>second</p>\n</li>\n</ol>";
+		expect(renderedFindBlocks(root).map((block) => block.text)).toEqual(["first", "second"]);
+	});
+
 	it("keeps nested list prose and hard line breaks in their own blocks", () => {
 		const root = document.createElement("div");
 		root.innerHTML = "<ul><li>parent<ul><li>child</li></ul></li></ul><p>hello<br>world</p>";

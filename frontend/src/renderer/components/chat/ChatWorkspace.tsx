@@ -2896,6 +2896,22 @@ export function Timeline({
 		glideRequested.current = true;
 		setPinnedNow(true);
 	}, [setPinnedNow]);
+	// Find pauses following while it steers the view; closing hands it back. A jump
+	// into older history is dropped on close, so the reader returns to the latest.
+	const findWindowConversation = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (find.open) {
+			findWindowConversation.current = find.windowed ? sourceSnapshot.conversationId : undefined;
+			return;
+		}
+		const returnToLatest = findWindowConversation.current === sourceSnapshot.conversationId;
+		findWindowConversation.current = undefined;
+		if (!findPausedFollow.current) return;
+		findPausedFollow.current = false;
+		if (returnToLatest) { requestGlideToEnd(); return; }
+		const node = scroller.current;
+		if (node && node.scrollHeight - node.scrollTop - node.clientHeight <= 2) setPinnedNow(true);
+	}, [find.open, find.windowed, sourceSnapshot.conversationId, requestGlideToEnd, setPinnedNow]);
 	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
 	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
@@ -3868,6 +3884,8 @@ export function Timeline({
 		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 	}, [find.open, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
+	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
+		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -4651,6 +4669,7 @@ export function Timeline({
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 								data-chat-turn={group.key}
 							>
+								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
 									group={group}

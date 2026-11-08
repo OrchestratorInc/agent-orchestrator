@@ -99,8 +99,9 @@ export function renderedFindBlocks(root: HTMLElement): Array<{ text: string; nod
 		if (!node.data || parent?.closest(excluded)) continue;
 		const closest = parent?.closest("pre, p, h1, h2, h3, h4, h5, h6, td, th, li");
 		const element = closest && root.contains(closest) ? closest : root;
-		// Ignore layout whitespace between independent Markdown blocks.
-		if (element === root && !node.data.trim()) continue;
+		// Ignore layout whitespace between independent Markdown blocks. A loose list
+		// item holds "\n" beside its <p>; that must not count as a block of its own.
+		if ((element === root || element.tagName === "LI" && !blocks.has(element)) && !node.data.trim()) continue;
 		const block = blocks.get(element) ?? { text: "", nodes: [] };
 		block.text += node.data; block.nodes.push(node); blocks.set(element, block);
 	}

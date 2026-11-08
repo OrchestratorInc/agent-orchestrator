@@ -3,6 +3,7 @@ import { Button } from "../components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronUp, Loader2, Search, X } from "lucide-react";
 import { useAppShortcut, isSettingsPageOpen } from "./useAppShortcut";
+import { useHarnessUpdateNoticeClearance } from "./useHarnessUpdateNoticeClearance";
 import { toSnapshot, mergeConversationPages } from "./useConversation";
 import { clientForSessionHost } from "../lib/host-clients";
 import { apiErrorMessage } from "../lib/api-client";
@@ -13,6 +14,8 @@ type FindPage = { conversationId: string; transcriptRevision: string; occurrence
 type SearchState = { phase: "idle" | "searching" | "ready" | "error"; hits: FindOccurrence[]; total: number; error?: string; page?: FindPage; updating?: boolean };
 const initial: SearchState = { phase: "idle", hits: [], total: 0 };
 const MODAL = "[role='dialog'], [role='alertdialog'], [role='menu'], [aria-modal='true'], [data-keybinding-recording]";
+/** A streaming reply changes the transcript constantly; re-search it at this pace. */
+const STREAM_REFRESH_MS = 2000;
 const OTHER_SURFACE = ".xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview";
 
 function isFindModalOpen(): boolean {
@@ -60,7 +63,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const ownedHighlights = useRef<{ all: unknown; active: unknown } | undefined>(undefined);
 	const readiness = useRef<Promise<boolean>>(Promise.resolve(true));
 	const ready = useRef<((success: boolean) => void) | undefined>(undefined);
-	const dirty = useRef(true);
+	const dirty = useRef(true), streamDirty = useRef(false), lastSearchAt = useRef(0);
 	const finishRefresh = useCallback((success: boolean) => { ready.current?.(success); ready.current = undefined; }, []);
 	const prepareRefresh = useCallback(() => {
 		finishRefresh(false);
@@ -99,7 +102,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const previousBranch = useRef(branch);
 	const close = useCallback((restore = true) => {
 		deactivate(); clearHighlights();
-		setOpen(false); setState(initial); setActive(undefined); setAnnouncement("");
+		setOpen(false); setState(initial); setActive(undefined); setAnnouncement(""); setWindowPage(undefined);
 		if (restore) {
 			const target = previousFocus.current;
 			if (target?.isConnected) target.focus({ preventScroll: true });
@@ -161,9 +164,9 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 					params: { path: { conversationId: snapshot.conversationId }, query: { sequence: hit.sequence } }, signal: controller.signal,
 				});
 				if (!engagedRef.current || controller.signal.aborted || token !== navigation.current || queryRef.current !== navigationQuery || hostRef.current !== hostId || sourceRef.current.conversationId !== snapshot.conversationId || sourceRef.current.activeBranchId !== snapshot.activeBranchId) return;
-				if (error || !data) throw error ?? new Error("History is unavailable.");
+				if (error || !data) throw error ?? new Error(t("chat.find.historyUnavailable"));
 				const page = toSnapshot(data);
-				if (page.conversationId !== snapshot.conversationId || page.activeBranchId !== snapshot.activeBranchId || !page.items.some((item) => item.kind === "message" && item.id === hit.messageId && item.revision === hit.revision)) throw new Error("This result changed. Retry the search.");
+				if (page.conversationId !== snapshot.conversationId || page.activeBranchId !== snapshot.activeBranchId || !page.items.some((item) => item.kind === "message" && item.id === hit.messageId && item.revision === hit.revision)) throw new Error(t("chat.find.resultChanged"));
 				setWindowPage(page);
 			} catch (error) {
 				if (!controller.signal.aborted && token === navigation.current) setState((current) => ({ ...current, phase: "error", error: apiErrorMessage(error) }));
@@ -171,23 +174,27 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 			}
 		}
 		if (engagedRef.current && scroll && token === navigation.current) revealRef.current(hit);
-	}, [hostId]);
+	}, [hostId, t]);
 
 	// Load only the occurrence page around the reader or active hit. A common
 	// query can match millions of times; counts must not imply downloading them.
-	useEffect(() => { dirty.current = true; }, [source]);
+	useEffect(() => {
+		if (source.items.some((item) => item.kind === "message" && item.streaming)) streamDirty.current = true;
+		else dirty.current = true;
+	}, [source]);
 	useEffect(() => {
 		if (!open || !engaged || composing) return;
 		const controller = new AbortController();
 		searchAbort.current = controller;
 		let stopped = false, running = false;
 		const run = async () => {
-			if (!engagedRef.current || stopped || running || paging.current || !dirty.current) return;
-			dirty.current = false;
+			const streamDue = streamDirty.current && performance.now() - lastSearchAt.current >= STREAM_REFRESH_MS;
+			if (!engagedRef.current || stopped || running || paging.current || !dirty.current && !streamDue) return;
+			dirty.current = false; streamDirty.current = false; lastSearchAt.current = performance.now();
 			if (isEmptyFindQuery(query)) { commit(initial); setActive(undefined); finishRefresh(true); return; }
-			if (unavailable) { commit({ ...initial, phase: "error", error: "Full-history search is not available for this chat transport." }); finishRefresh(false); return; }
+			if (unavailable) { commit({ ...initial, phase: "error", error: t("chat.find.transportUnavailable") }); finishRefresh(false); return; }
 			if (!sourceRef.current.conversationId && !sourceRef.current.items.length) { commit({ ...initial, phase: "ready" }); setActive(undefined); finishRefresh(true); return; }
-			if (Array.from(query).length > 512) { commit({ ...initial, phase: "error", error: "Search supports up to 512 characters." }); finishRefresh(false); return; }
+			if (Array.from(query).length > 512) { commit({ ...initial, phase: "error", error: t("chat.find.queryTooLong") }); finishRefresh(false); return; }
 			running = true;
 			const token = ++generation.current;
 			const current = stateRef.current;
@@ -215,11 +222,11 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 					params: { path: { conversationId: snapshot.conversationId }, query: { query, anchorMessageId, anchorBlock, anchorOffset, anchorSequence: prior?.sequence, fallbackToPrevious: Boolean(prior) } }, signal: controller.signal,
 				});
 				if (!engagedRef.current || controller.signal.aborted || stopped || token !== generation.current || queryRef.current !== query || hostRef.current !== hostId || sourceRef.current.conversationId !== snapshot.conversationId || sourceRef.current.activeBranchId !== snapshot.activeBranchId) return;
-				if (result.error || !result.data) throw result.error ?? new Error("Complete history search is unavailable for this chat.");
+				if (result.error || !result.data) throw result.error ?? new Error(t("chat.find.searchUnavailable"));
 				const page: FindPage = result.data;
 				const hits = page.occurrences;
 				const next = prior && hits.find((hit) => occurrenceKey(hit) === occurrenceKey(prior)) || hits[(page.initialIndex ?? page.offset ?? 0) - (page.offset ?? 0)] || hits[0];
-				if (!changedQuery && prior && (!next || occurrenceKey(next) !== occurrenceKey(prior))) setAnnouncement("The active match changed. Moved to the nearest available match.");
+				if (!changedQuery && prior && (!next || occurrenceKey(next) !== occurrenceKey(prior))) setAnnouncement(t("chat.find.activeChanged"));
 				lastQuery.current = query;
 				commit({ phase: "ready", hits, total: page.total, page });
 				if (windowPageRef.current && prior && !hits.some((hit) => hit.messageId === prior.messageId)) setWindowPage(undefined);
@@ -231,14 +238,14 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 				if (!stopped && engagedRef.current && token === generation.current) finishRefresh(true);
 			} catch (error) {
 				if (!stopped && engagedRef.current && !controller.signal.aborted && token === generation.current) {
-					commit({ ...stateRef.current, phase: "error", updating: false, error: apiErrorMessage(error) || "Could not search complete history. Retry." }); finishRefresh(false);
+					commit({ ...stateRef.current, phase: "error", updating: false, error: apiErrorMessage(error) || t("chat.find.searchFailed") }); finishRefresh(false);
 				}
 			} finally { running = false; }
 		};
 		dirty.current = true;
 		const timer = window.setInterval(() => void run(), 150);
 		return () => { stopped = true; controller.abort(); window.clearInterval(timer); };
-	}, [open, engaged, composing, query, identity, branch, retry, hostId, go, root, viewport, unavailable, finishRefresh]);
+	}, [open, engaged, composing, query, identity, branch, retry, hostId, go, root, viewport, unavailable, finishRefresh, t]);
 
 	const move = (direction: number) => {
 		activate();
@@ -262,8 +269,8 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 						params: { path: { conversationId: sourceRef.current.conversationId }, query: { query: queryRef.current, cursor } }, signal: controller.signal,
 					});
 					if (epoch !== lifetime.current || controller.signal.aborted) return;
-					if (result.response.status === 409 || result.data && result.data.transcriptRevision !== page.transcriptRevision) { prepareRefresh(); setRetry((value) => value + 1); setAnnouncement("Results changed. Updating matches."); return; }
-					if (result.error || !result.data) throw result.error ?? new Error("Could not load the next matches.");
+					if (result.response.status === 409 || result.data && result.data.transcriptRevision !== page.transcriptRevision) { prepareRefresh(); setRetry((value) => value + 1); setAnnouncement(t("chat.find.resultsChanged")); return; }
+					if (result.error || !result.data) throw result.error ?? new Error(t("chat.find.nextFailed"));
 					page = result.data;
 					commit({ phase: "ready", hits: page.occurrences, total: page.total, page });
 				} catch (error) {
@@ -274,7 +281,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 			if (epoch !== lifetime.current) return;
 			const hit = page.occurrences[desired - (page.offset ?? 0)];
 			if (!hit) return;
-			setAnnouncement(desired === 0 && direction > 0 ? "Wrapped to the first match." : desired === current.total - 1 && direction < 0 ? "Wrapped to the last match." : "");
+			setAnnouncement(desired === 0 && direction > 0 ? t("chat.find.wrappedFirst") : desired === current.total - 1 && direction < 0 ? t("chat.find.wrappedLast") : "");
 			await go(hit); input.current?.focus({ preventScroll: true });
 		});
 	};
@@ -348,14 +355,14 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		const timeout = window.setTimeout(() => {
 			if (engagedRef.current && active && requestedScroll.current === occurrenceKey(active)) {
 				requestedScroll.current = undefined;
-				setState((current) => ({ ...current, phase: "error", error: "This match could not be revealed. Retry the search." }));
+				setState((current) => ({ ...current, phase: "error", error: t("chat.find.notRevealed") }));
 			}
 		}, 3000);
 		// Pausing retains the existing browser ranges, without rescanning or copying text.
 		const disconnect = () => { observer.disconnect(); resize.disconnect(); window.clearTimeout(timer); window.clearTimeout(timeout); };
 		stopHighlights.current = disconnect;
 		return disconnect;
-	}, [open, engaged, query, active, state.page, windowPage, root, viewport]);
+	}, [open, engaged, query, active, state.page, windowPage, root, viewport, t]);
 	useEffect(() => () => { engagedRef.current = false; cancelWork(); clearHighlights(); }, [cancelWork, clearHighlights]);
 
 	let snapshot = windowPage && windowPage.conversationId === source.conversationId && windowPage.activeBranchId === source.activeBranchId
@@ -368,7 +375,11 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		}) };
 	}
 	const activeIndex = useMemo(() => active ? (state.page?.offset ?? 0) + state.hits.findIndex((hit) => occurrenceKey(hit) === occurrenceKey(active)) + 1 : 0, [active, state.page, state.hits]);
-	const bar = open ? <div ref={barRef} role="search" onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
+	// The update notice shares the top-right corner; step left of it, as the session switch does.
+	const noticeClearance = useHarnessUpdateNoticeClearance(open ? root.current : null);
+	const newestWindowSequence = windowPage?.items.at(-1)?.sequence, firstSourceSequence = source.items[0]?.sequence;
+	const gapBeforeSequence = !sideChat && source.hasMoreBefore && newestWindowSequence !== undefined && firstSourceSequence !== undefined && newestWindowSequence < firstSourceSequence ? firstSourceSequence : undefined;
+	const bar = open ? <div ref={barRef} role="search" style={noticeClearance ? { right: noticeClearance, maxWidth: `calc(100% - 12px - ${noticeClearance}px)` } : undefined} onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
 		if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
 		else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
 	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="z-overlay absolute top-3 right-3 flex w-[320px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-lg border border-(--color-border-overlay) bg-overlay px-3 py-2 text-sm leading-5 shadow-(--shadow-popover) focus-within:ring-1 focus-within:ring-ring/40">
@@ -392,5 +403,5 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
 	</div> : null;
-	return { snapshot, bar, active, open };
+	return { snapshot, bar, active, open, windowed: Boolean(windowPage), gapBeforeSequence };
 }

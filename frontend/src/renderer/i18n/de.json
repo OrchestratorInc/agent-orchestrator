@@ -4042,5 +4042,18 @@
 	"teams.sharedToastWithYou": "{{name}} hat {{thing}} mit dir geteilt",
 	"teams.open": "Öffnen",
 	"shortcut.find-in-chat": "Im Chat suchen",
-	"chat.find.incomplete": "Suche unvollständig"
+	"chat.find.incomplete": "Suche unvollständig",
+	"chat.find.gap": "Nachrichten dazwischen sind nicht geladen",
+	"chat.find.historyUnavailable": "Verlauf ist nicht verfügbar.",
+	"chat.find.resultChanged": "Dieses Ergebnis hat sich geändert. Suche wiederholen.",
+	"chat.find.transportUnavailable": "Die Suche im gesamten Verlauf ist für diese Chat-Verbindung nicht verfügbar.",
+	"chat.find.queryTooLong": "Die Suche unterstützt bis zu 512 Zeichen.",
+	"chat.find.searchUnavailable": "Die Suche im gesamten Verlauf ist für diesen Chat nicht verfügbar.",
+	"chat.find.activeChanged": "Der aktive Treffer hat sich geändert. Zum nächsten verfügbaren Treffer gewechselt.",
+	"chat.find.searchFailed": "Der gesamte Verlauf konnte nicht durchsucht werden. Erneut versuchen.",
+	"chat.find.resultsChanged": "Ergebnisse haben sich geändert. Treffer werden aktualisiert.",
+	"chat.find.nextFailed": "Die nächsten Treffer konnten nicht geladen werden.",
+	"chat.find.wrappedFirst": "Zurück zum ersten Treffer.",
+	"chat.find.wrappedLast": "Weiter zum letzten Treffer.",
+	"chat.find.notRevealed": "Dieser Treffer konnte nicht angezeigt werden. Suche wiederholen."
 }

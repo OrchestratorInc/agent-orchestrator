@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -110,9 +111,13 @@ func (s *Service) FindConversation(ctx context.Context, id, query, cursor string
 	if err != nil {
 		return FindResult{}, err
 	}
-	durableRevision, err := findRevisionFiltered(conversation, messages, query, true)
-	if err != nil {
-		return FindResult{}, err
+	// Without a streaming message the two hashes cover the same input.
+	durableRevision := revision
+	if slices.ContainsFunc(messages, func(message domain.ConversationMessage) bool { return findableMessage(message) && message.Streaming }) {
+		durableRevision, err = findRevisionFiltered(conversation, messages, query, true)
+		if err != nil {
+			return FindResult{}, err
+		}
 	}
 	key := revision
 	if cursor != "" {
@@ -139,7 +144,7 @@ func (s *Service) FindConversation(ctx context.Context, id, query, cursor string
 	if _, err := findCursorOffset(cursor, revision); err != nil {
 		return FindResult{}, err
 	}
-	result, err := findMessagesLimit(ctx, conversation, messages, query, cursor, 200, anchorSequence, anchor)
+	result, err := findMessagesAt(ctx, conversation, messages, query, revision, cursor, 200, anchorSequence, anchor)
 	if err != nil {
 		return FindResult{}, err
 	}
@@ -256,11 +261,15 @@ func findCursorOffset(cursor, revision string) (int, error) {
 }
 
 func findMessagesLimit(ctx context.Context, conversation domain.ConversationRecord, messages []domain.ConversationMessage, query, cursor string, limit int, anchorSequence int64, anchor FindAnchor) (FindResult, error) {
-	needle := strings.TrimSpace(foldFindText(query).text)
 	revision, err := findRevision(conversation, messages, query)
 	if err != nil {
 		return FindResult{}, err
 	}
+	return findMessagesAt(ctx, conversation, messages, query, revision, cursor, limit, anchorSequence, anchor)
+}
+
+func findMessagesAt(ctx context.Context, conversation domain.ConversationRecord, messages []domain.ConversationMessage, query, revision, cursor string, limit int, anchorSequence int64, anchor FindAnchor) (FindResult, error) {
+	needle := strings.TrimSpace(foldFindText(query).text)
 	offset, err := findCursorOffset(cursor, revision)
 	if err != nil {
 		return FindResult{}, err
@@ -283,7 +292,7 @@ func findMessagesLimit(ctx context.Context, conversation domain.ConversationReco
 		if !findableMessage(message) {
 			continue
 		}
-		for block, value := range FindBlocks(findMessageText(message), message.Role == domain.MessageRoleAssistant) {
+		for block, value := range findMessageBlocks(message) {
 			folded := foldFindText(value)
 			for from := 0; from < len(folded.text); {
 				index := strings.Index(folded.text[from:], needle)

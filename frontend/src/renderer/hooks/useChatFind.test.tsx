@@ -127,10 +127,12 @@ describe("find in chat interactions", () => {
 		const view = render(<Harness />); await openAndSearch();
 		const streaming = { ...source.items[0] as ConversationMessage, id: "stream", role: "assistant" as const, origin: "provider" as const, text: "hello", streaming: true, sequence: 11 };
 		get.mockResolvedValueOnce({ data: { conversationId: "c", transcriptRevision: "stream1", occurrences: [...hits, { ...hits[0], messageId: "stream", sequence: 11 }], total: 3 }, response: { status: 200 } });
+		const before = get.mock.calls.length;
 		view.rerender(<Harness snapshot={{ ...source, items: [...source.items, streaming] }} />); await tick();
+		expect(get).toHaveBeenCalledTimes(before); await tick(2000);
 		expect(screen.getByText("1/3")).toBeInTheDocument(); expect(reveal).toHaveBeenCalledTimes(1);
 		get.mockResolvedValueOnce({ data: { conversationId: "c", transcriptRevision: "stream2", occurrences: [...hits, ...hits.map((hit) => ({ ...hit, messageId: "stream", sequence: 11, revision: 2 }))], total: 4 }, response: { status: 200 } });
-		view.rerender(<Harness snapshot={{ ...source, items: [...source.items, { ...streaming, text: "hello hello", revision: 2 }] }} />); await tick();
+		view.rerender(<Harness snapshot={{ ...source, items: [...source.items, { ...streaming, text: "hello hello", revision: 2 }] }} />); await tick(2000);
 		expect(screen.getByText("1/4")).toBeInTheDocument(); expect(reveal).toHaveBeenCalledTimes(1);
 	});
 
