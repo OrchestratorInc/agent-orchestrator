@@ -37,15 +37,24 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 	if strings.ContainsAny(secret, " \t#\"'\\") {
 		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This provider key contains characters that Continue's environment file cannot store safely.", nil)
 	}
-	home, err := continueConfigHome()
-	if err != nil || home == "" {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration home is unavailable.")
+	dir, err := continueGlobalDir()
+	if err != nil {
+		return err
 	}
-	dir := filepath.Join(home, ".continue")
 	configPath := filepath.Join(dir, "config.yaml")
 	configData, err := readContinueFile(configPath)
 	if err != nil {
 		return err
+	}
+	if configData == nil {
+		// Continue loads config.yaml whenever it exists and falls back to the
+		// legacy config.json only without it, so creating one would hide
+		// every model, context provider and rule configured there.
+		if _, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil {
+			return apierr.Invalid("AGENT_AUTH_STORE_LEGACY", "Continue is set up with config.json. Move to config.yaml in Continue first, then save the key here.", nil)
+		} else if !os.IsNotExist(err) {
+			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration file could not be inspected.")
+		}
 	}
 	var doc yaml.Node
 	if len(configData) != 0 && yaml.Unmarshal(configData, &doc) != nil {
@@ -56,9 +65,11 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's configuration file must be a YAML mapping.", nil)
 	}
 	if len(configData) == 0 {
-		upsertYAMLMappingString(root, "name", "AO Providers")
-		upsertYAMLMappingString(root, "version", "0.0.1")
-		upsertYAMLMappingString(root, "schema", "v1")
+		for _, field := range [][2]string{{"name", "AO Providers"}, {"version", "0.0.1"}, {"schema", "v1"}} {
+			if err := upsertYAMLMappingString(root, field[0], field[1]); err != nil {
+				return err
+			}
+		}
 	}
 	var models *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
@@ -93,16 +104,19 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 			break
 		}
 	}
+	fields := [][2]string{{"apiKey", "${{ secrets." + envName + " }}"}}
 	if entry == nil {
 		entry = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		models.Content = append(models.Content, entry)
-		upsertYAMLMappingString(entry, "name", modelID)
-		upsertYAMLMappingString(entry, "provider", provider)
-		upsertYAMLMappingString(entry, "model", modelID)
+		fields = append([][2]string{{"name", modelID}, {"provider", provider}, {"model", modelID}}, fields...)
 	}
-	upsertYAMLMappingString(entry, "apiKey", "${{ secrets."+envName+" }}")
 	if provider == "openrouter" {
-		upsertYAMLMappingString(entry, "apiBase", "https://openrouter.ai/api/v1")
+		fields = append(fields, [2]string{"apiBase", "https://openrouter.ai/api/v1"})
+	}
+	for _, field := range fields {
+		if err := upsertYAMLMappingString(entry, field[0], field[1]); err != nil {
+			return err
+		}
 	}
 	encoded, err := yaml.Marshal(&doc)
 	if err != nil {
@@ -135,6 +149,23 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 		return err
 	}
 	return atomicConfigWrite(ctx, dir, configPath, encoded)
+}
+
+// continueGlobalDir is the folder Continue reads its global config.yaml and
+// .env from: CONTINUE_GLOBAL_DIR when set, as the Continue CLI and AO's model
+// catalog honour it, else ~/.continue.
+func continueGlobalDir() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv("CONTINUE_GLOBAL_DIR")); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "CONTINUE_GLOBAL_DIR must be an absolute path.", nil)
+		}
+		return dir, nil
+	}
+	home, err := continueConfigHome()
+	if err != nil || home == "" {
+		return "", apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration home is unavailable.")
+	}
+	return filepath.Join(home, ".continue"), nil
 }
 
 func isContinueKeyLine(line, name string) bool {

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 func stubGeminiHome(t *testing.T) string {
@@ -179,12 +180,39 @@ func TestGeminiKeySaveAcceptsCommentedSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
+	if err := jsoncUnmarshal(data, &settings); err != nil {
 		t.Fatal(err)
 	}
 	auth := settings["security"].(map[string]any)["auth"].(map[string]any)
 	if auth["selectedType"] != "gemini-api-key" || settings["ui"].(map[string]any)["theme"] != "custom" || settings["docs"] != "https://example.com/not//a-comment" {
 		t.Fatalf("settings not kept: %s", data)
+	}
+	// Only the selected type changes: comments and layout stay.
+	if want := strings.Replace(commented, `"oauth-personal"`, `"gemini-api-key"`, 1); string(data) != want {
+		t.Fatalf("settings rewritten:\n%s\nwant:\n%s", data, want)
+	}
+}
+
+func TestGeminiKeySaveFollowsGeminiCLIHomeAndReachesSessions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", home)
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(foundExecutable("gemini"), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	if _, err := svc.StartLogin(t.Context(), "gemini", "gemini_api_key", "sk new"); err == nil {
+		t.Fatal("saved a key dotenv would cut at the space")
+	}
+	if _, err := svc.StartLogin(t.Context(), "gemini", "gemini_api_key", "sk-gemini"); err != nil {
+		t.Fatal(err)
+	}
+	if got := geminiEnv(t, home); !strings.Contains(got, "GEMINI_API_KEY=sk-gemini\n") {
+		t.Fatalf("key not saved under GEMINI_CLI_HOME: %q", got)
+	}
+	// Gemini skips ~/.gemini/.env in untrusted folders, so sessions get it too.
+	if inject, withhold, err := providerkeys.ForSession(dataDir, "gemini"); err != nil || len(withhold) != 0 || inject["GEMINI_API_KEY"] != "sk-gemini" {
+		t.Fatalf("Gemini sessions: inject=%v withhold=%v err=%v", inject, withhold, err)
 	}
 }
 

@@ -80,11 +80,72 @@ func saveMiMoProviderKey(ctx context.Context, harness catalogHarness, providerID
 // keeps keys entered in its UI in the crush.json beside it, under
 // providers.<id>.api_key.
 
+// crushDataDir mirrors Crush's GlobalConfigData: CRUSH_GLOBAL_DATA, then
+// XDG_DATA_HOME (on Windows too), then %LOCALAPPDATA% or ~/.local/share.
 func crushDataDir() (string, error) {
-	if runtime.GOOS == "windows" {
+	dir := ""
+	switch {
+	case os.Getenv("CRUSH_GLOBAL_DATA") != "":
+		dir = os.Getenv("CRUSH_GLOBAL_DATA")
+	case os.Getenv("XDG_DATA_HOME") != "":
+		dir = filepath.Join(os.Getenv("XDG_DATA_HOME"), "crush")
+	case runtime.GOOS == "windows":
 		return xdgDir("LOCALAPPDATA", filepath.Join("AppData", "Local"), "crush")
+	default:
+		return xdgDir("", filepath.Join(".local", "share"), "crush")
 	}
-	return xdgDir("XDG_DATA_HOME", filepath.Join(".local", "share"), "crush")
+	// A relative directory would resolve against each process's own working
+	// directory, which differs between AO and Crush.
+	if !filepath.IsAbs(dir) {
+		return "", errors.New("crush data directory is not absolute")
+	}
+	return dir, nil
+}
+
+// crushLockWait matches Crush's own wait for its configuration lock.
+const crushLockWait = 5 * time.Second
+
+// lockCrushConfig takes the lock Crush holds on "<file>.lock" while it
+// rewrites file, so a token refresh or model list Crush saves concurrently
+// is never lost.
+func lockCrushConfig(ctx context.Context, path string) (func(), error) {
+	file, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // Crush's lock beside its data file
+	if err != nil {
+		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Crush's data file could not be locked.")
+	}
+	deadline := time.Now().Add(crushLockWait)
+	for {
+		release, busy, err := tryLockFile(file)
+		if err == nil {
+			return func() {
+				release()
+				_ = file.Close()
+			}, nil
+		}
+		if !busy {
+			_ = file.Close()
+			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Crush's data file could not be locked.")
+		}
+		if time.Now().After(deadline) {
+			_ = file.Close()
+			return nil, apierr.Conflict("AGENT_AUTH_STORE_BUSY", "Crush is saving its settings. Try again in a moment.", nil)
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// crushSignInFields are what Crush itself removes when a key is saved for a
+// provider, so a stored sign-in or its model list never replaces the key.
+// Crush drops all of providers.anthropic while a Claude sign-in is stored.
+var crushSignInFields = map[string][]string{
+	"openai":    {"oauth", "chatgpt_models"},
+	"xai":       {"oauth", "grok_models"},
+	"anthropic": {"oauth"},
 }
 
 func crushCatalogPath() (string, error) {
@@ -115,15 +176,25 @@ func readCatwalkCatalog(data []byte) ([]catalogEntry, error) {
 		if name == "" || len(name) > 128 || strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 			name = provider.ID
 		}
-		out = append(out, catalogEntry{CatalogProvider: CatalogProvider{ID: provider.ID, Name: name, Env: env, Models: len(provider.Models)}})
+		models := make([]string, 0, len(provider.Models))
+		for _, raw := range provider.Models {
+			var model struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(raw, &model) == nil && model.ID != "" {
+				models = append(models, model.ID)
+			}
+		}
+		out = append(out, catalogEntry{CatalogProvider: CatalogProvider{ID: provider.ID, Name: name, Env: env, Models: len(models)}, models: models})
 	}
 	return out, nil
 }
 
 func saveCrushProviderKey(ctx context.Context, _ catalogHarness, providerID, key string) error {
-	// Crush expands $NAME and $(command) in config values.
-	if strings.Contains(key, "$") {
-		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Crush reads a key containing $ as a variable or command. Enter the key itself.", nil)
+	// Crush passes a value holding any of these through its shell expander,
+	// which also runs backtick commands and rewrites backslash escapes.
+	if strings.ContainsAny(key, "$`\\'\"") {
+		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Crush reads $, backticks, quotes and backslashes in a key as shell syntax. Enter a key without them.", nil)
 	}
 	dir, err := crushDataDir()
 	if err != nil {
@@ -133,6 +204,11 @@ func saveCrushProviderKey(ctx context.Context, _ catalogHarness, providerID, key
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Crush's data directory could not be prepared.")
 	}
 	path := filepath.Join(dir, "crush.json")
+	unlock, err := lockCrushConfig(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	config := map[string]json.RawMessage{}
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Size() > 4*1024*1024 {
@@ -160,6 +236,9 @@ func saveCrushProviderKey(ctx context.Context, _ catalogHarness, providerID, key
 		entry = map[string]json.RawMessage{}
 	}
 	entry["api_key"], _ = json.Marshal(key)
+	for _, field := range crushSignInFields[providerID] {
+		delete(entry, field)
+	}
 	providers[providerID] = entry
 	config["providers"], _ = json.Marshal(providers)
 	data, err := json.MarshalIndent(config, "", "  ")

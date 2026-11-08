@@ -63,11 +63,15 @@ func saveAiderAPIKey(ctx context.Context, method, key string) error {
 	if err != nil {
 		return err
 	}
-	if provider == "openai" {
-		upsertYAMLMappingString(root, "openai-api-key", key)
-	} else if provider == "anthropic" {
-		upsertYAMLMappingString(root, "anthropic-api-key", key)
-	} else if err := upsertYAMLProviderKey(root, provider, key); err != nil {
+	switch provider {
+	case "openai":
+		err = upsertYAMLMappingString(root, "openai-api-key", key)
+	case "anthropic":
+		err = upsertYAMLMappingString(root, "anthropic-api-key", key)
+	default:
+		err = upsertYAMLProviderKey(root, provider, key)
+	}
+	if err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(&doc)
@@ -112,16 +116,34 @@ func mappingRoot(doc *yaml.Node) (*yaml.Node, error) {
 	return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Aider's configuration file is invalid; repair it before saving a key here.", nil)
 }
 
-func upsertYAMLMappingString(root *yaml.Node, key, value string) {
+// errYAMLAnchored refuses to change a value other settings share through a
+// YAML anchor: replacing it would leave their aliases dangling, and changing
+// it in place would change them too.
+var errYAMLAnchored = apierr.Invalid("AGENT_AUTH_STORE_SHARED", "This setting is shared with others through a YAML anchor; change it in the file itself.", nil)
+
+// upsertYAMLMappingString sets key to the string value. An existing string is
+// updated in place, keeping its comments and quoting; an alias becomes a
+// plain string, leaving the value it pointed at where it is defined.
+func upsertYAMLMappingString(root *yaml.Node, key, value string) error {
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == key {
-			root.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
-			return
+		if root.Content[i].Value != key {
+			continue
 		}
+		node := root.Content[i+1]
+		switch {
+		case node.Anchor != "":
+			return errYAMLAnchored
+		case node.Kind == yaml.ScalarNode:
+			node.Tag, node.Value = "!!str", value
+		default:
+			root.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, LineComment: node.LineComment}
+		}
+		return nil
 	}
 	root.Content = append(root.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+	return nil
 }
 
 // upsertYAMLProviderKey maintains Aider's documented `api-key` list of
@@ -137,7 +159,14 @@ func upsertYAMLProviderKey(root *yaml.Node, provider, key string) error {
 			entry := provider + "=" + key
 			for j, item := range list.Content {
 				if providerOfYAMLKeyEntry(item.Value) == provider {
-					list.Content[j] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: entry}
+					switch {
+					case item.Anchor != "":
+						return errYAMLAnchored
+					case item.Kind == yaml.ScalarNode:
+						item.Tag, item.Value = "!!str", entry
+					default:
+						list.Content[j] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: entry}
+					}
 					return nil
 				}
 			}

@@ -1,6 +1,7 @@
 package agentauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -57,7 +58,7 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		}
 	}
 	path := filepath.Join(dir, "settings.json")
-	root, err := readQwenSettings(path)
+	root, data, err := readQwenSettings(path)
 	if err != nil {
 		return err
 	}
@@ -97,31 +98,37 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		}
 		found = true
 	}
-	if !found {
-		entry := map[string]json.RawMessage{}
-		entry["id"], _ = json.Marshal(modelID)
-		entry["envKey"], _ = json.Marshal(envName)
-		if route.baseURL != "" {
-			entry["baseUrl"], _ = json.Marshal(route.baseURL)
-		}
-		models = append(models, entry)
-	}
-	providers[route.authType], _ = json.Marshal(models)
-	root["modelProviders"], _ = json.Marshal(providers)
-	auth["selectedType"], _ = json.Marshal(route.authType)
-	security["auth"], _ = json.Marshal(auth)
-	root["security"], _ = json.Marshal(security)
-	model, err := qwenObject(root["model"])
-	if err != nil {
+	if _, err := qwenObject(root["model"]); err != nil {
 		return err
 	}
-	model["name"], _ = json.Marshal(modelID)
-	root["model"], _ = json.Marshal(model)
-	data, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be encoded.")
+	// Each change is spliced into the file, so comments, key order and
+	// layout elsewhere stay as the user wrote them.
+	type edit struct {
+		path  []string
+		value any
 	}
-	return atomicConfigWrite(ctx, dir, path, append(data, '\n'))
+	edits := []edit{{[]string{"security", "auth", "selectedType"}, route.authType}, {[]string{"model", "name"}, modelID}}
+	if !found {
+		entry := map[string]string{"id": modelID, "envKey": envName}
+		if route.baseURL != "" {
+			entry["baseUrl"] = route.baseURL
+		}
+		list := make([]any, 0, len(models)+1)
+		for _, model := range models {
+			list = append(list, model)
+		}
+		edits = append([]edit{{[]string{"modelProviders", route.authType}, append(list, entry)}}, edits...)
+	}
+	for _, change := range edits {
+		raw, err := json.Marshal(change.value)
+		if err != nil {
+			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be encoded.")
+		}
+		if data, err = setJSONC(data, change.path, raw); err != nil {
+			return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's settings are invalid; repair them before saving a key here.", nil)
+		}
+	}
+	return atomicConfigWrite(ctx, dir, path, data)
 }
 
 func qwenObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -135,37 +142,39 @@ func qwenObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	return value, nil
 }
 
-func readQwenSettings(path string) (map[string]json.RawMessage, error) {
+// readQwenSettings returns Qwen's settings parsed the way Qwen reads them
+// (comments, trailing commas, a BOM), with the file's bytes for editing.
+func readQwenSettings(path string) (map[string]json.RawMessage, []byte, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return map[string]json.RawMessage{}, nil
+		return map[string]json.RawMessage{}, nil, nil
 	}
 	if err != nil {
-		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be inspected.")
+		return nil, nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be inspected.")
 	}
 	if !info.Mode().IsRegular() || info.Size() > 64*1024 {
-		return nil, apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "Qwen's settings are not a safe regular file.", nil)
+		return nil, nil, apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "Qwen's settings are not a safe regular file.", nil)
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be read.")
+		return nil, nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be read.")
 	}
 	opened, statErr := file.Stat()
 	if statErr != nil || !os.SameFile(info, opened) {
 		_ = file.Close()
-		return nil, apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "Qwen's settings changed while opening them.", nil)
+		return nil, nil, apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "Qwen's settings changed while opening them.", nil)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, 64*1024+1))
 	_ = file.Close()
 	if readErr != nil || len(data) > 64*1024 {
-		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be read.")
+		return nil, nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be read.")
 	}
-	if len(data) == 0 {
-		return map[string]json.RawMessage{}, nil
+	if plain, _ := jsoncPlain(data); len(bytes.TrimSpace(plain)) == 0 {
+		return map[string]json.RawMessage{}, data, nil
 	}
 	var root map[string]json.RawMessage
-	if json.Unmarshal(data, &root) != nil || root == nil {
-		return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's settings are invalid; repair them before saving a key here.", nil)
+	if jsoncUnmarshal(data, &root) != nil || root == nil {
+		return nil, nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's settings are invalid; repair them before saving a key here.", nil)
 	}
-	return root, nil
+	return root, data, nil
 }

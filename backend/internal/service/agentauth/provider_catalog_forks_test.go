@@ -61,6 +61,7 @@ func TestMiMoCatalogKeyUsesReportedDataDir(t *testing.T) {
 
 func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 	data := t.TempDir()
+	t.Setenv("CRUSH_GLOBAL_DATA", "")
 	t.Setenv("XDG_DATA_HOME", data)
 	t.Setenv("LOCALAPPDATA", data)
 	dir := filepath.Join(data, "crush")
@@ -68,20 +69,30 @@ func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := `[
-		{"id":"openrouter","name":"OpenRouter","api_key":"$OPENROUTER_API_KEY","models":[{},{}]},
+		{"id":"openrouter","name":"OpenRouter","api_key":"$OPENROUTER_API_KEY","models":[{"id":"or-b"},{"id":"or-a"}]},
+		{"id":"openai","name":"OpenAI","api_key":"$OPENAI_API_KEY","models":[{"id":"gpt-5"}]},
 		{"id":"azure","name":"Azure OpenAI","api_key":"$AZURE_OPENAI_API_KEY","models":[]},
 		{"id":"bedrock","name":"AWS Bedrock","api_key":"","models":[]}
 	]`
 	if err := os.WriteFile(filepath.Join(dir, "providers.json"), []byte(catalog), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "crush.json"), []byte(`{"recent_models":{"large":"x"},"providers":{"openrouter":{"base_url":"https://example.test"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "crush.json"), []byte(`{"recent_models":{"large":"x"},"providers":{"openrouter":{"base_url":"https://example.test"},"openai":{"oauth":{"access_token":"t"},"chatgpt_models":["gpt-5"]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewWithAgentResolver(foundExecutable("crush"), nil, nil, t.TempDir())
 	providers, err := svc.CatalogProviders(t.Context(), "crush")
-	if err != nil || len(providers) != 1 || providers[0].ID != "openrouter" || providers[0].Env != "OPENROUTER_API_KEY" || providers[0].Models != 2 {
+	var openrouter *CatalogProvider
+	for i := range providers {
+		if providers[i].ID == "openrouter" {
+			openrouter = &providers[i]
+		}
+	}
+	if err != nil || len(providers) != 2 || openrouter == nil || openrouter.Env != "OPENROUTER_API_KEY" || openrouter.Models != 2 {
 		t.Fatalf("Crush providers = %+v, %v", providers, err)
+	}
+	if models, err := svc.CatalogModels(t.Context(), "crush", "openrouter"); err != nil || len(models) != 2 {
+		t.Fatalf("Crush models = %v, %v", models, err)
 	}
 	if _, err := svc.StartLoginWithOptions(t.Context(), "crush", catalogKeyMethod, "sk-or", LoginOptions{Provider: "openrouter"}); err != nil {
 		t.Fatal(err)
@@ -95,7 +106,40 @@ func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 		config.Providers["openrouter"]["api_key"] != "sk-or" || config.Providers["openrouter"]["base_url"] != "https://example.test" {
 		t.Fatalf("crush.json = %s, %v", raw, err)
 	}
-	if _, err := svc.StartLoginWithOptions(t.Context(), "crush", catalogKeyMethod, "$(cat ~/.ssh/id_rsa)", LoginOptions{Provider: "openrouter"}); err == nil {
-		t.Fatal("accepted a key Crush would expand")
+	for _, key := range []string{"$(cat ~/.ssh/id_rsa)", "abc`id`def", `abc\def`} {
+		if _, err := svc.StartLoginWithOptions(t.Context(), "crush", catalogKeyMethod, key, LoginOptions{Provider: "openrouter"}); err == nil {
+			t.Fatalf("accepted %q, which Crush would expand", key)
+		}
+	}
+	// As when Crush saves a key itself, a stored ChatGPT sign-in and its model
+	// list go, or a token refresh would replace the key.
+	if _, err := svc.StartLoginWithOptions(t.Context(), "crush", catalogKeyMethod, "sk-openai", LoginOptions{Provider: "openai"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(filepath.Join(dir, "crush.json"))
+	var saved struct {
+		Providers map[string]map[string]json.RawMessage `json:"providers"`
+	}
+	if json.Unmarshal(raw, &saved) != nil || saved.Providers["openai"]["oauth"] != nil || saved.Providers["openai"]["chatgpt_models"] != nil || string(saved.Providers["openai"]["api_key"]) != `"sk-openai"` {
+		t.Fatalf("crush.json = %s", raw)
+	}
+}
+
+func TestCrushFollowsCrushGlobalData(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("CRUSH_GLOBAL_DATA", data)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if path, err := crushCatalogPath(); err != nil || path != filepath.Join(data, "providers.json") {
+		t.Fatalf("catalog path = %q, %v", path, err)
+	}
+	if err := saveCrushProviderKey(t.Context(), catalogHarness{}, "openrouter", "sk-or"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "crush.json")); err != nil {
+		t.Fatalf("key not saved where Crush reads it: %v", err)
+	}
+	t.Setenv("CRUSH_GLOBAL_DATA", "relative/crush")
+	if _, err := crushDataDir(); err == nil {
+		t.Fatal("accepted a relative Crush data directory")
 	}
 }

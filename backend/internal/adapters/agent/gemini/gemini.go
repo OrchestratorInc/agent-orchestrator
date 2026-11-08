@@ -281,6 +281,17 @@ func stripGeminiJSONComments(data []byte) []byte {
 	return out
 }
 
+// ConfigHome is the directory Gemini CLI treats as home: GEMINI_CLI_HOME
+// when set, else the user's home. Its .gemini folder holds settings.json and
+// the user-wide .env.
+func ConfigHome() (string, error) {
+	dir, err := geminiConfigDir()
+	if err != nil || dir == "" {
+		return "", err
+	}
+	return filepath.Dir(dir), nil
+}
+
 func geminiConfigDir() (string, error) {
 	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
 	if home == "" {

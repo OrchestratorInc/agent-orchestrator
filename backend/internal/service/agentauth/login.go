@@ -884,7 +884,16 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 		return true, s.saveCatalogKey(ctx, plan, opts.Provider, secret)
 	}
 	if writer, ok := directKeyWriter(agentID); ok && !strings.HasPrefix(method, "env_") {
-		return true, writer(ctx, method, secret)
+		if err := writer(ctx, method, secret); err != nil {
+			return true, err
+		}
+		// Gemini CLI reads ~/.gemini/.env only in trusted folders without a
+		// .env of their own, and AO worktrees start untrusted. Its sessions
+		// receive the key through their environment, which wins.
+		if agentID == "gemini" && strings.TrimSpace(s.dataDir) != "" {
+			return true, s.storeProviderKey(ctx, "GEMINI_API_KEY", strings.TrimSpace(secret), nil, agentID)
+		}
+		return true, nil
 	}
 	if name, ok := environmentMethod(agentID, method); ok {
 		if agentID == "openhands" {

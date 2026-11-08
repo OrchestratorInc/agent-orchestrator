@@ -2,12 +2,15 @@ package agentauth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 func TestContinueProviderLoginWritesNativeConfigAndGlobalEnv(t *testing.T) {
@@ -65,5 +68,64 @@ func TestContinueProviderLoginWritesNativeConfigAndGlobalEnv(t *testing.T) {
 	envData, err := os.ReadFile(filepath.Join(dir, ".env"))
 	if err != nil || string(envData) != "EXISTING_KEY=keep\nANTHROPIC_API_KEY=test-secret\n" {
 		t.Fatalf("Continue global env = %q, %v", envData, err)
+	}
+}
+
+func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
+	home := t.TempDir()
+	previousHome := continueConfigHome
+	continueConfigHome = func() (string, error) { return home, nil }
+	t.Cleanup(func() { continueConfigHome = previousHome })
+	t.Setenv("CONTINUE_GLOBAL_DIR", "")
+	code := func(err error) string {
+		var apiErr *apierr.Error
+		if errors.As(err, &apiErr) {
+			return apiErr.Code
+		}
+		return ""
+	}
+	// Continue falls back to config.json only while config.yaml is missing.
+	legacy := filepath.Join(home, ".continue")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(`{"models":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_LEGACY" {
+		t.Fatalf("saved beside a legacy config.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "config.yaml")); !os.IsNotExist(err) {
+		t.Fatal("created a config.yaml that hides config.json")
+	}
+	// CONTINUE_GLOBAL_DIR moves the whole global folder.
+	global := t.TempDir()
+	t.Setenv("CONTINUE_GLOBAL_DIR", global)
+	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(global, ".env")); err != nil {
+		t.Fatalf("key not saved in CONTINUE_GLOBAL_DIR: %v", err)
+	}
+	// A value other models share through an anchor is never rewritten; an
+	// alias becomes a plain value and the anchor it pointed at stays valid.
+	shared := "name: c\nversion: 0.0.1\nschema: v1\nmodels:\n  - name: gpt-5\n    provider: openai\n    model: gpt-5\n    apiKey: &shared ${{ secrets.OTHER_KEY }}\n  - name: other\n    provider: openai\n    model: other\n    apiKey: *shared\n"
+	configPath := filepath.Join(global, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_SHARED" {
+		t.Fatalf("rewrote an anchored value: %v", err)
+	}
+	if data, _ := os.ReadFile(configPath); string(data) != shared {
+		t.Fatalf("changed a refused config: %s", data)
+	}
+	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "other", "test-secret"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(configPath)
+	var decoded map[string]any
+	if err != nil || yaml.Unmarshal(data, &decoded) != nil || !strings.Contains(string(data), "&shared") {
+		t.Fatalf("config after replacing an alias = %s, %v", data, err)
 	}
 }
