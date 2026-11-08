@@ -2318,6 +2318,8 @@
 	"files.error.loadWorkspaceFile": "No se pudo cargar el archivo del espacio de trabajo",
 	"files.error.emptyResponse": "La respuesta del archivo del espacio de trabajo estaba vacía",
 	"files.binaryUnavailable": "La vista previa de archivos binarios no está disponible.",
+	"files.previewUnavailableType": "La vista previa no está disponible para archivos {{type}}.",
+	"files.previewUnavailable": "La vista previa no está disponible para este tipo de archivo.",
 	"files.imageBefore": "Antes",
 	"files.imageAfter": "Después",
 	"files.imageDimensions": "{{width}} × {{height}}",

@@ -2803,6 +2803,8 @@
 	"files.error.loadWorkspaceFile": "Не удалось загрузить файл рабочего пространства",
 	"files.error.emptyResponse": "Ответ с файлом рабочего пространства пуст",
 	"files.binaryUnavailable": "Предпросмотр бинарного файла недоступен.",
+	"files.previewUnavailableType": "Предпросмотр файлов {{type}} недоступен.",
+	"files.previewUnavailable": "Предпросмотр файлов этого типа недоступен.",
 	"files.imageBefore": "До",
 	"files.imageAfter": "После",
 	"files.imageDimensions": "{{width}} × {{height}}",

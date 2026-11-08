@@ -2715,6 +2715,8 @@
 	"files.error.loadWorkspaceFile": "Unable to load workspace file",
 	"files.error.emptyResponse": "Workspace file response was empty",
 	"files.binaryUnavailable": "Binary file preview is not available.",
+	"files.previewUnavailableType": "Preview isn't available for {{type}} files.",
+	"files.previewUnavailable": "Preview isn't available for this file type.",
 	"files.imageBefore": "Before",
 	"files.imageAfter": "After",
 	"files.imageDimensions": "{{width}} × {{height}}",
