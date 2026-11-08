@@ -59,6 +59,11 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 			return
 		case <-ticker.C:
 			publish()
+		case <-bridge.ListingNudges():
+			// A device just linked the machine: ask again now, even at an
+			// unchanged address still in its refusal backoff.
+			lastSent = ""
+			publish()
 		}
 	}
 }

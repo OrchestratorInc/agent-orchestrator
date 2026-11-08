@@ -2707,10 +2707,11 @@ type MobileStatusResponse struct {
 	// machine no account holds, so it never moves one to another account or
 	// lists one again that its account removed.
 	AccountLinked bool `json:"accountLinked"`
-	// AccountUnlisted means AO Cloud refused the machine's last address
-	// publish under its current account token: no account lists it, so a
-	// link that never reached AO Cloud shows as such.
-	AccountUnlisted     bool `json:"accountUnlisted"`
+	// AccountLinkRefused means AO Cloud refused the machine's last address
+	// publish under its current account token: no account lists the link, or
+	// AO Cloud does not accept its credential. Either way the account's
+	// devices may not list the machine, and linking again repairs both.
+	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`

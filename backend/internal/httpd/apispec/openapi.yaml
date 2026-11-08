@@ -18970,9 +18970,9 @@ components:
       type: object
     MobileStatusResponse:
       properties:
-        accountLinked:
+        accountLinkRefused:
           type: boolean
-        accountUnlisted:
+        accountLinked:
           type: boolean
         browserRemoteAccess:
           type: boolean
@@ -19007,7 +19007,7 @@ components:
       required:
       - enabled
       - accountLinked
-      - accountUnlisted
+      - accountLinkRefused
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel

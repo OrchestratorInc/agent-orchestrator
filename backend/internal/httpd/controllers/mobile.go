@@ -296,11 +296,17 @@ type BridgeService struct {
 	// Guards Tunnel, which ensureTunnel may replace while HTTP handlers read it.
 	tunnelMu sync.RWMutex
 
-	// unlistedAccountHash is the account token digest AO Cloud last refused
-	// the machine's address publish for: no account lists the machine under
-	// it. Empty once a publish is accepted.
-	unlistedMu          sync.Mutex
-	unlistedAccountHash string
+	// refusedAccountHash is the account token digest AO Cloud last refused
+	// the machine's address publish for. AO Cloud answers one 401 for a link
+	// no account lists and for a listed one whose credential it does not
+	// accept, so this says only that AO Cloud refuses the link. Empty once a
+	// publish is accepted.
+	refusedMu          sync.Mutex
+	refusedAccountHash string
+	// listingNudge asks the address publisher to publish now instead of
+	// waiting out its backoff. Buffered so a nudge is never lost or blocks.
+	listingNudgeOnce sync.Once
+	listingNudge     chan struct{}
 	// tunnelResolving is closed once ResolveTunnelInBackground's lookup ends.
 	// Nil when no background lookup was started.
 	tunnelResolving chan struct{}
@@ -337,23 +343,38 @@ func first(hosts []string) string {
 
 // NoteAccountListing records whether AO Cloud accepted the machine's address
 // publish under the account token digest hash, so Status can tell a link AO
-// Cloud lists from a token no account lists.
-func (b *BridgeService) NoteAccountListing(hash string, listed bool) {
-	b.unlistedMu.Lock()
-	defer b.unlistedMu.Unlock()
-	if listed {
-		if b.unlistedAccountHash == hash {
-			b.unlistedAccountHash = ""
+// Cloud accepts from one it refuses.
+func (b *BridgeService) NoteAccountListing(hash string, accepted bool) {
+	b.refusedMu.Lock()
+	defer b.refusedMu.Unlock()
+	if accepted {
+		if b.refusedAccountHash == hash {
+			b.refusedAccountHash = ""
 		}
 		return
 	}
-	b.unlistedAccountHash = hash
+	b.refusedAccountHash = hash
 }
 
-func (b *BridgeService) accountUnlisted(hash string) bool {
-	b.unlistedMu.Lock()
-	defer b.unlistedMu.Unlock()
-	return hash != "" && b.unlistedAccountHash == hash
+func (b *BridgeService) accountLinkRefused(hash string) bool {
+	b.refusedMu.Lock()
+	defer b.refusedMu.Unlock()
+	return hash != "" && b.refusedAccountHash == hash
+}
+
+// ListingNudges delivers a value whenever the address publisher should
+// publish again at once, such as right after a device linked the machine.
+func (b *BridgeService) ListingNudges() <-chan struct{} {
+	b.listingNudgeOnce.Do(func() { b.listingNudge = make(chan struct{}, 1) })
+	return b.listingNudge
+}
+
+func (b *BridgeService) nudgeListing() {
+	b.listingNudgeOnce.Do(func() { b.listingNudge = make(chan struct{}, 1) })
+	select {
+	case b.listingNudge <- struct{}{}:
+	default:
+	}
 }
 
 // Status reports the current bridge state, host, and port. The plaintext
@@ -369,7 +390,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	res := MobileStatusResponse{
 		Enabled:             enabled,
 		AccountLinked:       st.AccountTokenHash != "",
-		AccountUnlisted:     b.accountUnlisted(st.AccountTokenHash),
+		AccountLinkRefused:  b.accountLinkRefused(st.AccountTokenHash),
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),
@@ -1097,6 +1118,9 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		b.nudgeTunnel()
 		t.Start(b.LAN.BoundPort())
 	}
+	// A link that just reached AO Cloud may follow a refused publish; publish
+	// again now so its status does not wait out the refusal backoff.
+	b.nudgeListing()
 	return b.Status(), nil
 }
 

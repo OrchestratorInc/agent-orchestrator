@@ -15,12 +15,12 @@ type remoteHostStatus struct {
 	Enabled       bool `json:"enabled"`
 	LoopbackOnly  bool `json:"loopbackOnly"`
 	AccountLinked bool `json:"accountLinked"`
-	// AccountUnlisted: AO Cloud refused the machine's address under its
-	// account token, so no account's devices list it.
-	AccountUnlisted bool   `json:"accountUnlisted"`
-	HostID          string `json:"hostId"`
-	Password        string `json:"password"`
-	Tunnel          struct {
+	// AccountLinkRefused: AO Cloud refused the machine's address under its
+	// account token, so the account's devices may not list it.
+	AccountLinkRefused bool   `json:"accountLinkRefused"`
+	HostID             string `json:"hostId"`
+	Password           string `json:"password"`
+	Tunnel             struct {
 		Supported  bool   `json:"supported"`
 		Installing bool   `json:"installing"`
 		Running    bool   `json:"running"`
@@ -80,8 +80,8 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				}
 				if status.AccountLinked {
 					message := "Linked to an AO account: its signed-in devices list this machine."
-					if status.AccountUnlisted {
-						message = "Not listed in any AO account: AO Cloud does not list this machine under its link, so no device shows it. Run `ao remote-host link` again."
+					if status.AccountLinkRefused {
+						message = "AO Cloud refuses this machine's account link, so your devices may not list it. Run `ao remote-host link` again."
 					}
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
 						return err
@@ -104,7 +104,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					message := "Fixed address: it stays the same after restarts."
 					if !status.Tunnel.Fixed {
 						message = "Quick tunnel: the address changes on restart and has no uptime guarantee."
-						if !status.AccountLinked || status.AccountUnlisted {
+						if !status.AccountLinked || status.AccountLinkRefused {
 							message += " Run `ao remote-host link` to add this machine to your AO account, which gives it a fixed address when the account has one free."
 						}
 					}
