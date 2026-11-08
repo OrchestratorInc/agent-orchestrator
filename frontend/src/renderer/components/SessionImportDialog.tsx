@@ -18,7 +18,7 @@ import {
 	type ImportCandidate,
 	type ImportResult,
 } from "../lib/session-import";
-import { cn, shortenPaths } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
@@ -49,6 +49,7 @@ type Folder = {
 
 const SUGGESTED_FOLDER_CHATS = 3;
 const MAX_FOLDER_LOGOS = 3;
+const MAX_LISTED_FAILURES = 5;
 
 export function SessionImportDialog() {
 	const dialog = useSessionImportStore((state) => state.dialog);
@@ -80,8 +81,8 @@ function useImportRun(onDone: (results: ImportResult[]) => void) {
 		try {
 			const results = await importChats(queryClient, ids, folders);
 			const failed = results.filter((result) => result.status === "failed");
-			const candidates = queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [];
-			setFailures(failed.map((result) => ({ id: result.id, title: candidates.find((chat) => chat.id === result.id)?.title ?? result.id, error: result.error })));
+			const titles = new Map((queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? []).map((chat) => [chat.id, chat.title]));
+			setFailures(failed.map((result) => ({ id: result.id, title: titles.get(result.id) ?? result.id, error: result.error })));
 			if (failed.length) setError(t("sessionImport.resultFailed", { count: failed.length }));
 			onDone(results);
 			if (failed.length) void queryClient.invalidateQueries({ queryKey: sessionImportPreviewQuery.queryKey });
@@ -169,7 +170,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 	const [showOther, setShowOther] = useState(false);
 	const byKey = new Map<string, Folder>();
 	for (const chat of preview.data?.candidates ?? []) {
-		const key = folderKey(chat);
+		const key = chat.projectId ?? chat.folder;
 		if (!key || chat.sessionId) continue;
 		const project = chat.projectId ? workspaces.data?.find((workspace) => workspace.id === chat.projectId) : undefined;
 		const folder = byKey.get(key) ?? {
@@ -193,21 +194,23 @@ function Folders({ onClose }: { onClose: () => void }) {
 	}
 	const suggested = folders.filter((folder) => folder.suggested);
 	const other = folders.filter((folder) => !folder.suggested);
-	const selected = picked ?? new Set(suggested.map((folder) => folder.key));
-	const chosen = folders.filter((folder) => selected.has(folder.key));
-	const toggle = (key: string, checked: boolean) =>
+	const selected = picked ?? new Set(suggested.flatMap((folder) => folder.chats.map((chat) => chat.id)));
+	const isPicked = (folder: Folder) => folder.chats.some((chat) => selected.has(chat.id));
+	const chosen = folders.filter(isPicked);
+	const toggle = (folder: Folder, checked: boolean) =>
 		setPicked((current) => {
 			const next = new Set(current ?? selected);
-			if (checked) next.add(key);
-			else next.delete(key);
+			for (const chat of folder.chats) {
+				if (checked) next.add(chat.id);
+				else next.delete(chat.id);
+			}
 			return next;
 		});
 	const { importing, error, failures, run } = useImportRun((results) => {
-		const rescanned = queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [];
 		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
 		if (created.size) {
 			closeSessionImportOffer();
-			const imported = rescanned
+			const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
 				.filter((chat) => chat.sessionId && created.has(chat.id))
 				.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 			for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
@@ -219,13 +222,11 @@ function Folders({ onClose }: { onClose: () => void }) {
 				action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
 			});
 		}
-		const failed = new Set(results.flatMap((result) => (result.status === "failed" ? [result.id] : [])));
-		if (failed.size) setPicked(new Set(rescanned.flatMap((chat) => (failed.has(chat.id) ? (folderKey(chat) ?? []) : []))));
-		else onClose();
+		if (!results.some((result) => result.status === "failed")) onClose();
 	});
 	const otherOpen = showOther || !suggested.length;
 	const row = (folder: Folder) => (
-		<FolderRow key={folder.key} folder={folder} checked={selected.has(folder.key)} disabled={importing} onCheckedChange={(checked) => toggle(folder.key, checked)} />
+		<FolderRow key={folder.key} folder={folder} checked={isPicked(folder)} disabled={importing} onCheckedChange={(checked) => toggle(folder, checked)} />
 	);
 	return (
 		<>
@@ -263,12 +264,13 @@ function Folders({ onClose }: { onClose: () => void }) {
 				<Button
 					variant="footer-primary"
 					disabled={importing || !chosen.length}
-					onClick={() =>
+					onClick={() => {
+						setPicked(selected);
 						void run(
 							chosen.flatMap((folder) => folder.chats.map((chat) => chat.id)),
 							chosen.flatMap((folder) => (folder.folder ? [folder.folder] : [])),
-						)
-					}
+						);
+					}}
 				>
 					{importing ? t("sessionImport.importing") : t("sessionImport.importFolders", { count: chosen.length })}
 				</Button>
@@ -277,21 +279,19 @@ function Folders({ onClose }: { onClose: () => void }) {
 	);
 }
 
-function folderKey(chat: ImportCandidate): string | undefined {
-	return chat.projectId ?? chat.folder;
-}
-
 function ImportError({ error, failures }: { error?: string; failures: { id: string; title: string; error?: string }[] }) {
+	const { t } = useTranslation();
 	if (!error) return null;
 	return (
 		<div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
 			<p>{error}</p>
-			{failures.map((failure) => (
+			{failures.slice(0, MAX_LISTED_FAILURES).map((failure) => (
 				<p key={failure.id} className="truncate text-xs">
 					{failure.title}
 					{failure.error ? `: ${failure.error}` : null}
 				</p>
 			))}
+			{failures.length > MAX_LISTED_FAILURES ? <p className="text-xs">{t("sessionImport.offerMore", { count: failures.length - MAX_LISTED_FAILURES })}</p> : null}
 		</div>
 	);
 }
@@ -384,7 +384,7 @@ function FolderRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{folder.name}</span>
 				<span className="block truncate text-xs text-muted-foreground" title={folder.path}>
-					{shortenPaths(folder.path)}
+					{folder.path.replace(/^\/(?:Users|home)\/[^/]+/, "~")}
 				</span>
 			</span>
 			<span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">

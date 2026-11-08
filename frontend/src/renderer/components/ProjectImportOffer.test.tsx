@@ -73,6 +73,15 @@ it("imports this project's chats from the row and confirms it", async () => {
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["bb", "a"] } });
 });
 
+it("keeps a partial failure next to the confirmation", async () => {
+	renderWith(<ProjectImportOffer projectId="todo" />, [chat("a", "claude-code", { projectId: "todo" }), chat("bb", "codex", { projectId: "todo" })]);
+	expect(await screen.findByText("2 earlier chats in this folder")).toBeInTheDocument();
+	api.POST.mockResolvedValueOnce({ data: { results: [{ id: "a", status: "created", sessionId: "s1" }, { id: "bb", status: "failed", error: "changed" }] } });
+	fireEvent.click(screen.getByRole("button", { name: "Import" }));
+	expect(await screen.findByText("Imported 1 chat into todo-api")).toBeInTheDocument();
+	expect(screen.getByRole("alert")).toHaveTextContent("1 could not be imported.");
+});
+
 it("hides the row for this project once dismissed", async () => {
 	renderWith(<ProjectImportOffer projectId="todo" />, [chat("a", "claude-code", { projectId: "todo" })]);
 	fireEvent.click(await screen.findByRole("button", { name: "Hide for this project" }));

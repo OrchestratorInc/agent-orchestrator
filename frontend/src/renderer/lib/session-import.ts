@@ -76,19 +76,22 @@ export async function importChats(queryClient: QueryClient, ids: string[], folde
 			await queryClient.fetchQuery(sessionImportPreviewQuery);
 		}
 		for (let start = 0; start < ids.length; start += MAX_IMPORT) {
-			const response = await apiClient.POST("/api/v1/session-import", { body: { ids: ids.slice(start, start + MAX_IMPORT) } });
-			if (response.error) {
-				const failure = apiErrorException(response.error);
-				if (!results.length) throw failure;
-				results.push(...ids.slice(start).map((id) => ({ id, status: "failed" as const, error: failure.message })));
+			try {
+				const response = await apiClient.POST("/api/v1/session-import", { body: { ids: ids.slice(start, start + MAX_IMPORT) } });
+				if (response.error) throw apiErrorException(response.error);
+				results.push(...response.data.results);
+			} catch (err) {
+				if (!results.length) throw err;
+				const error = err instanceof Error ? err.message : String(err);
+				results.push(...ids.slice(start).map((id) => ({ id, status: "failed" as const, error })));
 				break;
 			}
-			results.push(...response.data.results);
 		}
 		return results;
 	} finally {
 		const imported = new Map(results.flatMap((r) => (r.status !== "failed" && r.sessionId ? [[r.id, r.sessionId] as const] : [])));
 		if (imported.size) {
+			await queryClient.cancelQueries({ queryKey: sessionImportPreviewQuery.queryKey });
 			queryClient.setQueryData(sessionImportPreviewQuery.queryKey, (data) =>
 				data && { ...data, candidates: data.candidates.map((c) => (imported.has(c.id) ? { ...c, sessionId: imported.get(c.id) } : c)) },
 			);

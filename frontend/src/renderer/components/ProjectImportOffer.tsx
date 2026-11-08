@@ -29,12 +29,20 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 	const dismiss = (
 		<CloseButton size="icon-xs" className="shrink-0" aria-label={t("sessionImport.projectOfferDismiss")} onClick={() => dismissProject(projectId)} />
 	);
+	const alert = error ? (
+		<p role="alert" className="mt-1.5 px-1 text-xs text-destructive">
+			{error}
+		</p>
+	) : null;
 	if (importedCount) {
 		return (
-			<div role="status" className={cn("flex items-center gap-2 px-1 text-xs text-muted-foreground", className)}>
-				<Check aria-hidden="true" className="size-3.5 shrink-0 text-success" />
-				<span className="min-w-0 flex-1 truncate">{t("sessionImport.projectImported", { count: importedCount, project: project.name })}</span>
-				{dismiss}
+			<div className={className}>
+				<div role="status" className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+					<Check aria-hidden="true" className="size-3.5 shrink-0 text-success" />
+					<span className="min-w-0 flex-1 truncate">{t("sessionImport.projectImported", { count: importedCount, project: project.name })}</span>
+					{dismiss}
+				</div>
+				{alert}
 			</div>
 		);
 	}
@@ -82,11 +90,7 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 				</Button>
 				{dismiss}
 			</div>
-			{error ? (
-				<p role="alert" className="mt-1.5 px-1 text-xs text-destructive">
-					{error}
-				</p>
-			) : null}
+			{alert}
 		</div>
 	);
 }
