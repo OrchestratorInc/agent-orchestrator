@@ -39,7 +39,7 @@ const session = {
 
 const moveReplies = {
 	"/api/v1/sessions/{sessionId}/exit-agent": { data: {} },
-	"/api/v1/sessions/{sessionId}/move/export": { data: { manifest: { branch: "feat/x", tip: "abc", harness: "claude-code" }, handoffNote: "note" } },
+	"/api/v1/sessions/{sessionId}/move/export": { data: { manifest: { branch: "feat/x", tip: "abc1234def", wip: true, harness: "claude-code" }, handoffNote: "note" } },
 	"/api/v1/sessions/{sessionId}/move/complete": { data: {} },
 };
 
@@ -103,7 +103,11 @@ it("tries again with the same move id and Cloud request after a lost response", 
 	renderDialog();
 	const user = userEvent.setup();
 	await user.click(await screen.findByRole("button", { name: "Move to AO Cloud" }));
-	await user.click(await screen.findByRole("button", { name: "Try again" }));
+	// The push already happened, so the session is not as it was.
+	expect(await screen.findByText("The uncommitted files are now commit abc1234 on feat/x, here and on GitHub.")).toBeTruthy();
+	expect(screen.getByText("The agent here is running again.")).toBeTruthy();
+	expect(screen.queryByText("The session continues here, unchanged.")).toBeNull();
+	await user.click(screen.getByRole("button", { name: "Try again" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
 	const [first, second] = cloud.createSession.mock.calls;
 	expect(second).toEqual(first);

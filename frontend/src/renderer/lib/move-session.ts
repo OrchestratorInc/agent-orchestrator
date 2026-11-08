@@ -19,13 +19,26 @@ export interface MoveResult {
 	completeError?: string;
 }
 
-/** A failed move. rolledBack says the source session was resumed and is as it was. */
+/** What a move had pushed to origin before it failed. */
+export interface MovePushed {
+	branch: string;
+	tip: string;
+	/** The tip is the commit of the session's uncommitted files. */
+	wip: boolean;
+}
+
+/**
+ * A failed move. rolledBack says the source agent was resumed. pushed is set
+ * once the export pushed the branch: the uncommitted files are then a commit
+ * on it, here and on origin, so the session is no longer as it was.
+ */
 export class MoveError extends Error {
 	constructor(
 		message: string,
 		readonly step: MoveStep,
 		readonly code: string | undefined,
 		readonly rolledBack: boolean,
+		readonly pushed?: MovePushed,
 	) {
 		super(message);
 	}
@@ -50,8 +63,8 @@ export interface MoveDeps {
 /**
  * Moves a worker session to AO Cloud: stop its agent, push its branch, start
  * a Cloud session on that branch, then mark it moved here. Until the Cloud
- * session exists a failure resumes the source agent, so the session continues
- * unchanged. moveId makes each call safe to retry.
+ * session exists a failure resumes the source agent; after the push the error
+ * says what was pushed. moveId makes each call safe to retry.
  */
 export async function moveSession(
 	input: { sessionId: string; sourceLabel?: string; target: MoveTarget; moveId?: string },
@@ -67,9 +80,9 @@ export async function moveSession(
 		throw new MoveError(apiErrorMessage(stopped.error, "Could not stop the agent"), "stop", apiErrorCode(stopped.error), false);
 	}
 
-	const rollback = async (step: MoveStep, error: unknown, fallback: string): Promise<never> => {
+	const rollback = async (step: MoveStep, error: unknown, fallback: string, pushed?: MovePushed): Promise<never> => {
 		const resumed = await deps.source.POST("/api/v1/sessions/{sessionId}/resume-agent", path);
-		throw new MoveError(apiErrorMessage(error, fallback), step, apiErrorCode(error), !resumed.error);
+		throw new MoveError(apiErrorMessage(error, fallback), step, apiErrorCode(error), !resumed.error, pushed);
 	};
 
 	deps.onStep?.("export");
@@ -98,7 +111,7 @@ export async function moveSession(
 		const { session } = await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId });
 		cloudSessionId = session.id;
 	} catch (error) {
-		return rollback("import", error, "Could not start the session in AO Cloud");
+		return rollback("import", error, "Could not start the session in AO Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
 	}
 
 	deps.onStep?.("complete");
