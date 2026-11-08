@@ -3,6 +3,7 @@ package usage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 const deepseekTestSessionID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"
@@ -92,30 +94,36 @@ func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 // 512 MiB decoded, and wrote the unchanged cursor back. A log with the size
 // and mtime of a read that left nothing unread is not decoded again, and a
 // pass that finds nothing new writes nothing.
-func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
-	ctx := context.Background()
-	clock := time.Unix(1700000000, 0).UTC()
-	path := filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
+func newDeepSeekTestIngestion(t *testing.T, clock *time.Time) (path string, store *sqlite.Store, session domain.SessionRecord, source domain.UsageSourceRecord) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
 	writeDeepSeekTestLog(t, path, deepseekTestFrames)
-	store, session := seedUsageTestSession(
-		t, t.TempDir(), "usage", domain.HarnessDeepSeek, domain.ActivityActive, deepseekTestSessionID, clock,
+	store, session = seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessDeepSeek, domain.ActivityActive, deepseekTestSessionID, *clock,
 	)
-	binding := seedUsageTestBinding(t, store, session, deepseekTestSessionID, domain.UsageBindingActive, clock)
-	identity, err := usagesvc.SourceIdentity(ctx, path)
+	binding := seedUsageTestBinding(t, store, session, deepseekTestSessionID, domain.UsageBindingActive, *clock)
+	identity, err := usagesvc.SourceIdentity(context.Background(), path)
 	mustNoError(t, err)
-	source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+	source, err = store.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
 		BindingID:       binding.ID,
 		Kind:            domain.UsageSourceDeepSeekSession,
 		NativeSessionID: deepseekTestSessionID,
 		ArtifactPath:    path,
 		FileIdentity:    identity,
 		State:           domain.UsageSourcePending,
-		UpdatedAt:       clock,
+		UpdatedAt:       *clock,
 	})
 	mustNoError(t, err)
+	return path, store, session, source
+}
+
+func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Unix(1700000000, 0).UTC()
+	path, store, session, source := newDeepSeekTestIngestion(t, &clock)
 	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return clock }})
 
-	_, err = ingestor.Ingest(ctx, source.ID)
+	_, err := ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)
 	assertTokenAggregate(t, store, session.ID, 15556+137+15807+90)
 	first, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
@@ -124,7 +132,6 @@ func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
 		t.Fatalf("first cursor = %+v", first.Source)
 	}
 
-	// Same size and mtime, undecodable bytes: a reread would fail the source.
 	info, err := os.Stat(path)
 	mustNoError(t, err)
 	mustNoError(t, os.WriteFile(path, bytes.Repeat([]byte{0xff}, int(info.Size())), 0o600))
@@ -137,4 +144,35 @@ func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
 	if !ok || second.Source.LastErrorCode != "" || !second.Source.UpdatedAt.Equal(first.Source.UpdatedAt) {
 		t.Fatalf("unchanged log pass = %+v, want no read and no write after %+v", second.Source, first.Source)
 	}
+}
+
+type failFirstApplyStore struct {
+	ingestorStore
+	failed bool
+}
+
+func (s *failFirstApplyStore) ApplyUsageChunk(
+	ctx context.Context, sourceID, offset int64, updatedAt time.Time,
+	cursor domain.SourceCursorState, events []domain.ModelUsageEvent,
+) error {
+	if !s.failed {
+		s.failed = true
+		return errors.New("writer busy")
+	}
+	return s.ingestorStore.ApplyUsageChunk(ctx, sourceID, offset, updatedAt, cursor, events)
+}
+
+func TestIngestorRereadsDeepSeekLogAfterFailedApply(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Unix(1700000000, 0).UTC()
+	_, store, session, source := newDeepSeekTestIngestion(t, &clock)
+	ingestor := NewIngestor(&failFirstApplyStore{ingestorStore: store}, IngestorConfig{Clock: func() time.Time { return clock }})
+
+	if _, err := ingestor.Ingest(ctx, source.ID); err == nil {
+		t.Fatal("first ingest succeeded, want the injected apply failure")
+	}
+	clock = clock.Add(time.Minute)
+	_, err := ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	assertTokenAggregate(t, store, session.ID, 15556+137+15807+90)
 }

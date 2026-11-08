@@ -98,17 +98,16 @@ func (i *Ingestor) ingestSQLite(
 	path := source.Source.ArtifactPath
 	limit := i.sqliteChunkRows
 	var records []jsonlRecord
+	var stamp snapshotStamp
+	readWhole := false
 	if readSnapshot, snapshot := snapshotUsageReaders[source.Source.Kind]; snapshot {
-		// The agent replaces the whole file after each turn, so its identity
-		// changes by design; the turn cursor alone says what is new. A file
-		// with the size and mtime of a read that left nothing unread holds
-		// nothing new, and decoding it again can cost hundreds of MiB.
-		stamp, statErr := snapshotStampOf(path)
+		var statErr error
+		stamp, statErr = snapshotStampOf(path)
 		if seen, ok := i.snapshots.Load(source.Source.ID); statErr != nil || !ok || seen != stamp {
+			i.snapshots.Delete(source.Source.ID)
 			var err error
 			records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
 			if err != nil {
-				i.snapshots.Delete(source.Source.ID)
 				if ctx.Err() != nil {
 					return result, ctx.Err()
 				}
@@ -117,11 +116,7 @@ func (i *Ingestor) ingestSQLite(
 				}
 				return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
 			}
-			if statErr == nil && len(records) < limit {
-				i.snapshots.Store(source.Source.ID, stamp)
-			} else {
-				i.snapshots.Delete(source.Source.ID)
-			}
+			readWhole = statErr == nil && len(records) < limit
 		}
 	} else {
 		read := sqliteUsageReaders[source.Source.Kind]
@@ -216,6 +211,9 @@ func (i *Ingestor) ingestSQLite(
 			return result, err
 		}
 		i.notifyLateRouteEvidence(ctx, source.Source.ID)
+	}
+	if readWhole {
+		i.snapshots.Store(source.Source.ID, stamp)
 	}
 	if parsed.Cursor.State == domain.UsageSourceComplete {
 		return result, i.completeBinding(ctx, source.Source.BindingID, now)
