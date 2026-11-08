@@ -830,6 +830,7 @@ type Session struct {
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
+	MovedTo                          string
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string

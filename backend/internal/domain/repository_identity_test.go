@@ -32,3 +32,20 @@ func TestCanonicalRepositoryValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestRepositoryKeyMatchesTheSameRepositoryHoweverWritten(t *testing.T) {
+	want := "github.com/acme/app"
+	for _, raw := range []string{
+		"git@github.com:Acme/App.git", "https://github.com/acme/app", "https://github.com/Acme/App.git/", "ssh://git@github.com/acme/app",
+	} {
+		if got := RepositoryKey(raw); got != want {
+			t.Errorf("RepositoryKey(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	if got := RepositoryKey("https://gitlab.example.com/Group/Sub/Repo.git"); got != "gitlab.example.com/Group/Sub/Repo" {
+		t.Errorf("GitLab key = %q, want case kept", got)
+	}
+	if got := RepositoryKey("/Users/me/code/app"); got != "" {
+		t.Errorf("local path key = %q, want empty", got)
+	}
+}

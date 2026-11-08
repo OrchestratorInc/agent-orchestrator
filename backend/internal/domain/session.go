@@ -408,6 +408,14 @@ type SessionMetadata struct {
 	BrowserCapabilityVerifier string `json:"-"`
 }
 
+// SessionMove records the AO Cloud session a session moved to.
+type SessionMove struct {
+	MoveID    string    `json:"moveId"`
+	OrgID     string    `json:"orgId"`
+	SessionID string    `json:"sessionId"`
+	At        time.Time `json:"at"`
+}
+
 // SessionRecord is the persistence shape. It intentionally stores only durable
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
@@ -455,6 +463,9 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// MovedTo is set when the session moved to AO Cloud. The session is
+	// archived here and continues there, so it must not run here again.
+	MovedTo *SessionMove `json:"movedTo,omitempty"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as

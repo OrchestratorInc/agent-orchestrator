@@ -285,6 +285,7 @@ var shippedMigrations = map[int64]string{
 	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
 	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
+	20261107221212658: "20261107221212658_add_session_moved_to.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
