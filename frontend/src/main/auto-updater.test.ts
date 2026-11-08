@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import semver from "semver";
 import { CancellationToken } from "builder-util-runtime";
 import nodePath from "node:path";
+import { requestDesktopShutdown } from "./desktop-shutdown";
 
 type UpdateSettings = {
   enabled: boolean;
@@ -1270,8 +1271,63 @@ describe("startAutoUpdates", () => {
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
     expect(statusMessages()).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(delay);
+    await vi.advanceTimersByTimeAsync(delay * 2);
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps automatic retry delays and resets after a successful check", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockRejectedValue(new Error("offline"));
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    autoUpdater.checkForUpdates.mockResolvedValue(undefined);
+    await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+    expect(latestInterval(intervals).delay).toBe(15 * 60 * 1000);
+  });
+
+  it("backs off from the base interval when settings fail before a check", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const readUpdateSettings = vi.fn<() => Promise<UpdateSettings>>().mockRejectedValue(new Error("settings unavailable"));
+    const { module, autoUpdater } = await importAutoUpdater(readUpdateSettings);
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("keeps backing off when an available update repeatedly fails to download", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      updaterEvents.get("update-available")?.({ version: "2.0.0" });
+      return Promise.resolve({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.0.0" },
+        downloadPromise: Promise.reject(new Error("download failed")),
+      });
+    });
+
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(4);
   });
 
   it("logs updater error events during automatic checks without broadcasting renderer errors", async () => {
@@ -2281,7 +2337,8 @@ describe("startAutoUpdates", () => {
     // Fire only the automatic-check tick, not the unrelated 30-minute retirement
     // poll, by selecting the timer armed at the automatic-check interval.
     const readsBeforeRetry = readUpdateSettings.mock.calls.length;
-    intervalWithDelay(setIntervalSpy, 15 * 60 * 1000)();
+    expect(latestInterval(setIntervalSpy).delay).toBe(30 * 60 * 1000);
+    latestInterval(setIntervalSpy).callback();
     await flushMicrotasks();
 
     expect(readUpdateSettings.mock.calls.length).toBe(readsBeforeRetry + 1);
@@ -3510,9 +3567,9 @@ function stubProcess(platform: NodeJS.Platform, execPath: string): () => void {
 
 // Builds a real bundle-shaped tree so the writability checks run against the
 // filesystem rather than a stub. Returns the exec path inside it.
-function makeBundle(): { root: string; bundle: string; execPath: string } {
+function makeBundle(name = "Agent Orchestrator.app"): { root: string; bundle: string; execPath: string } {
   const root = mkdtempSync(nodePath.join(os.tmpdir(), "ao-updater-perm-"));
-  const bundle = nodePath.join(root, "Agent Orchestrator.app");
+  const bundle = nodePath.join(root, name);
   mkdirSync(nodePath.join(bundle, "Contents", "MacOS"), { recursive: true });
   return {
     root,
@@ -3528,6 +3585,250 @@ describe("quitAndInstallUpdate", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
+  });
+
+  async function requestQuit(preserveAgents: () => boolean) {
+    const requestShutdown = vi.fn(async (_port: number, _body: { stopAgents: boolean; appRunId: string }) => ({ ok: true, status: 202 }));
+    await requestDesktopShutdown({
+      keepAlive: false,
+      appRunId: "run-1",
+      status: { state: "ready", pid: 123, port: 3002 },
+      preserveAgents,
+      readRunInfo: async () => ({ pid: 123, port: 3002, startedAtMs: 0, owner: "app", appRunId: "run-1" }),
+      requestShutdown,
+    });
+    expect(requestShutdown).toHaveBeenCalledOnce();
+    return requestShutdown.mock.calls[0][1];
+  }
+
+  it.each(["darwin", "win32", "linux"] as const)("preserves agents during update quit and stops them after cancellation on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      let shutdown: ReturnType<typeof requestQuit> | undefined;
+      autoUpdater.quitAndInstall.mockImplementation(() => {
+        shutdown = requestQuit(module.isUpdateRestartRequested);
+      });
+      await module.quitAndInstallUpdate();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+      expect(await shutdown).toEqual({ stopAgents: false, appRunId: "run-1" });
+      module.clearUpdateRestartRequest();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+      await module.quitAndInstallUpdate();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(2);
+      expect(await shutdown).toEqual({ stopAgents: false, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
+  it.each(["win32", "linux"] as const)("stops agents on an ordinary quit after a synchronous install failure on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      autoUpdater.quitAndInstall.mockImplementationOnce(() => { throw new Error("installer failed"); });
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow("installer failed");
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
+  it.each(["win32", "linux"] as const)("stops agents on an ordinary quit after an asynchronous install failure on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      const failed = vi.fn();
+      module.setUpdateRestartFailureHandler(failed);
+      await module.quitAndInstallUpdate();
+      updaterEvents.get("error")?.(new Error("installer failed"));
+      expect(failed).toHaveBeenCalledOnce();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
+  it("keeps native staging ready when Finder renamed the running app", async () => {
+    const bundle = makeBundle("Agent Orchestrator 2.app");
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      const periodicCheck = intervalWithDelay(setIntervalSpy, 15 * 60 * 1000);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+
+      periodicCheck();
+      await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2));
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+
+      startMacUpdateProgress.mockResolvedValueOnce({ assertAlive: vi.fn(), fail: vi.fn(async () => undefined) });
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops an in-process macOS stage whose native files disappeared and checks again", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      mkdirSync(extracted, { recursive: true });
+      writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+      writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+
+      rmSync(shipIt, { recursive: true });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      autoUpdater.checkForUpdates.mockImplementation(async () => ({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.2.0" },
+        downloadPromise: autoUpdater.autoDownload ? Promise.resolve() : undefined,
+      }));
+
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.autoDownload).toBe(true);
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a pending install when native staging disappears before the helper responds", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const abandoned = expect(install).rejects.toThrow(/staged update files are missing/);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await abandoned;
+      await flushMicrotasks();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(progress.assertAlive).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a pending install on the next periodic check without another click", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      const periodicCheck = intervalWithDelay(setIntervalSpy, 15 * 60 * 1000);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const handshake = deferred<Awaited<ReturnType<typeof startMacUpdateProgress>>>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const abandoned = expect(install).rejects.toThrow(/staged update files are missing/);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+
+      periodicCheck();
+      await flushMicrotasks();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+      rmSync(shipIt, { recursive: true });
+      periodicCheck();
+      await abandoned;
+      await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2));
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+
+      handshake.resolve({ assertAlive: vi.fn(), fail: vi.fn(async () => undefined) });
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a retained restart request when its native staging disappears", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      startMacUpdateProgress.mockResolvedValueOnce(progress);
+      const restoreWindow = vi.fn();
+      module.setUpdateRestartFailureHandler(restoreWindow);
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(module.isUpdateRestartRequested()).toBe(true);
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      expect(module.isUpdateRestartRequested()).toBe(false);
+      expect(progress.fail).toHaveBeenCalledWith(expect.stringContaining("staged update files are missing"));
+      expect(restoreWindow).toHaveBeenCalledOnce();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
   });
 
   it("requires new confirmation before downloading a changed remembered target", async () => {
@@ -3610,6 +3911,7 @@ describe("quitAndInstallUpdate", () => {
         await downloaded.promise;
       });
       const install = module.quitAndInstallUpdate();
+      module.clearUpdateRestartRequest();
       const duplicate = module.quitAndInstallUpdate();
       await flushMicrotasks();
       expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
@@ -3893,6 +4195,7 @@ describe("quitAndInstallUpdate", () => {
       await module.checkForUpdatesNow(stateDir);
       await expect(module.quitAndInstallUpdate()).rejects.toThrow(/not ready/);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
     } finally { restore(); }
   });
 
@@ -5210,4 +5513,19 @@ describe("release notes while a newer build replaces a staged one (#6607)", () =
     await module.checkForUpdatesNow(stateDir);
     expect(notesWhileDownloading).toBeUndefined();
   });
+});
+
+
+it("keeps expected update outages out of handled captures and reports genuine faults", async () => {
+  const { module } = await importAutoUpdater();
+  const { setMainErrorSink, resetMainErrorCaptureForTests } = await import("./main-error-capture");
+  const sink = vi.fn(); setMainErrorSink(sink);
+  try {
+    for (const error of [new Error("ETIMEDOUT"), new Error("ENOTFOUND"), ...[429, 404, 503].map(statusCode => Object.assign(new Error("updater request failed"), { statusCode }))]) module.reportUpdateFailure(error, "check");
+    expect(sink).not.toHaveBeenCalled();
+    module.reportUpdateFailure(Object.assign(new Error("private signature details"), { code: "ERR_UPDATER_INVALID_SIGNATURE" }), "install", "stage");
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "update", reason: "stage", detail: "kind:invalid-signature" }));
+    module.reportUpdateFailure(new Error("unexpected staging failure"), "install");
+    expect(sink).toHaveBeenCalledTimes(2);
+  } finally { resetMainErrorCaptureForTests(); }
 });

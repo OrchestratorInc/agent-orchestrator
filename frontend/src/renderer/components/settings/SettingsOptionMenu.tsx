@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode, type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, type Ref, useEffect, useRef, useState } from "react";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -74,23 +75,7 @@ export function SettingsOptionMenu<T extends string>({
 			)
 		: options;
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
-	useLayoutEffect(() => {
-		if (!menuOpen) {
-			setCanScrollDown(false);
-			return;
-		}
-		updateScrollCue();
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, [menuOpen, updateScrollCue, visibleOptions.length]);
+	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	// Radix skips onOpenChange when an open menu unmounts (e.g. a shortcut closes
 	// the settings view), so end any highlight here or a preview would stick.
@@ -149,8 +134,7 @@ export function SettingsOptionMenu<T extends string>({
 				>
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-						onScroll={updateScrollCue}
+						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					>
 						{visibleOptions.map((option, index) => (
 							<Fragment key={option.value}>
@@ -158,7 +142,8 @@ export function SettingsOptionMenu<T extends string>({
 							<DropdownMenuItem
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
-								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
+								// Rows remain mounted during the exit animation; they must not restart a preview.
+								onFocus={menuOpen && onHighlight ? () => onHighlight(option.value) : undefined}
 								// Hovering off the options (or into the search box) ends the
 								// preview; moving to another option hands it straight over.
 								onBlur={
@@ -191,10 +176,6 @@ export function SettingsOptionMenu<T extends string>({
 							<p className="px-2 py-1.5 text-xs text-settings-muted">{emptyLabel ?? t("settings.options.noMatches")}</p>
 						)}
 					</div>
-					<div
-						className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-						aria-hidden="true"
-					/>
 				</div>
 				{action && (
 					<div data-slot="settings-option-menu-action" className="shrink-0">

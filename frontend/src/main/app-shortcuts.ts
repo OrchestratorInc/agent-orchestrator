@@ -14,6 +14,8 @@ import {
 	PREVIOUS_TAB_SHORTCUT_CHANNEL,
 	terminalFontSizeDelta,
 	TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL,
+	ARTIFACT_ZOOM_SHORTCUT_CHANNEL,
+	artifactZoomAction,
 	type AppShortcutEvent,
 	type AppShortcutId,
 	type KeybindingOverrides,
@@ -42,6 +44,24 @@ type BeforeInputContents = {
 		listener: (event: { preventDefault: () => void }, input: BeforeInput) => void,
 	): unknown;
 };
+
+// Browser listeners handle their own page reloads; browser menu callbacks also
+// handle force reload while focus is in the shell-painted address bar.
+export function attachShellReloadGuard(
+	contents: BeforeInputContents,
+	isMac: boolean,
+	hasBrowserTarget: () => boolean = () => false,
+	isRecording: () => boolean = () => false,
+): void {
+	contents.on("before-input-event", (event, input) => {
+		if (input.type !== "keyDown" || input.alt || isRecording()) return;
+		const key = input.key.toLowerCase();
+		const primary = isMac ? input.meta && !input.control : input.control && !input.meta;
+		if ((key === "r" && primary && !hasBrowserTarget()) || (key === "f5" && !input.meta)) {
+			event.preventDefault();
+		}
+	});
+}
 
 type ShortcutTargetContents = {
 	focus: () => void;
@@ -97,6 +117,10 @@ export function attachAppShortcuts(
 	// leave them to app zoom. Defaults to "any focused terminal" for callers that
 	// do not distinguish.
 	isTerminalFontSizeFocused: () => boolean = isTerminalFocused,
+	// An artifact viewer that can zoom, under the pointer or holding focus,
+	// claims the zoom chords ahead of the app's View zoom, even from a framed
+	// page whose keys never reach the viewer itself.
+	isArtifactZoomEngaged: () => boolean = () => false,
 ): void {
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") return;
@@ -113,6 +137,12 @@ export function attachAppShortcuts(
 			event.preventDefault();
 			if (focusTarget) target.focus();
 			target.send(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, fontSizeDelta);
+			return;
+		}
+		const artifactZoom = artifactZoomAction(chord, isMac);
+		if (artifactZoom && isArtifactZoomEngaged()) {
+			event.preventDefault();
+			target.send(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, artifactZoom);
 			return;
 		}
 		// Let the renderer's capture listener receive application-owned chords

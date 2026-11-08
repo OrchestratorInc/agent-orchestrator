@@ -13,6 +13,7 @@ import {
 } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
 import { CopyButton } from "./chat/CopyButton";
+import { Pressable } from "./ui/pressable";
 
 /**
  * The header and step rows' right padding (px-2.5) plus whatever the panel
@@ -93,7 +94,8 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 				{output}
 			</pre>
 			<CopyButton
-				className="absolute right-1 top-1 size-6 bg-background"
+				size="icon-xs"
+				className="absolute right-1 top-1 bg-background"
 				compact
 				copiedLabel={t("scriptRun.copied")}
 				label={t("scriptRun.copyOutput")}
@@ -312,19 +314,18 @@ function StepRow({
 	}
 	return (
 		<li className="flex flex-col" data-status={status} data-testid="script-step">
-			<button
+			<Pressable
 				aria-controls={bodyId}
 				aria-expanded={open}
-				className={cn("group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60", ROW_PAD_RIGHT)}
+				className={cn("group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 hover:bg-interactive-hover", ROW_PAD_RIGHT)}
 				onClick={onToggle}
-				type="button"
 			>
 				{content}
 				<ChevronRight
 					aria-hidden="true"
 					className={cn("size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground", open && "rotate-90")}
 				/>
-			</button>
+			</Pressable>
 			{running ? <QuietStepNote now={now} step={step} /> : null}
 			{open ? (
 				<div className="flex flex-col gap-1.5 px-2.5 pb-2.5 pt-0.5" id={bodyId}>
@@ -424,16 +425,15 @@ export function ScriptRunPanel({
 			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-announcer" role="status">{announcement}</div>
 			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-quiet-announcer" role="status">{quietAnnouncement}</div>
 			{collapsible ? (
-				<button
+				<Pressable
 					aria-controls={listId}
 					aria-expanded={listOpen}
-					className={cn("group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60", ROW_PAD_RIGHT)}
+					className={cn("group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 hover:bg-interactive-hover", ROW_PAD_RIGHT)}
 					onClick={() => setListToggled(!listOpen)}
-					type="button"
 				>
 					{header}
 					<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground", listOpen && "rotate-90")} />
-				</button>
+				</Pressable>
 			) : (
 				<div className={cn("flex min-h-8 items-center gap-2 px-2.5 py-1.5", ROW_PAD_RIGHT)}>{header}</div>
 			)}

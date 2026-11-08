@@ -53,6 +53,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if anon["install_id"] != stableInstallID {
 		t.Fatal("anonymous event missing installation ID")
 	}
+	if _, ok := anon["is_signed_in"]; ok {
+		t.Fatal("unresolved Cloud sign-in state was exported")
+	}
 
 	sink.Identity().SetGitHubLogin("octocat")
 	if err := sink.Identity().SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
@@ -64,6 +67,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	}
 	if first["install_id"] != stableInstallID {
 		t.Fatal("signed-in event changed installation ID")
+	}
+	if first["is_signed_in"] != true {
+		t.Fatalf("signed-in event has is_signed_in = %#v", first["is_signed_in"])
 	}
 	if first["$process_person_profile"] != true {
 		t.Fatal("signed-in event must be linked to the person")
@@ -96,6 +102,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if _, ok := out["ao_cloud_user_id"]; ok {
 		t.Fatal("ao_cloud_user_id survived sign-out")
+	}
+	if out["is_signed_in"] != false {
+		t.Fatalf("known sign-out has is_signed_in = %#v", out["is_signed_in"])
 	}
 	if out["install_id"] != stableInstallID || sink.Identity().InstallID() != stableInstallID {
 		t.Fatal("sign-out changed installation ID")

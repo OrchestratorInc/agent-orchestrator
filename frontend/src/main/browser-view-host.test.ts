@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { net } from "electron";
 import {
 	type BrowserNavState,
+	type BrowserRect,
 	type BrowserTabsState,
 	browserShortcutAction,
 	clampBoundsToWindow,
@@ -733,6 +734,14 @@ describe("browser shortcut matching", () => {
 		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
 	});
 
+	it("leaves dictation and terminal splits to the page", () => {
+		const option = { key: "∂", code: "KeyD", ctrl: false, meta: false, shift: false, alt: true };
+		expect(shouldHandleAppShortcutInBrowserContext("dictate", option, true)).toBe(false);
+		const command = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal", command, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal-down", { ...command, key: "D", shift: true }, true)).toBe(false);
+	});
+
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
 		const input = { key: " ", control: false, meta: false, shift: false, alt: false, type: "keyDown" };
 		expect(browserShortcutAction(input, false)).toBeNull();
@@ -917,6 +926,18 @@ describe("browser shortcut routing", () => {
 			expect((await invoke("browser:getTabs", state.viewId) as unknown as BrowserTabsState).tabs).toHaveLength(0);
 		});
 		expect(webContents.close).toHaveBeenCalledTimes(2);
+	});
+
+	it("reports a visible panel only while a page is on screen", async () => {
+		const { emit, host, invoke } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		expect(host.hasVisiblePanel()).toBe(false);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		expect(host.hasVisiblePanel()).toBe(true);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 2, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: false });
+		expect(host.hasVisiblePanel()).toBe(false);
 	});
 
 	it("keeps browser shortcuts targeted after a blank-tab hide clears native focus", async () => {
@@ -1474,13 +1495,17 @@ function setupTabHost(
 }
 
 function fakeBrowserProfileStore(
-	profile: BrowserProfile,
+	profile: BrowserProfile | BrowserProfile[],
 	bindings: Record<string, string | null>,
 	defaultProfileId: string | null = null,
 ): BrowserProfileStore {
+	const profiles = Array.isArray(profile) ? profile : [profile];
 	return {
-		profiles: [profile],
-		getProfile: (profileId: string) => (profileId === profile.id ? { ...profile } : undefined),
+		profiles,
+		getProfile: (profileId: string) => {
+			const found = profiles.find((candidate) => candidate.id === profileId);
+			return found ? { ...found } : undefined;
+		},
 		getSessionProfileId: (sessionId: string) => bindings[sessionId],
 		getDefaultProfileId: () => defaultProfileId,
 		// A binding of `null` is an explicit, durable choice of Temporary and
@@ -2705,7 +2730,8 @@ describe("browser profile partitions and replacement", () => {
 	});
 
 	it("falls back to the global default profile for a session with no binding of its own", async () => {
-		const store = fakeBrowserProfileStore(profile, {}, profile.id);
+		const firstProfile = { ...profile, id: "33333333-3333-4333-8333-333333333333", name: "Personal" };
+		const store = fakeBrowserProfileStore([firstProfile, profile], {}, profile.id);
 		const { host, invoke } = setupTabHost(store);
 		const ensured = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
 
@@ -5517,6 +5543,36 @@ describe("agent browser network capture", () => {
 });
 
 describe("browser:setBounds", () => {
+	it.each([1, 1.25])("preserves viewport size through inspector close, parking, and reopen at zoom %s", async (zoom) => {
+		const { emit, invoke, view } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		let bounds = view.getBounds();
+		view.getBounds.mockImplementation(() => bounds);
+		view.setBounds.mockImplementation((next: BrowserRect) => { bounds = next; });
+		view.setBounds.mockClear();
+
+		let revision = 0;
+		for (const x of [480, 640, 800]) {
+			emit("browser:setBounds", zoom, {
+				viewId: "1:sess-1", revision: ++revision,
+				rect: { x: x / zoom, y: 20 / zoom, width: 320 / zoom, height: 240 / zoom }, visible: true,
+			});
+			expect(bounds).toEqual({ x, y: 20, width: 320, height: 240 });
+		}
+		emit("browser:setBounds", zoom, {
+			viewId: "1:sess-1", revision: ++revision,
+			rect: { x: 0, y: 0, width: 0, height: 0 }, visible: false,
+		});
+		expect(bounds).toEqual({ x: -10000, y: -10000, width: 320, height: 240 });
+		for (const x of [640, 480]) {
+			emit("browser:setBounds", zoom, {
+				viewId: "1:sess-1", revision: ++revision,
+				rect: { x: x / zoom, y: 20 / zoom, width: 320 / zoom, height: 240 / zoom }, visible: true,
+			});
+			expect(bounds).toEqual({ x, y: 20, width: 320, height: 240 });
+		}
+	});
+
 	it("keeps the newest geometry across 200 rapid updates and acknowledges only applied revisions", async () => {
 		const { emit, invoke, shellSend, view } = setupHost();
 		await invoke("browser:ensure", "sess-1");
@@ -6284,11 +6340,11 @@ describe("clampBoundsToWindow", () => {
 		).toEqual({ x: 0, y: 21, width: 800, height: 579 });
 	});
 
-	it("returns a zero-sized rectangle when the slot is outside the window", () => {
+	it("preserves viewport width when the slot moves beyond the window", () => {
 		expect(clampBoundsToWindow({ x: 900, y: 10, width: 100, height: 100 }, { width: 800, height: 600 })).toEqual({
 			x: 800,
 			y: 10,
-			width: 0,
+			width: 100,
 			height: 100,
 		});
 	});

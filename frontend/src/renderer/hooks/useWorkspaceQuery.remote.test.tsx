@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localGet: vi.fn(), remoteConnect: vi.fn(), remotePreviewUrl: vi.fn() }));
-vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true, reportingFetch: (input: Request) => fetch(input) }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
@@ -161,4 +161,25 @@ it("never keeps a remote daemon's inline artifact origin, which here would name 
 	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
 	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.path).toBe("q3/report.html"));
 	expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.inlineUrl).toBeUndefined();
+});
+
+it("shows a saved host's last lists without reading it, and its session while it is offline", async () => {
+	const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+	vi.stubGlobal("fetch", fetchMock);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(["remote-workspaces", "box-a", "projects"], [{ id: "project-1", name: "Remote", path: "/remote" }]);
+	queryClient.setQueryData(["remote-workspaces", "box-a", "sessions"], [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }]);
+	const cachedHostIds = ["box-a"];
+	const { result } = renderHook(() => ({
+		saved: useRemoteWorkspaces({ cachedHostIds }),
+		connectedOnly: useRemoteWorkspaces(),
+		session: useWorkspaceSession("session-1", "box-a", false),
+	}), { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+	expect(result.current.saved.data.map((project) => [project.name, project.hostId])).toEqual([["Remote", "box-a"]]);
+	expect(result.current.saved.failedHostIds).toEqual([]);
+	expect(result.current.saved.loadedProjectHostIds).toEqual([]);
+	// The new-task pickers list only hosts that can take work.
+	expect(result.current.connectedOnly.data).toEqual([]);
+	expect(result.current.session.data?.id).toBe("session-1");
+	expect(fetchMock).not.toHaveBeenCalled();
 });

@@ -114,8 +114,8 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 			<header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-2">
 				<label className="relative mr-1 min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" /><Input aria-label={t("files.explorer.filter")} className="h-8 pl-8 font-mono text-xs" onChange={(event) => setFilter(event.target.value)} placeholder={t("files.explorer.filterPlaceholder")} value={filter} /></label>
 				{changedFiles.length > 0 ? <div aria-label={t("files.viewMode")} className="flex items-center rounded-md border border-border bg-muted/30 p-0.5" role="tablist">
-					<Button aria-selected={showChanges} className="h-6 px-2 text-2xs" onClick={() => setShowChanges(true)} role="tab" size="sm" variant={showChanges ? "secondary" : "ghost"}>{t("files.reviewChanges")}</Button>
-					<Button aria-selected={!showChanges} className="h-6 px-2 text-2xs" onClick={() => setShowChanges(false)} role="tab" size="sm" variant={!showChanges ? "secondary" : "ghost"}>{t("files.allFiles")}</Button>
+					<Button aria-selected={showChanges} data-active={showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(true)} size="xs" variant="ghost">{t("files.reviewChanges")}</Button>
+					<Button aria-selected={!showChanges} data-active={!showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(false)} size="xs" variant="ghost">{t("files.allFiles")}</Button>
 				</div> : null}
 				{showChanges ? <Tooltip><TooltipTrigger asChild><Button aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")} aria-pressed={split} onClick={() => { const next = !split; if (controlledSplit === undefined) setInternalSplit(next); onSplitChange?.(next); }} size="icon-sm" variant="ghost">{split ? <Columns2 className="size-icon-sm" /> : <Rows3 className="size-icon-sm" />}</Button></TooltipTrigger><TooltipContent>{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent></Tooltip> : null}
 				{onToggleMaximized ? <Tooltip><TooltipTrigger asChild><Button aria-label={isMaximized ? t("common.returnToPanel") : t("common.maximize")} onClick={() => onToggleMaximized(!isMaximized)} size="icon-sm" variant="ghost">{isMaximized ? <Minimize2 className="size-icon-sm" /> : <Maximize2 className="size-icon-sm" />}</Button></TooltipTrigger><TooltipContent>{isMaximized ? t("common.returnToPanel") : t("common.maximize")}</TooltipContent></Tooltip> : null}
@@ -126,7 +126,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 					// The main checkout's folder is the provider's fixed name; label it with the repository's own.
 					const label = entry.label || entry.name;
 					const selected = value === activeRepository;
-					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(session.id, value); setReviewUi(session.id, value, { filter: "" }); }} role="tab" size="sm" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant={selected ? "secondary" : "ghost"}>{label}</Button>;
+					return <Button aria-selected={selected} data-active={selected} role="tab" className="font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(session.id, value); setReviewUi(session.id, value, { filter: "" }); }} size="xs" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant="ghost">{label}</Button>;
 				})}
 			</div> : null}
 			{!enabled || (summaryQuery.isPending && !workerGone) ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isPending ? (

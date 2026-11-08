@@ -106,6 +106,8 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		if (!bridge || !name.trim()) return;
 		try {
 			const created = await bridge.create(name);
+			// Mirrors the store: the first profile becomes the default.
+			if (profiles.length === 0) setDefaultProfileIdState(created.id);
 			setProfiles((current) => [...current, created]);
 			setName("");
 			setError("");
@@ -145,8 +147,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			} else {
 				const result = await bridge.delete(pendingAction.profile.id, usage.map((session) => session.viewId));
 				if (result.error) throw new Error(result.error);
-				setProfiles((current) => current.filter((profile) => profile.id !== pendingAction.profile.id));
-				setDefaultProfileIdState((current) => (current === pendingAction.profile.id ? null : current));
+				const deletedId = pendingAction.profile.id;
+				setProfiles((current) => current.filter((profile) => profile.id !== deletedId));
+				// Mirrors the store: deleting the default promotes the oldest remaining profile.
+				const promotedId = profiles.find((profile) => profile.id !== deletedId)?.id ?? null;
+				setDefaultProfileIdState((current) => (current === deletedId ? promotedId : current));
 			}
 			setError("");
 			setPendingAction(null);
@@ -172,12 +177,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
 					<Button
-						className="text-settings-muted hover:text-settings-label"
 						disabled={!bridge}
 						onClick={() => setImportOpen(true)}
 						size="sm"
 						type="button"
-						variant="ghost"
+						variant="quiet"
 					>
 						<Import aria-hidden="true" className="size-icon-base" />
 						{t("settings.browserImport.action")}
@@ -206,11 +210,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 						/>
 						<Button
 							aria-label={t("settings.browserProfiles.create")}
-							className="size-control-sm text-settings-muted hover:text-settings-label"
+							className="size-control-sm"
 							disabled={!name.trim() || !bridge || loading}
 							size="none"
 							type="submit"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Plus aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -373,14 +377,16 @@ function BrowserProfileRow({
 			</div>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<button
+					<Button
 						aria-label={t("settings.browserProfiles.actions", { profile: profile.name })}
-						className="settings-close-button shrink-0 focus-visible:bg-(--color-bg-settings-row-hover) focus-visible:text-settings-title data-[state=open]:bg-(--color-bg-settings-row-hover) data-[state=open]:text-settings-title"
+						className="shrink-0"
 						ref={triggerRef}
+						size="icon"
 						type="button"
+						variant="quiet"
 					>
 						<MoreHorizontal aria-hidden="true" className="size-4" />
-					</button>
+					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent
 					align="end"

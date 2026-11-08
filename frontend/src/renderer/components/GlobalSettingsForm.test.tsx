@@ -249,7 +249,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
@@ -433,6 +433,24 @@ describe("GlobalSettingsForm", () => {
 		expect(useLocaleStore.getState().locale).toBe("zh-CN");
 	});
 
+	it("selects and persists both chat send key modes in General settings", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const preference = await screen.findByLabelText("Chat send key");
+		expect(preference).toHaveTextContent("Enter sends; Shift+Enter inserts newline");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter inserts newline; Cmd/Ctrl+Enter sends" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("mod-enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("mod-enter");
+		expect(preference).toHaveTextContent("Enter inserts newline; Cmd/Ctrl+Enter sends");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter sends; Shift+Enter inserts newline" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("enter");
+	});
+
 	it("toggles sound notifications on and persists the change", async () => {
 		const user = userEvent.setup();
 		renderForm();
@@ -508,6 +526,30 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
 	});
 
+	it("lists the shells the daemon detected outside Windows and stores the picked path", async () => {
+		isWindowsPlatform.mockReturnValue(false);
+		const user = userEvent.setup();
+		const qc = renderForm();
+		qc.setQueryData(["terminal-shells"], {
+			default: { id: "auto", name: "zsh", path: "/bin/zsh" },
+			shells: [
+				{ id: "/opt/homebrew/bin/fish", name: "fish", path: "/opt/homebrew/bin/fish" },
+				{ id: "/bin/zsh", name: "zsh", path: "/bin/zsh" },
+			],
+		});
+
+		expect(await screen.findByText("Applies to new terminals. Open terminals keep their shell.")).toBeInTheDocument();
+		await user.click(await screen.findByLabelText("Terminal shell"));
+		expect(await screen.findByRole("menuitem", { name: /System default/ })).toHaveTextContent("/bin/zsh");
+		expect(screen.queryByRole("menuitem", { name: "Git Bash" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: /fish/ }));
+
+		await waitFor(() =>
+			expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom", path: "/opt/homebrew/bin/fish" } }),
+		);
+		await waitFor(() => expect(screen.getByLabelText("Terminal shell")).toHaveTextContent("fish"));
+	});
+
 	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
 		const user = userEvent.setup();
 		const qc = renderForm("general");
@@ -552,11 +594,9 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		await user.click(await screen.findByLabelText("Terminal shell"));
-		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
-		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
+		await user.click(await screen.findByRole("menuitem", { name: "Custom…" }));
 
-		setUiSettings.mockClear();
-		await user.click(screen.getByRole("button", { name: "Edit Shell executable" }));
+		await user.click(await screen.findByRole("button", { name: "Edit Shell executable" }));
 		const input = screen.getByLabelText("Shell executable");
 		await user.type(input, "C:\\Tools\\bash.exe");
 		await user.keyboard("{Escape}");

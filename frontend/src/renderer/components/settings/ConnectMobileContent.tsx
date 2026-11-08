@@ -1,8 +1,9 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Globe, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
+import { apiClient } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
@@ -19,6 +20,7 @@ import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -217,11 +219,7 @@ function AndroidIcon({ className }: { className?: string }) {
 
 /** One store in the segmented control: platform icon and name. */
 const STORE_SEGMENT_CLASS =
-	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--color-settings-accent)";
-
-/** Icon actions beside the password. */
-const ICON_ACTION_CLASS =
-	"inline-flex size-6 items-center justify-center rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label disabled:opacity-50";
+	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)]";
 
 interface MobileStatus {
 	enabled: boolean;
@@ -282,7 +280,7 @@ interface MobileStatus {
 
 export async function fetchMobileStatus(): Promise<MobileStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/mobile/status");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -332,7 +330,7 @@ function readLastKeepAwake(): KeepAwakeStatus | null {
 		if (!raw) return null;
 		const saved = JSON.parse(raw) as Partial<KeepAwakeStatus> | null;
 		if (typeof saved?.supported !== "boolean" || typeof saved.enabled !== "boolean") return null;
-		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true };
+		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true, lidClosed: saved.lidClosed === true, lidSupported: saved.lidSupported === true };
 	} catch {
 		return null;
 	}
@@ -344,7 +342,7 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 		else
 			window.localStorage?.setItem(
 				KEEP_AWAKE_STORAGE_KEY,
-				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery }),
+				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery, lidClosed: keepAwake.lidClosed, lidSupported: keepAwake.lidSupported }),
 			);
 	} catch {
 		// Storage can be unavailable; the row then waits for the status.
@@ -418,7 +416,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		if (started.error) {
 			// Not left listed at an address nothing serves.
 			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
-			throw new Error(apiErrorMessage(started.error));
+			throw apiErrorException(started.error);
 		}
 		return started.data;
 	};
@@ -476,7 +474,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// not a computer that only serves this network after a restart. The
 			// link usually lands before the quick tunnel's address is advertised.
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!signedIn) return data;
 			invalidate(); // the code shows while the computer is linked
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
@@ -493,7 +491,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
 			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -502,7 +500,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const regenerate = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			invalidate(); // the new password shows at once; linking can take a minute
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
@@ -532,7 +530,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		// Shutdown can finish before returning an error. Refresh the actual
 		// server state while retaining the mutation error for the user.
@@ -543,20 +541,20 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setSecure = useMutation({
 		mutationFn: async (secureEnabled: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/secure-pairing", { body: { enabled: secureEnabled } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
 	});
 
-	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	// Share wake ownership with the sidebar; mobile also opts into lid-closed wake.
 	const stayAwake = useStayAwake(active);
 
 
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onMutate: async (browserRemoteAccess) => {
@@ -818,29 +816,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="flex min-w-0 items-center">
 							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-											className={ICON_ACTION_CLASS}
-											onClick={() => void copyPassword()}
-										>
-											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									</TooltipContent>
-								</Tooltip>
+								<Button
+									type="button"
+									variant="quiet"
+									size="icon-xs"
+									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+									onClick={() => void copyPassword()}
+								>
+									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}
 										<span className="inline-flex">
-											<button
+											<Button
 												type="button"
+												variant="quiet"
+												size="icon-xs"
 												aria-label={t("mobile.regenerate")}
-												className={ICON_ACTION_CLASS}
 												disabled={busy}
 												onClick={() => {
 													clearActionErrors();
@@ -853,7 +846,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 												) : (
 													<RotateCcw className="size-3.5" aria-hidden="true" />
 												)}
-											</button>
+											</Button>
 										</span>
 									</TooltipTrigger>
 									<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
@@ -941,20 +934,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				/>
 			</SettingsRow>
 
-			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
-			    whether or not the bridge is on: the choice is remembered and takes
-			    effect whenever the mobile connection is. */}
+			{/* macOS wake ownership is independent of the mobile connection. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
+					confirming={stayAwake.busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						stayAwake.set(next, true);
-					}}
-					onLidChange={(next) => {
-						clearActionErrors();
-						stayAwake.setLid(next);
+						if (next) stayAwake.setLid(true);
+						else stayAwake.set(false, true);
 					}}
 				/>
 			)}
@@ -978,83 +967,72 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	);
 }
 
-/** Keep this Mac awake, and (when the daemon reports it) keep it awake with the
- *  lid closed. Disabled while it shows a remembered state rather than the
- *  daemon's, so it cannot be toggled on a guess; the lid row appears only for a
- *  live status, since the remembered one does not carry the lid fields. */
+/** One mobile wake switch includes closed-lid mode on supported Macs.
+ * Remembered status stays disabled until the daemon confirms it. */
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	confirming = false,
 	onCheckedChange,
-	onLidChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	/** A wake request is in flight; the helper may not have acknowledged it yet. */
+	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
-	onLidChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
+	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// While a request is in flight the switch already shows it, so hide the
+	// transient "starting" line. Once it settles, a lease that never armed
+	// stays visible: closing the lid would otherwise sleep the Mac silently.
+	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		lidUnavailable ||
+		(keepAwake.enabled && keepAwake.lidClosed && !(confirming && lidStarting)) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
+	const status = keepAwake.lidActive && keepAwake.enabled
+		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+		: keepAwake.lidReason || lidUnavailable
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
-		<>
-			<SettingsRow
-				data-testid="mobile-keep-awake"
-				icon={Coffee}
-				label={t("mobile.keepAwake.label")}
-				description={
-					<>
-						{t("mobile.keepAwake.help")}
-						{keepAwake.hasBattery && (!keepAwake.lidClosed || !keepAwake.lidSupported || !keepAwake.enabled) && (
-							<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
-						)}
-					</>
-				}
-			>
-				<Switch
-					aria-label={t("mobile.keepAwake.label")}
-					checked={keepAwake.enabled}
-					disabled={disabled}
-					onCheckedChange={onCheckedChange}
-				/>
-			</SettingsRow>
-			{onLidChange && (keepAwake.lidSupported || keepAwake.lidClosed) && (
-				<SettingsRow
-					data-testid="mobile-lid-awake"
-					label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-					description={
-						<>
-							{t(
-								"mobile.keepAwake.lidHelp",
-								"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
-							)}
-							{lidNeedsAttention && (
-								<span className="mt-1 block" role="status">
-									{keepAwake.lidActive && keepAwake.enabled
-										? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-										: keepAwake.lidReason
-											? t(
-													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
-													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
-												)
-											: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
-								</span>
-							)}
-						</>
-					}
-				>
-					<Switch
-						aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-						checked={keepAwake.enabled && (keepAwake.lidClosed ?? false)}
-						disabled={disabled}
-						onCheckedChange={onLidChange}
-					/>
-				</SettingsRow>
-			)}
-		</>
+		<SettingsRow
+			data-testid="mobile-keep-awake"
+			icon={Coffee}
+			label={t("mobile.keepAwake.label")}
+			description={
+				<>
+					{t("mobile.keepAwake.combinedHelp")}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Pressable
+								aria-label={t("mobile.keepAwake.details")}
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground"
+							>
+								<Info className="size-3.5" aria-hidden="true" />
+							</Pressable>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							{t("mobile.keepAwake.lidHelp")}
+							{keepAwake.lidReason === "isolated_data_dir" && <p className="mt-1">{t("mobile.keepAwake.lidReason.isolated_data_dir")}</p>}
+						</TooltipContent>
+					</Tooltip>
+					{lidNeedsAttention && keepAwake.lidReason !== "isolated_data_dir" && (
+						<span className="mt-1 block" role="status">{status}</span>
+					)}
+				</>
+			}
+		>
+			<Switch
+				aria-label={t("mobile.keepAwake.label")}
+				checked={keepAwake.enabled && keepAwake.lidClosed === true}
+				disabled={disabled || lidUnavailable}
+				onCheckedChange={onCheckedChange}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -1100,15 +1078,14 @@ function ScanIntro() {
 					{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
 						<Tooltip key={key}>
 							<TooltipTrigger asChild>
-								<button
-									type="button"
+								<Pressable
 									className={STORE_SEGMENT_CLASS}
 									aria-label={t(ariaKey)}
 									onClick={() => void aoBridge.app.openExternal(url)}
 								>
 									<Icon className="size-3.5 shrink-0" />
 									{t(labelKey)}
-								</button>
+								</Pressable>
 							</TooltipTrigger>
 							<TooltipContent side="bottom" className="p-2" data-testid={testId}>
 								<div className="rounded-md bg-(--color-bg-settings-input) p-2">

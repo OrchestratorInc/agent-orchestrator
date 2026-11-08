@@ -51,7 +51,7 @@ func TestNormalizeAdditionalDirectoriesWithoutCapability(t *testing.T) {
 		{name: "cwd is a file", cwd: file, dirs: []string{file}, want: "directory"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := normalizeAdditionalDirectories(tc.cwd, tc.dirs, false)
+			got, err := normalizeAdditionalDirectories(tc.cwd, tc.dirs, false, false)
 			if tc.want != "" {
 				if err == nil || (tc.want != "" && !strings.Contains(err.Error(), tc.want)) {
 					t.Fatalf("directories = %v, error = %v, want refusal containing %q", got, err, tc.want)
@@ -111,7 +111,7 @@ func TestNormalizeAdditionalDirectoriesSymlinkContainment(t *testing.T) {
 				}
 				t.Fatal(err)
 			}
-			got, err := normalizeAdditionalDirectories(cwd, []string{directory}, false)
+			got, err := normalizeAdditionalDirectories(cwd, []string{directory}, false, false)
 			if tc.ok && (err != nil || len(got) != 0) {
 				t.Fatalf("redundant canonical scope = %v, %v", got, err)
 			}
@@ -128,11 +128,11 @@ func TestNormalizeAdditionalDirectoriesSupportedPreservesScope(t *testing.T) {
 	missing := filepath.Join(root, "not-created")
 	got, err := normalizeAdditionalDirectories(root, []string{
 		root, external + string(os.PathSeparator) + ".", missing, external,
-	}, true)
+	}, true, false)
 	if err != nil || !reflect.DeepEqual(got, []string{external, missing}) {
 		t.Fatalf("supported additional directories = %v, %v", got, err)
 	}
-	if _, err := normalizeAdditionalDirectories(root, []string{"relative"}, true); err == nil {
+	if _, err := normalizeAdditionalDirectories(root, []string{"relative"}, true, false); err == nil {
 		t.Fatal("supported provider accepted a relative directory")
 	}
 }

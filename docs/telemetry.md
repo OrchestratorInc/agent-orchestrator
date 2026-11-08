@@ -32,6 +32,9 @@ default DSN is distinct from the daemon project; Electron main uses
 builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
+All consented desktop error reports are kept, subject to the renderer's
+per-error budget and side-chat recovery budgets. This includes fatal crashes, handled main-process failures,
+unhandled renderer window errors, and rejected promises.
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
@@ -43,9 +46,27 @@ choice controls Electron and daemon Sentry there. Share usage analytics is a
 separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
-Error events can include a standard exception type and allowlisted in-app
-function names and line numbers. Stack paths and raw exception messages are
-removed before sending.
+Error events can include a standard exception type, bounded function names,
+bounded line and column numbers, and a validated app relative JavaScript asset
+filename. The asset filename preserves the location needed for source map matching. Local
+filesystem paths, full URLs, and raw exception messages are removed before sending.
+The app's global renderer error boundary binds handlers independently of
+PostHog setup. Electron main still checks Share error events before sending.
+Preload installs main-world error and rejection handlers before renderer imports
+and reads the consent policy itself. An import failure can therefore report even
+when the renderer never starts. Early reports contain fixed text, a standard
+exception type, and validated asset locations only. Once the renderer starts,
+the same listeners hand off to its normal reporter. Early captures are not
+replayed through the later renderer boundaries.
+Router error boundaries and query/mutation cache callbacks also report unexpected
+client failures. Query keys, mutation inputs, route parameters and error text are
+not sent. API failures retain a local ownership marker through message wrapping,
+so these callbacks do not duplicate the API client's report or escalate expected
+API state. Repeated observations of the same exception object are reported once.
+Background side-chat restore and snapshot failures use the same main-owned
+consent gate, with fixed titles and no launch-state payload. Expected connection,
+authentication, cancellation and stale-attachment states stay out. Repeated
+recovery reports are limited to five per minute and 200 per UTC day.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
@@ -117,11 +138,11 @@ Orchestrator.inc sends structured events in a few broad categories:
   `exe`, `appimage`, `deb`, `rpm`, `dev`, `unknown`, or `other`, and
   `installed_at` is the UTC day the app first ran. Both come from
   `~/.ao/app-state.json`; no download path or file name is sent
-- Whether the app is running in CI or a container (`is_ci`, plus `ci_signal`
-  of `ci_env` or `container`), detected from well-known CI environment
-  variables and container marker files. Only the boolean and the category are
-  sent, never the variables themselves, so automated runs can be excluded from
-  usage counts
+- Whether the app is running in CI (`is_ci`) or a container (`is_container`),
+  detected independently from well-known CI environment variables and
+  container marker files. A development container has `is_ci: false` and
+  `is_container: true`; CI inside a container has both true. Only the booleans
+  are sent, never the variables themselves
 - If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
   address, AO Cloud user ID, and GitHub username. The email is set at sign-in
@@ -133,9 +154,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   session-start events)
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
-- One-time lifecycle markers: `ao.app.first_open` is sent once per
+- One-time lifecycle markers: `ao.install.created` is sent once per
   installation identifier on any build, including installations that predate
-  the install event, and `ao.app.installed` and `ao.app.first_open` say
+  the install event, and `ao.app.installed` and `ao.install.created` say
   whether the desktop app or the CLI started the daemon (`launcher`).
   `ao.session.spawned` and `ao.projects.created` carry `first_for_install`,
   true only for the installation's first session or project. These are
@@ -155,6 +176,8 @@ Orchestrator.inc sends structured events in a few broad categories:
   only categories, counts, and durations, never message text, titles, branch
   names, or URLs. See "Usage counts by project" and "How sessions start and
   end" below
+- Desktop onboarding milestones separately record an app open on the install
+  day, first eligible user CLI invocation, and return on a later UTC day.
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -183,6 +206,60 @@ group events for the same project or session without sending those identifiers
 in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
+
+Daemon `project_id_hash` uses the random install ID as a salt before hashing
+the local project ID. This keeps the session spawn grouping stable within one
+installation while preventing a short, guessable project slug from yielding
+the same hash across installations. Usage summary events retain their separate
+random `project_telemetry_id`.
+
+Desktop and daemon events carry `days_since_install` when the persisted install
+ID file has a valid timestamp. The daemon reads it at export time; the desktop
+receives that timestamp during telemetry bootstrap and recalculates the age
+for each event. The daemon also reads `lifetime_sessions` from
+a SQLite counter that increases when a session is committed and survives its
+later deletion. The daemon snapshots the count when an event enters its remote
+sink, before asynchronous export. The desktop reads that counter from the
+loopback daemon during bootstrap, and a paired phone receives it through the
+authenticated telemetry identity route. If the count cannot be read, it is
+omitted. Historical sessions
+deleted before this counter was introduced cannot be reconstructed.
+`is_signed_in` reflects the AO Cloud identity known on the emitting surface.
+The daemon and paired phone omit it until the desktop resolves and hands off
+its Cloud session; an explicit sign-out reports false. These
+properties contain no local project or session ID.
+
+Session spawn events use `created_by` from the durable session attribution
+record to describe whether a user, orchestrator, schedule, or automation
+started the session. Session telemetry reports `kind: standalone` when the
+session has no project. Failed desktop orchestrator spawn outcomes include
+the daemon error code and HTTP status when available. These values contain
+no error message, project name, or request ID.
+
+The onboarding milestones use durable local reservations. A first app open is
+recorded only on the install day.
+The next-day return requires desktop activity on the install day and again on
+the next UTC calendar day, including when the desktop remains open across midnight.
+The first eligible user CLI invocation reserves a local marker before export. None of
+these milestones treats an idle session as a successful session.
+The first project and first session are identified by `first_for_install` on
+the committed project and session events. The old `ao.onboarding.first_*`
+events remain deprecated until the separate event rename.
+`lifetime_sessions: 2` on `ao.session.spawned` identifies the second session.
+
+| Event | Authoritative source | Deduplication |
+| --- | --- | --- |
+| `ao.app.first_opened` | Desktop opens on the installation day | Desktop local reservation |
+| `ao.cli.first_used` | First eligible user CLI invocation, before command execution; the command may later fail | Install marker file |
+| `ao.projects.created` with `first_for_install` | First committed project registration | Durable project registry |
+| `ao.session.spawned` with `first_for_install` | First committed session | Durable install milestone |
+| `ao.session.spawned` with `lifetime_sessions: 2` | Second committed session | Durable lifetime counter |
+| `ao.app.next_day_returned` | Desktop active on the install day and again the next UTC day | Desktop local reservation |
+| `ao.agents.missing` | Agent readiness reports zero installed agents | Once per desktop launch |
+| `ao.agents.install_clicked` | User starts an agent install from Settings | One event per accepted click |
+
+`ao.renderer.agents_available` continues to report bounded installed,
+authorized, and supported agent inventory once per desktop launch.
 
 ## Usage counts by project
 
@@ -329,6 +406,39 @@ leading and trailing whitespace:
 | `l` | 801 to 2,000 bytes |
 | `xl` | More than 2,000 bytes |
 
+The daemon also emits `ao.automation.created` once after successfully saving a
+new definition, whether created through the desktop, CLI, or API. Its only
+automation-specific properties are `template_id` and `use_case`, both restricted
+to closed vocabularies. It does not include the automation ID, prompt, name,
+repository, project ID, or generated output. Existing desktop/daemon telemetry
+controls apply; delivery is best effort and a telemetry failure does not fail
+creation.
+
+`template_id` is one of `custom`, `daily_pr_review_v1`,
+`daily_issue_triage_v1`, or `weekly_release_notes_v1`. It records the chosen
+starting point and stays fixed even if the prompt changes. `use_case` is one of
+`pr_review`, `issue_triage`, `repo_digest`, `ci_triage`, `release_notes`,
+`security_audit`, `dependency_maintenance`, `docs_maintenance`, `other`, or
+`unknown`. The desktop derives the category from the selected starter; custom
+definitions use `unknown`. CLI/API clients may optionally supply or update a
+category, including `other`. Older definitions and clients default to
+`custom` / `unknown`.
+
+Template origin is client-declared, not verified. The desktop sets `templateId`
+from the selected starter, but CLI/API callers can supply any allowed template
+ID with an arbitrary prompt, even when they did not use that starter. Scripted
+or agent-driven creates can therefore inflate template counts. Treat
+`template_id` as a declared starting point, not proof of a template selection
+or prompt contents; it cannot reliably measure desktop starter adoption across
+all clients.
+
+For intent analysis, count `ao.automation.created` grouped by these two fields.
+Do not add renderer success events to this count: they describe the same desktop
+creations and exclude CLI/API creations. Updates, runs, and startup migration do
+not emit creation events. This measures declared intent at creation, not current
+active usage, successful execution, or the exact contents of a customized prompt.
+Existing events cannot be used to reconstruct historical automation intent.
+
 ## Artifact creation
 
 When desktop product telemetry is enabled, Orchestrator.inc records visits to the
@@ -398,17 +508,19 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   or account switch, its anonymous `distinct_id` changes to avoid attributing
   new anonymous events to the previous person.
 - Project and session identifiers included in telemetry are one-way hashed.
-  Hashing hides the plain text but still allows related events to be grouped.
+  Daemon project hashes are salted by the random install ID. Hashing hides
+  the plain text while allowing related events on that install to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
   are replaced with redaction markers before the events are sent.
 - Daemon events sent to PostHog and mobile events accept a fixed set of
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
-- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
-  rate limit bound them, and real HTTP 500 responses also go to the existing
-  gated Sentry capture once. The local diagnostic stream keeps every
-  occurrence. CLI usage errors are one event per command path and error kind
+- Remote HTTP 5xx events contain only a count and rollup window. The minute
+  rollup and daily rate limit bound them. Reportable HTTP errors still go to
+  the existing gated daemon Sentry capture once, and local logs and local
+  telemetry retain each occurrence with diagnostic fields. CLI usage errors
+  are one event per command path and error kind
   per install per completed UTC day, with `command_path`, `error_kind`, and
   `count`. At most 20 of those events are sent per day. The minute rate limit
   does not apply to this event, because each one is already a summary. Paths
@@ -422,7 +534,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   `GET /api/v1/sessions/:id/conversation/models`, and
   `GET /api/v1/sessions/:id/conversation/skills`. Codex
   account management being unwired, and an already-closed shell terminal, are
-  not analytics events. An expired GitHub token still reports. A Codex login
+  not analytics events. A GitHub token rejected after refresh still reports
+  `GITHUB_AUTH_INVALID`. A temporary refresh outage reports
+  `GITHUB_REFRESH_UNAVAILABLE` for retry instead of claiming the credential is
+  invalid. A Codex login
   terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
   account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
   account routes. The account event stream stays open for setup-incomplete
@@ -486,6 +601,23 @@ mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
 
+A release build returns from the sign-in page through
+`https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
+If you accepted analytics on that website, the page passes your website
+PostHog `distinct_id` to the desktop app along with the sign-in result. The
+desktop app uses it only when Share usage analytics is on: right after it
+identifies you, it calls PostHog `alias` once, which links your website visits
+to your AO Cloud person, and sends one `ao.renderer.cloud_web_visitor_link_requested`
+event carrying that website ID as `website_distinct_id`. The event records
+that the link was requested: PostHog can still refuse the merge, for example
+when that website ID already belongs to an identified person. This can link your
+website visit to your AO Cloud account. The website ID plays no part in signing
+in, is not written to disk, settings, or logs, and is not sent again on later
+launches, token refreshes, or a repeated return link. If you did not accept
+website analytics, or desktop analytics are off, nothing is linked. Builds that
+sign in against another WorkOS environment, and development builds, return
+through other pages that never add a website ID.
+
 AO Cloud itself reports a few server-side events for signed-in users, currently
 `invite.sent` (organization role and a hash of the organization ID, never the
 invitee's email). Event names for pricing, checkout, and subscriptions are
@@ -525,24 +657,44 @@ interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
-only: the daemon's Sentry capture of reportable 5xx errors, failed agent
-relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
-goroutine panics; and Electron main capture of process crashes, uncaught
-exceptions, unhandled rejections, and reportable renderer errors. Sentry
+only: the daemon's Sentry capture of reportable 5xx errors, registered fault
+codes answered as 4xx or 503, background failures, and handler or background
+goroutine panics; and Electron main capture of process crashes, handled
+daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
+and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by registered route and error code,
-while retaining the AO function that recorded the failure as the culprit.
+raw error messages. It groups HTTP faults by registered route and stable error
+code, or by a bounded cause type when no code exists. Ordinary Go errors carry
+no synthetic throw stack. Recovered panics retain the interrupted AO function.
 Agent relaunches group by operation and failure step, with a fixed step tag
 and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
-error provides evidence. It keeps stack function and line information, but
-removes stack paths, request data, project, session, repository and branch
-names, and panic text. Electron events use fixed titles and scrubbed exception
-values with the same installation ID as Sentry `user.id`.
-Canceled requests, transient 503 responses, and expected upstream link-preview
-502 responses do not create Sentry issues. Registered route templates remain
+error provides evidence. Panic events keep function and line information, but
+remove stack paths, request data, project, session, repository and branch
+names, and panic text. Electron exception titles use a standard error type and
+a fixed function name or bounded bundle location; renderer API titles use a
+fixed error code or category.
+Both have scrubbed exception values and the same
+installation ID as Sentry `user.id`.
+Canceled requests, plain transient 503 responses, and expected upstream link-preview
+502 responses do not create Sentry issues. A 503 caused by a server deadline or
+a registered daemon fault code is reportable. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
+Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
+Sentry policy. Untyped renderer 503 responses remain reportable. The existing
+API client skips its confirmed expected 409 probes, while other 409 responses
+remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
+name and call site at five per minute and 200 per day. HTTP and background daemon sends
+share a limit of four concurrent reports, dropping diagnostics at capacity without
+retaining a queue. Their transport runs outside the caller's locks and database
+transactions, and opt-out waits for admitted sends before it completes.
+The daemon admits the first five
+reportable errors per fingerprint each minute and at most 200 per day. Its
+in process budget tracks at most 1,024 distinct fingerprints per day, then
+uses one overflow group per operation. It samples
+admitted errors at full rate. Project quota and spike protection still need
+verification before a stable release.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not
@@ -584,3 +736,5 @@ For the broader data policy, retention information, and contact options, see
 the [Orchestrator.inc privacy policy](https://orchestrator.inc/privacy). You can report a problem
 with this documentation in the
 [GitHub repository](https://github.com/OrchestratorInc/agent-orchestrator).
+
+Handled Electron main captures are limited per sanitized category, reason and detail to five per minute and 200 per UTC day, with at most 1,024 budget keys per day. Pending pre-policy captures count against the same limits. Renderer operation tags are forwarded only for fixed exception operations. Remote proxy connectivity and identity-verification refusals are expected states.
