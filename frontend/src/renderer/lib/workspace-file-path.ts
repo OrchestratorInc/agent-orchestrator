@@ -78,6 +78,19 @@ export function findWorkspaceFilePath(
 	return byBase.length === 1 ? byBase[0] : undefined;
 }
 
+/** Reuse hits and misses for one immutable workspace catalog. */
+export function createWorkspaceFileLookup(paths: readonly string[]): (reference: string) => string | undefined {
+	const results = new Map<string, string | undefined>();
+	return (reference) => {
+		if (results.has(reference)) return results.get(reference);
+		const result = findWorkspaceFilePath(reference, paths);
+		// Streaming can produce arbitrarily many incomplete references.
+		if (results.size >= 1024) results.clear();
+		results.set(reference, result);
+		return result;
+	};
+}
+
 /** A link-shaped local path can still target a new file absent from a stale catalog. */
 export function explicitWorkspaceFilePath(reference: string): string | undefined {
 	if (!reference.trim() || reference.trim().startsWith("#") || hasNonFileScheme(reference)) return undefined;
