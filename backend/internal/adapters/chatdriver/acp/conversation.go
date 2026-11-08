@@ -194,6 +194,8 @@ type conversation struct {
 	compactionFailure string
 	compactedTurn     string
 
+	claudeRejectedLimits map[string]time.Time
+
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
 	eventsClosed bool
@@ -935,6 +937,11 @@ func (c *conversation) finishPrompt(
 				CachedTokens: int64(cached), TotalTokens: int64(resp.Usage.TotalTokens),
 				TotalsKnown: true,
 			}})
+		}
+	}
+	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
+		if reset, ok := c.claudeUsageLimitReset(time.Now()); ok {
+			turnErr = ports.NewChatProviderFailure(turnErr.Error(), "Resets at "+reset.Format(time.RFC3339), turnErr)
 		}
 	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
