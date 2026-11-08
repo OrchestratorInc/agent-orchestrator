@@ -11,6 +11,7 @@ import (
 
 const shareLinksFixture = `{
 	"[\"https://cp.test\",\"sess-1\",\"report.html\"]": {"shareId": "a", "fingerprint": "f", "url": "https://share.test/a"},
+	"[\"https://cp.test\",\"sess-1\",\"charts/q3.html\"]": {"shareId": "q", "url": "https://share.test/q"},
 	"[\"https://cp.test\",\"sess-1\",\"old.html\"]": "b",
 	"[\"https://cp.test\",\"sess-1\",\"bad.html\"]": {"shareId": "c", "url": "javascript:alert(1)"},
 	"[\"https://other.test\",\"sess-1\",\"notes.md\"]": {"shareId": "d", "url": "https://other.test/d"},
@@ -40,9 +41,9 @@ func TestShareLinksApply(t *testing.T) {
 	}
 	links := NewShareLinks(dir, "https://cp.test")
 
-	got := applied(links, "sess-1", "report.html", "old.html", "bad.html", "notes.md")
-	if len(got) != 1 || got["report.html"] != "https://share.test/a" {
-		t.Fatalf("sess-1 links = %v, want only report.html", got)
+	got := applied(links, "sess-1", "report.html", "charts/q3.html", "old.html", "bad.html", "notes.md")
+	if len(got) != 2 || got["report.html"] != "https://share.test/a" || got["charts/q3.html"] != "https://share.test/q" {
+		t.Fatalf("sess-1 links = %v, want report.html and charts/q3.html", got)
 	}
 
 	if err := os.WriteFile(file, []byte(`{"[\"https://cp.test\",\"sess-1\",\"report.html\"]": {"shareId": "a", "fingerprint": "f"}}`), 0o600); err != nil {
