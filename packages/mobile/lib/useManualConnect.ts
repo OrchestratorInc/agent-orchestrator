@@ -65,8 +65,6 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		// A pasted "https://host:443" is split into its host and port here, so
-		// the URL is never built as host:443:443.
 		const target = { ...cfg, host: address.host, httpPort: address.port };
 		try {
 			if (editingHost) {

@@ -44,7 +44,6 @@ describe("machine editor draft", () => {
 		expect(canSaveDraft({ ...draft, machineName: "  " })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "" } })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "70000" } })).toBe(false);
-		// TLS on implies 443, and a port in the host fills an empty Port (#7981).
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "" } })).toBe(true);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, httpPort: "" } })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, host: "192.168.1.24:3011", httpPort: "" } })).toBe(true);

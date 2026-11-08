@@ -14,24 +14,11 @@ export function portError(port: string): string | undefined {
 	return port.trim() && !isValidPort(port) ? PORT_ERROR : undefined;
 }
 
-/** What a hand-typed Host, Port and TLS setting resolve to. */
 export type ManualAddress =
 	| { ok: true; host: string; port: string; secure: boolean }
-	/** `incomplete` is a field not filled in yet: it blocks Connect without an error. */
 	| { ok: false; incomplete: true }
 	| { ok: false; incomplete?: false; error: string };
 
-/**
- * Reads the Host and Port fields the way a person fills them in: a pasted
- * address can carry a scheme and a port (`https://example.com:443`,
- * `[::1]:8080`), and then the Port field may be left empty. Pure, so the form,
- * the editor and the save path agree on one answer.
- *
- * The port comes from the Port field, else the one in the Host, else 443 when
- * TLS is on. A port in both must match, and a scheme must match the TLS
- * toggle, so the form says what to change instead of building a URL that
- * cannot work (`https://host:443:443`).
- */
 export function resolveManualAddress(hostInput: string, portInput: string, secure: boolean | undefined): ManualAddress {
 	const tls = secure === true;
 	let rest = hostInput.trim();
@@ -54,8 +41,6 @@ export function resolveManualAddress(hostInput: string, portInput: string, secur
 		host = bracketed[1];
 		if (bracketed[2] !== undefined) embedded = bracketed[2] || "-";
 	} else if (rest.indexOf(":") !== -1 && rest.indexOf(":") === rest.lastIndexOf(":")) {
-		// One colon is host:port. More than one is a bare IPv6 address with no
-		// port, kept as typed.
 		const at = rest.indexOf(":");
 		host = rest.slice(0, at);
 		embedded = rest.slice(at + 1) || "-";
@@ -73,7 +58,6 @@ export function resolveManualAddress(hostInput: string, portInput: string, secur
 	return { ok: true, host, port: String(Number(resolved)), secure: tls };
 }
 
-/** The address's error to show against the form, if any: nothing while a field is merely empty. */
 export function manualAddressError(hostInput: string, portInput: string, secure: boolean | undefined): string | undefined {
 	if (!hostInput.trim()) return portError(portInput);
 	const address = resolveManualAddress(hostInput, portInput, secure);

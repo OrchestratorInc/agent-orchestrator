@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { manualAddressError, resolveManualAddress } from "./connectionFields";
 
-// #7981: a pasted "https://host:443" became https://host:443:443 and was
-// reported unreachable, and an empty Port blocked Connect.
 describe("resolveManualAddress", () => {
 	it("keeps a plain host and port", () => {
 		expect(resolveManualAddress("192.168.1.42", "3011", false)).toEqual({ ok: true, host: "192.168.1.42", port: "3011", secure: false });
