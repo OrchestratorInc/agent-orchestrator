@@ -119,6 +119,12 @@ type deleteSessionResponse struct {
 	SessionID string `json:"sessionId"`
 }
 
+// killSessionRequest names the AO session running the command, so the session
+// that spawned the killed one shows the termination only when it asked for it.
+type killSessionRequest struct {
+	CallerSessionID string `json:"callerSessionId,omitempty"`
+}
+
 type killSessionResponse struct {
 	SessionID      string `json:"sessionId"`
 	Freed          bool   `json:"freed"`
@@ -713,7 +719,8 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 		}
 	}
 	var res killSessionResponse
-	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", struct{}{}, &res); err != nil {
+	req := killSessionRequest{CallerSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID"))}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", req, &res); err != nil {
 		return err
 	}
 	if res.CleanupPending {

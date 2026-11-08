@@ -5575,6 +5575,7 @@ export interface components {
             supported: boolean;
         };
         ControllersKillSessionRequest: {
+            callerSessionId?: string;
             deleteArtifacts?: boolean;
         };
         ControllersRemoteHostAccountTokenResponse: {
@@ -6725,6 +6726,8 @@ export interface components {
         };
         Project: {
             agent?: string;
+            canonicalOwnerAvatarUrl?: string;
+            canonicalRepo?: string;
             config?: components["schemas"]["ProjectConfig"];
             defaultBranch: string;
             folderMissing: boolean;
@@ -7116,6 +7119,7 @@ export interface components {
         SessionBranchState: {
             commits: number;
             remoteBranch?: string;
+            remoteHead?: string;
             unpushed: number;
         };
         SessionHistoryResponse: {
@@ -7388,6 +7392,8 @@ export interface components {
              * @description Time the local hook process observed the event, before delivery to the daemon.
              */
             observedAt?: string;
+            /** @description The finished tool call probably changed the session's pull request (gh pr merge, git push), so AO re-reads it early. */
+            prMayHaveChanged?: boolean;
             /** @description Process id of the provider process that fired the hook (Claude's CLAUDE_PID). */
             processId?: number;
             /** @description Native main-turn identity reported by the hook, when supported. */
@@ -7720,6 +7726,7 @@ export interface components {
         SpawnSessionRequest: {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            async?: boolean;
             attachments?: components["schemas"]["AttachmentInput"][];
             branch?: string;
             clientRequestId?: string;

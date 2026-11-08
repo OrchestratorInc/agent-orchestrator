@@ -36,6 +36,7 @@ type APIDeps struct {
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
+	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
@@ -190,6 +191,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Svc:                      deps.Sessions,
 			Projects:                 deps.Projects,
 			Activity:                 deps.Activity,
+			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,

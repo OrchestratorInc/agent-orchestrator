@@ -16187,6 +16187,8 @@ components:
       type: object
     ControllersKillSessionRequest:
       properties:
+        callerSessionId:
+          type: string
         deleteArtifacts:
           type: boolean
       type: object
@@ -19275,6 +19277,10 @@ components:
       properties:
         agent:
           type: string
+        canonicalOwnerAvatarUrl:
+          type: string
+        canonicalRepo:
+          type: string
         config:
           $ref: '#/components/schemas/ProjectConfig'
         defaultBranch:
@@ -20235,6 +20241,8 @@ components:
           type: integer
         remoteBranch:
           type: string
+        remoteHead:
+          type: string
         unpushed:
           type: integer
       required:
@@ -20926,6 +20934,10 @@ components:
             to the daemon.
           format: date-time
           type: string
+        prMayHaveChanged:
+          description: The finished tool call probably changed the session's pull
+            request (gh pr merge, git push), so AO re-reads it early.
+          type: boolean
         processId:
           description: Process id of the provider process that fired the hook (Claude's
             CLAUDE_PID).
@@ -21744,6 +21756,8 @@ components:
           - auto
           - bypass-permissions
           type: string
+        async:
+          type: boolean
         attachments:
           items:
             $ref: '#/components/schemas/AttachmentInput'

@@ -479,14 +479,25 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 		</div>
 	),
 }));
-// The session tab's menu is stood in for by the switch control it wraps.
-vi.mock("./TerminalAgentControls", () => ({
-	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
-		<>
-			{switchControl}
-		</>
-	),
-}));
+vi.mock("./TerminalAgentControls", () => ({ TerminalAgentPickerRow: () => null }));
+// The session tab's ⋮ menu is stood in for by its interface switch row, as a button.
+vi.mock("./TabContextMenu", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./TabContextMenu")>();
+	const { useContext } = await import("react");
+	return {
+		...actual,
+		SessionTabMenuButton: () => {
+			const menu = useContext(actual.SessionTabAgentMenuContext);
+			const action = menu?.switchAction;
+			if (!action) return null;
+			return (
+				<button disabled={action.disabled} onClick={action.run} title={action.reason} type="button">
+					{menu.switchTarget === "chat" ? "Switch to chat UI" : "Switch to terminal UI"}
+				</button>
+			);
+		},
+	};
+});
 vi.mock("./chat/ReviewerChatSurface", () => ({
 	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>

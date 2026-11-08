@@ -23,8 +23,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
-import { SessionContextMenuItems } from "./SessionContextMenuItems";
-import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
+import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
@@ -66,12 +65,11 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
-import { FileTabMenuItems, SessionFileTab } from "./SessionFileTabs";
+import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
@@ -1577,14 +1575,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				),
 				onSelect: () => activateCenterFile(path),
 				onClose: () => closeCenterFile(path),
-				menuItems: (
-					<FileTabMenuItems
-						path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
-						remote={Boolean(hostId || session?.cloud)}
-						sessionId={sessionId}
-						source={centerFileRequestsBySession[uiSessionId]?.[path]?.source}
-					/>
-				),
+				menu: {
+					kind: "file",
+					tabKey: `file:${path}`,
+					onClose: () => closeCenterFile(path),
+					file: {
+						path: centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path,
+						remote: Boolean(hostId || session?.cloud),
+						sessionId,
+						source: centerFileRequestsBySession[uiSessionId]?.[path]?.source,
+					},
+				} satisfies TabMenuSpec,
 			})),
 		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId, hostId, session?.cloud, sessionId],
 	);
@@ -1900,25 +1901,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
 		};
-		// The focused member's own tab menu, below the group's Ungroup.
-		const memberMenu = (key: string, shown: boolean) => {
+		// The focused member's own tab menu, below the group's Ungroup. A
+		// member's title is not edited in the group tab, so it has no rename.
+		const memberMenu = (key: string, shown: boolean): TabMenuSpec | undefined => {
 			const filePath = key.startsWith("file:") ? key.slice("file:".length) : undefined;
 			const request = filePath ? centerFileRequestsBySession[uiSessionId]?.[filePath] : undefined;
-			const items = key === SESSION_TAB_KEY
-				? session ? <SessionContextMenuItems session={session} /> : undefined
-				: filePath
-					? <FileTabMenuItems path={request?.path ?? filePath} remote={Boolean(hostId || session?.cloud)} sessionId={sessionId} source={request?.source} />
-					: undefined;
-			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud && sessionIsActive(session);
-			return (
-				<TabMenuBody
-					closeShortcut={shown}
-					destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
-					items={items}
-					onClose={() => closePane(key)}
-					tabKey={key}
-				/>
-			);
+			const base = { tabKey: key, closeShortcut: shown, onClose: () => closePane(key) };
+			if (key === SESSION_TAB_KEY) {
+				if (!session) return { ...base, kind: "plain" };
+				const canArchive = !isOrchestrator && !session.cloud && sessionIsActive(session);
+				return { ...base, kind: "session", session, canArchive };
+			}
+			if (filePath) {
+				return { ...base, kind: "file", file: { path: request?.path ?? filePath, remote: Boolean(hostId || session?.cloud), sessionId, source: request?.source } };
+			}
+			return { ...base, kind: "plain" };
 		};
 		return groups.map((group) => ({
 			key: groupTabKey(group),
@@ -1927,8 +1924,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					active={group === shownGroup}
 					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 					members={leafKeys(group.root).map(groupMember)}
-					menuItems={memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup)}
-					onUngroup={() => updateGroups((current) => ungroupById(current, group.id))}
+					menu={{
+						kind: "group",
+						onUngroup: () => updateGroups((current) => ungroupById(current, group.id)),
+						member: memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup),
+					}}
 				/>
 			),
 			onSelect: () => selectTab(groupFocus(group)),
@@ -2026,25 +2026,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	// A local session's tab menus hold the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	// SessionTabMenu renders nothing without a switch or an agent picker; pass no
-	// action then, so the tab keeps its avatar on hover.
-	const sessionTabMenuEmpty = !interfaceUi.switchAction && !interfaceUi.switchControl && interfaceUi.target !== "chat";
-	const sessionTabActions = !session || session.cloud || sessionTabMenuEmpty
-		? (session?.cloud ? interfaceUi.switchControl : null)
-		: (
-			<SessionTabMenu
-				key={uiSessionId}
-				session={session}
-				hostId={hostId}
-				blocked={agentWorking}
-				switchTarget={interfaceUi.target}
-				switchAction={interfaceUi.switchAction}
-				switchControl={interfaceUi.switchControl}
-			/>
-		);
+	// The agent rows apply while there is a switch to offer, or a terminal's
+	// agent to pick and no switch running. Then the tab also shows its ⋮ button;
+	// otherwise the running switch's status takes the tab's action slot.
+	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
+		if (!session || session.cloud) return undefined;
+		const picksAgent = interfaceUi.target === "chat" && !interfaceUi.switchControl;
+		if (!interfaceUi.switchAction && !picksAgent) return undefined;
+		return { session, hostId, blocked: agentWorking, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
+	const sessionTabActions = sessionTabAgentMenu
+		? <SessionTabMenuButton key={uiSessionId} />
+		: session ? (interfaceUi.switchControl ?? null) : null;
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
@@ -2537,6 +2533,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<TabSplitMenuContext.Provider value={splitTabMenu}>
+							<SessionTabAgentMenuContext.Provider value={sessionTabAgentMenu}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
@@ -2577,6 +2574,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
 									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
+									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
 							) : showChatSurface ? (
@@ -2676,6 +2674,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							)}
 							</div>
+							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
 							</SplitHiddenTabKeysContext.Provider>
 							</SplitCloseFocusedContext.Provider>

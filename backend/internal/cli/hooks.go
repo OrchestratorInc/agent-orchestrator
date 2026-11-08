@@ -77,6 +77,9 @@ type setActivityAPIRequest struct {
 	Entrypoint                   string                              `json:"entrypoint,omitempty"`
 	ProcessID                    int                                 `json:"processId,omitempty"`
 	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
+	// PRMayHaveChanged reports a finished shell command that probably changed
+	// the session's PR (gh pr merge, git push), so the daemon re-reads it early.
+	PRMayHaveChanged bool `json:"prMayHaveChanged,omitempty"`
 }
 
 type usageHookMetadata struct {
@@ -128,6 +131,18 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 		p.ToolUseID = ""
 	}
 	return p.ToolName, p.ToolUseID
+}
+
+// hookCommandMayChangePR reports whether a post-tool-use payload's shell
+// command (`tool_input.command`, left raw so a string or argv both work)
+// probably changed a pull request.
+func hookCommandMayChangePR(payload []byte) bool {
+	var p struct {
+		ToolInput struct {
+			Command json.RawMessage `json:"command"`
+		} `json:"tool_input"`
+	}
+	return json.Unmarshal(normalizeHookPayload(payload), &p) == nil && domain.CommandMayChangePR(string(p.ToolInput.Command))
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
@@ -739,7 +754,8 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			}
 		}
 	}
-	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" {
+	prMayHaveChanged := event == "post-tool-use" && hookCommandMayChangePR(payload)
+	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" && !prMayHaveChanged {
 		// Unknown agent, or an event carrying neither activity nor resumable
 		// session metadata: report nothing.
 		return nil
@@ -793,6 +809,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		TranscriptPath:               conversation.TranscriptPath,
 		LaunchID:                     launchID,
 		Usage:                        usage,
+		PRMayHaveChanged:             prMayHaveChanged,
 	}
 	if hasActivity {
 		req.State = string(state)

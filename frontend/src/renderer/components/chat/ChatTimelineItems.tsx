@@ -75,6 +75,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
+import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
@@ -1228,7 +1229,12 @@ export function AssistantMessage({
 export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
-	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
+	if (activity.activityKind === "mcp_tool") {
+		const ao = aoToolView(activity);
+		if (ao) return ao.label;
+		const { tool } = mcpToolName(activity);
+		return tool.trim() || "Using a tool";
+	}
 	return splitSummary(activity).label;
 }
 
@@ -2210,15 +2216,21 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
+	const aoView = aoToolView(activity);
+	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} />;
+	return <GenericMcpToolRow activity={activity} />;
+}
+
+function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
-	const tool = detail?.toolName ?? activity.summary;
-	const server = detail?.server ?? detail?.namespace;
-	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
+	const { tool, server } = mcpToolName(activity);
+	const args = mcpToolArguments(activity);
+	const sourceLabel = server ? `· ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
+			args !== undefined ||
 			detail?.result !== undefined ||
 			detail?.content !== undefined ||
 			detail?.error ||
@@ -2285,9 +2297,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							{detail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
-						<JsonPayload label="Arguments" value={detail.arguments} />
-					) : null}
+					{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
 					{detail?.result !== undefined ? (
 						<JsonPayload label="Result" value={detail.result} />
 					) : null}
@@ -2302,6 +2312,86 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							</pre>
 						</div>
 					) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
+	);
+}
+
+/**
+ * A call to one of AO's own tools, told in the user's words: what was done, and
+ * what went wrong when something did. The tool's answer is written for the agent,
+ * so it is never shown as is.
+ */
+function AOToolRow({ view }: { view: AOToolView }) {
+	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
+	const failed = view.state === "failed";
+	const hasBody = Boolean((failed && view.error) || view.lines?.length || view.text);
+
+	return (
+		<div className="min-w-0 max-w-full">
+			<Pressable
+				onClick={() => setOpen((prev) => !prev)}
+				disabled={!hasBody}
+				aria-expanded={hasBody ? open : undefined}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
+			>
+				<strong
+					className={cn(
+						"activity-row-label min-w-0 truncate text-xs font-normal",
+						failed ? "text-destructive" : "text-muted-foreground",
+					)}
+					title={view.label}
+				>
+					<span>{view.label}</span>
+				</strong>
+				{view.note ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-warning">{view.note}</span>
+				) : null}
+				{view.state === "running" ? (
+					<Loader2 aria-label="running" className="size-3 shrink-0 animate-spin text-muted-foreground/60" />
+				) : hasBody ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
+					/>
+				) : null}
+			</Pressable>
+
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex flex-col gap-1 pb-2.5">
+							{failed && view.error ? (
+								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
+									{view.error}
+								</p>
+							) : null}
+							{view.lines?.map((line, index) => (
+								<p
+									key={`${index}:${line.text}`}
+									className={cn(
+										"whitespace-pre-wrap break-words text-xs leading-relaxed",
+										line.tone === "error" ? "text-destructive" : "text-muted-foreground",
+									)}
+								>
+									{line.text}
+								</p>
+							))}
+							{view.text ? (
+								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+									{view.text}
+								</pre>
+							) : null}
 						</div>
 					</motion.div>
 				) : null}
