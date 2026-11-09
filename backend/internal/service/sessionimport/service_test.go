@@ -376,7 +376,7 @@ func TestScanListsNewestChatsPerProject(t *testing.T) {
 	old := harnessImporters[domain.HarnessGemini]
 	t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
 	root, cwd := canonical(t.TempDir()), canonical(t.TempDir())
-	now := time.Now()
+	now := time.Now().In(time.FixedZone("IST", 5*3600+1800))
 	harnessImporters[domain.HarnessGemini] = harnessImporter{
 		root: func(string) string { return root },
 		discover: func(context.Context, string) ([]sourceFiles, error) {
@@ -398,7 +398,7 @@ func TestScanListsNewestChatsPerProject(t *testing.T) {
 	if err != nil || len(preview.Candidates) != maxChatsPerProject || len(svc.selections) != maxChatsPerProject {
 		t.Fatalf("listed %d, selectable %d, %v", len(preview.Candidates), len(svc.selections), err)
 	}
-	if oldest := preview.Candidates[maxChatsPerProject-1].LastActivity; !oldest.Equal(now.Add(-(maxChatsPerProject - 1) * time.Minute)) {
+	if oldest := preview.Candidates[maxChatsPerProject-1].LastActivity; !oldest.Equal(now.Add(-(maxChatsPerProject-1)*time.Minute)) || oldest.Location() != time.UTC {
 		t.Fatalf("oldest listed chat is from %v", oldest)
 	}
 }
