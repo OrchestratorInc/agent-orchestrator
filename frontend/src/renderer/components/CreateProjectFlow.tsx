@@ -1,4 +1,5 @@
 import type { FirstRunPromptAction } from "../lib/experiments";
+import { apiErrorException } from "../lib/api-error-exception";
 import { AppLink } from "./AppLink";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -19,9 +20,8 @@ import {
 	LoaderCircle,
 	Lock,
 	MessageSquarePlus,
-	X,
 	XCircle,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
@@ -40,7 +40,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
-import { usePreparedClone } from "../hooks/usePreparedClone";
+import { type CloneProgress, usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -75,9 +75,11 @@ import CloneRepositoryDialog, { type CloneRepositoryDetails, type CloneRepositor
 // GitHubTokenField is used via inline Input components in CloudProjectCard
 import { PathRow } from "./PathRow";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
@@ -206,6 +208,7 @@ export function CreateProjectFlow({
 	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => initialCloneDetails(hostId));
 	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
 	const [cloneActivity, setCloneActivity] = useState<"cloning" | "validating" | null>(null);
+	const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
 	const [cloneRegistrationFailed, setCloneRegistrationFailed] = useState(false);
 	const preparedClone = usePreparedClone(hostId);
 	const [remoteBrowse, setRemoteBrowse] = useState<RemoteBrowseRequest | null>(null);
@@ -607,9 +610,10 @@ export function CreateProjectFlow({
 		setCloneRegistrationFailed(false);
 		setIsPreparingGit(true);
 		setCloneActivity(preparedClone.current() ? "validating" : "cloning");
+		setCloneProgress(null);
 		let clonedPath: string | null = null;
 		try {
-			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent, setCloneProgress);
 			clonedPath = data.path;
 			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
@@ -645,6 +649,7 @@ export function CreateProjectFlow({
 			setCloneDialogOpen(true);
 		} finally {
 			setCloneActivity(null);
+			setCloneProgress(null);
 			setIsPreparingGit(false);
 		}
 	};
@@ -736,7 +741,7 @@ export function CreateProjectFlow({
 							stepwise: true,
 						},
 				});
-				if (apiError || !data) throw new Error(apiErrorMessage(apiError, t("createProject.couldNotAdd")));
+				if (apiError || !data) throw apiErrorException(apiError, t("createProject.couldNotAdd"));
 				setProjectPrepEvents((current) => mergePreparationEvents(current, data.events));
 				setProjectValidation(data.validation);
 				setProjectApprovedActions(data.validation.root.requiredActions);
@@ -885,6 +890,7 @@ export function CreateProjectFlow({
 							}}
 							onCancel={preparedClone.cancel}
 							activity={cloneActivity}
+							progress={cloneProgress}
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
 							open={cloneDialogOpen && !settingsOpen}
@@ -1076,7 +1082,7 @@ function safeProjectCreationError(message: string, fallback: string, code?: stri
 
 async function validateImportFolder(path: string, importKind: "project" | "workspace", hostId?: string): Promise<ImportValidationResult> {
 	const { data, error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/imports/validate", { body: { importKind, path } });
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not validate this folder."));
+	if (error || !data) throw apiErrorException(error, "Could not validate this folder.");
 	return data;
 }
 
@@ -1304,7 +1310,7 @@ function CloudSignInPanel({
 	const { t } = useTranslation();
 	return (
 		<div className={cn(onboardingPanelClass, "flex flex-col items-center gap-4 px-4 py-6 text-center")}>
-			<Button type="button" variant="outline" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
 				<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 			</Button>
 			<Cloud className="size-6 text-foreground" aria-hidden="true" />
@@ -1421,7 +1427,7 @@ function CloudAgentSetupStep({
 					</p>
 					<Button
 						type="button"
-						variant="outline"
+						variant="secondary"
 						size="sm"
 						className="shrink-0"
 						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
@@ -1436,7 +1442,7 @@ function CloudAgentSetupStep({
 				</p>
 			) : null}
 			<div className={onboardingFooterActionsClass}>
-				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+				<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
 				</Button>
 				<Button
@@ -1816,15 +1822,12 @@ function CloudProjectCard({
 				<h2 className={onboardingPanelTitleClass}>{t("createProject.cloudCreate")}</h2>
 			)}
 			{dialog && onClose ? (
-				<button
-					type="button"
-					className="settings-close-button absolute right-3 top-3 z-10"
+				<CloseButton
+					className="absolute right-3 top-3 z-10"
 					aria-label={t("createProject.closeDialog")}
 					disabled={isCreating}
 					onClick={onClose}
-				>
-					<X className="size-4" aria-hidden="true" />
-				</button>
+				/>
 			) : null}
 
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
@@ -1850,14 +1853,15 @@ function CloudProjectCard({
 								defaultValue: "Sessions start in an empty folder",
 							})}
 						</p>
-						<button
+						<Button
 							type="button"
-							className="self-start text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+							variant="link"
+							className="self-start text-[12px] font-medium text-muted-foreground decoration-dotted decoration-muted-foreground/60 underline-offset-4 hover:decoration-foreground"
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("repositories")}
 						>
 							{t("createProject.cloudUseRepositories", { defaultValue: "Use a repo instead" })}
-						</button>
+						</Button>
 					</div>
 				) : (
 				<div className="space-y-2">
@@ -1866,9 +1870,8 @@ function CloudProjectCard({
 					</Label>
 
 					{!appConnected || noRepositoriesShared ? (
-						<button
-							type="button"
-							className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3 text-left transition-colors hover:bg-accent/50 active:bg-accent disabled:opacity-60"
+						<Pressable
+							className="flex w-full items-center gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3 transition-colors hover:bg-accent/50 disabled:opacity-60"
 							disabled={isCreating || githubOAuthBusy}
 							onClick={() => void connectGitHub()}
 						>
@@ -1890,7 +1893,7 @@ function CloudProjectCard({
 							{githubOAuthBusy && (
 								<span className="ml-auto size-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
 							)}
-						</button>
+						</Pressable>
 					) : (
 						<SearchablePicker
 							ariaLabel={t("createProject.selectRepository", { defaultValue: "Select a repository" })}
@@ -1911,23 +1914,25 @@ function CloudProjectCard({
 						/>
 					)}
 					<div className="flex items-center justify-between gap-3">
-						<button
+						<Button
 							type="button"
-							className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+							variant="link"
+							className="text-[12px] font-medium text-muted-foreground decoration-dotted decoration-muted-foreground/60 underline-offset-4 hover:decoration-foreground"
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("standalone")}
 						>
 							{t("createProject.cloudStartWithoutRepository", { defaultValue: "Start without a repo" })}
-						</button>
+						</Button>
 						{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
-							<button
+							<Button
 								type="button"
-								className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
+								variant="link"
+								className="text-[12px] font-medium text-muted-foreground decoration-dotted decoration-muted-foreground/60 underline-offset-4 hover:decoration-foreground"
 								disabled={isCreating || githubOAuthBusy}
 								onClick={() => void connectGitHub()}
 							>
 								{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
-							</button>
+							</Button>
 						) : null}
 					</div>
 
@@ -1939,13 +1944,15 @@ function CloudProjectCard({
 									? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
 									: null}
 							</span>
-							<button
+							<Button
 								type="button"
-								className="shrink-0 font-medium transition-colors hover:text-foreground"
+								variant="quiet"
+								size="xs"
+								className="-mr-2 font-medium"
 								onClick={cancelConnectGitHub}
 							>
 								{t("createProject.cancel", { defaultValue: "Cancel" })}
-							</button>
+							</Button>
 						</div>
 					) : null}
 
@@ -1953,9 +1960,9 @@ function CloudProjectCard({
 						githubAppRepos.isError ? (
 							<div className="flex items-center gap-2 text-[12px] leading-5 text-destructive" role="alert">
 								<span>{t("createProject.githubReposFailed", { defaultValue: "Failed to load repositories." })}</span>
-								<button type="button" className="underline" disabled={githubAppRepos.isFetching} onClick={() => void githubAppRepos.refetch()}>
+								<Button type="button" variant="link" disabled={githubAppRepos.isFetching} onClick={() => void githubAppRepos.refetch()}>
 									{t("createProject.retry")}
-								</button>
+								</Button>
 							</div>
 						) : !appRepositoriesReady || (!allActiveInstallationsReady && !githubAppRepos.isLoading && (githubAppRepos.data?.length ?? 0) === 0) ? (
 							<div className="flex items-center gap-2 text-[12px] leading-5 text-muted-foreground">
@@ -1965,17 +1972,17 @@ function CloudProjectCard({
 										: t("createProject.githubReposLoading", { defaultValue: "Loading repositories..." })}
 								</span>
 								{githubOAuthError || appRepositorySyncFailed ? (
-									<button type="button" className="underline" disabled={githubOAuthBusy} onClick={() => void retryGitHubRepositorySync()}>
+									<Button type="button" variant="link" disabled={githubOAuthBusy} onClick={() => void retryGitHubRepositorySync()}>
 										{t("createProject.retry")}
-									</button>
+									</Button>
 								) : null}
 							</div>
 						) : noRepositoriesShared ? null : appRepositorySyncFailed ? (
 							<div className="flex items-center gap-2 text-[12px] leading-5 text-destructive">
 								<span>{t("createProject.githubReposFailed", { defaultValue: "Failed to load repositories." })}</span>
-								<button type="button" className="underline" disabled={githubOAuthBusy} onClick={() => void retryGitHubRepositorySync()}>
+								<Button type="button" variant="link" disabled={githubOAuthBusy} onClick={() => void retryGitHubRepositorySync()}>
 									{t("createProject.retry")}
-								</button>
+								</Button>
 							</div>
 						) : null
 					) : null}
@@ -2068,7 +2075,7 @@ function CloudProjectCard({
 				{/* The agent step carries its own Back; show one here until it appears. */}
 				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
-						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+						<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
 						</Button>
 					</div>
@@ -2170,10 +2177,9 @@ function ImportSourcePicker({
 	};
 	// Both steps use the same tile so they read as one family.
 	const tile = (key: string, icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
-		<button
+		<Pressable
 			key={key}
-			type="button"
-			className="group flex flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 text-left hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
+			className="group flex flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
 			aria-label={label}
 			disabled={disabled}
 			onClick={onClick}
@@ -2183,24 +2189,24 @@ function ImportSourcePicker({
 				<span className="block text-[14px] font-medium text-foreground">{label}</span>
 				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
 			</span>
-		</button>
+		</Pressable>
 	);
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
 		{
 			source: "clone",
-			icon: <GitFork className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <GitFork className="size-6" aria-hidden="true" />,
 			label: t("createProject.cloneFromGit"),
 			description: t("createProject.cloneFromGitDesc"),
 		},
 		{
 			source: "local",
-			icon: <FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <FolderClosed className="size-6" aria-hidden="true" />,
 			label: t("createProject.openLocal"),
 			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",
-			icon: <Folders className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <Folders className="size-6" aria-hidden="true" />,
 			label: t("createProject.addWorkspace"),
 			description: t("createProject.workspaceDesc"),
 		},
@@ -2243,13 +2249,13 @@ function ImportSourcePicker({
 				<motion.div key="placement" data-step="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
 					{tile(
 						"local",
-						<Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+						<Laptop className="size-6" aria-hidden="true" />,
 						// With remote machines connected, the machine picker lives behind this tile.
 						hasRemoteHosts ? t("createProject.placementMachines") : t("createProject.placementLocal"),
 						hasRemoteHosts ? t("createProject.placementMachinesDesc") : t("createProject.placementLocalDesc"),
 						() => onLocalChosenChange(true),
 					)}
-					{tile("cloud", <Cloud className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
+					{tile("cloud", <Cloud className="size-6" aria-hidden="true" />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
 				<motion.div key="sources" data-step="sources" {...fade}>
@@ -2266,7 +2272,7 @@ function ImportSourcePicker({
 					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
 						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
 						{onCreateStandaloneAgent
-							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
 							: null}
 					</div>
 				</motion.div>
@@ -2275,15 +2281,12 @@ function ImportSourcePicker({
 			</div>
 			</motion.div>
 			{dialog && onClose ? (
-				<button
-					type="button"
-					className="settings-close-button absolute right-3 top-3"
+				<CloseButton
+					className="absolute right-3 top-3"
 					aria-label={t("createProject.closeDialog")}
 					disabled={closeDisabled ?? disabled}
 					onClick={onClose}
-				>
-					<X className="size-4" aria-hidden="true" />
-				</button>
+				/>
 			) : null}
 		</div>
 	);
@@ -2420,7 +2423,7 @@ function ProjectImportDialog({
 					onPointerDownOutside={(event) => event.preventDefault()}
 				>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-						<Button type="button" variant="outline" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
+						<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
 							<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 						</Button>
 						<div className="min-w-0 flex-1 pr-8">
@@ -2436,9 +2439,7 @@ function ProjectImportDialog({
 							</Dialog.Description>
 						</div>
 						<Dialog.Close asChild>
-							<button type="button" className="settings-close-button" aria-label={t("createProject.closeProjectImport")} disabled={disabled}>
-								<X className="size-4" aria-hidden="true" />
-							</button>
+							<CloseButton aria-label={t("createProject.closeProjectImport")} disabled={disabled} />
 						</Dialog.Close>
 					</div>
 					<div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-1 pt-4">
@@ -2500,7 +2501,7 @@ function ProjectImportDialog({
 														onChangeRemote(githubRepositoryRemoteUrl(next));
 													}}
 												>
-													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full bg-[var(--color-bg-import-card)] font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
+													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
 														<SelectValue placeholder={t("createProject.githubOwner")}>
 															{customGitHubOwner ? (
 																<span className="flex items-center gap-2">
@@ -2675,7 +2676,7 @@ function ProjectImportDialog({
 							<Button type="button" variant="primary" disabled={disabled} onClick={onTryWorkspace}>{t("createProject.importAsWorkspace")}</Button>
 						) : step === "blocked" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								{hasChildRepos || Boolean(validation.warning) ? <Button type="button" variant="primary" disabled={disabled} onClick={onContinueProject}>{t("createProject.cloneContinue")}</Button> : null}
@@ -2683,7 +2684,7 @@ function ProjectImportDialog({
 						) : null}
 						{step === "prepare_git" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								<Button type="button" variant="primary" disabled={continueDisabled} onClick={onContinue}>
@@ -2760,7 +2761,7 @@ function CreateProjectFolderDialog({
 					<div className="relative flex shrink-0 items-start gap-3 px-4 pt-3">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="icon"
 							aria-label={t("createProject.backToType")}
 							disabled={disabled}
@@ -2777,14 +2778,10 @@ function CreateProjectFolderDialog({
 							</Dialog.Description>
 						</div>
 						<Dialog.Close asChild>
-							<button
-								type="button"
-								className="settings-close-button"
+							<CloseButton
 								aria-label={t("createProject.closeImport")}
 								disabled={disabled}
-							>
-								<X className="size-4" aria-hidden="true" />
-							</button>
+							/>
 						</Dialog.Close>
 					</div>
 					<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-1 pt-3">
@@ -2840,7 +2837,7 @@ function CreateProjectFolderDialog({
 					</div>
 					<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 						<div className="flex flex-wrap items-center justify-end gap-3">
-							<Button type="button" variant="outline" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
+							<Button type="button" variant="secondary" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
 								{workspaceHasNoChildGitRepos ? "Go Back" : t("createProject.cancel")}
 							</Button>
 							{hasScan && workspaceRootIsProject && !error ? (
@@ -2848,7 +2845,7 @@ function CreateProjectFolderDialog({
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && workspaceHasNoChildGitRepos && !error ? (
-								<Button type="button" variant="outline" disabled={disabled} onClick={onContinueAsProject}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onContinueAsProject}>
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && !workspaceValidationBlocked && failedRepos.length === 0 && (!error || isWorkspace) ? (
@@ -2877,7 +2874,7 @@ function ImportRepoRow({ excluded = false, failed = false, onSetup, repo, setupE
 			</div>
 			<div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-import-title)]">{repo.name}</div>
 			<div className="flex max-w-[220px] shrink-0 items-center gap-1 truncate text-right text-[11px] text-[var(--color-text-import-muted)]">
-				{needsSetup ? onSetup ? <button type="button" aria-expanded={setupExpanded} className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300 hover:bg-orange-500/25" onClick={onSetup}>{setupExpanded ? "Hide setup" : `${workspaceSetupLabel(repo)} · Set up`}</button> : <span className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300">{excluded ? t("createProject.repoNotIncluded", { reason: workspaceSetupLabel(repo) }) : t("createProject.setupRequired")}</span> : repositoryUrl ? <><GitBranch className="size-3.5 shrink-0" aria-hidden="true" /><AppLink className="truncate underline decoration-border underline-offset-2 hover:text-foreground" href={repositoryUrl} rel="noreferrer" target="_blank">{repo.branch}</AppLink></> : <><span className={cn("truncate", isPlainFolder && "rounded-sm bg-orange-500/15 px-2 py-0.5 text-orange-300")}>{isPlainFolder ? "Needs git init" : failed ? (repo.reason ?? t("createProject.repoCannotImport")) : repo.branch}</span></>}
+				{needsSetup ? onSetup ? <Pressable aria-expanded={setupExpanded} className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300 hover:bg-orange-500/25" onClick={onSetup}>{setupExpanded ? "Hide setup" : `${workspaceSetupLabel(repo)} · Set up`}</Pressable> : <span className="rounded-sm border border-orange-400/40 bg-orange-500/15 px-2 py-0.5 text-orange-300">{excluded ? t("createProject.repoNotIncluded", { reason: workspaceSetupLabel(repo) }) : t("createProject.setupRequired")}</span> : repositoryUrl ? <><GitBranch className="size-3.5 shrink-0" aria-hidden="true" /><AppLink className="truncate underline decoration-border underline-offset-2 hover:text-foreground" href={repositoryUrl} rel="noreferrer" target="_blank">{repo.branch}</AppLink></> : <><span className={cn("truncate", isPlainFolder && "rounded-sm bg-orange-500/15 px-2 py-0.5 text-orange-300")}>{isPlainFolder ? "Needs git init" : failed ? (repo.reason ?? t("createProject.repoCannotImport")) : repo.branch}</span></>}
 			</div>
 		</div>
 	);

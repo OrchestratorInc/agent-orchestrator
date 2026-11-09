@@ -85,6 +85,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
+						openChromeExtensions: async () => undefined,
 						scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
@@ -109,12 +110,21 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					setMenuAvailability: () => undefined,
+					onMenuAction: unsubscribe,
 					onScrollPhase: unsubscribe,
+					showPrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
+					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
 					setFocused: () => undefined,
 					onFontSizeShortcut: () => () => undefined,
+				},
+				artifactZoom: {
+					setEngaged: () => undefined,
+					onShortcut: () => () => undefined,
 				},
 				window: {
 					getZoomFactor: async () => 1,
@@ -140,6 +150,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				sessionShareUrls: {
+					remember: async () => undefined,
+					recall: async () => ({}),
+					forget: async () => undefined,
+				},
 				cloudShare: {
 					available: async () => true,
 					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
@@ -164,8 +179,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
@@ -183,6 +200,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
+					openArtifactInBrowser: async () => undefined,
 				},
 				telemetry: {
 					getBootstrap: async () => null,
@@ -406,6 +424,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					takePendingSignIn: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},
@@ -1014,6 +1033,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
+						openChromeExtensions: async () => undefined,
 						scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
@@ -1038,12 +1058,21 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					setMenuAvailability: () => undefined,
+					onMenuAction: unsubscribe,
 					onScrollPhase: unsubscribe,
+					showPrivacyGuide: async () => undefined,
+					updatePrivacyGuide: async () => false,
+					closePrivacyGuide: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
 					setFocused: () => undefined,
 					onFontSizeShortcut: () => () => undefined,
+				},
+				artifactZoom: {
+					setEngaged: () => undefined,
+					onShortcut: () => () => undefined,
 				},
 				window: {
 					getZoomFactor: async () => 1,
@@ -1064,6 +1093,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				sessionShareUrls: {
+					remember: async () => undefined,
+					recall: async () => ({}),
+					forget: async () => undefined,
 				},
 				cloudShare: {
 					available: async () => true,
@@ -1089,8 +1123,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
@@ -1108,6 +1144,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
+					openArtifactInBrowser: async () => undefined,
 				},
 				telemetry: {
 					getBootstrap: async () => null,
@@ -1319,6 +1356,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					takePendingSignIn: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},

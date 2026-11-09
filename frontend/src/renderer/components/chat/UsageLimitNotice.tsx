@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
-import { Gauge, Loader2, Play } from "lucide-react";
+import { Gauge, Loader2, Play } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import type { ConversationUsageLimit } from "../../types/conversation";
 import { Button } from "../ui/button";
@@ -117,7 +117,6 @@ export function UsageLimitNotice({
 						<Button
 							type="button" size="sm" variant="primary" onClick={onResume}
 							disabled={pending || disabled}
-							className="focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}
 							{t("chat.usageLimit.resume")}
@@ -128,7 +127,6 @@ export function UsageLimitNotice({
 							type="button" size="sm" variant={scheduled ? "ghost" : "secondary"}
 							onClick={() => onAutoResumeChange?.(!usageLimit.autoResume)}
 								disabled={pending || (!scheduled && disabled)}
-							className="focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							{t(usageLimit.autoResume ? "chat.usageLimit.cancelAutoResume" : "chat.usageLimit.autoResume")}
 						</Button>

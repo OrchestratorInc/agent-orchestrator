@@ -617,6 +617,15 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		}
 		conv.liveState = live
 		conv.hasDurableTurns = cfg.HasPriorTurns
+		// The adapter announced its commands once, to the controller that set
+		// the session up. Without the host's copy a reattached chat has no
+		// slash commands until the provider happens to send a new catalog.
+		if len(live.AvailableCommands) > 0 {
+			var commands []acpsdk.AvailableCommand
+			if json.Unmarshal(live.AvailableCommands, &commands) == nil {
+				conv.replaceAvailableCommands(commands)
+			}
+		}
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 			d.sessionMode(init), d.cfg.SessionOptions, d.cfg.PermissionPolicy,

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,6 +6,7 @@ import type { CloudCpSessionRepo } from "../lib/cloud-cp/types";
 import { type CoderSize, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchablePicker } from "./SearchablePicker";
@@ -96,15 +97,14 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 
 			{supportsStartup ? (
 				<div className="flex flex-col gap-2">
-					<button
-						type="button"
+					<Pressable
 						className="w-fit text-xs font-medium text-muted-foreground hover:text-foreground"
 						onClick={() => setAdvancedOpen(!advancedOpen)}
 					>
 						{advancedOpen
 							? t("coder.startup.hide", { defaultValue: "Hide startup script" })
 							: t("coder.startup.show", { defaultValue: "Add startup script" })}
-					</button>
+					</Pressable>
 					{advancedOpen ? (
 						<textarea
 							value={startupScript}
@@ -181,7 +181,8 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 										)}
 										<Button
 											type="button"
-											variant="ghost"
+											variant="destructive-ghost"
+											size="icon"
 											aria-label={t("coder.repos.remove", { defaultValue: "Remove repository" })}
 											onClick={() => setExtraRepos(extraRepos.filter((_, i) => i !== index))}
 										>
@@ -203,8 +204,8 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 								>
 									<div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
 										<span aria-live="polite">{activeRepoIndex + 1} / {extraRepos.length}</span>
-										<Button type="button" variant="ghost" aria-label={t("coder.repo.previous", { defaultValue: "Previous repository" })} disabled={activeRepoIndex === 0} onClick={() => setActiveRepoIndex((index) => index - 1)}><ChevronLeft className="size-4" aria-hidden="true" /></Button>
-										<Button type="button" variant="ghost" aria-label={t("coder.repo.next", { defaultValue: "Next repository" })} disabled={activeRepoIndex === extraRepos.length - 1} onClick={() => setActiveRepoIndex((index) => index + 1)}><ChevronRight className="size-4" aria-hidden="true" /></Button>
+										<Button type="button" variant="quiet" size="icon" aria-label={t("coder.repo.previous", { defaultValue: "Previous repository" })} disabled={activeRepoIndex === 0} onClick={() => setActiveRepoIndex((index) => index - 1)}><ChevronLeft className="size-4" aria-hidden="true" /></Button>
+										<Button type="button" variant="quiet" size="icon" aria-label={t("coder.repo.next", { defaultValue: "Next repository" })} disabled={activeRepoIndex === extraRepos.length - 1} onClick={() => setActiveRepoIndex((index) => index + 1)}><ChevronRight className="size-4" aria-hidden="true" /></Button>
 									</div>
 								</motion.div>
 							) : null}

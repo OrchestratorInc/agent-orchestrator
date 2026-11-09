@@ -19,19 +19,49 @@ import (
 // The fallbacks are last-resort only: an empty argv would be rejected by the
 // runtime adapters, so a terminal that cannot name a shell must not open at
 // all rather than open something unusable.
+//
+// On macOS and Linux a preference other than "auto" is an executable the user
+// picked in Settings. It launches exactly like $SHELL does: the bare path, so
+// it starts interactive on the PTY with the same login-shell environment.
 func resolveUserLoginShell(preference string) (argv []string, usedFallback bool) {
 	if runtime.GOOS == "windows" {
 		return resolveWindowsShell(preference)
 	}
+	preference = strings.TrimSpace(preference)
+	if preference == "" || strings.EqualFold(preference, "auto") {
+		return defaultUnixShell(), false
+	}
+	if _, ok := windowsShellSelectors[strings.ToLower(preference)]; ok {
+		// A Windows selector reaching a macOS or Linux daemon (a stale or
+		// cross-platform setting) was ignored before shell selection applied
+		// here, so it keeps opening the default shell instead of failing.
+		if path, err := exec.LookPath(preference); err == nil {
+			return []string{path}, false
+		}
+		return defaultUnixShell(), false
+	}
+	if path, err := CheckShellPath(preference); err == nil {
+		return []string{path}, false
+	}
+	return defaultUnixShell(), true
+}
+
+// windowsShellSelectors are the named Windows choices; anything else is a path.
+var windowsShellSelectors = map[string]struct{}{
+	"git-bash": {}, "pwsh": {}, "powershell": {}, "cmd": {}, "wsl": {},
+}
+
+// defaultUnixShell is the shell a terminal opens when nothing is selected.
+func defaultUnixShell() []string {
 	if shell := os.Getenv("SHELL"); shell != "" {
-		return []string{shell}, false
+		return []string{shell}
 	}
 	for _, candidate := range []string{"zsh", "bash", "sh"} {
 		if path, err := exec.LookPath(candidate); err == nil {
-			return []string{path}, false
+			return []string{path}
 		}
 	}
-	return nil, false
+	return nil
 }
 
 // resolveWindowsShell honors an explicit selector first. An unavailable named
@@ -51,6 +81,8 @@ func resolveWindowsShell(preference string) (argv []string, usedFallback bool) {
 		resolved = resolveKnownWindowsShell("pwsh.exe")
 	case "powershell":
 		resolved = resolveKnownWindowsShell("powershell.exe")
+	case "wsl":
+		resolved = resolveKnownWindowsShell("wsl.exe")
 	case "cmd":
 		// ComSpec is authoritative for the user's Windows Command Prompt. It
 		// must win even when cmd.exe is not separately discoverable through PATH.
@@ -63,7 +95,7 @@ func resolveWindowsShell(preference string) (argv []string, usedFallback bool) {
 			resolved = resolveKnownWindowsShell("cmd.exe")
 		}
 	default:
-		if path, err := exec.LookPath(preference); err == nil {
+		if path, err := CheckShellPath(preference); err == nil {
 			resolved = windowsShellArgv(path)
 		}
 	}

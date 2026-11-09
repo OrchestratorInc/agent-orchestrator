@@ -179,10 +179,11 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	// which can take more than a minute, and finishes either way.
 	putClient := &http.Client{}
 	err = cloudJSON(ctx, putClient, http.MethodPut, put, session.AccessToken, registration, nil)
-	var limited *cloudError
-	if errors.As(err, &limited) && limited.status == http.StatusConflict && registration["url"] == "" {
-		// Out of fixed addresses: list it at its quick tunnel instead,
-		// which AO Cloud follows when the address changes.
+	var refused *cloudError
+	if errors.As(err, &refused) && noFixedAddressNow(refused.status) && registration["url"] == "" {
+		// AO Cloud could not make the fixed address: list the machine at its
+		// quick tunnel instead, which AO Cloud follows when the address
+		// changes. The machine keeps asking for the fixed address.
 		address, waitErr := c.waitForTunnelAddress(ctx, false)
 		if waitErr != nil {
 			return waitErr
@@ -217,6 +218,14 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	_, err = fmt.Fprintf(out, "Address: %s\nYour desktops and phones signed in to %s list this machine within about 30 seconds.\n"+
 		"Cloudflare terminates TLS and can see the connection password and traffic.\n", address, session.User.Email)
 	return err
+}
+
+// noFixedAddressNow reports AO Cloud's answers to a registration without
+// `url` that mean it could not make the fixed address: out of fixed
+// addresses (409), too many fixed-address writes (429), or Cloudflare failed
+// (502). A registration with `url` still lists the machine.
+func noFixedAddressNow(status int) bool {
+	return status == http.StatusConflict || status == http.StatusTooManyRequests || status == http.StatusBadGateway
 }
 
 // waitForTunnelAddress returns the tunnel's https origin once the daemon

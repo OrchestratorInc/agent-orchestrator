@@ -15,7 +15,7 @@ import {
 	Plus,
 	RotateCcw,
 	Sun,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { CommandGroupId, CommandItem } from "./command-palette";
 
 /** Exact-id icons for known actions. Add new command ids here as they ship. */

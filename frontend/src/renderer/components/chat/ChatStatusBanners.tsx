@@ -15,7 +15,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert, X } from "lucide-react";
+import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
@@ -24,6 +24,7 @@ import { cn, truncateMiddle } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
+import { CloseButton } from "../ui/close-button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
 /**
@@ -62,7 +63,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="outline" className="shrink-0"
+			<Button type="button" size="sm" variant="secondary" className="shrink-0"
 				onClick={() => openGlobalSettings("harness", {
 					focusAgentId: harness,
 					...(hostId ? { hostId } : {}),
@@ -72,11 +73,9 @@ export const ReauthBanner = memo(function ReauthBanner({
 				})}>
 				{t("chat.reauth.logInAgain")}
 			</Button>
-			<Button variant="ghost" size="icon" className="size-6 shrink-0"
+			<CloseButton size="icon-xs" className="shrink-0"
 				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
-				onClick={() => setDismissedFailure(failure)}>
-				<X aria-hidden="true" className="size-3.5" />
-			</Button>
+				onClick={() => setDismissedFailure(failure)} />
 		</div>
 	);
 });
