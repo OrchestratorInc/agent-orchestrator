@@ -1,8 +1,9 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 
 export type AgentReadiness = components["schemas"]["AgentReadinessResponse"];
@@ -14,7 +15,7 @@ export const agentReadinessQueryKeyForHost = (hostId?: string) => hostId ? ["age
 
 async function fetchAgentReadiness(hostId?: string): Promise<AgentReadiness> {
 	const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/agents/readiness");
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as AgentReadiness;
 }
 

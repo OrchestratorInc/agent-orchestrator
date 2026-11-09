@@ -1,3 +1,4 @@
+import { apiErrorException } from "./api-error-exception";
 import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
@@ -117,7 +118,7 @@ async function requestOrchestratorResume(sessionId: string, hostId?: string): Pr
 		params: { path: { sessionId } },
 	});
 	if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") {
-		throw new Error(apiErrorMessage(error, `Could not resume the orchestrator (${response.status})`));
+		throw apiErrorException(error, `Could not resume the orchestrator (${response.status})`);
 	}
 	if (data?.resumeMode === "saved_prompt") {
 		void aoBridge.notifications

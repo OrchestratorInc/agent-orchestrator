@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
-import { Gauge, Loader2, Play } from "lucide-react";
+import { Gauge, Loader2, Play } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import type { ConversationUsageLimit } from "../../types/conversation";
 import { Button } from "../ui/button";

@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
-import { AgentAvatar } from "./AgentAvatar";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -47,7 +46,7 @@ import {
 	User,
 	X,
 	ArrowLeft,
-} from "lucide-react";
+} from "@/components/app-icons";
 import {
 	useCallback,
 	useEffect,
@@ -82,9 +81,8 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import {
-	getSessionRowMarker,
+	getSessionRowIndicator,
 	getSessionStatusDotView,
-	isAgentActivityWorking,
 	sessionNeedsInput,
 	type SessionRowMarker,
 } from "../lib/session-presentation";
@@ -92,6 +90,7 @@ import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -147,15 +146,18 @@ import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
+import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { captureRendererException } from "../lib/telemetry";
 import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -423,48 +425,13 @@ function SidebarSectionScroller({
 	wrapperClassName?: string;
 }) {
 	const scrollerRef = useRef<HTMLDivElement>(null);
-	const [scrollEdges, setScrollEdges] = useState({ top: false, bottom: false });
-	const updateScrollEdges = useCallback(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		const overflow = scroller.scrollHeight - scroller.clientHeight;
-		const next = {
-			top: overflow > 1 && scroller.scrollTop > 1,
-			bottom: overflow > 1 && scroller.scrollTop < overflow - 1,
-		};
-		setScrollEdges((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
-	}, []);
-
-	useLayoutEffect(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		updateScrollEdges();
-		scroller.addEventListener("scroll", updateScrollEdges, { passive: true });
-		const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateScrollEdges);
-		resizeObserver?.observe(scroller);
-		if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-		const mutationObserver =
-			typeof MutationObserver === "undefined"
-				? undefined
-				: new MutationObserver(() => {
-					if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-					updateScrollEdges();
-				});
-		mutationObserver?.observe(scroller, { childList: true, subtree: true });
-		return () => {
-			scroller.removeEventListener("scroll", updateScrollEdges);
-			resizeObserver?.disconnect();
-			mutationObserver?.disconnect();
-		};
-	}, [updateScrollEdges]);
+	useEdgeFade(scrollerRef);
 
 	return (
 		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
-			<div ref={scrollerRef} className={className} data-sidebar-section-scroller="" data-testid={testId} style={style}>
+			<div ref={scrollerRef} className={`edge-fade [--edge-fade-size:var(--space-4)] ${className}`} data-sidebar-section-scroller="" data-testid={testId} style={style}>
 				{children}
 			</div>
-			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
-			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
 		</div>
 	);
 }
@@ -611,20 +578,12 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// A row spins while its agent works, ahead of any PR state: it may already be
-// on its next PR, and the hover card has the PR detail.
-function isSessionRowWorking(session: WorkspaceSession): boolean {
-	if (session.displayStatus === "Terminated") return false;
-	// Setting up (worktree, agent) already counts as working, so the row spins from the moment it is created.
-	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
-}
-
 // Rows showing the red alert sit above the rest, but only in the default
 // order: once the user has dragged rows into their own order, it wins. Stable,
 // so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
-	const flagged = sessions.filter((session) => !isSessionRowWorking(session) && getSessionRowMarker(session) === "attention");
+	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
@@ -682,11 +641,16 @@ function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean; legacy: boolean }) {
+function SessionStatusDot({ session, indicator, legacy }: {
+	session: WorkspaceSession;
+	indicator: ReturnType<typeof getSessionRowIndicator>;
+	legacy: boolean;
+}) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
-	const marker = working ? null : getSessionRowMarker(session);
+	const working = indicator === "working";
+	const marker = working ? null : indicator;
 	// Filled until the user has opened the session since it last changed.
 	const unread = useSessionUnread(session);
 	const previous = useRef(marker);
@@ -696,19 +660,6 @@ function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: 
 		previous.current = marker;
 	}, [marker]);
 	if (legacy) return <LegacySessionStatusDot session={session} />;
-	if (harnessOnly) {
-		return (
-			// Same 14px box, 10px inset, and 8px gap as a project's avatar. A session
-			// waiting on the user swaps the logo for the red alert.
-			<span aria-hidden="true" className="relative z-[1] mr-0.5 inline-flex size-icon-md shrink-0 items-center justify-center">
-				{!working && sessionNeedsInput(session) ? (
-					<SessionMarkerIcon data-session-status={session.status} marker="attention" />
-				) : (
-					<AgentAvatar className="size-icon-md" decorative provider={session.provider} />
-				)}
-			</span>
-		);
-	}
 	// Rows with nothing to flag still get a quiet dot, so every title starts on
 	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
@@ -1414,7 +1365,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<ArrowLeft aria-hidden="true" />
 								<span className="tracking-tight">{t("settings.back")}</span>
 							</span>
@@ -1453,7 +1404,7 @@ export function Sidebar({
 						type="button"
 					>
 						<NavRowHighlight />
-						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 							<Smartphone aria-hidden="true" />
 							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
@@ -1467,7 +1418,7 @@ export function Sidebar({
 							type="button"
 						>
 							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 								<Settings aria-hidden="true" />
 								<span className="tracking-tight">{t("shell.settings")}</span>
 							</span>
@@ -1736,6 +1687,12 @@ const ProjectItem = memo(function ProjectItem({
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		orchestrator,
+		viewing: orchestratorActive,
+	});
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
@@ -1792,6 +1749,7 @@ const ProjectItem = memo(function ProjectItem({
 				selection.goSession(workspace.id, sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
+				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 			} finally {
 				setIsSpawning(false);
 			}
@@ -1808,6 +1766,7 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
+			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 		} finally {
 			setIsSpawning(false);
 		}
@@ -1964,7 +1923,7 @@ const ProjectItem = memo(function ProjectItem({
 											)}
 											data-project-chevron-icon=""
 										>
-											<ChevronRight strokeWidth={1.75} />
+											<ChevronRight />
 										</span>
 									</span>
 									{/* Collapsed icon rail: the project icon, with a red badge when a session
@@ -2065,21 +2024,27 @@ const ProjectItem = memo(function ProjectItem({
 														size="icon-xs"
 														variant="quiet"
 														aria-current={orchestratorActive ? "page" : undefined}
-														aria-label={
+														aria-label={orchestratorReplyLabel(
 															orchestrator
 																? t("shell.openProjectOrchestrator", {
 																name: nameWithHost,
 																	})
 																: t("shell.spawnProjectOrchestrator", {
 																name: nameWithHost,
-																	})
-														}
+																	}),
+															orchestratorReply,
+															t,
+														)}
 															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
 															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
 														onClick={() => void openOrchestrator()}
 														type="button"
 													>
-														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
+														<OrchestratorReplyIcon
+															reply={orchestratorReply}
+															strokeWidth={orchestratorActive ? 2.5 : 2}
+															surface="sidebar"
+														/>
 													</Button>
 												</span>
 											</TooltipTrigger>
@@ -2089,7 +2054,7 @@ const ProjectItem = memo(function ProjectItem({
 														: isSpawning
 														? t("shell.spawning")
 														: orchestrator
-															? t("shell.orchestrator")
+															? orchestratorReplyLabel(t("shell.orchestrator"), orchestratorReply, t)
 															: t("shell.spawnOrchestratorLower")}
 											</TooltipContent>
 										</Tooltip>
@@ -2451,7 +2416,6 @@ function ScratchpadSection({
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
 						indented={false}
-						harnessOnly
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
 						onOpen={openSession}
@@ -2493,7 +2457,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
-	harnessOnly,
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
@@ -2504,7 +2467,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
-	harnessOnly?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
@@ -2528,7 +2490,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			session={session}
 			active={active}
 			indented={indented}
-			harnessOnly={harnessOnly}
 			onKilled={onKilled}
 			onOpen={open}
 			layoutDependency={layoutDependency}
@@ -2549,7 +2510,6 @@ function SessionReorderList({
 	sessionIds,
 	activeSessionId,
 	indented = true,
-	harnessOnly = false,
 	plain = false,
 	onReorder,
 	onKilled,
@@ -2562,8 +2522,6 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
-	/** Rows show only the harness logo and the title (the Scratchpad). */
-	harnessOnly?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
 	 *  descendants on drop. */
@@ -2622,7 +2580,6 @@ function SessionReorderList({
 						session={session}
 						active={activeSessionId === session.id}
 						indented={indented}
-						harnessOnly={harnessOnly}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
 					/>
@@ -2650,7 +2607,6 @@ function SessionReorderList({
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
-							harnessOnly={harnessOnly}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
@@ -2676,7 +2632,6 @@ const SessionRow = memo(function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
-	harnessOnly: harnessOnlyRequested = false,
 	layoutDependency,
 	listIsDragging = false,
 	onKilled,
@@ -2687,8 +2642,6 @@ const SessionRow = memo(function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
-	/** Show only the harness logo and the title: no status, spinner, or age. */
-	harnessOnly?: boolean;
 	/** The list order. Present only for rows in a reorderable list: the row then
 	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
@@ -2705,9 +2658,8 @@ const SessionRow = memo(function SessionRow({
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
-	// The Scratchpad's logo-only rows are part of the new design.
-	const harnessOnly = harnessOnlyRequested && newSidebarDesign;
-	const working = isSessionRowWorking(session);
+	const indicator = getSessionRowIndicator(session);
+	const working = indicator === "working";
 	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
 	useEffect(() => {
@@ -2715,8 +2667,8 @@ const SessionRow = memo(function SessionRow({
 		const updated = Date.parse(session.updatedAt);
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
-	const shimmer = newSidebarDesign && working && !active && !harnessOnly;
-	const marker = !newSidebarDesign || harnessOnly || working ? null : getSessionRowMarker(session);
+	const shimmer = newSidebarDesign && working && !active;
+	const marker = !newSidebarDesign || working ? null : indicator;
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2740,13 +2692,15 @@ const SessionRow = memo(function SessionRow({
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	const canPrefetch = session.mode === "chat" && !session.cloud && !session.hostId && !active && !listIsDragging && !reorder?.isDragging;
+	// A remote chat prefetches its page too; only a local agent can be woken from here.
+	const canPrefetchChat = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
+	const canPrefetch = canPrefetchChat && !session.hostId;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
 	const resumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 	useEffect(() => () => clearTimeout(resumeTimerRef.current), [canPrefetch]);
 	const prefetchConversation = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || queryClient.getQueryData(conversationQueryKey(session.id))) return;
-		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id));
+		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
+		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
 	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
@@ -2762,7 +2716,12 @@ const SessionRow = memo(function SessionRow({
 	// A session shared from another organization is the sharer's to name.
 	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		if (renamable) rename.begin();
+		if (!renamable) return;
+		// The editor replaces the row, unmounting a context menu that is still
+		// open. Radix reports that close from an effect the unmount skips, so
+		// contextMenuOpen would stay true and keep the preview off for good.
+		setContextMenuOpen(false);
+		rename.begin();
 	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
@@ -2772,20 +2731,19 @@ const SessionRow = memo(function SessionRow({
 			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
 				<div
 					className={cn(
-						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
-						harnessOnly ? "pl-2.5" : "pl-1.5",
+						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
 						active && "text-foreground",
 					)}
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+					<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2803,7 +2761,7 @@ const SessionRow = memo(function SessionRow({
 						}}
 						value={rename.draft}
 					/>
-					{harnessOnly ? null : <SessionMessageAge session={session} />}
+					<SessionMessageAge session={session} />
 				</div>
 			</SidebarMenuSubItem>
 		);
@@ -2846,9 +2804,8 @@ const SessionRow = memo(function SessionRow({
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
-								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								harnessOnly ? "pl-2.5" : "pl-1.5",
-								!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
+								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2856,9 +2813,9 @@ const SessionRow = memo(function SessionRow({
 							)}
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
-								if (!canPrefetch) return;
+								if (!canPrefetchChat) return;
 								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
-								resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
+								if (canPrefetch) resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
 							onMouseLeave={() => {
 								clearTimeout(hoverTimerRef.current);
@@ -2887,7 +2844,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+							<SessionStatusDot indicator={indicator} legacy={!newSidebarDesign} session={session} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
@@ -2920,7 +2877,6 @@ const SessionRow = memo(function SessionRow({
 					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
 						archiveOpen={archiveOpen}
-						hideAge={harnessOnly}
 						isDragging={Boolean(reorder?.isDragging)}
 						onArchiveOpenChange={setArchiveOpen}
 						onKilled={onKilled}
@@ -2972,14 +2928,12 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 
 const SessionActions = memo(function SessionActions({
 	session,
-	hideAge = false,
 	isDragging,
 	archiveOpen,
 	onArchiveOpenChange,
 	onKilled,
 }: {
 	session: WorkspaceSession;
-	hideAge?: boolean;
 	isDragging: boolean;
 	archiveOpen: boolean;
 	onArchiveOpenChange: (open: boolean) => void;
@@ -3045,34 +2999,36 @@ const SessionActions = memo(function SessionActions({
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						</Button>}
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
-				{session.cloud?.shared ? null : <Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<SessionArchiveDialog
-								onConfirm={confirmArchive}
-								onOpenChange={onArchiveOpenChange}
-								open={archiveOpen}
-								session={session}
-								trigger={
-									<Button
-										size="icon-xs"
-										variant="quiet"
-										aria-label={t("shell.archiveSession")}
-										className={SESSION_ACTION_CLASS}
-										disabled={isKilling}
-										onClick={handleArchive}
-										type="button"
-									>
-										<Archive aria-hidden="true" />
-									</Button>
-								}
-							/>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>}
+				{session.cloud?.shared ? null : (
+					<SessionArchiveDialog
+						onConfirm={confirmArchive}
+						onOpenChange={onArchiveOpenChange}
+						open={archiveOpen}
+						session={session}
+						trigger={
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											size="icon-xs"
+											variant="quiet"
+											aria-label={t("shell.archiveSession")}
+											className={SESSION_ACTION_CLASS}
+											disabled={isKilling}
+											onClick={handleArchive}
+											type="button"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
+							</Tooltip>
+						}
+					/>
+				)}
 			</div>
-			{hideAge ? null : <SessionMessageAge session={session} />}
+			<SessionMessageAge session={session} />
 		</div>
 	);
 });
@@ -3096,7 +3052,7 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 			type="button"
 		>
 			<NavRowHighlight />
-			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 				<LogIn aria-hidden="true" />
 				<span className="tracking-tight">{t("shell.signInToAOCloud")}</span>
 			</span>
@@ -3159,7 +3115,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<AccountAvatar user={session?.user} />
 						<span className="min-w-0 truncate tracking-tight">{name}</span>
 						{plan ? (
@@ -3361,7 +3317,7 @@ function UpdateStatusRow({
 					type="button"
 				>
 					<NavRowHighlight />
-					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
 						<Download aria-hidden="true" className="size-icon-lg shrink-0" />
 						<span className="min-w-0 flex-1">
 							<span className="block truncate tracking-tight">{t("shell.updateAvailable")}</span>
@@ -3668,7 +3624,7 @@ function ProjectIcon({
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {
 		const Icon = expanded ? FolderOpen : Folder;
-		return <Icon className={className} strokeWidth={1.75} />;
+		return <Icon className={className} />;
 	}
 	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
 	const loaded = showAvatar && loadedUrl === avatarUrl;
@@ -3731,7 +3687,6 @@ function SectionDisclosure({
 				<ChevronRight
 					aria-hidden="true"
 					className={cn("size-3.5! shrink-0 transition-transform duration-150", open && "rotate-90")}
-					strokeWidth={2}
 				/>
 			) : null}
 		</>
@@ -3876,7 +3831,7 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 	return (
 		<SidebarMenuItem className="group-data-[collapsible=icon]:mb-0">
 			<SidebarTopNavRow
-				icon={<Search strokeWidth={1.75} aria-hidden="true" />}
+				icon={<Search aria-hidden="true" />}
 				label={t("shell.search")}
 				onClick={() => {
 					// Open on the microtask after this click rather than inside it: mounting

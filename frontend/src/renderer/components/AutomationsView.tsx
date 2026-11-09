@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";

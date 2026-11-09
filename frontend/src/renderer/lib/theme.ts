@@ -103,11 +103,19 @@ export function previewDocumentThemeStyle(style: ThemeStyle | null, saved: Theme
  * Also sets `data-theme-transition` so global CSS can zero out
  * transition-duration while tokens swap; otherwise composer, search, and
  * switch chrome tween from the old palette and look stuck white/black.
+ *
+ * `onReveal` runs when the new theme reaches the screen; main flips the
+ * native window material with it. A translucent window takes its own path
+ * (`runTranslucentThemeTransition`).
  */
-export function runThemeTransition(update: () => void): void {
+export function runThemeTransition(update: () => void, onReveal?: () => void): void {
 	if (typeof document === "undefined") return;
 
 	const root = document.documentElement;
+	if (root.dataset.windowTranslucent === "true" && typeof document.startViewTransition === "function") {
+		runTranslucentThemeTransition(update, onReveal);
+		return;
+	}
 	const finish = () => {
 		requestAnimationFrame(() => {
 			delete root.dataset.themeTransition;
@@ -121,6 +129,7 @@ export function runThemeTransition(update: () => void): void {
 
 	if (typeof document.startViewTransition !== "function") {
 		run();
+		onReveal?.();
 		finish();
 		return;
 	}
@@ -128,5 +137,37 @@ export function runThemeTransition(update: () => void): void {
 	const transition = document.startViewTransition(() => {
 		run();
 	});
+	onReveal?.();
 	void transition.finished.finally(finish);
+}
+
+/**
+ * Translucent windows: the update runs inside a View Transition that keeps the
+ * old frame on screen while React re-renders theme consumers, then reveals
+ * everything in one frame. styles.css turns off every transition animation
+ * there (the root group's own 250 ms animation froze the page, and the old
+ * snapshot showed its tint through the new one), so the cut costs no extra
+ * time. No forced style flush: each one is a whole-document recalc, which the
+ * translucent styles make expensive.
+ */
+function runTranslucentThemeTransition(update: () => void, onReveal?: () => void): void {
+	const root = document.documentElement;
+	const transition = document.startViewTransition(async () => {
+		root.dataset.themeTransition = "active";
+		update();
+		// Let React flush the re-render the update scheduled, so theme
+		// consumers change in the revealed frame rather than after it.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+	// `ready` fires once the new frame is rendered and about to be shown,
+	// ~60 ms after the update itself. Flipping the native material any earlier
+	// shows it under the old frame.
+	void transition.ready.then(onReveal, onReveal);
+	void transition.finished.finally(() =>
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				if (!previewing) delete root.dataset.themeTransition;
+			}),
+		),
+	);
 }

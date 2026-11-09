@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -97,6 +97,8 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
+		// The models offered are Cloud's for the account, so a saved model is one its sessions run.
+		cloudOrgId={project.orgId}
 		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
 		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}

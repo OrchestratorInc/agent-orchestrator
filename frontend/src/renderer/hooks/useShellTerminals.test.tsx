@@ -231,15 +231,18 @@ describe("useOpenShellTerminal", () => {
 		});
 	});
 
-	it("omits the shell field outside Windows", async () => {
+	it("sends the configured shell outside Windows too", async () => {
+		shellStoreMock.preference = { kind: "custom", path: "/opt/homebrew/bin/fish" };
 		postMock.mockResolvedValue({ data: { shellTerminal: { ...shells[0] } } });
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
 
 		await act(async () => result.current.mutateAsync({}));
 
-		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", { body: { startOnAttach: true } });
-		expect(shellStoreMock.load).not.toHaveBeenCalled();
+		expect(shellStoreMock.load).toHaveBeenCalled();
+		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", {
+			body: { startOnAttach: true, shell: "/opt/homebrew/bin/fish" },
+		});
 	});
 
 	it("normalizes an unavailable configured shell back to Automatic", async () => {

@@ -4,7 +4,7 @@ import {
 	SquareTerminal,
 	TriangleAlert,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -36,7 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /** The view an interface switch leads to: Lucide's boxed prompt or a speech bubble, with rounder corners. */
 export function RoundedInterfaceIcon({ target, className }: { target: SessionInterfaceMode; className?: string }) {
 	return (
-		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
 			aria-hidden="true" data-icon={target === "chat" ? "rounded-chat" : "rounded-terminal"} className={className}>
 			{target === "chat"
 				? <path d="M21 13a5 5 0 0 1-5 5H8l-5 3.5V8a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5z" />

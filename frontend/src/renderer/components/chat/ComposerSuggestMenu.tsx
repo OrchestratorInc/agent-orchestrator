@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";

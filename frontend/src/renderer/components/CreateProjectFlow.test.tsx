@@ -255,7 +255,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onUseExisting, value }: {
+	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onUseExisting, progress, value }: {
 		disabled?: boolean;
 		error?: string | null;
 		firstRun?: boolean;
@@ -267,10 +267,11 @@ vi.mock("./CloneRepositoryDialog", () => ({
 		onStartStandaloneAgent?: () => void;
 		onUseExisting?: (path: string) => void;
 		open: boolean;
+		progress?: { phase: string } | null;
 		value: { remoteUrl: string; destinationParent: string };
 	}) =>
 		open ? (
-			<div data-testid="clone-dialog" data-destination={value.destinationParent}>
+			<div data-testid="clone-dialog" data-destination={value.destinationParent} data-progress={progress?.phase ?? ""}>
 				{error ? <span>{error}</span> : null}
 				<input
 					aria-label="Clone URL"
@@ -288,6 +289,12 @@ vi.mock("./CloneRepositoryDialog", () => ({
 			</div>
 		) : null,
 }));
+
+/** A clone/prepare/stream reply that sends these events, then ends. */
+function cloneStream(...events: Record<string, unknown>[]) {
+	const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+	return { data: new Response(body).body, response: new Response(null, { status: 200 }) };
+}
 
 function okScan(path: string) {
 	return {
@@ -513,12 +520,12 @@ describe("CreateProjectFlow remote host", () => {
 
 	it("shows safe Git clone guidance from a failed host clone", async () => {
 		const user = userEvent.setup();
-		hostMocks.aPost.mockResolvedValueOnce({
+		hostMocks.aPost.mockResolvedValueOnce(cloneStream({
 			error: {
 				code: "GIT_CLONE_FAILED",
 				message: "fatal: Authentication failed for https://user:secret@github.com/acme/private.git",
 			},
-		});
+		}));
 		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", connected: true });
 
 		await openSource(user, "Clone a repo");
@@ -532,9 +539,9 @@ describe("CreateProjectFlow remote host", () => {
 
 	it("explains a clone that ran past its time limit", async () => {
 		const user = userEvent.setup();
-		hostMocks.aPost.mockResolvedValueOnce({
+		hostMocks.aPost.mockResolvedValueOnce(cloneStream({
 			error: { code: "GIT_CLONE_TIMED_OUT", message: "Cloning this repository took too long and was stopped." },
-		});
+		}));
 		renderChooseFlow({ hostId: "host-a", hostLabel: "Host A", connected: true });
 
 		await openSource(user, "Clone a repo");
@@ -738,7 +745,7 @@ describe("CreateProjectFlow droppedPath", () => {
 	it("routes an empty clone through Prepare project", async () => {
 		const user = userEvent.setup();
 		apiMocks.POST
-			.mockResolvedValueOnce({ data: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-empty" } })
+			.mockResolvedValueOnce(cloneStream({ result: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-empty" } }))
 			.mockResolvedValueOnce({
 				data: projectValidation("/repo/empty-repository", {
 					nextStep: "prepare_git",
@@ -751,10 +758,38 @@ describe("CreateProjectFlow droppedPath", () => {
 		fireEvent.click(await screen.findByText("Continue clone"));
 
 		expect(await screen.findByText("Prepare project")).toBeInTheDocument();
-		expect(apiMocks.POST).toHaveBeenNthCalledWith(1, "/api/v1/projects/clone/prepare", expect.anything());
+		expect(apiMocks.POST).toHaveBeenNthCalledWith(1, "/api/v1/projects/clone/prepare/stream", expect.objectContaining({ parseAs: "stream" }));
 		expect(apiMocks.POST).toHaveBeenNthCalledWith(2, "/api/v1/imports/validate", {
 			body: { importKind: "project", path: "/repo/empty-repository" },
 		});
+	});
+
+	it("passes each streamed git step to the clone dialog while cloning", async () => {
+		const user = userEvent.setup();
+		const encoder = new TextEncoder();
+		let send!: (event: Record<string, unknown>) => void;
+		let end!: () => void;
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				send = (event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				end = () => controller.close();
+			},
+		});
+		apiMocks.POST.mockImplementation(async (path: string) => path === "/api/v1/projects/clone/prepare/stream"
+			? { data: stream, response: new Response(null, { status: 200 }) }
+			: { data: projectValidation("/repo/empty-repository", { nextStep: "prepare_git" }) });
+
+		renderChooseFlow();
+		await openSource(user, "Clone a repo");
+		fireEvent.click(await screen.findByText("Continue clone"));
+		send({ progress: { phase: "receiving_objects", attempt: 1 } });
+		await waitFor(() => expect(screen.getByTestId("clone-dialog")).toHaveAttribute("data-progress", "receiving_objects"));
+		send({ progress: { phase: "resolving_deltas", attempt: 1 } });
+		await waitFor(() => expect(screen.getByTestId("clone-dialog")).toHaveAttribute("data-progress", "resolving_deltas"));
+		send({ result: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-streamed" } });
+		end();
+		expect(await screen.findByText("Prepare project")).toBeInTheDocument();
+		expect(apiMocks.POST.mock.calls.some(([path]) => path === "/api/v1/projects/clone/prepare")).toBe(false);
 	});
 
 	it("keeps the clone dialog visible until preparation is ready", async () => {
@@ -762,7 +797,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		let resolveClone!: (value: unknown) => void;
 		let resolveValidation!: (value: unknown) => void;
 		apiMocks.POST.mockImplementation((path: string) => {
-			if (path === "/api/v1/projects/clone/prepare") {
+			if (path === "/api/v1/projects/clone/prepare/stream") {
 				return new Promise((resolve) => {
 					resolveClone = resolve;
 				});
@@ -777,7 +812,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		fireEvent.click(await screen.findByText("Continue clone"));
 		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
 
-		resolveClone({ data: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-empty" } });
+		resolveClone(cloneStream({ result: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-empty" } }));
 		await waitFor(() => expect(apiMocks.POST).toHaveBeenCalledWith("/api/v1/imports/validate", expect.anything()));
 		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
 		resolveValidation({ data: projectValidation("/repo/empty-repository", { nextStep: "prepare_git" }) });
@@ -942,7 +977,7 @@ describe("CreateProjectFlow droppedPath", () => {
 			finishCreate = resolve;
 		}));
 		apiMocks.POST
-			.mockResolvedValueOnce({ data: { path: "/repo/cloned", remoteUrl: "file:///source/cloned.git", preparationId: "prep-cloned" } })
+			.mockResolvedValueOnce(cloneStream({ result: { path: "/repo/cloned", remoteUrl: "file:///source/cloned.git", preparationId: "prep-cloned" } }))
 			.mockResolvedValueOnce({ data: projectValidation("/repo/cloned") });
 
 		renderChooseFlow({ onCreateProject });

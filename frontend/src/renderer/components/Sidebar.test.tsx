@@ -1187,7 +1187,7 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
 	});
 
-	it("shows scroll-edge fades on project and Scratchpad sections as they scroll", () => {
+	it("fades the scroll edges of project and Scratchpad sections as they scroll", () => {
 		renderSidebar({
 			workspaces: [
 				...Array.from({ length: 2 }, (_, index) => ({
@@ -1214,18 +1214,18 @@ describe("Sidebar", () => {
 			});
 
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-end");
+			expect(scroller).not.toHaveAttribute("data-fade-start");
 
 			scroller.scrollTop = 50;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).toHaveAttribute("data-fade-end");
 
 			scroller.scrollTop = 100;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).not.toHaveAttribute("data-fade-end");
 		}
 	});
 
@@ -2874,7 +2874,7 @@ describe("Sidebar", () => {
 		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
 		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
-		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
+		expect(sessionDot("review task")).toHaveClass("icon-circle-alert", "text-status-in-review");
 		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
 		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
 		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
@@ -2916,6 +2916,31 @@ describe("Sidebar", () => {
 		expect(marker("ci task")).toHaveClass("text-destructive");
 	});
 
+	it("gives Scratchpad rows the same status icons and age as project rows", () => {
+		const adhoc = { ...session, workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad", lastUserMessageAt: "2026-06-29T23:55:00Z" };
+		renderSidebar({
+			workspaces: [{
+				id: STANDALONE_WORKSPACE_ID,
+				name: "Scratchpad",
+				kind: STANDALONE_PROJECT_KIND,
+				path: "",
+				sessions: [
+					{ ...adhoc, id: "adhoc-idle", title: "idle chat", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } },
+					{ ...adhoc, id: "adhoc-working", title: "working chat", activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" } },
+					{ ...adhoc, id: "adhoc-input", title: "input chat", status: "needs_input", activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" } },
+				],
+			}],
+		});
+		const row = (title: string) => screen.getByLabelText(`Open ${title}`);
+		const dot = (title: string) => row(title).querySelector<HTMLElement>("[data-session-status]");
+
+		expect(dot("idle chat")).toHaveAttribute("data-session-idle", "idle");
+		expect(dot("working chat")).toHaveAttribute("data-session-spinner");
+		expect(dot("input chat")).toHaveAttribute("data-session-marker", "attention");
+		expect(row("idle chat").closest("[data-session-row]")?.querySelector("[data-session-message-age]")).toBeInTheDocument();
+		expect(document.querySelector("[data-scratchpad-section] img")).toBeNull();
+	});
+
 	it("keeps AO's pending review quiet on the session and its project folder", async () => {
 		useUiStore.setState({ projectAvatars: false });
 		const user = userEvent.setup();
@@ -2926,11 +2951,11 @@ describe("Sidebar", () => {
 			}],
 		});
 		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder-open")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder-open")).toBeInTheDocument();
 		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
 	it("replaces the folder with a warning when a collapsed project needs attention", () => {
@@ -2939,8 +2964,8 @@ describe("Sidebar", () => {
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("lucide-circle-alert", "text-destructive");
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).not.toBeInTheDocument();
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
@@ -2950,7 +2975,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [{ ...session, status }] }],
 		});
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
 	it("shows a first-letter tile for a project without a repository avatar", () => {
@@ -2958,7 +2983,7 @@ describe("Sidebar", () => {
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [] }] });
 		const icon = document.querySelector("[data-project-folder-icon]");
 		expect(icon).toHaveTextContent("P");
-		expect(icon?.querySelector(".lucide-folder")).not.toBeInTheDocument();
+		expect(icon?.querySelector(".icon-folder")).not.toBeInTheDocument();
 	});
 
 	it("previews the board card to the right of a hovered session row", async () => {
@@ -3113,6 +3138,87 @@ describe("Sidebar", () => {
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 		const card = await screen.findByTestId("board-session-card");
 		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
+	});
+
+	it("closes the preview when the row's archive confirm opens", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.hover(screen.getByLabelText("Open fix login"));
+		await screen.findByTestId("board-session-card");
+
+		await user.click(within(row).getByLabelText("Archive session"));
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(within(row).getByLabelText("Archive session")).toHaveFocus());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("closes the row's archive confirm on the first Escape", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.click(within(row).getByLabelText("Archive session"));
+		await screen.findByRole("dialog");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("keeps the preview closed through the archive confirm opened from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+
+		fireEvent.contextMenu(row);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive session" }));
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("previews a row again after renaming it from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		fireEvent.contextMenu(screen.getByLabelText("Open fix login"));
+		await user.click(await screen.findByRole("menuitem", { name: "Rename fix login" }));
+		const input = screen.getByRole("textbox", { name: "Rename fix login" });
+		await user.clear(input);
+		await user.type(input, "polish login{Enter}");
+		await waitFor(() => expect(renameSessionMock).toHaveBeenCalledWith("proj-1-1", "polish login"));
+
+		await user.hover(screen.getByLabelText("Open fix login"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("fix login");
+	});
+
+	it("previews a row when focus moves to it from another control", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		act(() => {
+			screen.getByRole("button", { name: "Search" }).focus();
+			screen.getByLabelText("Open fix login").focus();
+		});
+
+		await screen.findByTestId("board-session-card");
 	});
 
 	it("lists sessions that need input above the rest", () => {
@@ -3327,7 +3433,7 @@ describe("Sidebar", () => {
 
 		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
 		const archiveButton = within(row).getByLabelText("Archive session");
-		expect(archiveButton.querySelector("svg")).toHaveClass("lucide-archive");
+		expect(archiveButton.querySelector("svg")).toHaveClass("icon-archive");
 
 		fireEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();
@@ -3691,6 +3797,18 @@ describe("Sidebar", () => {
 		expect(await screen.findByTestId("sidebar-update-ready")).toBeVisible();
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
+	});
+
+	it("keeps restart available for a stalled native stage", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "downloaded",
+			version: "9.9.9",
+			staged: { version: "9.9.9", stagedAt: Date.now(), escalated: false, ready: false },
+		});
+		renderSidebar();
+
+		expect(await screen.findByTestId("sidebar-update-ready")).toBeVisible();
+		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
 	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {

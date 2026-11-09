@@ -19,6 +19,10 @@ export const aoBridge: AoBridge =
 			openExternal: async (url: string) => {
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
@@ -43,12 +47,18 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -96,6 +106,23 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		// Outside the desktop app a made link is remembered for this page only.
+		sessionShareUrls: (() => {
+			const urls = new Map<string, string>();
+			return {
+				remember: async (baseUrl: string, linkId: string, url: string) => {
+					urls.set(`${baseUrl} ${linkId}`, url);
+				},
+				recall: async (baseUrl: string, linkIds: readonly string[]) =>
+					Object.fromEntries(linkIds.flatMap((id) => {
+						const url = urls.get(`${baseUrl} ${id}`);
+						return url ? [[id, url]] : [];
+					})),
+				forget: async (baseUrl: string, linkIds: readonly string[]) => {
+					for (const id of linkIds) urls.delete(`${baseUrl} ${id}`);
+				},
+			};
+		})(),
 		// Publishing reads local files in the main process: desktop only.
 		cloudShare: {
 			available: async () => false,
@@ -135,8 +162,10 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 		editorHandoff: {
+			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
 				targets: [],
 				preferredEditorId: "cursor",
@@ -151,6 +180,9 @@ export const aoBridge: AoBridge =
 				throw new Error("Desktop app is required to open a workspace.");
 			},
 			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
+			openArtifactInBrowser: async () => {
 				throw new Error("Desktop app is required to open artifacts.");
 			},
 			copyWorkspacePath: async () => {
@@ -415,6 +447,7 @@ export const aoBridge: AoBridge =
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
 			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => {

@@ -126,6 +126,7 @@ type SessionArtifactFile struct {
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	ShareURL  string              `json:"shareUrl,omitempty"`
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.
@@ -175,8 +176,9 @@ type SessionMetadata struct {
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
 	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
-	// purpose while keeping the session (an agent exit). Its runtime's death is
-	// then not a crash. It names one launch, so a new launch is never covered.
+	// purpose while keeping the session (an agent exit), or found already gone
+	// at startup. Its runtime's death is then not a crash. It names one launch,
+	// so a new launch is never covered.
 	RuntimeReleasedLaunchID string `json:"-"`
 	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
@@ -410,6 +412,7 @@ type SessionBranchState struct {
 	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
 	// Empty means the branch has never been pushed.
 	RemoteBranch string `json:"remoteBranch,omitempty"`
+	RemoteHead   string `json:"remoteHead,omitempty"`
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
@@ -493,6 +496,14 @@ func (s SessionProvisionState) IsProvisioning() bool {
 
 // IsStandalone reports whether the session has no registered project owner.
 func (s SessionRecord) IsStandalone() bool { return s.ProjectID == "" }
+
+// RuntimeReleased reports that AO ended the current terminal launch on purpose
+// and kept the session stopped. That launch's runtime is gone by design, so its
+// death is not a crash; a resume starts a new launch, which this never covers.
+func (s SessionRecord) RuntimeReleased() bool {
+	launch := s.Metadata.RuntimeLaunchID
+	return s.Activity.State == ActivityExited && launch != "" && s.Metadata.RuntimeReleasedLaunchID == launch
+}
 
 // SessionControllerOwner is the durable identity of the process/controller
 // currently allowed to act for a session. Narrow lifecycle writes compare this

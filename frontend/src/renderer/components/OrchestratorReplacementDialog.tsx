@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { canBypassOrchestratorApprovals, isChatPreflightCode } from "../lib/spawn-orchestrator";
 import type { OrchestratorReplacementFailure } from "../stores/ui-store";

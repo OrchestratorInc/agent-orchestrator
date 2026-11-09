@@ -63,7 +63,7 @@ import {
 	Trash2,
 	UserRound,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
@@ -505,8 +505,6 @@ export function BrowserPanelView({
 	const {
 		scrollRef: tabScrollRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade: showTabsLeftFade,
-		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
 
@@ -1116,7 +1114,7 @@ export function BrowserPanelView({
 					<div className="browser-panel__tab-region">
 						<div
 							aria-label={t("browser.tabs")}
-							className="browser-panel__tab-strip"
+							className="browser-panel__tab-strip edge-fade edge-fade-x"
 							onKeyDown={draggedTopTabId ? undefined : handleTabListKeyDown}
 							ref={tabScrollRef}
 							role="tablist"
@@ -1131,10 +1129,6 @@ export function BrowserPanelView({
 								/>
 							))}
 						</div>
-						{showTabsLeftFade ? (
-							<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
-						) : null}
-						{showTabsRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>

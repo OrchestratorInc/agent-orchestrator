@@ -1,5 +1,6 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -33,9 +34,8 @@ import {
 	Info,
 	Play,
 	Loader2,
-	SearchCheck,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
@@ -121,37 +121,12 @@ const VIEW_DEFS: {
 	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
-	{
-		id: "summary",
-		labelKey: "inspector.summary",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<line x1="8" y1="7" x2="20" y2="7" />
-				<line x1="8" y1="12" x2="20" y2="12" />
-				<line x1="8" y1="17" x2="16" y2="17" />
-				<circle cx="4" cy="7" r="1" />
-				<circle cx="4" cy="12" r="1" />
-				<circle cx="4" cy="17" r="1" />
-			</svg>
-		),
-	},
-	{
-		id: "reviews",
-		labelKey: "inspector.reviewTab",
-		icon: <SearchCheck aria-hidden="true" />,
-	},
-	{
-		id: "browser",
-		labelKey: "inspector.browser",
-		icon: <BrowserIcon aria-hidden="true" />,
-	},
-	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{
-		id: "files",
-		labelKey: "inspector.files",
-		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
-	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
+	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
+	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
+	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
+	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -162,10 +137,10 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
-	browserOnly = false,
+	orchestrator = false,
 	session,
 	hostId: hostIdProp,
 	onOpenReviewerTerminal,
@@ -186,7 +161,8 @@ export const SessionInspector = memo(function SessionInspector({
 	view: viewProp,
 	onViewChange,
 }: {
-	browserOnly?: boolean;
+	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
+	orchestrator?: boolean;
 	session?: WorkspaceSession;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -211,7 +187,6 @@ export const SessionInspector = memo(function SessionInspector({
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
-	const onlyBrowser = browserOnly;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -223,7 +198,7 @@ export const SessionInspector = memo(function SessionInspector({
 	);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -262,20 +237,22 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
+		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The tab is contextual: an artifact click opens it; leaving it hides it.
-			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+			// Artifacts shows whenever the session lists files, or while an artifact
+			// link waits for the list to refresh.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -356,6 +333,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							orchestrator={orchestrator}
 							session={session}
 						/>
 					) : undefined
@@ -390,6 +368,7 @@ const SummaryView = memo(function SummaryView({
 	hostId,
 	onOpenFiles,
 	onOpenReviews,
+	orchestrator,
 	session,
 }: {
 	canOpenReviews: boolean;
@@ -397,6 +376,7 @@ const SummaryView = memo(function SummaryView({
 	hostId?: string;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
+	orchestrator: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -444,8 +424,6 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
@@ -454,7 +432,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -476,9 +454,10 @@ const SummaryView = memo(function SummaryView({
 				) : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={
+			branch={orchestrator ? undefined : (
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (
@@ -503,7 +482,7 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 					title={prSectionTitle}
 				/>
-			}
+			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -679,7 +658,7 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.ci.autoInjectError", { status: response.status })));
+			if (error) throw apiErrorException(error, t("inspector.ci.autoInjectError", { status: response.status }));
 		},
 		onMutate: async (autoInjectCI) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -742,7 +721,7 @@ function AutoInjectReviewPolicyControl({ session, hostId }: { session: Workspace
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.review.autoInjectError")));
+			if (error) throw apiErrorException(error, t("inspector.review.autoInjectError"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -808,7 +787,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
 			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to update merge policy (${response.status})`));
+			if (error) throw apiErrorException(error, `Failed to update merge policy (${response.status})`);
 		},
 		onMutate: async (terminateOnPrMerge) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -973,7 +952,7 @@ export function PRSummaryCard({
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
 		},
 		onSuccess: async (result) => {
@@ -1045,7 +1024,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1462,7 +1441,7 @@ function LocalReviewsSection({
 					agentConfig: nextReviewerConfig,
 				},
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to save reviewer"));
+			if (error) throw apiErrorException(error, "Unable to save reviewer");
 			if (data) queryClient.setQueryData(reviewsKey, data);
 		},
 		onSuccess: () => {
@@ -1479,7 +1458,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { enabled },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.reviewRequestFailed")));
+			if (error) throw apiErrorException(error, t("inspector.reviewRequestFailed"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -1496,7 +1475,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableStartReview"));
 			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
@@ -1529,7 +1508,7 @@ function LocalReviewsSection({
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/cancel", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableCancelReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableCancelReview"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: reviewsKey });
@@ -1541,7 +1520,7 @@ function LocalReviewsSection({
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/kill", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
+			if (error) throw apiErrorException(error, t("inspector.unableKillReviewSession"));
 			return {
 				data,
 				requestReviewsKey: reviewsKey,
@@ -1963,14 +1942,14 @@ function MergedReviewsSection({
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: review.pullRequestUrl, reviewerId: review.reviewerId },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to request re-review"));
+		if (error) throw apiErrorException(error, "Unable to request re-review");
 	};
 	const resolveInlineComment = async (comment: InspectorInlineComment) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to resolve review comment"));
+		if (error) throw apiErrorException(error, "Unable to resolve review comment");
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
@@ -1984,14 +1963,14 @@ function MergedReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { text: message, clientMessageId: crypto.randomUUID() },
 			});
-			if (error) throw new Error(apiErrorMessage(error, fallbackError));
+			if (error) throw apiErrorException(error, fallbackError);
 			return;
 		}
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 			params: { path: { sessionId: session.id } },
 			body: { message, userAuthored: true },
 		});
-		if (error) throw new Error(apiErrorMessage(error, fallbackError));
+		if (error) throw apiErrorException(error, fallbackError);
 	};
 	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
 		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");

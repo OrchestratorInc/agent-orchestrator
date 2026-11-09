@@ -563,7 +563,7 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("Idle")).toBeInTheDocument();
 		const terminateButton = within(idleCard).getByRole("button", { name: "Archive brand-font-pipeline" });
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
-		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
+		expect(terminateButton.querySelector("svg")).toHaveClass("icon-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});
@@ -1649,6 +1649,21 @@ describe("SessionsBoard", () => {
 		// stranded on <body> instead of the control they came from.
 		expect(screen.getByRole("button", { name: "Archive merged worker" })).toHaveFocus();
 		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("closes the card's archive confirm on the first Escape", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-merged", title: "merged worker", status: "merged" })])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await userEvent.click(screen.getByRole("button", { name: "Archive merged worker" }));
+		await screen.findByRole("dialog");
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 	});
 
 	it("terminates a live merged session from its card without opening the session", async () => {

@@ -132,6 +132,19 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	/**
+	 * Where the turn's group sorts when that is not its first loaded item: a
+	 * turn whose prompt is above the loaded part of a history began before
+	 * every prompt in it, so it sorts ahead of them (between the sequence
+	 * before the loaded events and their first).
+	 */
+	anchorSequence?: number;
+	/**
+	 * The key of the turn's group, held while its first loaded item changes
+	 * (older history loading above it brings in its prompt), so the reader's
+	 * view stays on it. Without one the group is keyed by its first item.
+	 */
+	groupKey?: string;
 	errorMessage?: string;
 	failureCode?: "provider_key_missing";
 	usageLimit?: ConversationUsageLimit;
@@ -296,6 +309,8 @@ export interface CommandDetail {
 	outputSource?: "stream" | "aggregate";
 	/** Accumulation stopped at the daemon's cap; the command printed more. */
 	outputTruncated?: boolean;
+	/** The page carries only the head and tail of the output; this is its full size in bytes. */
+	outputBytes?: number;
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
@@ -390,7 +405,9 @@ export interface McpToolDetail {
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
+	/** Codex and Hermes send the call's arguments here; other ACP agents send `input`. */
 	arguments?: unknown;
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;
@@ -490,7 +507,9 @@ export interface SystemEventDetail {
 		| "workspace.script.run"
 		| "account.switched"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
-		| "approval_mode.substituted";
+		| "approval_mode.substituted"
+		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
+		| "session.model_unavailable";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
@@ -720,6 +739,8 @@ export interface ChatModel {
 	supportsFast?: boolean;
 	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator". */
+	hint?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -747,6 +768,8 @@ export interface ChatConfigChoice {
 	groupName?: string;
 	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator"; the provider never sends it. */
+	hint?: string;
 }
 
 /** The two value shapes ACP session config supports. */
