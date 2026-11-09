@@ -6,16 +6,14 @@ import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
-import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactButton, useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -37,9 +35,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
-	// Only the person who started a cloud session shares its files.
-	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
-	const cloudOwner = Boolean(cloudUserId) && artifact?.cloud?.createdByUserId === cloudUserId;
+	const share = useArtifactShareFile(artifact);
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -64,23 +60,13 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-0.5">
-							{/* Only the person who started a cloud session publishes its files.
-							    A Scratchpad file belongs to the Scratchpad workspace, as in the session view. */}
-							{artifact.cloud && (artifact.cloud.shared || !cloudOwner) ? null : (
-								<ShareArtifactButton
-									className="transition-none"
-									iconOnly
-									file={artifact.cloud
-										? { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" }
-										: { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID }}
-									name={artifact.name}
-								/>
-							)}
+							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} /> : null}
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
 								verticalDots
+								share={share}
 								pinInMenu
 								pinned={pinned}
 								onTogglePin={() => togglePinnedArtifact(id)}

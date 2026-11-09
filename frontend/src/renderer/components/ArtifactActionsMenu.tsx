@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "@/components/app-icons";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -20,6 +20,8 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
+import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAvailable } from "./ShareArtifactPopover";
+import type { CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -75,6 +77,7 @@ export function ArtifactActionsMenu({
 	session,
 	iconOnly = false,
 	verticalDots = false,
+	share,
 	variant = "default",
 	onEdit,
 	pinInMenu = false,
@@ -93,6 +96,8 @@ export function ArtifactActionsMenu({
 	iconOnly?: boolean;
 	/** Draws the icon-only trigger as a vertical ellipsis. */
 	verticalDots?: boolean;
+	/** Adds a Share item to an icon-only menu; it opens the share panel under the trigger. */
+	share?: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;
 	pinInMenu?: boolean;
@@ -111,6 +116,10 @@ export function ArtifactActionsMenu({
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [shareOpen, setShareOpen] = useState(false);
+	const sharing = useRef(false);
+	const shareAvailable = useShareAvailable();
+	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
 	const actionClassName = cn(className, menuOpen && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
@@ -284,14 +293,33 @@ export function ArtifactActionsMenu({
 			) : null}
 			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 				{iconOnly ? (
-					<span className="inline-flex">{menuTrigger}</span>
-				
+					canShare && share ? (
+						<ShareArtifactMenuPopover file={share} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>
+							<span className="inline-flex">{menuTrigger}</span>
+						</ShareArtifactMenuPopover>
+					) : <span className="inline-flex">{menuTrigger}</span>
 				) : menuTrigger}
-				<DropdownMenuContent align={iconOnly ? "end" : "start"} className="min-w-44" data-browser-native-overlay="true">
+				<DropdownMenuContent
+					align={iconOnly ? "end" : "start"}
+					className="min-w-44"
+					data-browser-native-overlay="true"
+					// Focus goes to the share panel, not back to the trigger, which would close it.
+					onCloseAutoFocus={(event) => {
+						if (!sharing.current) return;
+						sharing.current = false;
+						event.preventDefault();
+					}}
+				>
 					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
-					{onTogglePin || onOpenInSession ? (
+					{onTogglePin || onOpenInSession || canShare ? (
 						<>
+							{canShare ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareOpen(true); }}>
+									<Share aria-hidden="true" />
+									{t("artifacts.share.menu")}
+								</DropdownMenuItem>
+							) : null}
 							{onTogglePin ? (
 								<DropdownMenuItem onSelect={onTogglePin}>
 									{pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}

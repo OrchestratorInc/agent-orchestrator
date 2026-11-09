@@ -613,7 +613,7 @@ describe("ArtifactsView", () => {
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
 		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toBeInTheDocument();
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
-		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Share" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));
