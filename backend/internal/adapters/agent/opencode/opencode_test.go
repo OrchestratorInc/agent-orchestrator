@@ -696,6 +696,28 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
 	}
+	// A reply must be reported as the turn-boundary permission-resolved event,
+	// not generic active: active is suppressed while the session is blocked,
+	// which leaves the session stuck on Needs You until the turn ends.
+	if !strings.Contains(body, `callHookSync("permission-resolved"`) {
+		t.Fatalf("installed plugin does not emit permission-resolved for replies:\n%s", body)
+	}
+	// With several dialogs open, the first reply must NOT resolve the block:
+	// the plugin tracks open asks by request id and reports only once none
+	// remain, or the first `ao send` types into the still-open dialog.
+	for _, marker := range []string{"openAsks", "askID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not track open permission asks (%q missing):\n%s", marker, body)
+		}
+	}
+	// Subagent sessions arrive on the same bus. The plugin must track them from
+	// session.created(parentID) and never report a child id as the identity:
+	// AO persists that id as the native restore handle.
+	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "reportSessionID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
+		}
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)

@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
-import { StickyNote } from "lucide-react";
+import { StickyNote } from "@/components/app-icons";
 import { useEffect, useMemo } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
@@ -11,7 +11,7 @@ import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { repositoryOwnerAvatar } from "../lib/repository-avatar";
+import { type CanonicalGitHubRepo, repositoryOwnerAvatar } from "../lib/repository-avatar";
 
 function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; url: string }; className: string }) {
 	return (
@@ -71,12 +71,15 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		const details = detailsIndex >= 0 ? localProjectDetails[detailsIndex]?.data : undefined;
 		const primaryRepo = details && "repo" in details && typeof details.repo === "string" ? details.repo : "";
 		const workspaceRepos = details && "workspaceRepos" in details ? details.workspaceRepos ?? [] : project.workspaceRepos ?? [];
-		const repositories = [
-			...(primaryRepo ? [{ repo: primaryRepo }] : []),
+		const canonical = details && "canonicalRepo" in details
+			? { repo: details.canonicalRepo, ownerAvatarUrl: details.canonicalOwnerAvatarUrl }
+			: undefined;
+		const repositories: { repo: string; canonical?: CanonicalGitHubRepo }[] = [
+			...(primaryRepo ? [{ repo: primaryRepo, canonical }] : []),
 			...workspaceRepos,
 		];
-		const avatars = repositories.flatMap(({ repo }) => {
-			const avatar = repositoryOwnerAvatar(repo);
+		const avatars = repositories.flatMap(({ repo, canonical }) => {
+			const avatar = repositoryOwnerAvatar(repo, canonical);
 			if (!avatar) return [];
 			const identity = `${new URL(avatar.url).hostname}/${avatar.owner.toLowerCase()}`;
 			if (seen.has(identity)) return [];
@@ -107,13 +110,14 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
+							triggerVariant="ghost"
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}
 							options={projectOptions}
 							onChange={(value) => onProjectChange?.(value)}
 							menuAlign="start"
 							menuClassName="w-48 max-h-72"
-							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md bg-transparent! px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground hover:bg-interactive-hover! hover:text-foreground data-[state=open]:bg-transparent! data-[state=open]:hover:bg-interactive-hover! data-[state=open]:text-foreground"
+							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground"
 							menuItemClassName="gap-1!"
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">

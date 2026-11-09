@@ -1,0 +1,65 @@
+/*!
+ * Adapted from daisyUI button.css with inset-only depth (no outer shadow).
+ * https://github.com/saadeghi/daisyui/blob/f832adddd5c2b458bda4b0da8816b31a5b17731e/packages/daisyui/src/components/button.css
+ *
+ * MIT License
+ *
+ * Copyright (c) 2020 Pouya Saadeghi
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+/* These rules also override the renderer's unlayered form-control font reset. */
+.button-emphasis {
+	font-weight: var(--font-weight-medium);
+}
+
+@utility button-raised {
+	--button-face: var(--button-color);
+	--button-edge: color-mix(in oklab, var(--button-color), #000 5%);
+	background-color: var(--button-face);
+	border-color: var(--button-edge);
+	box-shadow: var(--shadow-control-inset);
+	touch-action: manipulation;
+
+	@supports (color: contrast-color(red)) {
+		/* 22% lighter bias: shift the luminance cutoff from 0.179129 to 0.359720.
+		   Use the resting fill so hover and press never flip the label color. */
+		color: contrast-color(color-mix(in srgb-linear, var(--button-color) 49.796664%, black));
+	}
+
+	@media (hover: hover) {
+		&:hover:not(:disabled, [aria-disabled="true"]) {
+			--button-face: color-mix(in oklab, var(--button-color), #000 7%);
+		}
+	}
+
+	&:is(:active, [aria-pressed="true"], [data-state="open"], [data-active="true"]):not(:disabled, [aria-disabled="true"]) {
+		--button-face: color-mix(in oklab, var(--button-color), #000 14%);
+	}
+
+	&:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+
+	&:is(:disabled, [aria-disabled="true"]) {
+		box-shadow: none;
+	}
+}

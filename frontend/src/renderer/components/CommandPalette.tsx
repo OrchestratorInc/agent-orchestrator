@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
 import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -1131,7 +1131,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

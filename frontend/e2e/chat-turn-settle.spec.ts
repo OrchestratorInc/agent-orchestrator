@@ -103,11 +103,12 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 }
 
 /**
- * Samples the latest turn's rows on every animation frame until the returned stop is called.
- * Resolves once the first frame is in, so a settle that follows always has a frame before it.
+ * Samples the latest turn's rows on every animation frame until the returned stop is
+ * called. Returns once the first frame is in, so a frame that runs late still sees
+ * the turn as it was before the caller settles it.
  */
 async function recordFrames(page: Page) {
-	await page.evaluate(async () => {
+	await page.evaluate(() => new Promise<void>((resolve) => {
 		const state = window as unknown as { __settleFrames: Frame[]; __settleStop: boolean };
 		state.__settleFrames = [];
 		state.__settleStop = false;
@@ -123,15 +124,11 @@ async function recordFrames(page: Page) {
 				live: live ? top(live) : null,
 				worked: Boolean(turn?.querySelector(":scope > [data-turn-worked]")),
 			});
+			resolve();
 			if (!state.__settleStop) requestAnimationFrame(tick);
 		};
-		await new Promise<void>((resolve) => {
-			requestAnimationFrame(() => {
-				tick();
-				resolve();
-			});
-		});
-	});
+		requestAnimationFrame(tick);
+	}));
 	return async () => {
 		await page.evaluate(() => {
 			(window as unknown as { __settleStop: boolean }).__settleStop = true;

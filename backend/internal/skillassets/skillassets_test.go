@@ -109,7 +109,7 @@ func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
 		"Never use display names as identity",
 		"Encode either ID with URL percent encoding",
 		"Do not append query strings, fragments, action names, credentials, authorities, or extra path segments",
-		"only inside a currently running AO desktop app",
+		"only inside a currently running Orchestrator desktop app",
 		"never sends a message, executes a command, or performs another action",
 	} {
 		if !strings.Contains(text, required) {

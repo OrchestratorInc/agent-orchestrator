@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw } from "@/components/app-icons";
 import {
 	createContext,
 	lazy,

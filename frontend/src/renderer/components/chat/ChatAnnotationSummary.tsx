@@ -1,6 +1,6 @@
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
-import { MessageSquareQuote, X } from "lucide-react";
+import { MessageSquareQuote, X } from "@/components/app-icons";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";

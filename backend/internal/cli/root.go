@@ -377,7 +377,7 @@ func atMostOneArg(cmd *cobra.Command, args []string) error {
 func newDaemonCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:    "daemon",
-		Short:  "Run the AO backend daemon",
+		Short:  "Run the Orchestrator backend daemon",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

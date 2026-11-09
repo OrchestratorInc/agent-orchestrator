@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";

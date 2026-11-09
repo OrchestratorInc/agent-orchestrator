@@ -35,6 +35,7 @@ import (
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -382,6 +383,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		SignalCapable:        activitydispatch.FullySupportsHarness,
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
+		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
@@ -494,7 +496,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					// Admission resets only on a new runtime handle or launch, so name the
 					// recovery instead of looking like a transient failure.
-					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume Orchestrator input", id)
 				}
 				admission.pending = ""
 			}
@@ -950,7 +952,7 @@ func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.Sessio
 	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
 		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
 	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
-		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+		return fmt.Errorf("%w: Orchestrator could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
 	default:
 		return err
 	}

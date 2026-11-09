@@ -1,5 +1,5 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "lucide-react";
+import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -8,7 +8,7 @@ import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { TabContextMenu, TabRenameItem } from "./TabContextMenu";
+import { TabContextMenu } from "./TabContextMenu";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
@@ -163,11 +163,8 @@ export function ShellTerminalTab({
 		) : undefined;
 		return (
 			<TabContextMenu
-				closeShortcut={isActive}
 				disabled={isEditing || shell.optimistic}
-				items={<TabRenameItem ariaLabel={t("terminal.rename", { title })} onRename={canEdit ? beginEdit : undefined} />}
-				onClose={onClose}
-				tabKey={shell.handleId}
+				spec={{ kind: "shell", tabKey: shell.handleId, title, onRename: canEdit ? beginEdit : undefined, onClose, closeShortcut: isActive }}
 			>
 				<TerminalTabFrame
 					wide={Boolean(agent)}

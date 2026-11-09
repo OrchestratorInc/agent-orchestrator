@@ -281,7 +281,7 @@ function unauthorizedResponse(): CloudCpProxyResponse {
 		body: JSON.stringify({
 			error: "unauthorized",
 			code: "no_token",
-			message: "No AO Cloud session is available. Sign in and try again.",
+			message: "No Orchestrator Cloud session is available. Sign in and try again.",
 		}),
 	};
 }
@@ -314,10 +314,10 @@ export async function pinnedTargetUrl(
 	controlPlaneUrl: ControlPlaneUrlResolver,
 ): Promise<string> {
 	const configured = await controlPlaneUrl();
-	if (!configured) throw invalid("no AO Cloud control plane is configured.");
+	if (!configured) throw invalid("no Orchestrator Cloud control plane is configured.");
 	parseCloudBaseUrl(configured);
 	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
-		throw invalid("baseUrl is not the configured AO Cloud control plane.");
+		throw invalid("baseUrl is not the configured Orchestrator Cloud control plane.");
 	}
 	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
 }
@@ -439,7 +439,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		// read, not a request.
 		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
 			return binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to Orchestrator Cloud at once.`);
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
@@ -464,7 +464,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 				headers[key] = value;
 			});
 			const tooLarge = () => binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from Orchestrator Cloud at once.`);
 			const declared = Number(response.headers.get("content-length"));
 			if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
 				await response.body?.cancel().catch(() => undefined);
@@ -476,7 +476,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		} catch (error) {
 			if (timeout.aborted && !cancelled.signal.aborted) {
 				return binaryError(504, CLOUD_CP_BINARY_TIMEOUT,
-					`AO Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
+					`Orchestrator Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
 			}
 			throw error;
 		} finally {
@@ -493,7 +493,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
-			throw streamError(401, "No AO Cloud session is available. Sign in and try again.");
+			throw streamError(401, "No Orchestrator Cloud session is available. Sign in and try again.");
 		}
 		const controller = new AbortController();
 		const response = await doFetch(url, {

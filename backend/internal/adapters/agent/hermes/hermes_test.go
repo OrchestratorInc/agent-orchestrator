@@ -303,7 +303,7 @@ func TestProbeAcceptsHomebrewBottleWithUnknownBanner(t *testing.T) {
 
 	unverified := writeHomebrewKeg(t, "hermes-agent", "0.22.4", "", banner)
 	ok, reason, _ := probeNativeVersion(t.Context(), unverified)
-	if ok || !strings.Contains(reason, "is not a Hermes release line AO has qualified") {
+	if ok || !strings.Contains(reason, "is not a Hermes release line Orchestrator has qualified") {
 		t.Fatalf("keg without Homebrew's receipt: ok=%v reason=%q", ok, reason)
 	}
 }

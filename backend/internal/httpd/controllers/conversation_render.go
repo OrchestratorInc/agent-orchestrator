@@ -161,7 +161,7 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "RENDER_INVALID", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrRenderCheckUnavailable):
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "RENDER_CHECK_UNAVAILABLE",
-			"render check needs the AO desktop app; open it, or publish without a check", nil)
+			"render check needs the Orchestrator desktop app; open it, or publish without a check", nil)
 	case errors.As(err, &desktopErr):
 		// The desktop app reached the page but could not check it (it did not
 		// load in time, say). The agent needs the reason, not an opaque 500.
