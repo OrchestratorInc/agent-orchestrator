@@ -120,7 +120,7 @@ describe("ActivityRun command groups", () => {
 				<ActivityRun activities={[command("activity-1", "cd repo && rg TODO ."), command("activity-2", "FOO=1 cat a.ts")]} />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: /Explored 2 tool calls/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Searched for 1 pattern · Read 1 file/i })).toBeInTheDocument();
 	});
 });
 
@@ -145,7 +145,7 @@ describe("ActivityRun agent built-in tools", () => {
 			</TooltipProvider>,
 		);
 
-		await user.click(screen.getByRole("button", { name: /Explored 2 tool calls/i }));
+		await user.click(screen.getByRole("button", { name: /Read 1 file · Searched the web/i }));
 		expect(await screen.findByRole("button", { name: "Read README.md" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Searched the web for latest stable Node.js version" })).toBeInTheDocument();
 		expect(container.querySelector(".icon-globe")).toHaveClass("size-3");

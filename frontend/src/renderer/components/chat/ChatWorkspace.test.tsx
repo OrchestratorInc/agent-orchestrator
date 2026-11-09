@@ -1219,7 +1219,7 @@ describe("ChatWorkspace timeline", () => {
 		// The current run is open and shows each call; the earlier run is folded to
 		// its summary line.
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
-		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
+		expect(toggle(/^Listed files · Read 1 file$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Built project")).toBeInTheDocument();
 		expect(screen.getByText("Ran lint")).toBeInTheDocument();

@@ -27,7 +27,7 @@ import {
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { aoActionName, summarizeAOActions } from "./activity-action";
-import { isExploratoryTool } from "./activity-step";
+import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
@@ -202,6 +202,9 @@ function activityGroupKey(activity: ConversationActivity): string {
 	if (activity.activityKind === "command") {
 		return `command:${commandCategory(activity.detail?.command ?? activity.summary)}${parentSuffix}`;
 	}
+	if (activity.activityKind === "mcp_tool") {
+		return `mcp_tool:${activityToolStep(activity)?.icon ?? "other"}${parentSuffix}`;
+	}
 	if (activity.activityKind === "ao_action") {
 		return `ao_action:${aoActionName(activity) || "unknown"}${parentSuffix}`;
 	}
@@ -253,6 +256,7 @@ function ActivitySubgroup({
 			</>
 		);
 	}
+	const summary = summarizeSubgroup(activities);
 
 	return (
 		<div className="activity-subgroup">
@@ -262,8 +266,8 @@ function ActivitySubgroup({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summarizeSubgroup(activities)} inline>
-						{summarizeSubgroup(activities)}
+					<ActivityTransition value={summary} inline>
+						{summary}
 					</ActivityTransition>
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
@@ -297,6 +301,8 @@ function ActivitySubgroup({
 function summarizeSubgroup(activities: ConversationActivity[]): string {
 	const first = activities[0];
 	if (!first) return "Related calls";
+	const exploration = summarizeExploration(activities);
+	if (exploration) return exploration;
 	if (first.activityKind === "file_change") {
 		const files = activities.reduce(
 			(count, activity) => count + Math.max(1, fileChangeFiles(activity).length),
@@ -316,6 +322,63 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 	const category = commandCategory(first.detail?.command ?? first.summary);
 	const verb = category === "read" || category === "search" ? "Explored" : "Ran";
 	return `${verb} ${activities.length} ${activities.length === 1 ? "tool call" : "tool calls"}`;
+}
+
+function summarizeExploration(activities: ConversationActivity[]): string | undefined {
+	if (activities.length === 0) return undefined;
+	const counts = new Map<string, number>();
+	for (const activity of activities) {
+		const step: CommandStep | undefined = activity.activityKind === "command"
+			? activityCommandStep(activity)
+			: activity.activityKind === "mcp_tool" ? activityToolStep(activity) : undefined;
+		if (!step) return undefined;
+		let kind: string;
+		let count = 1;
+		switch (step.done) {
+			case "Read":
+			case "Read file":
+				kind = "read";
+				break;
+			case "Listed":
+			case "Listed files":
+				kind = "list";
+				break;
+			case "Searched for":
+			case "Searched files":
+				kind = step.target ? "search-pattern" : "search";
+				break;
+			case "Found files":
+				kind = step.target ? "find-pattern" : "find";
+				break;
+			case "Searched the web":
+			case "Searched the web for":
+				kind = "web-search";
+				break;
+			case "Fetched":
+				kind = "fetch";
+				break;
+			default: {
+				const read = /^Read (\d+) files$/.exec(step.done);
+				if (!read) return undefined;
+				kind = "read";
+				count = Number(read[1]);
+			}
+		}
+		counts.set(kind, (counts.get(kind) ?? 0) + count);
+	}
+	return [...counts].map(([kind, count]) => {
+		switch (kind) {
+			case "read": return `Read ${count} ${count === 1 ? "file" : "files"}`;
+			case "list": return count === 1 ? "Listed files" : `Listed files ${count} times`;
+			case "search-pattern": return `Searched for ${count} ${count === 1 ? "pattern" : "patterns"}`;
+			case "search": return count === 1 ? "Searched files" : `Searched files ${count} times`;
+			case "find-pattern": return `Found files matching ${count} ${count === 1 ? "pattern" : "patterns"}`;
+			case "find": return count === 1 ? "Found files" : `Found files ${count} times`;
+			case "web-search": return count === 1 ? "Searched the web" : `Searched the web ${count} times`;
+			case "fetch": return `Fetched ${count} ${count === 1 ? "page" : "pages"}`;
+			default: return "";
+		}
+	}).join(" · ");
 }
 
 type ActivityNode = { activity: ConversationActivity; children: ActivityNode[] };
@@ -441,6 +504,10 @@ function summarize(activities: ConversationActivity[]): string {
 	if (toolCalls === 0) {
 		if (aoActions > 0) return summarizeAOActions(activities.filter((activity) => activity.activityKind === "ao_action"));
 		return hasPlan ? "Updated plan" : `${activities.length} steps`;
+	}
+	if (aoActions === 0 && changedFiles === 0 && !hasPlan) {
+		const exploration = summarizeExploration(activities);
+		if (exploration) return exploration;
 	}
 	const label = `${exploratory ? "Explored" : "Ran"} ${toolCalls} ${toolCalls === 1 ? "tool call" : "tool calls"}`;
 	const details = [
