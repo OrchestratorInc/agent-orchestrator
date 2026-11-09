@@ -107,6 +107,7 @@ vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer"
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
+vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
 vi.mock("./useChatKeyboard", () => ({
 	useChatKeyboard: () => ({ keyboardVisible: false, rootStyle: {}, behavior: "padding", keyboardVerticalOffset: 0, composerLift: 0, restingInset: 0, dockRiseOverride: undefined }),
 }));
@@ -118,7 +119,6 @@ vi.mock("./autoResume", () => ({ shouldAutoResume: () => false }));
 vi.mock("./conversationBanners", () => ({
 	controllerStoppedBanner: () => ({ key: "stopped", title: "The agent stopped" }),
 	errorBanner: () => undefined,
-	mcpBanner: () => undefined,
 	quotaBanner: () => undefined,
 	reauthBanner: () => undefined,
 	rolledBackBanner: () => undefined,
