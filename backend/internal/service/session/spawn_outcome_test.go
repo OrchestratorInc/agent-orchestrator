@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -242,5 +243,27 @@ func TestSessionReportsWhetherItsWorkspaceIsPublished(t *testing.T) {
 		if got.WorkspacePublished != want {
 			t.Errorf("%s workspacePublished = %t, want %t", id, got.WorkspacePublished, want)
 		}
+	}
+}
+
+// A start cancelled on purpose (killed mid-start, daemon shutdown) is not a
+// launch failure; a start that ran out of its time budget is.
+func TestCancelledAsyncChatStartIsNotASpawnFailure(t *testing.T) {
+	svc, cmd, sink, _, milestones := newAsyncSpawnService(t)
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	settle(cmd, domain.SessionProvisionFailed, fmt.Errorf("spawn chat-1: workspace: %w", context.Canceled))
+	if len(named(sink, "ao.sessions.spawn_failed")) != 0 || len(named(sink, "ao.sessions.spawned")) != 0 {
+		t.Fatalf("events = %#v, want none for a cancelled start", sink.events)
+	}
+	if milestones["session_spawned"] {
+		t.Fatal("a cancelled start must not spend the first_for_install claim")
+	}
+
+	cmd.observer(context.Background(), domain.SessionRecord{ID: "chat-1", ProjectID: "mer"}, domain.SessionProvisionProvisioning, nil)
+	settle(cmd, domain.SessionProvisionFailed, context.DeadlineExceeded)
+	if got := named(sink, "ao.sessions.spawn_failed"); len(got) != 1 {
+		t.Fatalf("spawn_failed = %d, want 1 for a start that timed out", len(got))
 	}
 }

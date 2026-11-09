@@ -657,7 +657,7 @@ func (m *Manager) cancelAsyncChatSpawn(ctx context.Context, id domain.SessionID)
 	if err != nil || !ok || !rec.ProvisionState.IsProvisioning() {
 		return err
 	}
-	_, err = m.setProvisionState(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled")
+	_, err = m.setProvisionStateCause(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled", context.Canceled)
 	return err
 }
 

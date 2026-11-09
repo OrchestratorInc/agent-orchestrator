@@ -398,8 +398,11 @@ New (`historical: false`) PR outcomes add:
   `duration_ms` keeps its earlier meaning, the time until the spawn request
   was answered, which for an asynchronous Chat start is before the session is
   usable. A retry of a failed start is its own attempt, timed from the retry,
-  without `duration_ms`. Each attempt reports one outcome. A start interrupted
-  by a daemon restart reports neither event.
+  without `duration_ms`. Each attempt reports one outcome. A start cancelled on
+  purpose (the session is killed while starting, or the daemon shuts down)
+  reports neither event, so it does not count as a launch failure; a start
+  that runs out of its time budget reports `ao.sessions.spawn_failed`. A start
+  interrupted by a daemon restart reports neither event.
 - `surface` is `desktop`, `mobile`, or `cli`, as above.
 - `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
   `scheduled` (an automation's schedule), or `automation` (issue intake, or a

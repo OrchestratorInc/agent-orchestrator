@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -191,6 +192,13 @@ func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawn
 	elapsed := s.now().Sub(attempt.start).Milliseconds()
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)
+	// A start cancelled on purpose (the session was killed mid-start, or the
+	// daemon shut down) is not a launch failure: it reports nothing, so it
+	// cannot inflate a harness's failure rate. A start that ran out of its
+	// time budget (context.DeadlineExceeded) still reports as failed.
+	if !ready && errors.Is(cause, context.Canceled) {
+		return
+	}
 	report := func(answered int64) {
 		if !ready {
 			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, requestID: attempt.facts.requestID}, cause, answered, elapsed)
