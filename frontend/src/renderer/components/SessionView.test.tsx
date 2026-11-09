@@ -2854,7 +2854,7 @@ describe("SessionView", () => {
 
 		expect(screen.queryByText("ao/sess-1")).not.toBeInTheDocument();
 		expect(screen.queryByTitle("ao/sess-1")).not.toBeInTheDocument();
-		expect(document.querySelector(".lucide-git-branch")).toBeNull();
+		expect(document.querySelector(".icon-git-branch")).toBeNull();
 		// The session's own actions still ride in the same top-bar slot.
 		expect(screen.getByTestId("mock-session-topbar")).toBeInTheDocument();
 		expect(Boolean(screen.queryByRole("button", { name: "New terminal" }))).toBe(offersNewTerminal);
@@ -3322,7 +3322,7 @@ describe("SessionView", () => {
 		expect(loader).toBeInTheDocument();
 		expect(within(loader).getByRole("status", { name: label })).toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Stopping controller");
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 		expect(loader.querySelector("[data-testid='multi-step-loader']")).toBeNull();
 		expect(loader.querySelector(".text-success")).toBeNull();
 	});
@@ -3380,7 +3380,7 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
 		expect(within(loader).getByRole("status", { name: "Switching to Chat UI" })).toBeInTheDocument();
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 	});
 
 	it("keeps the Cloud switch loader over the stopped terminal until the session mode catches up", () => {
@@ -5766,6 +5766,23 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("opens an absolute orchestrator chat path to a listed artifact", async () => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.mode = "chat";
+		orchestrator.artifactFiles = [{ kind: "html", name: "chart.html", path: "renders/chart.html", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		mockAbsolutePathLookup({ data: { sessionId: "sess-orch", kind: "artifact", path: "renders/chart.html" }, error: undefined });
+		try {
+			render(<SessionView sessionId="sess-orch" />);
+			fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
+			expect(await screen.findByText("selected renders/chart.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		} finally {
+			delete orchestrator.artifactFiles;
+			delete orchestrator.mode;
+		}
+	});
+
 	it("explains an artifact the session still does not list after a refresh", async () => {
 		workerSession("sess-1").mode = "chat";
 		mockAbsolutePathLookup({ data: { sessionId: "sess-1", kind: "artifact", path: "out/new.md" }, error: undefined });
@@ -6052,6 +6069,26 @@ describe("SessionView", () => {
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {
 			delete worker.artifactFiles;
+		}
+	});
+
+	it.each([
+		["direct HTML file", "direct.html"],
+		["render saved as an artifact", "renders/chart.html"],
+	])("opens an orchestrator %s from its artifact link", (_source, path) => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.artifactFiles = [{ kind: "html", name: path.split("/").at(-1)!, path, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		try {
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-orch", path, undefined, "artifact"));
+
+			render(<SessionView sessionId="sess-orch" />);
+
+			expect(screen.getByText(`selected ${path}`)).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete orchestrator.artifactFiles;
 		}
 	});
 

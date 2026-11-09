@@ -180,6 +180,35 @@ describe("persisting an inline machine edit", () => {
 		expect(saved.endpoints[1]).toEqual({ kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true });
 	});
 
+	it("splits a pasted host:port instead of saving host:443 with another port on top (#7981)", async () => {
+		const d = editDeps();
+
+		const saved = await persistManualHostEdit(
+			host,
+			{ ...cfg, host: "https://new.trycloudflare.com:443", httpPort: "", secure: true, password: "old" },
+			"Old",
+			1,
+			d,
+		);
+
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "new.trycloudflare.com", httpPort: "443" }));
+		expect(saved.endpoints[1]).toEqual({ kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true });
+	});
+
+	it("refuses a host and Port that name different ports before probing", async () => {
+		const d = editDeps();
+
+		await expect(persistManualHostEdit(
+			host,
+			{ ...cfg, host: "new.trycloudflare.com:443", httpPort: "3011", secure: true },
+			"Old",
+			1,
+			d,
+		)).rejects.toThrow("The host says port 443 but Port is 3011");
+
+		expect(d.probe).not.toHaveBeenCalled();
+	});
+
 	it("does not send a credential when the changed address belongs to another machine", async () => {
 		const d = editDeps({ probe: vi.fn(async () => ({ hostId: "someone-else" })) });
 

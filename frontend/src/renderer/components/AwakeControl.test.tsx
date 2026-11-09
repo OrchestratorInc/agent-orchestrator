@@ -392,15 +392,15 @@ describe("shared Stay Awake controls", () => {
 		state.paused = true;
 		state.reason = "low_battery";
 		await show();
-		expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("lucide-triangle-alert", "size-2.5", "text-error", "-right-1", "-top-1");
-		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("icon-triangle-alert", "size-2.5", "text-error", "-right-1", "-top-1");
+		expect(coffee().querySelector(".icon-coffee")).toHaveClass("size-icon-md");
 		expect(coffee()).toHaveAccessibleDescription("Paused: battery below 10%.\nResumes after charging.");
 		state.paused = false;
 		state.reason = "";
 		state.active = true;
 		await act(async () => { await client.invalidateQueries({ queryKey: awakeQueryKey }); });
 		await waitFor(() => expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull());
-		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(coffee().querySelector(".icon-coffee")).toHaveClass("size-icon-md");
 		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 		expect(test.post).not.toHaveBeenCalled();
 	});

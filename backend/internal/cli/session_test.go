@@ -429,6 +429,42 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	}
 }
 
+func TestSessionGet_PrintsArtifactsWithPublicLinks(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/sessions/demo-1" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"worker","status":"working","prs":[],"artifactFiles":[`+
+			`{"path":"explainer.html","kind":"html","shareUrl":"https://share.test/abc"},{"path":"notes.md","kind":"markdown"}]}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, errOut, err := executeCLI(t, deps, "session", "get", "demo-1")
+	if err != nil {
+		t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "artifacts:\n  explainer.html (public link: https://share.test/abc)\n  notes.md\n") {
+		t.Fatalf("artifacts not listed with their links:\n%s", out)
+	}
+
+	out, errOut, err = executeCLI(t, deps, "session", "get", "demo-1", "--json")
+	if err != nil {
+		t.Fatalf("session get --json failed: %v\nstderr=%s", err, errOut)
+	}
+	var got sessionResponse
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := []sessionArtifactDTO{{Path: "explainer.html", Kind: "html", ShareURL: "https://share.test/abc"}, {Path: "notes.md", Kind: "markdown"}}; !reflect.DeepEqual(got.Session.ArtifactFiles, want) {
+		t.Fatalf("artifactFiles = %#v, want %#v", got.Session.ArtifactFiles, want)
+	}
+}
+
 func TestSessionKill_SuccessWithProjectScope(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, log := sessionCommandServer(t)

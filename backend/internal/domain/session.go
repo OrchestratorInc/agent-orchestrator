@@ -126,6 +126,7 @@ type SessionArtifactFile struct {
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	ShareURL  string              `json:"shareUrl,omitempty"`
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.

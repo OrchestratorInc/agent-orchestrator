@@ -42,7 +42,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
+import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -392,6 +392,8 @@ export interface ChatWorkspaceProps {
 	accountMoving?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
+	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
+	historyPending?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -734,6 +736,7 @@ function ChatWorkspaceContent({
 	controllerTransitioning,
 	accountMoving = false,
 	loadingQuietly,
+	historyPending = false,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -1685,14 +1688,14 @@ function ChatWorkspaceContent({
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
-	const arrivingInChat = Boolean(controllerTransitioning) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
-	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	const arrivingInChat = (Boolean(controllerTransitioning) || historyPending) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
+	const arrivingPlaceholder = historyPending || snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
-	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	const arrivingWithHistory = arrivingInChat && (historyPending || Boolean(session?.lastUserMessageAt));
 	// A chat started from the new chat page holds the start-up shimmer from the
 	// send until the agent picks the brief up, on that page and on the session's.
 	// Arriving from the new chat page, whose header strip is empty, the session's
@@ -2694,7 +2697,7 @@ function ControllerBanner({
 								<Button
 									type="button"
 									size="sm"
-									variant="outline"
+									variant="secondary"
 									onClick={resumeClick}
 									disabled={resuming}
 								>
@@ -4867,7 +4870,7 @@ export function Timeline({
 				<Button
 					type="button"
 					size="icon-sm"
-					variant="outline"
+					variant="secondary"
 					aria-label="Jump to latest"
 					title="Jump to latest"
 					onClick={requestGlideToEnd}
@@ -5839,9 +5842,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? `${item.turnId}-${item.sequence}` : itemKey(item),
+			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
 			turnId: item.turnId,
-			anchor: item.sequence,
+			// A turn that began above the loaded history sorts where it began.
+			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
 		groupForTurn.set(item.turnId, group);

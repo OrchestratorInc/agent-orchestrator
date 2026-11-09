@@ -6562,6 +6562,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		"intermediate outputs such as frames or partial renders",
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.",
 		"does not authorize external publishing",
+		"`ao session get mer-7` lists each artifact with its public link",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)

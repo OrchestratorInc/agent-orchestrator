@@ -4,7 +4,7 @@ import {
 	SquareTerminal,
 	TriangleAlert,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -20,7 +20,6 @@ import {
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import type { ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import {
@@ -36,7 +35,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /** The view an interface switch leads to: Lucide's boxed prompt or a speech bubble, with rounder corners. */
 export function RoundedInterfaceIcon({ target, className }: { target: SessionInterfaceMode; className?: string }) {
 	return (
-		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
 			aria-hidden="true" data-icon={target === "chat" ? "rounded-chat" : "rounded-terminal"} className={className}>
 			{target === "chat"
 				? <path d="M21 13a5 5 0 0 1-5 5H8l-5 3.5V8a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5z" />
@@ -178,17 +177,14 @@ export function SessionInterfaceSwitchButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<TopbarButton
+					<Button size={showLabel ? "sm" : "icon-sm"}
+						data-interface-switch=""
 						aria-label={label}
-						className={cn(
-							!supported && "opacity-50",
-							showLabel && "topbar-control--labeled !inline-flex !h-control-lg !w-auto !min-w-0 gap-1.5 px-2 text-xs",
-							className,
-						)}
+						className={className}
 						disabled={!supported || pending}
 						onClick={onClick}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						{pending ? (
 							<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
@@ -196,7 +192,7 @@ export function SessionInterfaceSwitchButton({
 							<RoundedInterfaceIcon target={target} className="size-icon-md" />
 						)}
 						{showLabel ? <span data-compact-label>{target === "tui" ? "Terminal UI" : "Chat UI"}</span> : null}
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="max-w-52 text-left text-wrap">{tooltipLabel}</TooltipContent>
@@ -298,7 +294,7 @@ export function SessionInterfaceSwitchDialog({
 				</div>
 
 				<DialogFooter className="border-t border-border px-5 py-3">
-					<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+					<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 						Keep current interface
 					</Button>
 				</DialogFooter>
@@ -484,7 +480,7 @@ export function SessionInterfaceTransitionNotice({
 					<Button
 						type="button"
 						size="sm"
-						variant="outline"
+						variant="secondary"
 						className="mt-2 text-caption"
 						disabled={interrupting}
 						onClick={onSwitchWithInterrupt}
@@ -498,7 +494,7 @@ export function SessionInterfaceTransitionNotice({
 						<Button
 							type="button"
 							size="sm"
-							variant="outline"
+							variant="secondary"
 							className="text-caption"
 							disabled={retrying || dismissing}
 							onClick={onRetry}
@@ -510,7 +506,7 @@ export function SessionInterfaceTransitionNotice({
 							<Button
 								type="button"
 								size="sm"
-								variant="outline"
+								variant="secondary"
 								className="text-caption"
 								disabled={retrying || dismissing}
 								onClick={onUseProviderHistory}

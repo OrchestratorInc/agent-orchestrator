@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { agentLabel, type AgentId } from "../lib/agent-options";

@@ -63,7 +63,7 @@ import {
 	Trash2,
 	UserRound,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
@@ -1311,7 +1311,7 @@ export function BrowserPanelView({
 											onClick={() => void reconnectRuntime()}
 											size="sm"
 											type="button"
-											variant="outline"
+											variant="secondary"
 										>
 											{t("browser.reconnectRuntime")}
 										</Button>

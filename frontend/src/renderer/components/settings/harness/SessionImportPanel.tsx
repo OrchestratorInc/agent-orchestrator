@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../../../lib/format-time";

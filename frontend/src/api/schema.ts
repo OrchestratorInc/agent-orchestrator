@@ -6626,6 +6626,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinkRefused: boolean;
             accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
@@ -7130,6 +7131,7 @@ export interface components {
             path: string;
             previewUrl?: string;
             rawUrl?: string;
+            shareUrl?: string;
             /** Format: int64 */
             size: number;
             /** Format: date-time */

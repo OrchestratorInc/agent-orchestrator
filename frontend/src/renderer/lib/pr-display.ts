@@ -195,6 +195,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 		primary = cardStatus("review", "pr.card.reviewRequired", "review", appI18n.t("pr.card.reviewRequiredDetail"));
 	} else if (pr.ci.state === "pending") {
 		primary = cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true);
+	} else if (ciCancelled(pr)) {
+		primary = cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr));
 	} else if (pr.ci.state === "unknown") {
 		primary = cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true);
 	} else if (pr.mergeability.state === "blocked" || pr.mergeability.state === "unstable") {
@@ -221,6 +223,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			supporting.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending") {
 			supporting.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true));
+		} else if (ciCancelled(pr)) {
+			supporting.push(cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "unknown") {
 			supporting.push(cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true));
 		}
@@ -236,6 +240,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], prChecksUrl(pr)));
 		} else if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
+		} else if (ciCancelled(pr)) {
+			statusRows.push(cardStatus("ci", "pr.card.checksCancelled", "neutral", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
@@ -253,6 +259,13 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.accessLostDetail"),
 				tone: "warning",
+			} };
+		}
+		if (ciCancelled(pr)) {
+			return { primary, supporting, statusRows, readiness: {
+				label: appI18n.t("pr.card.checksCancelled"),
+				detail: appI18n.t("pr.merge.checksCancelledDetail"),
+				tone: "neutral",
 			} };
 		}
 		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
@@ -279,6 +292,7 @@ function cardStatus(
 		| "pr.card.checksPending"
 		| "pr.card.checksLoading"
 		| "pr.card.checksUnavailable"
+		| "pr.card.checksCancelled"
 		| "pr.card.draft"
 		| "pr.card.readyToMerge"
 		| "pr.card.reviewApproved"
@@ -292,6 +306,12 @@ function cardStatus(
 	breathe = false,
 ): PRCardStatus {
 	return { key, label: appI18n.t(labelKey), detail, href, breathe, links, tone };
+}
+
+// A run cancelled with no replacement: the backend reports unknown and lists the
+// cancelled checks. It is settled, so it must not read as still loading.
+function ciCancelled(pr: SessionPRSummary): boolean {
+	return pr.ci.state === "unknown" && pr.ci.failingChecks.some((check) => check.status === "cancelled");
 }
 
 export function prCanMerge(pr: SessionPRSummary): boolean {
@@ -337,7 +357,9 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "ci",
 			label: appI18n.t("pr.section.ci"),
-			status: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.card.checksUnavailable") : ciLabel(pr.ci.state),
+			status: mergeReasons(pr).includes("github_checks_unavailable")
+				? appI18n.t("pr.card.checksUnavailable")
+				: ciCancelled(pr) ? appI18n.t("pr.card.checksCancelled") : ciLabel(pr.ci.state),
 			summary: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.merge.checksUnavailableDetail") : ciSummary(pr),
 			links: ciLinks(pr),
 			linkTotal: pr.ci.state === "failing" ? pr.ci.failingChecks.length : 0,
