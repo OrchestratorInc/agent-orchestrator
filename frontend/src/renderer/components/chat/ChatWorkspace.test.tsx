@@ -2638,6 +2638,23 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("asks only for a sign-in while the stopped agent's login is refused", () => {
+		const stopped = { ...chatFixtureSettled, harness: "opencode", controller: { state: "stopped" as const } };
+		const view = (account: ConversationSnapshot["account"]) => (
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace snapshot={{ ...stopped, account }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />
+			</QueryClientProvider>
+		);
+		const { rerender } = render(view({ authenticationState: "required", reauthRequiredAt: "2026-08-03T00:00:00Z" }));
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+
+		rerender(view({ authenticationState: "authenticated" }));
+		expect(screen.queryByRole("button", { name: "Log in again" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+	});
+
 	it("offers Restore, not Resume, on a terminated session", async () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();

@@ -95,15 +95,12 @@ describe("ReauthBanner", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("dismisses only this failure and displays a new failure", async () => {
+	it("stays until the login works, with sign-in as its only action", () => {
 		const account = { authenticationState: "required" as const, authFailureId: "first", reauthRequiredAt: "2026-08-03T00:00:00Z" };
 		const { rerender } = render(<ReauthBanner account={account} harness="codex" />);
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss authentication notice" }));
+		expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Log in again"]);
+		rerender(<ReauthBanner account={{ ...account, authenticationState: "authenticated" }} harness="codex" />);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		rerender(<ReauthBanner account={{ ...account, planLabel: "Pro" }} harness="codex" />);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		rerender(<ReauthBanner account={{ ...account, authFailureId: "second" }} harness="codex" />);
-		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
 	it("uses current authentication state even when historical failure evidence exists", () => {
