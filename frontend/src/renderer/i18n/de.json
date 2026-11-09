@@ -1394,7 +1394,7 @@
 	"settings.telemetryEvents.unsupported": "Die Aktivierung ist auf dieser Plattform nicht verfügbar.",
 	"settings.telemetryEvents.releaseBlocked": "Fehlerberichte sind durch die Sicherheitsfreigabe dieser Version deaktiviert.",
 	"settings.analytics.label": "Nutzungsanalysen teilen",
-	"settings.analytics.description": "Sendet Produktnutzungsereignisse an PostHog. Bei Orchestrator Cloud Anmeldung begleiten Nutzer ID und GitHub Name die Ereignisse; die E Mail Adresse wird nur als Personeneigenschaft verwendet. Das Ausschalten stoppt Analysen auf diesem Desktop, im Daemon und auf gekoppelten Telefonen.",
+	"settings.analytics.description": "Sendet Produktnutzungsereignisse an PostHog. Bei Orchestrator Cloud Anmeldung begleiten Nutzer ID und GitHub Name die Ereignisse; die E Mail Adresse wird nur als Personeneigenschaft verwendet. Das Ausschalten stoppt Analysen auf diesem Desktop, im Daemon und auf gekoppelten Telefonen. Außerdem lädt es Feature Flags von PostHog für Produktexperimente.",
 	"settings.analytics.loadFailed": "Die Analyse Einstellung konnte nicht geladen werden.",
 	"settings.analytics.saveFailed": "Die Analyse-Einstellung konnte nicht gespeichert werden.",
 	"settings.sessions": "Sitzungen",

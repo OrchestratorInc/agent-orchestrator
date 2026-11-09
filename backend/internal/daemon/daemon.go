@@ -276,7 +276,7 @@ func Run(buildVersion string) error {
 			"agent": cfg.Agent,
 		},
 	})
-	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, log)
+	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, storeHasPriorState(store), log)
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.

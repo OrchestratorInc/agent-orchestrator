@@ -1394,7 +1394,7 @@
 	"settings.telemetryEvents.unsupported": "このプラットフォームでは有効化できません。",
 	"settings.telemetryEvents.releaseBlocked": "このリリースの安全ゲートによりエラー報告は無効です。",
 	"settings.analytics.label": "利用状況の分析を共有",
-	"settings.analytics.description": "製品の利用イベントを PostHog に送信します。Orchestrator Cloud にサインインすると、ユーザー ID と GitHub ユーザー名がイベントに付与されます。メールアドレスは人物プロパティにのみ使用されます。オフにすると、このデスクトップ、デーモン、ペアリング済みの電話で送信が止まります。",
+	"settings.analytics.description": "製品の利用イベントを PostHog に送信します。Orchestrator Cloud にサインインすると、ユーザー ID と GitHub ユーザー名がイベントに付与されます。メールアドレスは人物プロパティにのみ使用されます。オフにすると、このデスクトップ、デーモン、ペアリング済みの電話で送信が止まります。製品の実験のため、PostHog から機能フラグも読み込みます。",
 	"settings.analytics.loadFailed": "分析設定を読み込めませんでした。",
 	"settings.analytics.saveFailed": "分析設定を保存できませんでした。",
 	"settings.sessions": "セッション",

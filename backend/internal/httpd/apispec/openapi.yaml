@@ -16645,6 +16645,10 @@ components:
           type: string
         workspaceCleanupReportOnly:
           type: boolean
+        workspacePublished:
+          description: Whether the session has a recorded workspace that workspace
+            reads can use.
+          type: boolean
       required:
       - id
       - kind
@@ -16659,6 +16663,7 @@ components:
       - createdAt
       - updatedAt
       - isPinned
+      - workspacePublished
       - statusReadiness
       - chatProviderPreserved
       - status
