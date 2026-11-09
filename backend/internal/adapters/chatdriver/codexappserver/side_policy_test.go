@@ -37,7 +37,7 @@ func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			config := params["config"].(map[string]any)
-			if len(config) != 3 || config["model_reasoning_effort"] != "high" || config["model_reasoning_summary"] != "detailed" || params["developerInstructions"] != cfg.SystemPrompt || params["sandbox"] == "read-only" {
+			if len(config) != 2 || config["model_reasoning_effort"] != "high" || params["developerInstructions"] != cfg.SystemPrompt || params["sandbox"] == "read-only" {
 				t.Fatalf("inherited configuration changed: %+v", params)
 			}
 			// Every open path, including the fork, carries AO's tool server so a

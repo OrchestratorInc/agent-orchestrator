@@ -488,7 +488,7 @@ const aoToolTimeoutSec = 150
 // run_steps batch, which may run the driver's full 60 s before its report and
 // closing read; the daemon allows that call two minutes.
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
-	config := map[string]any{"model_reasoning_summary": "detailed"}
+	config := map[string]any{}
 	if effort != "" {
 		config["model_reasoning_effort"] = effort
 	}

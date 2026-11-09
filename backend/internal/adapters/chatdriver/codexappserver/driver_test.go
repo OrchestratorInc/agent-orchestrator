@@ -267,7 +267,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	if params.DeveloperInstructions != "standing rules" {
 		t.Errorf("developerInstructions = %q", params.DeveloperInstructions)
 	}
-	if params.Model != "gpt-test" || params.Config["model_reasoning_effort"] != "high" || params.Config["model_reasoning_summary"] != "detailed" {
+	if params.Model != "gpt-test" || params.Config["model_reasoning_effort"] != "high" {
 		t.Errorf("model tuning = %#v", params)
 	}
 	if !params.Ephemeral {
@@ -904,9 +904,6 @@ func TestResumeReappliesWorkspaceAndStandingInstructions(t *testing.T) {
 	}
 	if params.Config["model_reasoning_effort"] != "high" {
 		t.Fatalf("thread resume effort config = %q, want high", params.Config["model_reasoning_effort"])
-	}
-	if params.Config["model_reasoning_summary"] != "detailed" {
-		t.Fatalf("thread resume summary config = %q, want detailed", params.Config["model_reasoning_summary"])
 	}
 	var rawParams map[string]json.RawMessage
 	if err := json.Unmarshal(resume.Params, &rawParams); err != nil {
@@ -1786,7 +1783,7 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 	// computer-use batch.
 	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
 		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"},"tool_timeout_sec":150},` +
-		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high","model_reasoning_summary":"detailed"}`
+		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
 	for _, method := range []string{"thread/start", "thread/resume"} {
 		t.Run(method, func(t *testing.T) {
 			d, srv := newTestDriver(t)
