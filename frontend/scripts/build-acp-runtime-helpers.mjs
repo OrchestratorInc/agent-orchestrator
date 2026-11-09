@@ -212,24 +212,25 @@ export function patchClaudeContextWindowProbe(adapterPath) {
 	const anchorAt = source.indexOf(anchor);
 	const start = source.lastIndexOf("if (message.parent_tool_use_id === null &&", anchorAt);
 	const at = source.indexOf("}", source.indexOf("session.contextWindowSize = inferred;", anchorAt)) + 1;
-	const end = source.indexOf("for (const notification of streamEventToAcpNotifications(", at);
+	const end = source.indexOf("for (const notification of streamEventToAcpNotifications(", anchorAt);
 	if (anchorAt < 0 || start < 0 || end < 0 || source.indexOf(anchor, anchorAt + 1) >= 0 ||
-		codeOnly(source.slice(start, at)) !== codeOnly(CLAUDE_STREAM_WINDOW_BLOCK) ||
-		!codeOnly(source.slice(at, end)).includes(codeOnly(CLAUDE_STREAM_USAGE_PUBLISH))) {
+		codeOnly(source.slice(start, end)) !== codeOnly(CLAUDE_STREAM_USAGE_BRANCH)) {
 		throw new Error("claude-agent-acp streamed window inference no longer matches AO's context window patch");
 	}
 	writeFileSync(adapterPath, source.slice(0, at) + CLAUDE_WINDOW_PROBE + source.slice(at));
 	return true;
 }
 
-// Comments and indentation are not part of the contract the patch relies on.
+// The pinned branch has only whole-line comments; anything else must match exactly.
 function codeOnly(text) {
-	return collapseWhitespace(text.replace(/\/\/.*$/gm, ""));
+	return collapseWhitespace(text.replace(/^\s*\/\/.*$/gm, ""));
 }
 
 const CLAUDE_WINDOW_PROBE_MARKER = "// AO: ask the SDK for the model's real window.";
 
-const CLAUDE_STREAM_WINDOW_BLOCK = `if (message.parent_tool_use_id === null &&
+// The whole top-level stream branch: the guards the probe sits behind and the
+// usage publish whose counter, sender and session id it reuses.
+const CLAUDE_STREAM_USAGE_BRANCH = `if (message.parent_tool_use_id === null &&
     (message.event.type === "message_start" || message.event.type === "message_delta")) {
     if (message.event.type === "message_start") {
         lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
@@ -241,30 +242,51 @@ const CLAUDE_STREAM_WINDOW_BLOCK = `if (message.parent_tool_use_id === null &&
                 const inferred = inferContextWindowFromModel(model);
                 if (inferred !== null) {
                     session.contextWindowSize = inferred;
-                }`;
-
-const CLAUDE_STREAM_USAGE_PUBLISH = `lastAssistantTotalUsage = nextUsage;
-await sendUpdate({
-    sessionId: params.sessionId,
-    update: {
-        sessionUpdate: "usage_update",
-        used: nextUsage,
-        size: session.contextWindowSize,
-    },
-});`;
+                }
+            }
+        }
+    }
+    else {
+        const usage = message.event.usage;
+        const prev = lastAssistantUsage ?? ZERO_USAGE;
+        lastAssistantUsage = {
+            input_tokens: usage.input_tokens ?? prev.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens ?? prev.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens ?? prev.cache_creation_input_tokens,
+        };
+    }
+    const nextUsage = totalTokens(lastAssistantUsage);
+    if (nextUsage !== lastAssistantTotalUsage) {
+        lastAssistantTotalUsage = nextUsage;
+        await sendUpdate({
+            sessionId: params.sessionId,
+            update: {
+                sessionUpdate: "usage_update",
+                used: nextUsage,
+                size: session.contextWindowSize,
+            },
+        });
+    }
+}`;
 
 const CLAUDE_WINDOW_PROBE = `
                                         ${CLAUDE_WINDOW_PROBE_MARKER}
                                         else if (session.aoWindowProbeModelId !== session.models.currentModelId) {
-                                            // Remembers only the last model probed, so switching back probes again.
                                             const probeModelId = session.models.currentModelId;
                                             session.aoWindowProbeModelId = probeModelId;
                                             void (async () => {
                                                 try {
                                                     const { rawMaxTokens } = await session.query.getContextUsage();
+                                                    if (!Number.isFinite(rawMaxTokens) || rawMaxTokens <= 0) {
+                                                        return;
+                                                    }
+                                                    // Answered: a later switch back to this model probes again.
+                                                    if (session.aoWindowProbeModelId === probeModelId) {
+                                                        session.aoWindowProbeModelId = undefined;
+                                                    }
                                                     // A result or a model switch while the probe ran already set the window.
-                                                    if (!Number.isFinite(rawMaxTokens) || rawMaxTokens <= 0 ||
-                                                        session.contextWindowAuthoritative || session.models.currentModelId !== probeModelId) {
+                                                    if (session.contextWindowAuthoritative || session.models.currentModelId !== probeModelId) {
                                                         return;
                                                     }
                                                     const changed = rawMaxTokens !== session.contextWindowSize;
