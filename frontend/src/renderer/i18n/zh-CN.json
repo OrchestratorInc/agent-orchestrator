@@ -1340,7 +1340,6 @@
 	"cliShadow.confirmFile": "{{path}} 将被删除,并替换为指向此应用 ao 的链接。此操作无法撤消。你的 shell 文件不会更改。",
 	"cliShadow.replaceFailed": "无法替换另一个 ao。",
 	"cliShadow.versionUnknown": "版本未知",
-	"cliShadow.dismiss": "关闭",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",
 	"settings.cliLink.link": "Link",

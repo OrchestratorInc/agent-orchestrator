@@ -9,8 +9,8 @@ import { Button } from "./ui/button";
 
 type Shadowed = Extract<CliShadowStatus, { kind: "shadowed" }>;
 
-// The notice and the Settings row each hold a status, and a fix from either
-// one has to clear both.
+// Details and the actions sit below the hook that holds the status, and a
+// version check or a fix from either one has to reach it.
 const refreshers = new Set<(status: CliShadowStatus) => void>();
 let refreshSequence = 0;
 
@@ -106,16 +106,13 @@ export function CliShadowDetails({ status, className }: { status: Shadowed; clas
 	);
 }
 
-export function CliShadowActions({ status, surface }: { status: Shadowed; surface: "toast" | "row" }) {
+export function CliShadowActions({ status }: { status: Shadowed }) {
 	const { t } = useTranslation();
 	const [confirming, setConfirming] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [copied, setCopied] = useState(false);
 	const { fix } = status;
-	const primary = surface === "row" ? "primary" : undefined;
-	const secondary = surface === "row" ? "secondary" : "link";
-	const secondaryClass = surface === "toast" ? "text-xs text-[var(--color-text-import-title)]" : undefined;
 
 	const replace = async () => {
 		setBusy(true);
@@ -133,20 +130,19 @@ export function CliShadowActions({ status, surface }: { status: Shadowed; surfac
 	};
 
 	return (
-		<div className={cn("flex flex-wrap items-center gap-2", surface === "toast" && "mt-2")}>
+		<div className="flex flex-wrap items-center gap-2">
 			{fix.kind === "replace" ? (
-				<Button type="button" variant={primary} disabled={busy} onClick={() => { setError(null); setConfirming(true); }}>
+				<Button type="button" variant="primary" disabled={busy} onClick={() => { setError(null); setConfirming(true); }}>
 					{t("cliShadow.useAppAo")}
 				</Button>
 			) : (
 				<>
-					<Button type="button" variant={secondary} className={secondaryClass} onClick={() => void aoBridge.cliShadow.reveal().catch(() => undefined)}>
+					<Button type="button" variant="secondary" onClick={() => void aoBridge.cliShadow.reveal().catch(() => undefined)}>
 						{isMacPlatform() ? t("cliShadow.showInFinder") : t("cliShadow.showInFolder")}
 					</Button>
 					<Button
 						type="button"
-						variant={secondary}
-						className={secondaryClass}
+						variant="secondary"
 						onClick={() => {
 							void aoBridge.clipboard.writeText(fix.command).then(() => setCopied(true)).catch(() => undefined);
 						}}
