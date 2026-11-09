@@ -142,7 +142,7 @@ func (s *Service) openAsyncSpawn(ctx context.Context, rec domain.SessionRecord) 
 	if already {
 		return
 	}
-	attempt := &asyncSpawnAttempt{start: s.now()}
+	attempt := &asyncSpawnAttempt{start: s.monoNow()}
 	if acc, ok := ctx.Value(spawnAcceptanceKey{}).(*spawnAcceptance); ok && acc.sessionID == "" {
 		acc.deferred, acc.sessionID = true, rec.ID
 		attempt.start, attempt.acceptance, attempt.firstEligible = acc.start, acc, acc.firstEligible
@@ -189,7 +189,7 @@ func (s *Service) abandonAsyncSpawn(acc *spawnAcceptance) bool {
 }
 
 func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawnAttempt, ready bool, cause error) {
-	elapsed := s.now().Sub(attempt.start).Milliseconds()
+	elapsed := s.monoNow().Sub(attempt.start).Milliseconds()
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)
 	// A start cancelled on purpose (the session was killed mid-start, or the
@@ -234,6 +234,17 @@ func (s *Service) onlySession(ctx context.Context, id domain.SessionID) bool {
 		}
 	}
 	return true
+}
+
+// monoNow is the clock for spawn durations. Unlike now(), it does not convert
+// to UTC, which would strip Go's monotonic reading and turn a duration into a
+// wall-clock difference that jumps with clock adjustments. Durations only ever
+// compare two readings from this process.
+func (s *Service) monoNow() time.Time {
+	if s.clock == nil {
+		return time.Now()
+	}
+	return s.clock()
 }
 
 func nonNegativeMs(ms int64) int64 {

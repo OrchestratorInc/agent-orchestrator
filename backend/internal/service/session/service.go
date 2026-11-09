@@ -473,7 +473,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		cfg.NameFromPrompt = true
 		cfg.KeepDisplayName = cfg.DisplayName != ""
 	}
-	start := s.now()
+	start := s.monoNow()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
@@ -486,7 +486,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
 	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
-	answeredMs := s.now().Sub(start).Milliseconds()
+	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
 		if acc.deferred {
 			abandoned := s.abandonAsyncSpawn(acc)

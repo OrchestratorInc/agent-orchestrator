@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,5 +266,14 @@ func TestCancelledAsyncChatStartIsNotASpawnFailure(t *testing.T) {
 	settle(cmd, domain.SessionProvisionFailed, context.DeadlineExceeded)
 	if got := named(sink, "ao.sessions.spawn_failed"); len(got) != 1 {
 		t.Fatalf("spawn_failed = %d, want 1 for a start that timed out", len(got))
+	}
+}
+
+// Spawn durations compare two readings from this process; converting to UTC
+// would drop Go's monotonic reading and let a wall-clock adjustment skew them.
+func TestSpawnDurationClockKeepsTheMonotonicReading(t *testing.T) {
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore()})
+	if got := svc.monoNow().String(); !strings.Contains(got, "m=") {
+		t.Fatalf("spawn duration clock %q has no monotonic reading", got)
 	}
 }
