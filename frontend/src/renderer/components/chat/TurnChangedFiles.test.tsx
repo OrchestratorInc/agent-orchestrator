@@ -546,6 +546,18 @@ describe("ActivityRow command labels", () => {
 		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
 	});
 
+	it("does not claim the result of a step that failed", () => {
+		const { unmount } = render(
+			<ActivityRow activity={commandActivity({ command: "git push", output: "rejected", exitCode: 1 }, "failed")} />,
+		);
+		expect(screen.getByRole("button").textContent).toMatch(/^Pushing changesexit 1/);
+		unmount();
+
+		// A test run that fails did run.
+		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
+		expect(screen.getByRole("button").textContent).toMatch(/^Ran testsexit 1/);
+	});
+
 	it("keeps command failures without exit metadata destructive", () => {
 		render(
 			<ActivityRow

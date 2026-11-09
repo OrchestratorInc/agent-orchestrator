@@ -11,4 +11,19 @@ describe("commandCategory", () => {
 		expect(commandCategory("timeout 30 npm test")).toBe("run");
 		expect(commandCategory("")).toBe("run");
 	});
+
+	it("does not count a command named as a write as exploring", () => {
+		expect(commandCategory("cat > notes.md <<'EOF'\nhello\nEOF")).toBe("run");
+		expect(commandCategory("sed -i 's/a/b/' a.ts")).toBe("run");
+		expect(commandCategory("sed -n '1,40p' a.ts")).toBe("read");
+	});
+
+	it("groups a chain with the segment that names it", () => {
+		expect(commandCategory("cat a.ts && rm -rf src")).toBe("run");
+		expect(commandCategory("npm test | tee log.txt")).toBe("run");
+	});
+
+	it("counts a Codex web search as exploring", () => {
+		expect(commandCategory("Searched the web for latest Node.js")).toBe("search");
+	});
 });

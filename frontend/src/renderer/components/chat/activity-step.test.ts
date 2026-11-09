@@ -94,6 +94,22 @@ describe("describeCommandStep", () => {
 		expect(done("gh pr list --limit 1 --state open")).toBe("Listed pull requests");
 		expect(done("gh issue view 44")).toBe("Read issue #44");
 		expect(live("gh pr view 7804")).toBe("Reading PR #7804");
+		expect(done("gh api -X POST repos/o/r/issues")).toBe("Called the GitHub API repos/o/r/issues");
+		expect(done("gh pr review 12 --approve")).toBe("Approved PR #12");
+		expect(done("gh pr review 12 --comment -b ok")).toBe("Commented on PR #12");
+	});
+
+	it("says what a git subcommand's action did", () => {
+		expect(done("git stash")).toBe("Stashed changes");
+		expect(done("git stash list")).toBe("Listed stashes");
+		expect(done("git stash pop")).toBe("Restored stash");
+		expect(done("git stash drop")).toBe("Dropped stash");
+		expect(done("git merge --abort")).toBe("Aborted merge");
+		expect(done("git merge feat/x")).toBe("Merged feat/x");
+		expect(done("git rebase --continue")).toBe("Continued rebase");
+		expect(done("git checkout .")).toBe("Restored files");
+		expect(done("git checkout -- src/a.ts")).toBe("Restored a.ts");
+		expect(done("git checkout feat/x")).toBe("Switched to feat/x");
 	});
 
 	it("names file operations", () => {
@@ -124,6 +140,49 @@ describe("describeCommandStep", () => {
 		// Routing a stream is not writing a file.
 		expect(done("rg TODO 2>/dev/null")).toBe("Searched for TODO");
 		expect(done("ls missing 2>&1")).toBe("Listed missing");
+	});
+
+	it("keeps the work a `tee` only logs", () => {
+		expect(done("npm test 2>&1 | tee /tmp/test.log")).toBe("Ran tests");
+		expect(done("go test ./... | tee out.txt")).toBe("Ran tests");
+		expect(done("make build | tee build.log")).toBe("Built project");
+	});
+
+	it("names a chain by the last segment that does something", () => {
+		expect(done("git add -A && git commit -m x && git push")).toBe("Pushed changes");
+		expect(done("rm -rf dist && npm run build")).toBe("Built project");
+		expect(done("npm ci && npm test")).toBe("Ran tests");
+		expect(done("sleep 30 && gh pr checks 12")).toBe("Checked CI #12");
+		expect(done("cat a.ts && rm -rf src")).toBe("Deleted src");
+		// A trailing look or report does not take the name from the work before it.
+		expect(done("npm test && echo done")).toBe("Ran tests");
+		expect(done("git add . && git status")).toBe("Staged changes");
+		// With nothing but looking, the first one names it.
+		expect(done("git status && git diff")).toBe("Checked git status");
+	});
+
+	it("reads every line of a multi-line command", () => {
+		expect(done("git add .\ngit commit -m x")).toBe("Committed changes");
+		expect(done("cd frontend\nnpm test")).toBe("Ran tests");
+		expect(done("npm test |\n  tee log.txt")).toBe("Ran tests");
+		expect(done('git commit -m "first line\nsecond line"')).toBe("Committed changes");
+		expect(done("git commit -m \"$(cat <<'EOF'\nrm -rf everything\nEOF\n)\"")).toBe("Committed changes");
+		expect(done("cat > a.sh <<'EOF'\nrm -rf everything\nEOF\nnpm test")).toBe("Ran tests");
+	});
+
+	it("leaves comments out", () => {
+		expect(done("# Check status\ngit status")).toBe("Checked git status");
+		expect(done("rm a.txt # don't keep it")).toBe("Deleted a.txt");
+		expect(done("#!/bin/bash\nnpm test")).toBe("Ran tests");
+		expect(done('grep "# heading" notes.md')).toBe("Searched for # heading");
+	});
+
+	it("reads `&>` as a redirect and `$(...)` as part of its word", () => {
+		expect(done("command -v gh &>/dev/null && gh pr list")).toBe("Listed pull requests");
+		expect(done("npm test &> out.log")).toBe("Ran tests");
+		expect(done("cd $(git rev-parse --show-toplevel) && npm test")).toBe("Ran tests");
+		expect(done("FOO=$(date) npm test")).toBe("Ran tests");
+		expect(done("rm -rf $(find . -name x)")).toBe("Deleted $(find . -name x)");
 	});
 
 	it("names scripts, tests, installs and builds", () => {
@@ -315,6 +374,9 @@ describe("activityToolStep", () => {
 		const mcp = commandActivity({ activityKind: "mcp_tool", summary: "search_issues", detail: { server: "linear", toolName: "search_issues" } });
 		expect(activityToolStep(mcp)).toBeUndefined();
 		expect(activityToolStep(toolActivity("SubagentHandback", "other", {}, "SubagentHandback"))).toBeUndefined();
+		// Claude Code names an MCP tool in full, with no separate server field.
+		expect(activityToolStep(toolActivity("mcp__linear__get_issue", "read", {}, "mcp__linear__get_issue"))).toBeUndefined();
+		expect(isExploratoryTool(toolActivity("mcp__linear__get_issue", "read", {}, "mcp__linear__get_issue"))).toBe(false);
 		// Another ACP agent's read keeps its own title and gains only the icon.
 		expect(activityToolStep(toolActivity(undefined, "read", {}, "ReadFile src/app.ts"))).toMatchObject({ done: "ReadFile src/app.ts", icon: "read" });
 	});
