@@ -827,9 +827,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
-/* Light: the selected tab's fill leans toward the panel's surface. It keeps the
- * control edge, and hover keeps the secondary treatment above. */
-html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:not(:hover)::before {
+/* Light: the selected tab's fill leans toward the panel's surface, keeps the
+ * control edge, and does not darken on hover. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
 	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
