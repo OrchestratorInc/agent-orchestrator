@@ -571,7 +571,7 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			"Orchestrator restarted before this session finished starting"); err != nil {
 			failures = append(failures, fmt.Errorf("session %s: %w", rec.ID, err))
 			retries = append(retries, rec)
 		}

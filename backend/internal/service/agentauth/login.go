@@ -91,7 +91,7 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "A setup token starts with sk-ant-oat and contains no spaces.", nil)
 	}
 	if setupToken && strings.TrimSpace(s.dataDir) == "" {
-		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "AO cannot save a setup token without a data directory.")
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Orchestrator cannot save a setup token without a data directory.")
 	}
 	release, err := s.reserveLogin(ctx, agentID)
 	if err != nil {

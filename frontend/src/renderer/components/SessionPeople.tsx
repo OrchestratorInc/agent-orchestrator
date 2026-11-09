@@ -11,7 +11,7 @@ import { useUiStore } from "../stores/ui-store";
 import { canCopy } from "./share/CopyLinkButton";
 import { anyoneSentence, useLinkAccess } from "./share/linkAccess";
 import { ShareSessionDialog } from "./ShareSessionDialog";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
@@ -142,10 +142,10 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 			<SessionPeopleStack people={others} list={present} me={me} onActivate={canShare ? () => setOpen(true) : undefined} ringClassName="ring-background" />
 		</span>
 	) : (
-		<TopbarButton variant="accent" className="topbar-control--labeled rounded-r-none" onClick={() => setOpen(true)} data-share-session-button>
+		<Button type="button" size="sm" variant="secondary" className="rounded-r-none" onClick={() => setOpen(true)} data-share-session-button>
 			<Share2 className="size-icon-md" aria-hidden="true" />
 			<span data-compact-label>{t("share.button")}</span>
-		</TopbarButton>
+		</Button>
 	);
 	return (
 		<>
@@ -228,14 +228,14 @@ function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, 
 	return (
 		<DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
 			<DropdownMenuTrigger asChild>
-				<TopbarButton
-					variant={joined ? "accent" : "icon"}
+				<Button type="button" size="icon-sm"
+					variant={joined ? "secondary" : "quiet"}
 					className={cn(joined ? "-ml-px rounded-l-none px-1.5" : "")}
 					aria-label={t("share.menu")}
 					data-share-menu=""
 				>
 					<ChevronDown className="size-icon-sm" aria-hidden="true" />
-				</TopbarButton>
+				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuItem

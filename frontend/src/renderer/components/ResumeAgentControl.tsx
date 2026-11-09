@@ -82,7 +82,7 @@ export function ResumeAgentControl({
 				onClick={() => resume.mutate()}
 				size="sm"
 				type="button"
-				variant="outline"
+				variant="secondary"
 			>
 				<Play className="size-icon-sm" aria-hidden="true" />
 				{t("inspector.resumeAgent")}

@@ -72,23 +72,23 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 				<Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={() => onInstall(installMethod.id)}>
 					{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
 				</Button>
-			</span> : !details.installationPending && plan?.command ? <Button type="button" size="default" variant="outline" className="min-w-20" onClick={() => onCopyCommand(plan.command!)}>
+			</span> : !details.installationPending && plan?.command ? <Button type="button" size="default" variant="secondary" className="min-w-20" onClick={() => onCopyCommand(plan.command!)}>
 				{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.copied" : "settings.harness.copyCommand")}
-			</Button> : !details.installationPending && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="outline" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
+			</Button> : !details.installationPending && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="secondary" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
 				<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 			</Button> : null
 		) : details.showUpdate && !details.needsLogin ? (
-			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="default" variant={updateBlocked ? "outline" : undefined} className="min-w-20" onClick={onUpdate}>
+			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="default" variant={updateBlocked ? "secondary" : undefined} className="min-w-20" onClick={onUpdate}>
 				{blockedBy ? t("settings.harness.viewSessions", { count: blockedBy.count })
 					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
-			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="outline" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
+			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="secondary" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
 		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="default" className="min-w-20" disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
-		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="outline" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
+		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="secondary" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
 		</Button> : null;
 	return <div className="flex flex-col gap-6">
@@ -121,7 +121,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 				description={authBusy ? undefined : details.accountDescription}
 			>
 				{accountAction}
-				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
+				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="secondary" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>}
 			{loginPanel}
 		</HarnessDetailGroup> : null}
@@ -132,7 +132,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 			onLogout,
 		}} /> : null}
 		{accountProvider && loginPanel ? <HarnessDetailGroup title={t("settings.harness.account")}>{loginPanel}</HarnessDetailGroup> : null}
-		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
+		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
 			hostId={hostId}
@@ -143,7 +143,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 
 		{details.rowError ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
 		{details.installWarning ? <p role="status" className="text-xs text-settings-label">{details.installWarning}</p> : null}
-		{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={onVerify}>{t("settings.harness.verifyAgain")}</Button></div> : null}
+		{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="secondary" disabled={details.busy} onClick={onVerify}>{t("settings.harness.verifyAgain")}</Button></div> : null}
 		{details.hasDiagnostics ? <div className="space-y-2">
 			<Button type="button" aria-expanded={diagnosticsExpanded} size="sm" variant="ghost" onClick={onToggleDiagnostics}>
 				{t(diagnosticsExpanded ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
@@ -153,7 +153,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, loginPa
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="outline" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

@@ -3107,7 +3107,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 			<DropdownMenuTrigger asChild>
 				<Pressable
 					aria-label={t("shell.signedInAs", {
-						email: session?.user.email ?? "AO Cloud",
+						email: session?.user.email ?? "Orchestrator Cloud",
 					})}
 					className={FOOTER_NAV_BUTTON_CLASS}
 					tabIndex={tabIndex}
@@ -3143,7 +3143,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 function accountName(user: { displayName?: string; email?: string } | undefined): string {
 	const display = user?.displayName?.trim();
 	if (display && display !== user?.email) return display;
-	return user?.email ?? "AO Cloud";
+	return user?.email ?? "Orchestrator Cloud";
 }
 
 /** The profile picture from the sign-in provider, or the person's initials. */
@@ -3184,7 +3184,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 			<TooltipTrigger asChild>
 				<Pressable
 					aria-label={t("shell.signedInAs", {
-						email: session?.user.email ?? "AO Cloud",
+						email: session?.user.email ?? "Orchestrator Cloud",
 					})}
 					className={FOOTER_RAIL_BUTTON_CLASS}
 					onClick={() => void signOut()}
@@ -3199,7 +3199,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 			</TooltipTrigger>
 			<TooltipContent side="right">
 				{t("shell.signOutWithEmail", {
-					email: session?.user.email ?? "AO Cloud",
+					email: session?.user.email ?? "Orchestrator Cloud",
 				})}
 			</TooltipContent>
 		</Tooltip>

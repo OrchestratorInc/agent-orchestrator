@@ -417,7 +417,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 			},
 		]);
 
-		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
 		expect(indicator).toBeNull();
 	});
@@ -431,7 +431,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		} satisfies WorkspaceSession;
 		renderBoardActions([worker, exitedOrchestrator]);
 
-		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
+		await userEvent.click(screen.getByRole("button", { name: "Orchestrator agent, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
 		expect(navigateMock).toHaveBeenCalledTimes(1);
@@ -442,7 +442,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		const boardButton = screen.getByRole("button", { name: "Board" });
 		expect(boardButton).toHaveTextContent("Board");
-		expect(boardButton).toHaveClass("topbar-control--action", "topbar-control--labeled");
+		expect(boardButton).toHaveClass("before:bg-interactive-hover");
 		expect(screen.queryByText("my-app")).not.toBeInTheDocument();
 		await userEvent.click(boardButton);
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -458,16 +458,16 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		const buttons = within(screen.getByTestId("workspace-topbar-actions")).getAllByRole("button");
 		const newTask = screen.getByRole("button", { name: "New task" });
-		expect(newTask).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(newTask).toHaveClass("button-raised", "text-primary-foreground");
 		expect(buttons.at(-1)).toBe(newTask);
-		expect(buttons.filter((button) => button.classList.contains("topbar-control--primary"))).toEqual([newTask]);
+		expect(buttons.filter((button) => button.classList.contains("[--button-color:var(--primary)]"))).toEqual([newTask]);
 	});
 
 	it("keeps the worker's Orchestrator link quiet and drops the Archive button", () => {
 		renderTopbarSessions([worker, orchestrator], worker.id);
 
-		expect(screen.getByRole("button", { name: "Open orchestrator" })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: "Open orchestrator" })).not.toHaveClass("topbar-control--primary");
+		expect(screen.getByRole("button", { name: "Open orchestrator" })).toHaveClass("before:bg-interactive-hover");
+		expect(screen.getByRole("button", { name: "Open orchestrator" })).not.toHaveClass("[--button-color:var(--primary)]");
 		expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
 	});
 
@@ -673,7 +673,7 @@ describe("SessionArchiveShortcut", () => {
 			const dialog = await openDialog();
 			expect(dialog).toHaveTextContent("This can't be undone, and a restored session starts without it.");
 			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
-			expect(within(dialog).getByRole("button", { name: "Confirm, archive session" })).toHaveClass("bg-danger-strong");
+			expect(within(dialog).getByRole("button", { name: "Confirm, archive session" })).toHaveClass("[--button-color:var(--color-danger-strong)]");
 			await clickKillDialogConfirm();
 
 			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));

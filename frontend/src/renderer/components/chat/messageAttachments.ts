@@ -25,6 +25,17 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 	return { body: text.slice(0, match.index), attachments };
 }
 
+/**
+ * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
+ * brief, so the same instruction reaches the agent whether a file was attached at
+ * spawn or mid-conversation.
+ */
+export function withAttachmentReferences(text: string, paths: string[]): string {
+	if (paths.length === 0) return text;
+	const lead = text.trim() === "" ? "" : `${text}\n\n`;
+	return `${lead}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+}
+
 export function attachmentName(path: string): string {
 	return path.slice(path.lastIndexOf("/") + 1);
 }

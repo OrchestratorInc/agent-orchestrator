@@ -57,6 +57,8 @@ import { readEditorSettings, writeEditorPreference } from "./main/editor-setting
 import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
+import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
+import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { readNativeAppIcon } from "./main/native-app-icon";
@@ -1007,7 +1009,7 @@ async function createWindowInternal(): Promise<void> {
 	windowComposition = composition;
 	syncNativeWindowBackground(true);
 	const shellWebContents = getShellWebContents();
-	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
+	if (!shellWebContents) throw new Error("Orchestrator shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
 	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
@@ -1378,7 +1380,7 @@ function runFilePath(): string | null {
 
 function editorStateDir(): string {
 	const runFile = runFilePath();
-	if (!runFile) throw new Error("AO state directory is not available.");
+	if (!runFile) throw new Error("Orchestrator state directory is not available.");
 	return path.dirname(runFile);
 }
 
@@ -1394,7 +1396,7 @@ async function fetchDesktopSessionPath(
 	unavailableMessage: string,
 ): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
-		throw workspaceCheckUnavailable("AO daemon is not ready.");
+		throw workspaceCheckUnavailable("Daemon is not ready.");
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
@@ -1405,10 +1407,10 @@ async function fetchDesktopSessionPath(
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
 			if (error instanceof Error && error.name === "AbortError") throw error;
-			throw workspaceCheckUnavailable("AO daemon is not reachable.");
+			throw workspaceCheckUnavailable("Daemon is not reachable.");
 		});
 		const body = await response.json().catch((error: unknown) => {
-			if (response.status >= 500) throw workspaceCheckUnavailable("AO daemon is not ready.");
+			if (response.status >= 500) throw workspaceCheckUnavailable("Daemon is not ready.");
 			throw error;
 		}) as Record<string, unknown>;
 		if (!response.ok) {
@@ -1540,7 +1542,7 @@ function telemetryOverrides(): Record<string, string> {
 // reads input hits EOF instead of hanging; stderr is ignored to drop banner
 // noise. Never rejects: resolves null on spawn error, non-zero exit, or timeout
 // (SIGKILLed), so the caller degrades to the static PATH floor.
-const runLoginShell: ShellRunner = (shellPath, args) =>
+const loginShellRunner = (timeoutMs: number): ShellRunner => (shellPath, args) =>
 	new Promise((resolve) => {
 		let settled = false;
 		const finish = (value: string | null) => {
@@ -1558,7 +1560,7 @@ const runLoginShell: ShellRunner = (shellPath, args) =>
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
 			finish(null);
-		}, SHELL_ENV_TIMEOUT_MS);
+		}, timeoutMs);
 		let stdout = "";
 		// stdout may be typed Readable | null under this stdio config; guard it.
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -1573,6 +1575,8 @@ const runLoginShell: ShellRunner = (shellPath, args) =>
 			finish(code === 0 ? stdout : null);
 		});
 	});
+
+const runLoginShell = loginShellRunner(SHELL_ENV_TIMEOUT_MS);
 
 function lookupWindowsExecutable(candidate: string): string | null {
 	const trimmed = candidate.trim().replace(/^"|"$/g, "");
@@ -1620,6 +1624,17 @@ function ensureShellEnv(): Promise<void> {
 		});
 	}
 	return shellEnvPromise;
+}
+
+// The early probe runs while Electron itself is starting, the busiest moment
+// of launch. If it failed there, probe once more before settling for a bare
+// PATH. Every caller resolves after that one retry, whichever of them starts it.
+function retryFailedEarlyShellEnvProbe(): Promise<void> {
+	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
+		earlyShellEnvProbe = null;
+		shellEnvPromise = null;
+	}
+	return ensureShellEnv();
 }
 
 // The daemon spawn waits on this probe (0.2-2s), so start it with the process
@@ -1786,12 +1801,12 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 			: false;
 		const executableMatches = probe.executablePath ? canonicalPathInside(probe.executablePath, launch.cwd) : false;
 		if (!probe.workingDirectory && !probe.startupWorkingDirectory && !probe.executablePath) {
-			return "An older AO daemon is already running, but it does not report its checkout identity. Stop it and restart this app.";
+			return "An older Orchestrator daemon is already running, but it does not report its checkout identity. Stop it and restart this app.";
 		}
 		if (!cwdMatches && !startupCwdMatches && !executableMatches) {
 			const actual =
 				probe.startupWorkingDirectory ?? probe.workingDirectory ?? probe.executablePath ?? "an unknown location";
-			return `Another AO daemon is already running from ${actual}; expected this checkout at ${launch.cwd}. Stop the other daemon before using this checkout.`;
+			return `Another Orchestrator daemon is already running from ${actual}; expected this checkout at ${launch.cwd}. Stop the other daemon before using this checkout.`;
 		}
 		return null;
 	}
@@ -1920,7 +1935,7 @@ function handleBrowserRuntimeRejection(reason: string): void {
 	disposeBrowserRuntimeLink();
 	setDaemonStatus({
 		state: "starting",
-		message: "Restarting the AO daemon to restore the browser runtime.",
+		message: "Restarting the Orchestrator daemon to restore the browser runtime.",
 	});
 	void startDaemon({ forceReplaceAdopted: true });
 }
@@ -2071,7 +2086,7 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	) {
 		setDaemonStatus({
 			state: "stopped",
-			message: "AO daemon is no longer reachable.",
+			message: "Orchestrator daemon is no longer reachable.",
 			code: "daemon_unreachable",
 		});
 	}
@@ -2316,16 +2331,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	if (startCancelled()) {
 		return daemonStatus;
 	}
-	// The early probe runs while Electron itself is starting, the busiest moment
-	// of launch. If it failed there, probe once more before settling for a bare
-	// PATH for the daemon's whole run.
-	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
-		earlyShellEnvProbe = null;
-		shellEnvPromise = null;
-		await ensureShellEnv();
-		if (startCancelled()) {
-			return daemonStatus;
-		}
+	await retryFailedEarlyShellEnvProbe();
+	if (startCancelled()) {
+		return daemonStatus;
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
@@ -2390,7 +2398,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	if (launch.source === "bundled" && !existsSync(launch.command)) {
 		setDaemonStatus({
 			state: "error",
-			message: `Bundled AO daemon binary was not found at ${launch.command}. Rebuild the desktop package.`,
+			message: `Bundled Orchestrator daemon binary was not found at ${launch.command}. Rebuild the desktop package.`,
 			code: "binary_missing",
 		});
 		return daemonStatus;
@@ -2401,7 +2409,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		if (autoRestartIntent && startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
-			message: `Could not stage AO's bundled tmux under the AO data directory: ${(err as Error).message}`,
+			message: `Could not stage Orchestrator's bundled tmux under the Orchestrator data directory: ${(err as Error).message}`,
 			code: "binary_missing",
 		});
 		return daemonStatus;
@@ -2421,7 +2429,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 			// and leave the UI stuck on "starting". Report it as a failure instead.
 			setDaemonStatus({
 				state: "error",
-				message: `Could not create the AO data directory at ${launch.cwd}: ${(err as Error).message}`,
+				message: `Could not create the Orchestrator data directory at ${launch.cwd}: ${(err as Error).message}`,
 				code: "datadir_unwritable",
 			});
 			return daemonStatus;
@@ -2796,7 +2804,7 @@ function stopDaemon(): DaemonStatus {
 function reportDaemonRestartFailure(error: unknown): DaemonStatus {
 	setDaemonStatus({
 		state: "error",
-		message: `Could not restart the AO daemon: ${error instanceof Error ? error.message : String(error)}`,
+		message: `Could not restart the Orchestrator daemon: ${error instanceof Error ? error.message : String(error)}`,
 		details: daemonOutput.trim() || undefined,
 		code: "spawn_failed",
 	});
@@ -2845,7 +2853,7 @@ async function restartDaemon(): Promise<DaemonStatus> {
 		// a replacement instead of collapsing back to a code-less stopped state.
 		setDaemonStatus({
 			state: "error",
-			message: "AO daemon is still stopping. It will restart automatically when shutdown completes.",
+			message: "Orchestrator daemon is still stopping. It will restart automatically when shutdown completes.",
 			details: daemonOutput.trim() || undefined,
 			code: "not_ready",
 		});
@@ -2861,6 +2869,37 @@ registerCliLinkIpc({
 	dataDir: desktopDataDir,
 	appVersion: app.getVersion(),
 	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
+});
+
+const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
+
+registerCliShadowIpc({
+	shellPath: createCliShadowShellPath({
+		settleStartupProbes: async () => {
+			await ensureShellEnv();
+			await retryFailedEarlyShellEnvProbe();
+		},
+		startupPath: () => cachedShellEnv?.PATH,
+		probe: async () => {
+			if (process.platform === "win32") return undefined;
+			const resolved = await resolveShellEnv(process.env, loginShellRunner(CLI_SHADOW_SHELL_TIMEOUT_MS), configuredLoginShell);
+			return resolved?.PATH;
+		},
+	}),
+	bundledPath: () => {
+		const launch = resolveDaemonLaunch(
+			process.env,
+			app.isPackaged,
+			process.resourcesPath,
+			app.getAppPath(),
+			os.homedir(),
+			process.platform,
+		);
+		return launch && launch.source !== "configured" ? launch.command : undefined;
+	},
+	isPackaged: () => app.isPackaged,
+	appImage: process.env.APPIMAGE,
+	reveal: (filePath) => shell.showItemInFolder(filePath),
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
@@ -3340,7 +3379,7 @@ registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
 	requireAccount: async () => {
-		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to AO Cloud to use remote hosts.");
+		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
@@ -4218,9 +4257,9 @@ app.whenReady().then(async () => {
 					buttons: ["Move old copies to Trash", "Not now"],
 					defaultId: 0,
 					cancelId: 1,
-					title: "Remove old AO copies",
+					title: "Remove old Orchestrator copies",
 					message: `Old copies of ${APP_DISPLAY_NAME} can replace your updated app.`,
-					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your AO projects and sessions will not be removed.`,
+					detail: `${formatStaleAppCopies(copies)}\n\nMove these copies to Trash to prevent another downgrade. Your Orchestrator projects and sessions will not be removed.`,
 					noLink: true,
 				});
 				return result.response === 0;
@@ -4232,7 +4271,7 @@ app.whenReady().then(async () => {
 					buttons: ["OK"],
 					defaultId: 0,
 					title: "Some old copies could not be removed",
-					message: "Move these copies to Trash manually before launching AO again.",
+					message: "Move these copies to Trash manually before launching Orchestrator again.",
 					detail: paths.join("\n"),
 					noLink: true,
 				});

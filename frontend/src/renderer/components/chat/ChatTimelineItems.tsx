@@ -9,7 +9,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
@@ -87,6 +87,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
+import { StagedAttachmentItems } from "./StagedAttachmentItems";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -781,48 +782,6 @@ function ProseWithInlineImages({
 	);
 }
 
-function StagedAttachmentItems({
-	paths,
-	sessionId,
-	apiBaseUrl,
-	ariaLabel,
-	className,
-}: {
-	paths: string[];
-	sessionId: string;
-	apiBaseUrl: string | null;
-	ariaLabel: string;
-	className?: string;
-}) {
-	const { t } = useTranslation();
-	if (paths.length === 0) return null;
-	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
-	return (
-		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{paths.map((path) => {
-				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
-					<li key={path} className="max-w-full">
-						<ChatImage
-							src={attachmentURL(apiBaseUrl, sessionId, path)}
-							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
-						/>
-					</li>
-				) : (
-					<li
-						key={path}
-						title={path}
-						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
-					>
-						<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-						<span className="truncate">{name}</span>
-					</li>
-				);
-			})}
-		</ul>
-	);
-}
-
 /** Collapse the home directory so a long absolute path does not eat the row. */
 function shortenPaths(text: string): string {
 	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
@@ -984,6 +943,26 @@ export function HumanMessage({
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
 	);
+	const annotationSummary = excerptReferences.length > 0 ? (
+		<ChatAnnotationSummary
+			annotations={excerptReferences.map((excerpt) => ({
+				fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
+				text: excerpt.text ?? "",
+				conversationId: excerpt.sourceConversationId,
+				messageId: excerpt.sourceMessageId,
+				revision: excerpt.sourceRevision,
+			}))}
+			onSelect={onSelectAnnotation}
+			className="mb-2"
+		/>
+	) : null;
+	// Hover-only actions float under the bubble instead of reserving a blank row;
+	// a branch navigator is always visible, so it keeps its place in the flow.
+	const inFlowActions = Boolean(branchPoint && onActivateBranch);
+	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10");
+	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
+	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
+	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
 	return (
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
@@ -991,7 +970,7 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
-			{message.authorName && !editing ? (
+			{message.authorName ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
 					{message.authorName}
 				</span>
@@ -999,9 +978,17 @@ export function HumanMessage({
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
+				// The bubble itself becomes the editor: same box, text and attachments.
 				<HumanMessageEditor
 					text={editText ?? visibleMessageText}
-					content={message.content ?? []}
+					originalText={visibleMessageText}
+					content={(message.content ?? []).filter((content) => !excerptReferences.includes(content))}
+					sessionId={sessionId}
+					apiBaseUrl={apiBaseUrl}
+					className={humanBubbleClass()}
+					actionsClassName={editActionRowClass}
+					leading={annotationSummary}
+					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1024,19 +1011,16 @@ export function HumanMessage({
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
 					<CollapsibleHumanBody stateKey={visibleMessageText}>
-						{excerptReferences.length > 0 ? (
-							<ChatAnnotationSummary
-								annotations={excerptReferences.map((excerpt) => ({
-									fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
-									text: excerpt.text ?? "",
-									conversationId: excerpt.sourceConversationId,
-	 messageId: excerpt.sourceMessageId,
-									revision: excerpt.sourceRevision,
-								}))}
-								onSelect={onSelectAnnotation}
-								className="mb-2"
-							/>
-						) : null}
+						{annotationSummary}
+						{/* Attachments sit above the text they came with. */}
+						<StagedAttachmentItems
+							paths={attachments}
+							sessionId={sessionId}
+							apiBaseUrl={apiBaseUrl}
+							ariaLabel="Attached files"
+							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
+						/>
+						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
 						{body ? (
 							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 								<ProseWithInlineImages
@@ -1048,21 +1032,11 @@ export function HumanMessage({
 								/>
 							</p>
 						) : null}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn(body && "mt-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
 					</CollapsibleHumanBody>
 				</div>
 			)}
 			{editing ? null : (
-				// Hover-only actions float under the bubble instead of reserving a blank row;
-				// a branch navigator is always visible, so it keeps its place in the flow.
-				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
+				<div className={actionRowClass}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
@@ -1808,7 +1782,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 			</pre>
 			{truncated ? (
 				<p className="text-micro text-muted-foreground/70">
-					AO stopped recording keystrokes at its cap; more were sent.
+					Orchestrator stopped recording keystrokes at its cap; more were sent.
 				</p>
 			) : null}
 		</div>
@@ -1912,7 +1886,7 @@ function CommandOutput({
 			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
-					This command printed more than AO stores, so the output above stops early. Open a shell in
+					This command printed more than Orchestrator stores, so the output above stops early. Open a shell in
 					the worktree to see the rest.
 				</p>
 			) : null}
@@ -2145,7 +2119,7 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 			<ToolDiffCode text={patch} />
 			{truncated ? (
 				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
-					This patch is longer than AO stores, so it stops early. The whole change is in the
+					This patch is longer than Orchestrator stores, so it stops early. The whole change is in the
 					worktree and in the turn&rsquo;s diff.
 				</p>
 			) : null}
@@ -2194,7 +2168,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 				<ChatMarkdown text={text} streaming={streaming} muted />
 				{activity.detail?.textTruncated ? (
 					<p className="mt-1 text-micro text-muted-foreground/70">
-						This summary is longer than AO stores, so it stops early.
+						This summary is longer than Orchestrator stores, so it stops early.
 					</p>
 				) : null}
 			</div>
@@ -2520,7 +2494,7 @@ function truncationNote(value: unknown): string | undefined {
 	const record = value as { truncated?: unknown; bytes?: unknown; note?: unknown };
 	if (record.truncated !== true) return undefined;
 	const bytes = typeof record.bytes === "number" ? ` (${formatBytes(record.bytes)})` : "";
-	return `This payload${bytes} was larger than AO stores, so it was not kept.`;
+	return `This payload${bytes} was larger than Orchestrator stores, so it was not kept.`;
 }
 
 function formatBytes(bytes: number): string {
@@ -3301,7 +3275,7 @@ export function ApprovalCard({
 					))}
 					{decisions.length === 0 ? (
 						<p className="text-xs text-warning">
-							The agent offered no decisions AO can present. Open diagnostics.
+							The agent offered no decisions Orchestrator can present. Open diagnostics.
 						</p>
 					) : null}
 				</div>
@@ -3621,7 +3595,7 @@ export function TurnChangedFiles({
 
 			{diff.truncated ? (
 				<p className="px-3 pb-2 text-xs leading-relaxed text-warning">
-					This turn changed more files than AO lists here.
+					This turn changed more files than Orchestrator lists here.
 					{onReview ? " Use Review for the whole change." : " Open the Files tab for the whole change."}
 				</p>
 			) : null}

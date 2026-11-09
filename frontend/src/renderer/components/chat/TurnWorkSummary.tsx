@@ -37,7 +37,7 @@ export function TurnWorkSummary({
 		// Same box and text edge as the fold's trigger below, so a turn with work and
 		// one without line up, and nothing moves if a turn gains steps to fold.
 		return (
-			<div className="flex h-7 items-center gap-1 text-sm text-muted-foreground" data-turn-worked-label="">
+			<div className="flex h-7 select-none items-center gap-1 text-sm text-muted-foreground" data-turn-worked-label="">
 				{label}
 			</div>
 		);

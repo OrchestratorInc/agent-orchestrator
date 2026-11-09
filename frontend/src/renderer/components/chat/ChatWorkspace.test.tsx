@@ -891,7 +891,7 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -899,7 +899,7 @@ describe("ChatWorkspace timeline", () => {
 				session={{ ...chatSession, id: "legacy-orchestrator", kind: undefined }}
 			/>,
 		);
-		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
 	});
 
 	it("shows live provider context usage beside the composer settings", () => {
@@ -959,7 +959,7 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		const tab = screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" });
 		await user.dblClick(tab);
 		fireEvent.contextMenu(tab);
 
@@ -1665,7 +1665,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(dock.getAllByText("Which direction should we take?").length).toBeGreaterThan(0);
 		expect(dock.getByText("Use the native protocol")).toBeVisible();
 		expect(dock.getByText("Keep the bridge")).toBeVisible();
-		expect(screen.queryByText("The agent offered no decisions AO can present")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent offered no decisions Orchestrator can present")).not.toBeInTheDocument();
 		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
 		await user.click(dock.getByRole("radio", { name: /Native/ }));
 		await user.click(dock.getByRole("button", { name: "Continue" }));
@@ -2249,7 +2249,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
+		expect(screen.getByText("Orchestrator restarted. History is kept.")).toBeInTheDocument();
 		// The banner title and the composer placeholder both say so.
 		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -3729,7 +3729,7 @@ Requested visual changes:
 Reference screenshots:
 - .ao/attachments/browser.png
 
-Task: Address the feedback below according to its wording. Visual adjustments are already previewed in AO's shared browser and describe the intended result.
+Task: Address the feedback below according to its wording. Visual adjustments are already previewed in Orchestrator's shared browser and describe the intended result.
 </browser_annotations>`,
 		};
 
@@ -4570,6 +4570,25 @@ describe("ChatWorkspace message actions", () => {
 		expect(restored).toHaveValue("later edit revision");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await waitFor(() => expect(getChatDraftBoundary(snapshot.sessionId)).toBeUndefined());
+	});
+
+	it("draws a restored inline edit as a bubble when its message is not in the timeline", async () => {
+		const snapshot = idleSnapshot();
+		writeChatInlineEdit(snapshot.sessionId, {
+			turnId: "turn-not-in-timeline",
+			text: "restored edit",
+			content: [],
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onEditMessage={vi.fn(async () => undefined)} />);
+		const restored = await screen.findByRole("textbox", { name: "Edit message" });
+		const bubble = restored.closest(".cursor-chat-human-message");
+		expect(bubble).not.toBeNull();
+		// Cancel and Send sit on their own row under the bubble.
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		expect(bubble).not.toContainElement(send);
+		expect(bubble!.parentElement).toHaveClass("flex-col");
+		expect(bubble!.parentElement).toContainElement(send);
 	});
 
 	it("does not expose an accepted inline edit when a hidden replacement committed a later revision", async () => {

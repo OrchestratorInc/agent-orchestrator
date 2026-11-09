@@ -819,7 +819,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
-			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			if (isStandaloneSession) {
 				void navigate({ to: "/" });
 				return;
 			}
@@ -1106,11 +1106,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
 	};
 	const createdAt = session.createdAt ?? session.updatedAt;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const creationLabel = appI18n.t(isStandalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace");
 
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
+			content: <>{creationLabel}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
@@ -2322,7 +2324,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	if (url) {
 		lines.push("", `Comment URL: ${url}`);
 	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what AO has provided here.");
+	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
 	return lines.join("\n");
 }
 
@@ -2330,9 +2332,9 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "AO agent review" : "external PR review";
+	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
 	const lines = [
-		`A ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
+		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
 		"",
 		"Review summary:",
 		body,
@@ -2562,7 +2564,7 @@ function ReviewPanel({
 										onClick={onCloudInstallHarness}
 										size="sm"
 										type="button"
-										variant="outline"
+										variant="secondary"
 									>
 										{isInstallingCloudHarness ? "Installing…" : "Install"}
 									</Button>
@@ -2813,7 +2815,7 @@ function BrowserView({
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
 				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
 					<p className="text-md-sm text-muted-foreground">{t("inspector.browserInCenter")}</p>
-					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="outline">
+					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="secondary">
 						{t("inspector.returnToPanel")}
 					</Button>
 				</div>
@@ -2851,7 +2853,7 @@ function FilesView({ filesView, onOpenFiles }: { filesView?: ReactNode; onOpenFi
 		<div role="tabpanel">
 			<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 px-5 py-10 text-center")}>
 				<p className="text-md-sm text-muted-foreground">{t("inspector.filesUnavailable")}</p>
-				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="outline">
+				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="secondary">
 					{t("inspector.openFiles")}
 				</Button>
 			</div>

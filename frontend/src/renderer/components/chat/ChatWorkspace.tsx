@@ -130,6 +130,7 @@ import {
 	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
+	humanBubbleClass,
 	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
@@ -2628,7 +2629,7 @@ function ControllerBanner({
 				{controller.state === "stopped" && waking && !terminated ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
 				) : restarting ? (
-					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
+					<span className="text-xs leading-snug text-muted-foreground">Orchestrator restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}
@@ -2647,7 +2648,7 @@ function ControllerBanner({
 								<Button
 									type="button"
 									size="sm"
-									variant="outline"
+									variant="secondary"
 									onClick={resumeClick}
 									disabled={resuming}
 								>
@@ -4686,10 +4687,16 @@ export function Timeline({
 						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
-						<div className="flex justify-end" data-chat-scroll-anchor="">
+						// No bubble to stand in for here, so the editor draws one, with Cancel
+						// and Send on their own row below it.
+						<div className="flex flex-col items-end gap-1" data-chat-scroll-anchor="">
 							<HumanMessageEditor
 								text={messageEdit.text}
 								content={messageEdit.content}
+								sessionId={snapshot.sessionId}
+								apiBaseUrl={apiBaseUrl}
+								className={humanBubbleClass()}
+								actionsClassName="flex h-7 items-center gap-1"
 								pending={inlineEditPending}
 								locked={Boolean(inlineEditRecoveryLabel)}
 								recoveryLabel={translateDraft(inlineEditRecoveryLabel)}
@@ -4820,7 +4827,7 @@ export function Timeline({
 				<Button
 					type="button"
 					size="icon-sm"
-					variant="outline"
+					variant="secondary"
 					aria-label="Jump to latest"
 					title="Jump to latest"
 					onClick={requestGlideToEnd}

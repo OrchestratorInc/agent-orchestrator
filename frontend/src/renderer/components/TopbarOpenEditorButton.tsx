@@ -9,9 +9,7 @@ import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import type { TopbarView } from "../lib/topbar-actions";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
+import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -46,8 +44,8 @@ export function TopbarOpenEditorButton({
 	const open = useOpenSessionTarget();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const [copyPending, setCopyPending] = useState(false);
-	const state = stateQuery.data;
 	const [menuOpen, setMenuOpen] = useState(false);
+	const state = stateQuery.data;
 	const targets = state?.targets ?? [];
 	const editors = targets.filter((target) => target.kind === "editor");
 	const preferred = editors.find((target) => target.id === state?.preferredEditorId);
@@ -105,29 +103,27 @@ export function TopbarOpenEditorButton({
 
 	return (
 		<div
-			className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
+			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md has-[:focus-visible]:before:inset-0 has-[:focus-visible]:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
 			data-state={menuOpen ? "open" : "closed"}
 			style={style}
 		>
-			<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={waitingLabel
 								?? (workspaceError
 									?? (mainTarget ? t("editor.openInAria", { name: mainTarget.name }) : t("editor.chooseEditor")))}
-							className="bg-transparent hover:bg-transparent"
-							highlight={false}
 							disabled={mainDisabled}
 							onClick={() => {
 								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
 								launchMain();
 							}}
-							variant="icon"
+							variant="quiet"
+							className="before:hidden"
 						>
 							<OpenTargetIcon target={mainTarget} className="size-icon-md" />
-						</TopbarButton>
+						</Button>
 					</span>
 				</TooltipTrigger>
 				<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
@@ -139,15 +135,14 @@ export function TopbarOpenEditorButton({
 			}}>
 				<span className="inline-flex">
 					<DropdownMenuTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={t("editor.openOptionsAria")}
-							className="bg-transparent hover:bg-transparent"
-							highlight={false}
 							disabled={menuDisabled}
-							variant="icon"
+							variant="quiet"
+							className="before:hidden"
 						>
 							<ChevronDown className="size-icon-sm" aria-hidden="true" />
-						</TopbarButton>
+						</Button>
 					</DropdownMenuTrigger>
 				</span>
 
