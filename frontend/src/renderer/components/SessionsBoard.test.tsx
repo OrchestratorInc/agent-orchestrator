@@ -504,9 +504,9 @@ describe("SessionsBoard", () => {
 
 		renderBoard("p1");
 
-		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
-		expect(within(button).getByText("Orchestrator agent").hasAttribute("data-compact-label")).toBe(true);
+		expect(within(button).getByText("Orchestrator").hasAttribute("data-compact-label")).toBe(true);
 		expect(indicator).toBeNull();
 	});
 

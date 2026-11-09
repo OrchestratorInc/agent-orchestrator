@@ -892,7 +892,7 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -900,7 +900,7 @@ describe("ChatWorkspace timeline", () => {
 				session={{ ...chatSession, id: "legacy-orchestrator", kind: undefined }}
 			/>,
 		);
-		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 	});
 
 	it("shows live provider context usage beside the composer settings", () => {
@@ -960,7 +960,7 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		const tab = screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" });
+		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
 		await user.dblClick(tab);
 		fireEvent.contextMenu(tab);
 
