@@ -25,6 +25,7 @@ import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
+import { SessionDeepLinkHost } from "../components/SessionDeepLinkHost";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
@@ -183,6 +184,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 			</div>
 			<SettingsPane />
 			<ShareLinkHost />
+			<SessionDeepLinkHost />
 		</>
 	);
 }

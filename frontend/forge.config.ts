@@ -36,6 +36,12 @@ const AUTH_PROTOCOL = {
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
+// ao://sessions/{project}/{session} opens a session from outside the app.
+const SESSION_PROTOCOL = {
+	name: "Orchestrator session link",
+	schemes: ["ao"],
+};
+const SESSION_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao";
 const PACKAGED_EXTERNAL_DEPENDENCIES = [
 	"/node_modules/better-sqlite3",
 	"/node_modules/bindings",
@@ -202,7 +208,7 @@ const config: ForgeConfig = {
 			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
 			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
 		},
-		protocols: [AUTH_PROTOCOL],
+		protocols: [AUTH_PROTOCOL, SESSION_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
@@ -428,7 +434,7 @@ const config: ForgeConfig = {
 				productName: "Orchestrator",
 				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
-				protocols: [AUTH_PROTOCOL],
+				protocols: [AUTH_PROTOCOL, SESSION_PROTOCOL],
 			},
 			["linux"],
 		),
@@ -443,7 +449,7 @@ const config: ForgeConfig = {
 					icon: "assets/icon.png",
 					maintainer: appPackage.author,
 					homepage: "https://github.com/aoagents/agent-orchestrator",
-					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
+					mimeType: [AUTH_PROTOCOL_MIME_TYPE, SESSION_PROTOCOL_MIME_TYPE],
 				},
 			},
 		},
@@ -455,7 +461,7 @@ const config: ForgeConfig = {
 					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
-					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
+					mimeType: [AUTH_PROTOCOL_MIME_TYPE, SESSION_PROTOCOL_MIME_TYPE],
 				},
 			},
 		},

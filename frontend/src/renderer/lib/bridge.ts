@@ -475,6 +475,10 @@ export const aoBridge: AoBridge =
 			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
+		sessionLinks: {
+			onOpen: () => () => undefined,
+			takePending: async () => null,
+		},
 		cloudCp: {
 			request: async () => {
 				throw new Error("Orchestrator Cloud requests require the desktop app.");
