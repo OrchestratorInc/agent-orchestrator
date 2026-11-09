@@ -377,7 +377,7 @@ describe("Executor", () => {
 		const opened = await run("open", { url: "https://shop.test/" });
 		expect(opened).toMatchObject({ url: "https://shop.test/", title: "Shop", isLoading: false, target: { tabId: "t1", origin: "https://shop.test" } });
 		const [group] = [...fake.groups.values()];
-		expect(group).toMatchObject({ title: "AO · s1" });
+		expect(group).toMatchObject({ title: "Orchestrator · s1" });
 		const [tab] = [...fake.tabs.values()];
 		expect(tab!.groupId).toBe(group!.id);
 		expect(tab!.active).toBe(false);

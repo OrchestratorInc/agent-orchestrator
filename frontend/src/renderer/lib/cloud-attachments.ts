@@ -78,11 +78,11 @@ async function binaryRequest(
 		return await raceAbort(aoBridge.cloudCp.requestBinary({ ...init, requestId, timeoutMs }), signal);
 	} catch (error) {
 		if (options.signal?.aborted) throw options.signal.reason ?? error;
-		if (guard.aborted || isAbort(error)) throw new Error("AO Cloud did not answer in time. Try again.");
+		if (guard.aborted || isAbort(error)) throw new Error("Orchestrator Cloud did not answer in time. Try again.");
 		const message = (error instanceof Error ? error.message : String(error))
 			.replace(/^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?/, "").trim();
 		if (/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|network/i.test(message)) {
-			throw new Error("Couldn’t reach AO Cloud. Check the connection and try again.");
+			throw new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again.");
 		}
 		throw new Error(message || "The attachment request failed.");
 	} finally {

@@ -287,7 +287,7 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
 	if err != nil || !strings.Contains(out, "https://h-0d483066194a12a5dc17.useao.dev:443") ||
 		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") ||
-		!strings.Contains(out, "Linked to an AO account") {
+		!strings.Contains(out, "Linked to an Orchestrator account") {
 		t.Fatalf("fixed address status = %q, %v", out, err)
 	}
 }
@@ -304,7 +304,7 @@ func TestRemoteHostCLISaysARefusedLinkMayNotBeListed(t *testing.T) {
 	writeRunFileFor(t, cfg, srv)
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
 	if err != nil || strings.Contains(out, "devices list this machine") ||
-		!strings.Contains(out, "AO Cloud refuses this machine's account link") || !strings.Contains(out, "ao remote-host link") {
+		!strings.Contains(out, "Orchestrator Cloud refuses this machine's account link") || !strings.Contains(out, "ao remote-host link") {
 		t.Fatalf("refused link status = %q, %v", out, err)
 	}
 }

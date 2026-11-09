@@ -24,7 +24,7 @@ export function additionalReposProblemMessage(t: TFunction, problem: ReturnType<
 		case "duplicate":
 			return t("cloudRepos.problemDuplicate", { defaultValue: "{{name}} is listed twice.", name });
 		case "reserved":
-			return t("cloudRepos.problemReserved", { defaultValue: "{{name}} would check out into the folder {{folder}}, which AO uses itself.", name, folder: problem.folder });
+			return t("cloudRepos.problemReserved", { defaultValue: "{{name}} would check out into the folder {{folder}}, which Orchestrator uses itself.", name, folder: problem.folder });
 		case "hidden":
 			return t("cloudRepos.problemHidden", { defaultValue: "{{name}} would check out into the hidden folder {{folder}}, which is not allowed.", name, folder: problem.folder });
 		case "folder":

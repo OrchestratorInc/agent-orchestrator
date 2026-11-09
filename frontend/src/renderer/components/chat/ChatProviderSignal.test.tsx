@@ -75,7 +75,7 @@ describe("reasoning", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// The default install sends the item with no body. A labelled empty row teaches
@@ -159,7 +159,7 @@ describe("MCP tool call", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/larger than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/larger than Orchestrator stores/i)).toBeInTheDocument();
 		expect(screen.getByText(/2\.0 MB/)).toBeInTheDocument();
 	});
 
@@ -686,7 +686,7 @@ describe("file changes", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Created/ }));
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// Rows written by earlier builds carry no status. The file is still drawn, as a

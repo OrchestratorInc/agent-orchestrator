@@ -489,13 +489,13 @@ describe("SessionArtifactsView", () => {
 		renderView(<AppBrowserLinkContext.Provider value={openInBrowser}><SessionArtifactsView session={session()} /></AppBrowserLinkContext.Provider>);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Open in Orchestrator Browser" })).not.toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
-		expect(screen.queryByRole("button", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open in Orchestrator Browser" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Open in AO Browser" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Open in Orchestrator Browser" }));
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("http://artifact.localhost/report.html");
 	});
 

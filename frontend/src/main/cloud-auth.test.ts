@@ -360,7 +360,7 @@ describe("native WorkOS authentication", () => {
         baseUrl: "https://cloud.example",
         provider: "codex",
       }),
-    ).rejects.toThrow("Sign in to AO Cloud before connecting a provider.");
+    ).rejects.toThrow("Sign in to Orchestrator Cloud before connecting a provider.");
   });
 
   describe("Claude browser login local fallback token", () => {
@@ -390,7 +390,7 @@ describe("native WorkOS authentication", () => {
 
     it("does not leave a local token behind when the cloud save fails", async () => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 500 }));
-      await expect(connect()).rejects.toThrow("AO Cloud could not save the provider credential.");
+      await expect(connect()).rejects.toThrow("Orchestrator Cloud could not save the provider credential.");
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
 
@@ -455,8 +455,8 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.showMessageBox).toHaveBeenCalledWith({
       type: "error",
-      title: "AO Cloud sign-in failed",
-      message: "Unable to sign in to AO Cloud",
+      title: "Orchestrator Cloud sign-in failed",
+      message: "Unable to sign in to Orchestrator Cloud",
       detail:
         "The WorkOS sign-in request expired. Start sign-in again to continue.",
     });

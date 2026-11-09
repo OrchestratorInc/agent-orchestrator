@@ -135,7 +135,7 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			});
 			const token = await bearer();
 			if (left) return;
-			if (!token) return answer(res, 401, "no AO Cloud session");
+			if (!token) return answer(res, 401, "no Orchestrator Cloud session");
 			const headers: OutgoingHttpHeaders = {};
 			for (const [name, value] of Object.entries(req.headers)) {
 				// HTTP/2 pseudo-headers (":authority", ":path") are not forwardable headers.
@@ -147,7 +147,7 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 				if (left) return;
 				warn(`control plane failed on ${req.method} ${found.tail.split("/", 1)[0]} (${error.message})`);
 				if (res.headersSent) res.destroy(error);
-				else answer(res, 502, "AO Cloud unreachable");
+				else answer(res, 502, "Orchestrator Cloud unreachable");
 			};
 			const url = cpUrl(found.target, found.tail, found.search);
 			proxied = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, { method: req.method, headers }, (upstream) => {
