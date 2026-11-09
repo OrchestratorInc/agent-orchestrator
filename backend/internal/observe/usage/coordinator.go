@@ -49,8 +49,7 @@ type CoordinatorConfig struct {
 	WatchRoots    func(context.Context) ([]string, error)
 }
 
-// Coordinator records filesystem, hook, and startup signals as unread changes
-// and ingests them when Flush asks. Finalizing sources and retries run at once.
+// Coordinator ingests unread usage sources when Flush asks, and finalizing sources at once.
 type Coordinator struct {
 	store         coordinatorStore
 	ingestor      sourceIngestor
@@ -130,8 +129,7 @@ func (c *Coordinator) NotifyInventoryChanged() {
 	}
 }
 
-// Flush ingests every source with unread changes and returns once no
-// ingestion is queued or running, or when ctx ends.
+// Flush ingests every unread source and returns when none is queued or running, or ctx ends.
 func (c *Coordinator) Flush(ctx context.Context) {
 	done := make(chan struct{})
 	select {

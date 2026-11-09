@@ -135,7 +135,6 @@
 	--color-danger: var(--destructive);
 	--color-purple: var(--chart-4);
 
-	/* Agent tones: each agent's hue (lib/agent-tone.ts) at one shared lightness and chroma. */
 	--agent-tone-lightness: 0.65;
 	--agent-tone-chroma: 0.15;
 
@@ -774,7 +773,6 @@
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
 
-	/* Agent tones, deepened to hold contrast on a light canvas. */
 	--agent-tone-lightness: 0.6;
 	--agent-tone-chroma: 0.15;
 	--color-status-idle: var(--muted-foreground);

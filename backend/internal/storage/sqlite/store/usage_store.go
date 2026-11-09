@@ -236,8 +236,7 @@ func (s *Store) ListWatchableUsageSources(ctx context.Context) ([]domain.UsageSo
 	return out, nil
 }
 
-// ListFinalizingUsageSourceIDs returns the sources whose session ended and
-// still need a final read.
+// ListFinalizingUsageSourceIDs returns the sources of ended sessions that still need a final read.
 func (s *Store) ListFinalizingUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	ids, err := s.qr.ListFinalizingUsageSourceIDs(ctx)
 	if err != nil {

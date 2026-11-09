@@ -8,8 +8,6 @@ import (
 )
 
 // CanonicalProviderID normalizes a reported provider for exact catalog lookup.
-// The catalog names providers as LiteLLM does; a harness that spells the same
-// billing account another way is mapped onto that name.
 func CanonicalProviderID(raw string) string {
 	providerID := strings.ToLower(strings.TrimSpace(raw))
 	if alias, ok := providerAliases[providerID]; ok {

@@ -76,8 +76,6 @@ func TestSyncWritesCanonicalContentAddressedCatalog(t *testing.T) {
 
 // Break caught: treating conflicting provider/model records as independent
 // models would silently select an arbitrary price.
-// Break caught: the live table is not reviewed before the daemon reads it, so
-// one entry priced twice, or one AO cannot read, failed every price at once.
 func TestSyncDropsConflictingDuplicatesAndUnreadableEntries(t *testing.T) {
 	upstream := `{
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
