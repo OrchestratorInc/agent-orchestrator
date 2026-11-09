@@ -183,6 +183,15 @@ describe("prStatusRows", () => {
 		expect(card.readiness?.label).toBe("Status unavailable");
 		expect(card.readiness?.detail).toContain("Checks and Commit statuses read access");
 	});
+	it("shows a run cancelled with no replacement as settled, not loading", () => {
+		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [
+			{ name: "lint", status: "cancelled", conclusion: "cancelled" },
+		] } });
+		const card = prCardPresentation(pr);
+		expect(card.statusRows?.find((row) => row.key === "ci")).toMatchObject({ label: "Checks cancelled", breathe: false });
+		expect(card.readiness?.label).toBe("Checks cancelled");
+		expect(prStatusRows(pr).find((row) => row.key === "ci")?.value).toBe("Checks cancelled");
+	});
 	it("shows lost GitHub App access instead of checking merge status", () => {
 		const pr = summary({ mergeability: {
 			state: "unknown", reasons: ["github_access_lost"], prUrl: "https://github.com/acme/repo/pull/7",

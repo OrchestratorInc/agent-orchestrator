@@ -253,8 +253,8 @@ func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
 		t.Run("project env "+off, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
 			env := map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": off}
-			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got != nil {
-				t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got["systemPrompt"] != nil {
+				t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
 			}
 			prompt := claudeSessionMeta(acpdriver.LaunchConfig{Env: env, SystemPrompt: "AO standing instructions"})["systemPrompt"].(map[string]any)
 			if prompt["append"] != "AO standing instructions" {
@@ -264,15 +264,15 @@ func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
 	}
 	t.Run("daemon env", func(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
-		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
-			t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
+			t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
 		}
 	})
 }
 
 func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
-	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
+	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
 		t.Fatalf("empty prompt metadata = %#v", got)
 	}
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})
@@ -315,6 +315,16 @@ func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClaudeSessionMetaAsksForSDKSessionState(t *testing.T) {
+	for _, cfg := range []acpdriver.LaunchConfig{{}, {DisableTools: true}} {
+		got := claudeNestedMap(claudeSessionMeta(cfg), "claudeCode")["emitRawSDKMessages"]
+		want := []map[string]string{{"type": "system", "subtype": "session_state_changed"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("emitRawSDKMessages = %#v, want only session state changes", got)
+		}
 	}
 }
 

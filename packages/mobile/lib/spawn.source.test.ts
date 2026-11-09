@@ -35,9 +35,9 @@ describe("spawn composer", () => {
 		expect(attachmentRow).toContain("row: { flexGrow: 0, flexShrink: 0 }");
 	});
 
-	it("shows a prompt-specific error for the daemon's 16 KiB rejection", () => {
+	it("shows a prompt-specific error for the daemon's 100 KiB rejection", () => {
 		expect(spawn).toContain('e instanceof ApiError && e.code === "PROMPT_TOO_LONG"');
-		expect(spawn).toContain('Task prompt is too long. Keep it to 16 KiB or fewer');
+		expect(spawn).toContain('Task prompt is too long. Keep it to 100 KiB or fewer');
 	});
 
 	// Live dictation is drawn in the composer's field (see SpawnComposer); the
@@ -77,6 +77,13 @@ describe("spawn effort", () => {
 	it("offers effort on the default model and pins the stand-in when a level is picked", () => {
 		expect(spawn).toContain("const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));");
 		expect(spawn).toContain("if (!runningModel && effortModel) {");
+	});
+
+	// With no model sent, the stand-in's fallback level is not sent either: the
+	// daemon has no model to check it against (#7979).
+	it("sends no stand-in fallback effort with the default model", () => {
+		expect(spawn).toContain("const usingStandIn = !runningModel && effortModel !== undefined;");
+		expect(spawn).toContain("const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);");
 	});
 });
 

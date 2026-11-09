@@ -20,7 +20,7 @@ import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, r
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
-import { spawnEffortChoices } from "../lib/modelEffort";
+import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
@@ -190,10 +190,9 @@ export default function SpawnScreen() {
 	const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));
 	const effortChoices = useMemo(() => spawnEffortChoices(effortModel, effort), [effort, effortModel]);
 	// A level picked here is sent; so is the fallback shown for a model that
-	// names no default, so the task runs at the level the speedometer shows.
-	// The model's own default is left to the model.
-	const shownEffort = effortChoices.find((choice) => choice.selected)?.value;
-	const chosenEffort = shownEffort && (shownEffort === effort || shownEffort !== effortModel?.defaultEffort) ? shownEffort : undefined;
+	// names no default. Not a stand-in's fallback: no model is sent with it.
+	const usingStandIn = !runningModel && effortModel !== undefined;
+	const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);
 	// Each agent's menu list, built once per change rather than per keystroke:
 	// some catalogs run to thousands of models.
 	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
@@ -575,7 +574,7 @@ export default function SpawnScreen() {
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
-		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
+		return "Task prompt is too long. Keep it to 100 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }

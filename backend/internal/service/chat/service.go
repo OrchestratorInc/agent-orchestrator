@@ -64,6 +64,7 @@ type Service struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
+	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
@@ -192,6 +193,10 @@ type Options struct {
 	// DataDir locates a session's artifact directory when its record names
 	// none, for a render kept as an artifact.
 	DataDir string
+	// PRChanged is told when a finished agent command probably changed the
+	// session's pull request (`gh pr merge`, `git push`), so the SCM observer
+	// can re-read it early. Nil leaves it to the regular poll.
+	PRChanged func(domain.SessionID)
 	// ReconcileOutputType updates a session's output type at once after a
 	// render is kept as an artifact. Nil leaves it to the artifact observer.
 	ReconcileOutputType func(context.Context, domain.SessionID) error
@@ -225,6 +230,7 @@ func New(opts Options) *Service {
 		now:                    now,
 		onAccountChanged:       opts.OnAccountChanged,
 		recheckAccount:         opts.RecheckAccount,
+		prChanged:              opts.PRChanged,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
@@ -713,6 +719,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
 		waking = true
 	}
+	if sessionFound && s.accountMoveAwaitingTarget(ctx, cfg.SessionID) {
+		waking = true
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -1042,7 +1051,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
@@ -1360,6 +1369,8 @@ func (s *Service) Send(
 			return domain.ConversationTurn{}, err
 		}
 	}
+	behindAccountMove := !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil &&
+		s.accountMoveAwaitingTarget(ctx, id)
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
 		if controller, controllerErr := s.Controller(id); controllerErr == nil {
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
@@ -1390,10 +1401,10 @@ func (s *Service) Send(
 		msg.Text = reports.AppendToUserMessage(msg.Text)
 	}
 	var turn domain.ConversationTurn
-	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {
+	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || behindAccountMove {
 		// Keep messages on the durable queue until provisioning finishes so a
 		// new message cannot overtake the opening prompt during handoff.
-		turn, err = s.queueWithoutController(ctx, record, msg)
+		turn, err = s.queueWithoutController(ctx, record, msg, behindAccountMove)
 		if errors.Is(err, ErrNotProvisioning) {
 			// Startup may have become ready after the first read. The store
 			// refused a stale queue append; hand the message to its controller.
@@ -1971,6 +1982,8 @@ type Snapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// AfterSequence is the floor of a tail read, or zero for a whole page.
+	AfterSequence int64
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -1999,7 +2012,8 @@ type SnapshotReader interface {
 // SnapshotReader so existing tests and recovery tools can still request a full
 // snapshot explicitly.
 type SnapshotPageReader interface {
-	LoadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, limit int64) (ConversationRows, error)
+	// afterSequence is a floor: rows at or below it are left out. Zero reads a whole page.
+	LoadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (ConversationRows, error)
 }
 
 // ConversationRows is the raw durable read.
@@ -2015,6 +2029,7 @@ type ConversationRows struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	AfterSequence                    int64
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -2169,7 +2184,10 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
-func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
+//
+// A positive afterSequence reads only the tail after it; AfterSequence echoes it
+// when the reader applied it.
+func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, afterSequence, limit int64) (Snapshot, error) {
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
@@ -2191,7 +2209,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		// old full read. Production always wires PageReader.
 		return s.Snapshot(ctx, id)
 	}
-	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, afterSequence, limit)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
@@ -2228,6 +2246,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
+		AfterSequence:                    rows.AfterSequence,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
@@ -2260,7 +2279,7 @@ func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, be
 	if err != nil {
 		return Snapshot{}, err
 	}
-	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, 0, limit)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -2281,15 +2300,15 @@ func (f SnapshotReaderFunc) LoadConversationSnapshot(
 }
 
 // SnapshotPageReaderFunc adapts a function to SnapshotPageReader.
-type SnapshotPageReaderFunc func(ctx context.Context, conversationID string, beforeSequence, limit int64) (ConversationRows, error)
+type SnapshotPageReaderFunc func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (ConversationRows, error)
 
 // LoadConversationSnapshotPage satisfies SnapshotPageReader.
 func (f SnapshotPageReaderFunc) LoadConversationSnapshotPage(
 	ctx context.Context,
 	conversationID string,
-	beforeSequence, limit int64,
+	beforeSequence, afterSequence, limit int64,
 ) (ConversationRows, error) {
-	return f(ctx, conversationID, beforeSequence, limit)
+	return f(ctx, conversationID, beforeSequence, afterSequence, limit)
 }
 
 /* ---- session_manager.ChatLauncher ---------------------------------------- */
@@ -2914,7 +2933,7 @@ func (s *Service) relayChatTurn(
 			return "", err
 		}
 		if record.HibernatedAt != nil {
-			turn, err := s.queueWithoutController(ctx, record, msg)
+			turn, err := s.queueWithoutController(ctx, record, msg, false)
 			if err == nil {
 				if turn.ID != "" {
 					s.startBackgroundWake(id)
@@ -3111,7 +3130,7 @@ func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionVal
 		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
 	}
 	if configID == "mode" && isCopilotAutopilot(value.Select) {
-		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+		return fmt.Errorf("%w: Copilot Autopilot bypasses Orchestrator approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
 	}
 	return nil
 }

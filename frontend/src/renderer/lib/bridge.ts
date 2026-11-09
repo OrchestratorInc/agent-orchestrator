@@ -19,6 +19,9 @@ export const aoBridge: AoBridge =
 			openExternal: async (url: string) => {
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
@@ -44,12 +47,18 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -97,21 +106,38 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		// Outside the desktop app a made link is remembered for this page only.
+		sessionShareUrls: (() => {
+			const urls = new Map<string, string>();
+			return {
+				remember: async (baseUrl: string, linkId: string, url: string) => {
+					urls.set(`${baseUrl} ${linkId}`, url);
+				},
+				recall: async (baseUrl: string, linkIds: readonly string[]) =>
+					Object.fromEntries(linkIds.flatMap((id) => {
+						const url = urls.get(`${baseUrl} ${id}`);
+						return url ? [[id, url]] : [];
+					})),
+				forget: async (baseUrl: string, linkIds: readonly string[]) => {
+					for (const id of linkIds) urls.delete(`${baseUrl} ${id}`);
+				},
+			};
+		})(),
 		// Publishing reads local files in the main process: desktop only.
 		cloudShare: {
 			available: async () => false,
 			inspect: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			list: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			publish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
 			unpublish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			onProgress: () => () => undefined,
 		},
@@ -154,6 +180,9 @@ export const aoBridge: AoBridge =
 				throw new Error("Desktop app is required to open a workspace.");
 			},
 			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
+			openArtifactInBrowser: async () => {
 				throw new Error("Desktop app is required to open artifacts.");
 			},
 			copyWorkspacePath: async () => {
@@ -351,6 +380,11 @@ export const aoBridge: AoBridge =
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 		},
+		cliShadow: {
+			inspect: async () => ({ kind: "unknown" as const }),
+			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+			reveal: async () => undefined,
+		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
@@ -409,10 +443,10 @@ export const aoBridge: AoBridge =
 			},
 			localAuthAvailable: async () => false,
 			localRegister: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			localLogin: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
@@ -421,14 +455,14 @@ export const aoBridge: AoBridge =
 		},
 		cloudCp: {
 			request: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			requestBinary: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			cancelBinary: () => undefined,
 			openStream: async () => {
-				throw new Error("AO Cloud event streams require the desktop app.");
+				throw new Error("Orchestrator Cloud event streams require the desktop app.");
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

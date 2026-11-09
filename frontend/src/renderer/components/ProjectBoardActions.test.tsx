@@ -7,6 +7,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const actions: ProjectOrchestratorAction = {
 	projectId: undefined,
+	hostId: undefined,
 	orchestrator: undefined,
 	isSpawning: false,
 	isProjectRestarting: false,
@@ -29,8 +30,8 @@ describe("ProjectBoardActions", () => {
 				<ProjectBoardActions actions={actions} placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("before:bg-interactive-hover");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("button-raised", "text-primary-foreground");
 		const buttons = screen.getAllByRole("button");
 		expect(buttons.indexOf(screen.getByRole("button", { name: "New task" }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i })));
 	});
@@ -41,9 +42,9 @@ describe("ProjectBoardActions", () => {
 				<ProjectBoardActions actions={actions} cloud placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("button-raised", "text-primary-foreground");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("before:bg-interactive-hover");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("button-raised");
 		// Orchestrator leads, matching the session top bar.
 		const buttons = screen.getAllByRole("button");
 		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
@@ -55,9 +56,9 @@ describe("ProjectBoardActions", () => {
 				<ProjectBoardActions actions={actions} placement="header" quiet />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("button-raised", "text-primary-foreground");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("before:bg-interactive-hover");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("button-raised");
 		// Orchestrator leads, matching the session top bar.
 		const buttons = screen.getAllByRole("button");
 		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));

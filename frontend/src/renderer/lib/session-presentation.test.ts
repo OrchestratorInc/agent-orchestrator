@@ -3,6 +3,7 @@ import {
 	attentionZone,
 	getAgentActivityView,
 	getAttentionZoneView,
+	getSessionRowIndicator,
 	getSessionRowMarker,
 	getSessionStatusDotView,
 	getSessionStatusView,
@@ -40,6 +41,51 @@ const openPr: WorkspaceSession["prs"][number] = {
 };
 
 describe("session presentation", () => {
+	describe("sidebar row indicator", () => {
+		const mergeable: Partial<WorkspaceSession> = {
+			status: "mergeable",
+			scmStatus: "mergeable",
+			kanbanColumn: "ready",
+			displayStatus: "Mergeable",
+			prs: [{ ...openPr, mergeability: "mergeable", ci: "passing", review: "approved" }],
+		};
+
+		it("shows the working spinner while the agent works, even with a PR open", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				status: "working",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("working");
+		});
+
+		it("shows the PR icon once the agent is idle", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("ready");
+		});
+
+		it("flags a session waiting on the user ahead of its PR", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				status: "needs_input",
+				activity: { state: "waiting_input", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("attention");
+		});
+
+		it("spins while the session is still being set up", () => {
+			expect(getSessionRowIndicator(sessionWith({ ...mergeable, provisionState: "provisioning" }))).toBe("working");
+		});
+
+		it("never spins for a terminated session", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				status: "terminated",
+				displayStatus: "Terminated",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBeNull();
+		});
+	});
+
 	it.each([
 		["Draft", null],
 		["Review pending", "review"],

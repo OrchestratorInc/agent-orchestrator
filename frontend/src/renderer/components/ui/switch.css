@@ -1,0 +1,41 @@
+@utility switch-inset {
+	--switch-color: var(--input);
+	--switch-face: var(--switch-color);
+	--switch-thumb: var(--foreground);
+	background-color: var(--switch-face);
+	border-color: color-mix(in oklab, var(--switch-face), #000 12%);
+	box-shadow: inset 0 1px 2px oklch(0% 0 0 / 18%), inset 0 -0.5px 0 oklch(100% 0 0 / 8%);
+	touch-action: manipulation;
+
+	&[data-state="checked"] {
+		--switch-color: var(--primary);
+		--switch-thumb: var(--primary-foreground);
+	}
+
+	@supports (color: contrast-color(red)) {
+		&[data-state="checked"] {
+			--switch-thumb: contrast-color(var(--switch-color));
+		}
+	}
+
+	& [data-slot="switch-thumb"] {
+		background-color: var(--switch-thumb);
+		box-shadow: inset 0 1px 0 oklch(100% 0 0 / 18%), inset 0 -1px 0 oklch(0% 0 0 / 12%);
+	}
+
+	@media (hover: hover) {
+		&:hover:not(:disabled) {
+			--switch-face: color-mix(in oklab, var(--switch-color), #000 7%);
+		}
+	}
+
+	&:active:not(:disabled) {
+		--switch-face: color-mix(in oklab, var(--switch-color), #000 14%);
+		box-shadow: inset 0 1px 3px oklch(0% 0 0 / 24%);
+	}
+
+	&:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+}

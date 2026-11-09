@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ScrollViewProps } from "react-native";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactElement, type RefObject } from "react";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import { SafeAreaListener } from "react-native-safe-area-context";
 import {
@@ -113,6 +113,7 @@ export function WorkerBoardList({
 	showMachine = true,
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
+	archiveFooter = false,
 	onScroll,
 }: {
 	sessions: DashboardSession[];
@@ -125,7 +126,7 @@ export function WorkerBoardList({
 	/**
 	 * How much of the list's top a translucent header covers. The list insets
 	 * its rows itself; what floats over it, and Android's pull-to-refresh
-	 * spinner, start this far down.
+	 * spinner, start this far down. iOS's spinner is left where UIKit puts it.
 	 */
 	overlayTopInset?: number;
 	refreshing: boolean;
@@ -158,6 +159,13 @@ export function WorkerBoardList({
 	 * `sessions`; they are fetched when Archive opens, or a search runs.
 	 */
 	archiveSources?: readonly ArchiveSource[];
+	/**
+	 * With nothing live, show `ListEmptyComponent` filling the screen and Archive
+	 * beneath it as a footer, instead of Archive as the board's only row. The
+	 * Workers tab's idle state is written for that; a project page's "no workers
+	 * yet" copy is not, so it keeps the plain Archive row.
+	 */
+	archiveFooter?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -246,6 +254,20 @@ export function WorkerBoardList({
 	// is at minus that, and offset 0 leaves the first rows under the bar. Measured
 	// with the empty board's height below; zero where nothing covers the list.
 	const restingTop = useRef(0);
+	// The list's scroll, kept off React state so a scroll re-renders the pill
+	// alone (it follows the header up), never the whole board. Null until the
+	// list first scrolls, which is its resting top.
+	const scrollY = useRef<number | null>(null);
+	const scrollListeners = useRef(new Set<() => void>());
+	const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		scrollY.current = event.nativeEvent.contentOffset.y;
+		scrollListeners.current.forEach((listener) => listener());
+		onScroll?.(event);
+	}, [onScroll]);
+	// The page's header rows (its title spacer, the stale banner, the machine
+	// chips): the pill rests below them rather than over the chips (#7982).
+	const [headerHeight, setHeaderHeight] = useState(0);
+	const measureHeader = useCallback((event: LayoutChangeEvent) => setHeaderHeight(event.nativeEvent.layout.height), []);
 	// One request per pill tap, so the scroll runs in the commit that installs the
 	// new order and only then. A flag read on the next snapshot change instead
 	// stayed armed when a tap changed nothing, then jumped the list on some later,
@@ -331,6 +353,10 @@ export function WorkerBoardList({
 			{ zone: "archive" as const, label: "Archive", color: t.textFaint, data: archiveOpen ? archived : [] },
 		];
 	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pagedArchive.error, pinned, sections, archiveCount, archived, archiveOpen, t]);
+	// Nothing live, only history. The Archive row used to be the whole board then,
+	// which kept the list non-empty and so hid the empty state behind it. Now the
+	// empty state fills the screen and Archive sits beneath it as a footer.
+	const archiveOnly = archiveFooter && listSections.length === 1 && listSections[0].zone === "archive";
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.
@@ -341,7 +367,11 @@ export function WorkerBoardList({
 					? [{ kind: "archive-status", key: "archive:status" }]
 					: [];
 				if (section.zone === "archive") {
-					return [{ kind: "archive", key: "header:archive" } as const, ...section.data.map(sessionRow), ...status];
+					return [
+						...(archiveOnly ? [] : [{ kind: "archive", key: "header:archive" } as const]),
+						...section.data.map(sessionRow),
+						...status,
+					];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
 				const open = !collapsible || !collapsedSections[section.zone];
@@ -352,7 +382,7 @@ export function WorkerBoardList({
 					...status,
 				];
 			}),
-		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
+		[collapsedSections, listSections, archiveStatusShown, archiveOpen, archiveOnly],
 	);
 
 	// Disclosure and plain presses stay silent; haptics mark an outcome (a pin, a
@@ -510,9 +540,25 @@ export function WorkerBoardList({
 		restingTop.current = insets.top;
 	}, []);
 	const insetsForBars = Platform.OS === "ios" && contentInsetAdjustmentBehavior === "automatic";
-	const contentContainerStyle = insetsForBars && visibleHeight && listData.length === 0
+	// Android's spinner alone. UIKit already sets iOS's under the large-title
+	// bar; an offset there moved it a whole header lower, onto the rows, and
+	// jumped it as the bar's height changed during the pull.
+	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
+	// The Archive footer is sized the same way, so it rests just above the tab bar.
+	const contentContainerStyle = insetsForBars && visibleHeight && (listData.length === 0 || archiveOnly)
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
 		: { flexGrow: 1, paddingBottom: contentBottomInset };
+
+	// The header grows to the space left, so the empty state centres in it and
+	// Archive rests at the bottom; opened, its rows follow beneath.
+	const measuredHeader = ListHeaderComponent ? <View onLayout={measureHeader}>{ListHeaderComponent}</View> : ListHeaderComponent;
+	const header = archiveOnly ? (
+		<View style={styles.archiveOnly}>
+			{measuredHeader}
+			{ListEmptyComponent}
+			<ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />
+		</View>
+	) : measuredHeader;
 
 	return (
 		<View style={styles.listWrap}>
@@ -535,22 +581,24 @@ export function WorkerBoardList({
 					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={overlayTopInset} {...refreshControlColors(t)} />}
-					ListHeaderComponent={ListHeaderComponent}
-					ListEmptyComponent={ListEmptyComponent}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={spinnerOffset} {...refreshControlColors(t)} />}
+					ListHeaderComponent={header}
+					ListHeaderComponentStyle={archiveOnly ? styles.archiveOnly : undefined}
+					ListEmptyComponent={archiveOnly ? null : ListEmptyComponent}
 					renderItem={renderItem}
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
 					onEndReachedThreshold={1.5}
-					onScroll={onScroll}
-					scrollEventThrottle={onScroll ? 16 : undefined}
+					onScroll={handleScroll}
+					scrollEventThrottle={16}
 				/>
 			</LayoutAnimationConfig>
 			{/* After the list, never before it: iOS's large title follows the page's
 			    first subviews down to a scroll view, and a view ahead of the list
 			    left the title expanded over the rows as they scrolled. */}
 			{insetsForBars ? <SafeAreaListener pointerEvents="none" style={StyleSheet.absoluteFill} onChange={measureVisible} /> : null}
-		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}
+		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} overlayTopInset={overlayTopInset} headerHeight={headerHeight}
+			restingTop={restingTop} scrollY={scrollY} scrollListeners={scrollListeners} onPress={showLatest} /> : null}
 		</View>
 	);
 }
@@ -584,9 +632,37 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...p
 	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} {...handlers} />;
 });
 
+/**
+ * Where the "N updated" pill floats, from the list's top: just below the page's
+ * header rows while they are on screen, so it never covers the machine chips,
+ * and just below the bar once they have scrolled up under it.
+ *
+ * The header is the list's first content, so its bottom sits `headerHeight -
+ * scrollY` from the list's top on both platforms: iOS's list rests at minus
+ * the bars' inset, Android's at 0 with the bar's spacer inside the header.
+ */
+export function updatesPillTop({ overlayTopInset, headerHeight, scrollY }: { overlayTopInset: number; headerHeight: number; scrollY: number }): number {
+	return Math.max(overlayTopInset, headerHeight - scrollY) + space.sm;
+}
+
 // News that arrived while the board was held still. Tapping re-sorts and goes
 // to the top, where the news now is.
-function UpdatesPill({ count, top, onPress }: { count: number; top: number; onPress: () => void }) {
+function UpdatesPill({ count, overlayTopInset, headerHeight, restingTop, scrollY, scrollListeners, onPress }: {
+	count: number;
+	overlayTopInset: number;
+	headerHeight: number;
+	restingTop: RefObject<number>;
+	scrollY: RefObject<number | null>;
+	scrollListeners: RefObject<Set<() => void>>;
+	onPress: () => void;
+}) {
+	const subscribe = useCallback((listener: () => void) => {
+		const listeners = scrollListeners.current;
+		listeners.add(listener);
+		return () => { listeners.delete(listener); };
+	}, [scrollListeners]);
+	const top = useSyncExternalStore(subscribe, () =>
+		updatesPillTop({ overlayTopInset, headerHeight, scrollY: scrollY.current ?? -restingTop.current }));
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button", { tone: "onAccent" });
@@ -672,6 +748,7 @@ function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		listWrap: { flex: 1 },
+		archiveOnly: { flexGrow: 1 },
 		updatesPill: {
 			position: "absolute",
 			alignSelf: "center",

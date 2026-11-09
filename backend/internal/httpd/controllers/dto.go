@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -191,6 +192,16 @@ type ListProjectsResponse struct {
 // ProjectResponse is the { project } body shared by POST /projects (201).
 type ProjectResponse struct {
 	Project projectsvc.Project `json:"project"`
+}
+
+// ClonePrepareStreamEvent is the data of one server-sent event on
+// POST /projects/clone/prepare/stream. Exactly one field is set: progress
+// events arrive while git runs, and the last event carries the result or the
+// error envelope the JSON route would have returned.
+type ClonePrepareStreamEvent struct {
+	Progress *projectsvc.CloneProgress          `json:"progress,omitempty"`
+	Result   *projectsvc.ClonePreparationResult `json:"result,omitempty"`
+	Error    *envelope.APIError                 `json:"error,omitempty"`
 }
 
 // GetProjectResponse is the { status, project } body of GET /projects/{id},
@@ -527,6 +538,7 @@ type SessionArtifactView struct {
 	// its files load same-origin there, but the daemon refuses that origin, so
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
+	ShareURL  string `json:"shareUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -571,7 +583,7 @@ type SpawnSessionRequest struct {
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"chat,tui"`
 	// ApprovalMode overrides the project/default policy for this spawn.
 	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
-	Prompt       string                `json:"prompt,omitempty" maxLength:"16384"`
+	Prompt       string                `json:"prompt,omitempty" maxLength:"102400"`
 	// Model is an optional agent model override scoped to this single spawn. Empty
 	// keeps the resolved project/role default. The daemon validates that the
 	// selected harness can honor the model before launching.
@@ -592,6 +604,12 @@ type SpawnSessionRequest struct {
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
+	// Async answers as soon as a project Chat session is addressable: the
+	// session reads as provisioning with its prompt queued, and the worktree,
+	// setup and agent start in the background. Clients follow provisionState
+	// to learn whether the start succeeded. Ignored for standalone and TUI
+	// sessions, which always start before the response.
+	Async bool `json:"async,omitempty"`
 }
 
 // AttachmentInput is one file attached to a spawn, delegate, stage, or send
@@ -1256,6 +1274,10 @@ type InterfaceTransitionNoticeAckResponse struct {
 // terminated. Only the archive dialog sets it; the CLI and the reaper never do.
 type KillSessionRequest struct {
 	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+	// CallerSessionID is supplied by `ao session kill` inside an AO session.
+	// The session that spawned the killed one shows the termination in its
+	// chat only when it is the caller.
+	CallerSessionID domain.SessionID `json:"callerSessionId,omitempty"`
 }
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
@@ -1335,7 +1357,7 @@ type SendSessionMessageResponse struct {
 type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"16384"`
+	Brief           string              `json:"brief" maxLength:"102400"`
 	Branch          string              `json:"branch,omitempty" maxLength:"255"`
 	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
@@ -1638,6 +1660,7 @@ type SetActivityRequest struct {
 	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
 	ProcessID                    int                                 `json:"processId,omitempty" minimum:"0" description:"Process id of the provider process that fired the hook (Claude's CLAUDE_PID)."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
+	PRMayHaveChanged             bool                                `json:"prMayHaveChanged,omitempty" description:"The finished tool call probably changed the session's pull request (gh pr merge, git push), so AO re-reads it early."`
 }
 
 // UsageHookMetadata is the transcript metadata carried by supported Claude
@@ -2684,7 +2707,12 @@ type MobileStatusResponse struct {
 	// whether or not it still lists the machine. Signing in links only a
 	// machine no account holds, so it never moves one to another account or
 	// lists one again that its account removed.
-	AccountLinked       bool `json:"accountLinked"`
+	AccountLinked bool `json:"accountLinked"`
+	// AccountLinkRefused means AO Cloud refused the machine's last address
+	// publish under its current account token: no account lists the link, or
+	// AO Cloud does not accept its credential. Either way the account's
+	// devices may not list the machine, and linking again repairs both.
+	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
@@ -3332,7 +3360,8 @@ type ConversationActivityResponse struct {
 	// The keys that depend on the kind:
 	//
 	//   command      command, rawCommand, cwd, exitCode, durationMs, processId,
-	//                output (+ outputSource, outputMayBePartial, outputTruncated),
+	//                output (+ outputSource, outputMayBePartial, outputTruncated,
+	//                and outputBytes when outputLimit kept only its head and tail),
 	//                terminalInput -- the keystrokes the agent sent to the PTY, kept
 	//                out of output because the PTY echoes them
 	//   file_change  files[] with path, oldPath, status, additions, deletions, patch
@@ -3380,6 +3409,10 @@ type ConversationSnapshotResponse struct {
 	LatestSequence int64  `json:"latestSequence"`
 	OldestSequence int64  `json:"oldestSequence,omitempty"`
 	HasMoreBefore  bool   `json:"hasMoreBefore"`
+	// AfterSequence echoes the afterSequence floor when the daemon applied it: the
+	// page then holds only rows after it, and hasMoreBefore means rows between the
+	// floor and oldestSequence were left out. Absent means a whole page.
+	AfterSequence int64 `json:"afterSequence,omitempty"`
 	// NativeForkAvailableAfterSequence is the first provider-backed human prompt
 	// in the active provider scope. It keeps edit gating exact across bounded pages.
 	NativeForkAvailableAfterSequence int64                             `json:"nativeForkAvailableAfterSequence"`
@@ -3935,11 +3968,14 @@ type AgentAccountResponse struct {
 	Provider domain.AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	// Device marks the computer's own login, which AO launches with the CLI's
 	// config folder untouched.
-	Device    bool       `json:"device"`
-	Email     string     `json:"email,omitempty"`
-	Plan      string     `json:"plan,omitempty"`
-	Default   bool       `json:"default"`
+	Device  bool   `json:"device"`
+	Email   string `json:"email,omitempty"`
+	Plan    string `json:"plan,omitempty"`
+	Default bool   `json:"default"`
+	// SignedIn is a subscription sign-in; LoggedIn is any login the CLI
+	// launches with, an API key included.
 	SignedIn  bool       `json:"signedIn"`
+	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
 	Problem string                     `json:"problem,omitempty"`

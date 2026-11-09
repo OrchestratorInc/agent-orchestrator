@@ -144,6 +144,9 @@ if (typeof window !== "undefined") {
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
@@ -169,12 +172,18 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -202,6 +211,11 @@ if (typeof window !== "undefined") {
 		chatImage: {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
+		},
+		sessionShareUrls: {
+			remember: async () => undefined,
+			recall: async () => ({}),
+			forget: async () => undefined,
 		},
 		cloudShare: {
 			available: async () => true,
@@ -247,6 +261,7 @@ if (typeof window !== "undefined") {
 			openArtifacts: async ({ targetId }) => targetId === "terminal"
 				? { id: "terminal", name: "Terminal", kind: "terminal" }
 				: { id: "file-manager", name: "Finder", kind: "file_manager" },
+			openArtifactInBrowser: async () => undefined,
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -422,6 +437,11 @@ if (typeof window !== "undefined") {
 			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+		},
+		cliShadow: {
+			inspect: async () => ({ kind: "unknown" as const }),
+			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+			reveal: async () => undefined,
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),

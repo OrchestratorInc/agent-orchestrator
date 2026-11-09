@@ -19,6 +19,11 @@ import { setNewTaskHandler } from "../../../lib/newTaskAction";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
+import { isArchived } from "../../../lib/agentsView";
+import { latestEventAt } from "../../../lib/archive/archiveOrder";
+import { useLatestArchivedAt } from "../../../lib/archive/useLatestArchivedAt";
+import { idleFleet } from "../../../lib/workers-idle-copy";
+import { WorkersIdleState } from "../../../lib/workers-idle-state";
 import { hostedProjectKey } from "../../../lib/hostedRows";
 import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
@@ -116,6 +121,17 @@ export default function FleetScreen() {
 	// only one paired. The rows leave its name off, since it would say the same
 	// on every row; the filter names a chosen machine.
 	const boardMachine = selectedHost ?? (hostStates.length === 1 ? hostStates[0] : undefined);
+	// The idle state's facts: which machines in scope are quiet, and when anything
+	// in this scope last happened. Older machines send their archive inline with
+	// the poll; newer ones page it, so their newest finish is read only while the
+	// idle board is on screen.
+	const fleet = idleFleet(selectedHost ? [selectedHost] : hostStates, connection);
+	const boardIdle = projectSessions.every(isArchived);
+	const inlineFinishedAt = useMemo(() => latestEventAt(projectSessions), [projectSessions]);
+	const pagedFinishedAt = useLatestArchivedAt(archiveSources, boardIdle);
+	const lastFinishedAt = pagedFinishedAt && (!inlineFinishedAt || Date.parse(pagedFinishedAt) > Date.parse(inlineFinishedAt))
+		? pagedFinishedAt
+		: inlineFinishedAt;
 	const selectEnvironment = useCallback((environmentId: string) => {
 		// Resolve both selectors in one React event. Letting the project reset in the
 		// effect below creates an intermediate empty board and a second remount.
@@ -199,6 +215,7 @@ export default function FleetScreen() {
 				key={boardIdentityKey}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
+				archiveFooter
 				identityKey={boardIdentityKey}
 				showMachine={!boardMachine}
 				listRef={listRef}
@@ -254,11 +271,11 @@ export default function FleetScreen() {
 							message="Choose another machine from the filter menu."
 						/>
 					) : (
-						<EmptyState
-							icon="moon"
-							title="No active workers"
-							message="Spawn a worker to get started."
-							action={<Button title="New agent" icon="plus" onPress={spawnWorker} />}
+						<WorkersIdleState
+							machines={fleet.machines}
+							connection={fleet.connection}
+							lastFinishedAt={lastFinishedAt}
+							onNewAgent={spawnWorker}
 						/>
 					)
 				}

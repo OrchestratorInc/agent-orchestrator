@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Keyboard, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, Keyboard, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";
@@ -451,7 +451,7 @@ export function KeyboardShortcutsContent({
 									{isRecording ? <div ref={captureRef} className="shortcut-recorder" tabIndex={0} role="group" aria-label={t("shortcut.recordingAria", { name: label })} aria-describedby={`${contentId}-recording-help`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) endRecording(false); }}>
 										<Keyboard className="size-5 shrink-0" aria-hidden="true" />
 										<div className="min-w-0 flex-1"><p>{recordingReady ? t("shortcut.pressRecording") : t("shortcut.preparing")}</p><p id={`${contentId}-recording-help`} className="shortcut-recording-help">{t("shortcut.recordingHelp")}</p>{recordingError ? <p role="alert" className="shortcut-error">{recordingError}</p> : null}</div>
-										<Button type="button" variant="outline" onClick={() => endRecording()}>{t("confirm.cancel")}</Button>
+										<Button type="button" variant="secondary" onClick={() => endRecording()}>{t("confirm.cancel")}</Button>
 									</div> : null}
 									<AnimatePresence initial={false}>
 									{isExpanded && !isRecording ? <motion.div
@@ -465,7 +465,7 @@ export function KeyboardShortcutsContent({
 									<div className="shortcut-management" id={`${contentId}-${shortcut.id}-manage`}>
 										{bindings.map((binding, index) => <div className="shortcut-manage-binding" key={`${binding.key}-${index}`}><BindingKeys binding={binding} isMac={isMac} /><Tooltip><TooltipTrigger asChild><Button type="button" variant="destructive-ghost" size="icon" disabled={saving} aria-label={t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(binding, isMac), name: label })} onClick={() => void handleRemoveBinding(shortcut.id, index)}><Trash2 className="size-4" aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(binding, isMac), name: label })}</TooltipContent></Tooltip></div>)}
 										<div className="shortcut-manage-actions">
-											{bindings.length < 2 ? <Button type="button" variant="outline" disabled={saving} aria-label={t("shortcut.addAltAria", { name: label })} onClick={(event) => void beginRecording({ id: shortcut.id, mode: "add" }, event.currentTarget)}><Plus className="size-4" aria-hidden="true" />{t("shortcut.addAlternative")}</Button> : null}
+											{bindings.length < 2 ? <Button type="button" variant="secondary" disabled={saving} aria-label={t("shortcut.addAltAria", { name: label })} onClick={(event) => void beginRecording({ id: shortcut.id, mode: "add" }, event.currentTarget)}><Plus className="size-4" aria-hidden="true" />{t("shortcut.addAlternative")}</Button> : null}
 											{modified ? <Button type="button" variant="ghost" disabled={saving} aria-label={t("shortcut.resetAria", { name: label })} onClick={() => void handleResetBinding(shortcut.id)}><RotateCcw className="size-4" aria-hidden="true" />{t("shortcut.restoreDefault")}</Button> : null}
 											<Button type="button" variant="ghost" className="ml-auto" aria-label={t("shortcut.closeManageAria", { name: label })} onClick={() => { setExpanded(null); document.getElementById(`${contentId}-${shortcut.id}-options`)?.focus(); }}>{t("common.close")}</Button>
 										</div>
@@ -479,7 +479,7 @@ export function KeyboardShortcutsContent({
 					</section>;
 				})}
 						</> : null}
-				{filteredShortcuts.length === 0 ? <div className="shortcut-empty"><Search className="size-6" aria-hidden="true" /><p>{modifiedOnly && !query ? t("shortcut.noModified") : t("shortcut.noMatching")}</p><span>{modifiedOnly && !query ? t("shortcut.noModifiedHelp") : t("shortcut.noMatchingHelp")}</span><Button type="button" variant="outline" onClick={() => { setQuery(""); setModifiedOnly(false); searchRef.current?.focus(); }}>{t("shortcut.showAll")}</Button></div> : null}
+				{filteredShortcuts.length === 0 ? <div className="shortcut-empty"><Search className="size-6" aria-hidden="true" /><p>{modifiedOnly && !query ? t("shortcut.noModified") : t("shortcut.noMatching")}</p><span>{modifiedOnly && !query ? t("shortcut.noModifiedHelp") : t("shortcut.noMatchingHelp")}</span><Button type="button" variant="secondary" onClick={() => { setQuery(""); setModifiedOnly(false); searchRef.current?.focus(); }}>{t("shortcut.showAll")}</Button></div> : null}
 						</div>
 					</div>
 				</SettingsSection>

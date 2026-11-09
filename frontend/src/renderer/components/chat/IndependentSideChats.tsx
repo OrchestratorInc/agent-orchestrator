@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
@@ -623,7 +623,7 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
 			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
-			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!enabled) throw new Error("Side chats are currently available only for local Orchestrator-managed sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
 			if (excerpt) {
 				const sizeError = excerptSizeError([excerpt]);
@@ -1508,7 +1508,7 @@ export function useIndependentSideChats(
 					<Button type="button" size="sm" onClick={() => void resolveInput(activeId, requestId, "accept")}>
 						{t("sideChat.submit")}
 					</Button>
-					<Button type="button" size="sm" variant="outline" onClick={() => void resolveInput(activeId, requestId, "decline")}>
+					<Button type="button" size="sm" variant="secondary" onClick={() => void resolveInput(activeId, requestId, "decline")}>
 						{t("sideChat.decline")}
 					</Button>
 				</div>
@@ -1526,7 +1526,7 @@ export function useIndependentSideChats(
 				{pendingCloses.some((side) => side.id === activeId) ? (
 					<div className="p-4" role="status">
 						<p>{t("sideChat.closing")}</p>
-						<Button type="button" variant="outline" size="sm" disabled={closing} onClick={() => {
+						<Button type="button" variant="secondary" size="sm" disabled={closing} onClick={() => {
 							if (!currentActiveId) return;
 							setClosing(true);
 							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
@@ -1577,7 +1577,7 @@ export function useIndependentSideChats(
 						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => void create(undefined, true).catch(() => undefined)}
 								disabled={!canCreate || pending}
@@ -1587,7 +1587,7 @@ export function useIndependentSideChats(
 						) : snapshot.side.state === "failed" ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() =>
 									void apiClient
@@ -1758,7 +1758,7 @@ export function useIndependentSideChats(
 						{error ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => {
 									setError(undefined);

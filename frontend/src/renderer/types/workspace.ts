@@ -96,7 +96,7 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+export type SessionBranchState = { commits: number; remoteBranch?: string; remoteHead?: string; unpushed: number };
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
@@ -321,10 +321,12 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, for sessions whose output includes artifacts. */
+/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
-	return session.artifactFiles ?? [];
+	return [...(session.artifactFiles ?? [])].sort(
+		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+	);
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {

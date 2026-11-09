@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardSession } from "./api";
+import { View } from "react-native";
 
 const fixtures = vi.hoisted(() => ({
 	platform: "ios",
@@ -64,7 +65,7 @@ vi.mock("./haptics", () => ({ haptics: { success: vi.fn(), error: vi.fn(), warni
 vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: {} }) }));
 vi.mock("./refreshControlColors", () => ({ refreshControlColors: () => ({}) }));
 
-import { WorkerBoardList } from "./worker-board-list";
+import { updatesPillTop, WorkerBoardList } from "./worker-board-list";
 
 let renderer: ReactTestRenderer;
 
@@ -104,6 +105,32 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
 
+describe("updatesPillTop", () => {
+	it("keeps the pill below whichever is lower: the header's bottom or the bar", () => {
+		expect(updatesPillTop({ overlayTopInset: 116, headerHeight: 52, scrollY: -116 })).toBe(176);
+		expect(updatesPillTop({ overlayTopInset: 116, headerHeight: 52, scrollY: 200 })).toBe(124);
+		expect(updatesPillTop({ overlayTopInset: 0, headerHeight: 0, scrollY: 0 })).toBe(8);
+	});
+});
+
+describe("WorkerBoardList's pull to refresh", () => {
+	const spinner = () => renderer.root.findByType("FlatList" as never).props.refreshControl.props;
+
+	// UIKit already sets iOS's spinner under the large-title bar. An offset
+	// moved it a whole header height lower, onto the rows, and it jumped as the
+	// bar's height changed during the pull.
+	it("leaves iOS's spinner where UIKit puts it, even under a clear header", () => {
+		act(() => { renderer = create(board([older], { overlayTopInset: 152 })); });
+		expect(spinner().progressViewOffset).toBeUndefined();
+	});
+
+	it("starts Android's spinner below the bar the list runs under", () => {
+		fixtures.platform = "android";
+		act(() => { renderer = create(board([older], { overlayTopInset: 80 })); });
+		expect(spinner().progressViewOffset).toBe(80);
+	});
+});
+
 describe("WorkerBoardList's updated pill", () => {
 	it("holds the order behind the pill until it is tapped", () => {
 		holdNews();
@@ -129,6 +156,43 @@ describe("WorkerBoardList's updated pill", () => {
 		expect(renderer.root.findByType("FlatList" as never).props.scrollToOverflowEnabled).toBe(true);
 		act(() => pill()!.props.onPress());
 		expect(fixtures.scrollToOffset).toHaveBeenCalledWith({ offset: -116, animated: false });
+	});
+
+	// #7982: the pill sat at the bar's bottom, which is where the machine chip
+	// row rests under the large title, and hid the chosen machine.
+	describe("placement", () => {
+		const top = () => [pill()!.props.style({ pressed: false })].flat().find((style: { top?: number }) => style && style.top !== undefined)?.top;
+		const header = <View testID="chips" />;
+		const scroll = (y: number) => act(() => renderer.root.findByType("FlatList" as never).props.onScroll({ nativeEvent: { contentOffset: { y } } }));
+		const layoutHeader = (height: number) => act(() => renderer.root.findByProps({ testID: "chips" }).parent!.props.onLayout({ nativeEvent: { layout: { height } } }));
+
+		it("rests below iOS's header rows, not over the chips under the large title", () => {
+			holdNews({ overlayTopInset: 116, ListHeaderComponent: header });
+			act(() => renderer.root.findByType("SafeAreaListener" as never).props.onChange({ insets: { top: 116, bottom: 83 }, frame: { height: 852 } }));
+			layoutHeader(52);
+			expect(top()).toBe(116 + 52 + 8);
+		});
+
+		it("follows the header up as the list scrolls, then stays below the bar", () => {
+			holdNews({ overlayTopInset: 116, ListHeaderComponent: header });
+			layoutHeader(52);
+			scroll(-116 + 30);
+			expect(top()).toBe(116 + 52 - 30 + 8);
+			scroll(400);
+			expect(top()).toBe(116 + 8);
+		});
+
+		it("rests below Android's header, whose bar spacer is inside it", () => {
+			fixtures.platform = "android";
+			holdNews({ overlayTopInset: 64, ListHeaderComponent: header });
+			layoutHeader(64 + 52);
+			expect(top()).toBe(64 + 52 + 8);
+		});
+
+		it("sits just below the bar when the page has no header rows", () => {
+			holdNews({ overlayTopInset: 116 });
+			expect(top()).toBe(116 + 8);
+		});
 	});
 
 	it("scrolls once per tap and never again on a later re-sort", () => {

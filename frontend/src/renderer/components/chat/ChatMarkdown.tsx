@@ -37,7 +37,7 @@ import Markdown, { defaultUrlTransform, type Components, type Options } from "re
 import remarkGfm from "remark-gfm";
 import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
-import { WrapText } from "lucide-react";
+import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
