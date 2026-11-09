@@ -155,7 +155,7 @@ func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, worksp
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("open workspace AO directory: %w", err)
+		return fmt.Errorf("open workspace .ao directory: %w", err)
 	}
 	defer func() { _ = aoRoot.Close() }()
 	sourceRoot, err := openChildDir(ctx, aoRoot, "attachments", false, 0)

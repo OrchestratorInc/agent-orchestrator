@@ -413,6 +413,12 @@ jobs:
     if: contains(fromJSON(inputs.lanes), 'frontend')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Two runners, half the spec files each: the suite is bound by the single
+    # Vite dev server, so more workers on one runner don't help.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     container:
       # Keep this aligned with Playwright in frontend/package-lock.json.
       image: mcr.microsoft.com/playwright:v1.60.0-noble
@@ -436,4 +442,16 @@ jobs:
         working-directory: packages/product-ui
 
       - name: Run renderer smoke suite
-        run: CI=true npm run test:e2e:renderer
+        run: CI=true npm run test:e2e:renderer -- --shard=${{ matrix.shard }}/2
+
+      # Screenshots and attachments from failed specs, so a flaky pixel check
+      # can be inspected instead of only re-run.
+      - name: Upload renderer smoke results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # One name per attempt, so a re-run's upload can't clash with the first.
+          name: renderer-smoke-results-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

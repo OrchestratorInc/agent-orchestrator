@@ -290,12 +290,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
-	// The conversation scrolls up under a clear bar. iOS 26's is the system's
+	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
 	// turned it off. Android's bar frosts it out with the page's colour (see
-	// `frost`), as the board tabs' bars do. The route also holds terminal
-	// sessions, so the stack's own bar comes back when this screen goes.
+	// `frost`), as the board tabs' bars do. Every other iOS keeps the stack's own
+	// bar (see `CLEAR_HEADER`). The route also holds terminal sessions, so the
+	// stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
 		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
@@ -881,10 +882,12 @@ function Failure({ children }: { children: ReactNode }) {
 }
 
 /**
- * The conversation runs on under a clear bar: iOS 26's glass, and on Android
- * the bar the frost lies behind. Older iOS keeps the stack's solid bar.
+ * The conversation runs on under a clear bar: iOS 27's glass, and on Android
+ * the bar the frost lies behind. Every other iOS keeps the stack's own bar, as
+ * a terminal session does. iOS 26's glass blurred only the status bar over
+ * this list, leaving the title over sharp text, and older versions have none.
  */
-const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";
+const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
 
 /** How much of the screen the clear header covers; nothing under a solid one. */
 function useGlassHeaderOverlap(): number {

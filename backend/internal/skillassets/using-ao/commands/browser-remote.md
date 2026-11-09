@@ -1,7 +1,7 @@
 # ao browser on a remote host
 
 Use `ao browser` to control the configured remote Chromium browser shown in
-AO's Browser panel. The browser service and app must already be running; open
+Orchestrator's Browser panel. The browser service and app must already be running; open
 the app's actual runtime URL with `ao browser open`.
 
 In the current remote-host setup, sessions share tabs, cookies, and logins in

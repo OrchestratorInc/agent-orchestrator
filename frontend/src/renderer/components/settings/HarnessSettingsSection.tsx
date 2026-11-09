@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { Search } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { RadioGroup } from "radix-ui";
 import { useTranslation } from "react-i18next";

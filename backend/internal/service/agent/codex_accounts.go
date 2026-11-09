@@ -229,7 +229,7 @@ func (m *codexAccountManager) detectCapabilities(ctx context.Context) domain.Cod
 	} else {
 		capabilities.GlobalSwitch = domain.CodexCapabilityObservation{
 			State: domain.CodexCapabilitySupported, ReasonCode: domain.CodexCapabilityReasonSupported,
-			Reason: "AO can switch file-backed Codex credentials on this device.",
+			Reason: "Orchestrator can switch file-backed Codex credentials on this device.",
 		}
 	}
 	m.mu.Lock()

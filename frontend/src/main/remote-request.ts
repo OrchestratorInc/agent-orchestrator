@@ -12,7 +12,7 @@ export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon
 
 export class IncompatibleRemoteVersionError extends Error {
 	constructor() {
-		super("AO versions are incompatible. Update AO on this computer and the remote host.");
+		super("Orchestrator versions are incompatible. Update Orchestrator on this computer and the remote host.");
 		this.name = "IncompatibleRemoteVersionError";
 	}
 }

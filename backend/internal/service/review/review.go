@@ -613,12 +613,12 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		// Nothing is tracked, so the review cannot go ahead; say the lookup
 		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
-		return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+		return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
 	switch len(found.Own) {
 	case 0:
 		if len(found.OtherAuthor) > 0 {
-			return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which AO does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
+			return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which Orchestrator does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
 		}
 		return true, nil
 	case 1:
@@ -630,7 +630,7 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		}
 		return false, nil
 	}
-	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that Orchestrator does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
 }
 
 // retryCommands lists the `ao review trigger --pr` command for each URL.

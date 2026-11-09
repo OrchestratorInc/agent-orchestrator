@@ -1069,7 +1069,7 @@ func TestReconcileLive_KeepsAnInterruptedAsyncSpawn(t *testing.T) {
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionFailed,
-		ProvisionError: "AO restarted before this session finished starting",
+		ProvisionError: "Orchestrator restarted before this session finished starting",
 	}
 
 	if err := m.reconcileLive(context.Background(), st.sessions["mer-1"]); err != nil {

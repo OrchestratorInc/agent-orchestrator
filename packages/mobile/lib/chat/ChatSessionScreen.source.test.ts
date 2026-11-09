@@ -127,3 +127,13 @@ describe("the composer and the keyboard", () => {
 		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
 	});
 });
+
+// iOS 26's glass blurred only the status bar over the conversation and left
+// the title over sharp text; iOS 27's covers the whole bar.
+describe("the bar over the conversation", () => {
+	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
+		expect(screenSource).not.toContain("headerBlurEffect");
+	});
+});

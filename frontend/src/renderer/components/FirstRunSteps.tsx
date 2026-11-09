@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, FolderClosed, MessageSquarePlus } from "lucide-react";
+import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,7 +23,7 @@ function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onB
 	const { t } = useTranslation();
 	return (
 		<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-			<Button type="button" variant="outline" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
 				<ChevronLeft className="size-4" aria-hidden="true" />
 			</Button>
 			<div className="min-w-0 flex-1 pr-8">
@@ -260,8 +260,8 @@ export function FirstRunSources({
 			</div>
 			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
 			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
-				{tile(<FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
-				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
 			</div>
 		</div>
 	);

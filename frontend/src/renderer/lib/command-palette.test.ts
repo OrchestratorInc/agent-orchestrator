@@ -167,9 +167,9 @@ describe("buildCommands grouping", () => {
 		});
 		const map = byId(items);
 		expect(map.get("current-new-task")?.disabled).toBe(true);
-		expect(map.get("current-new-task")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-new-task")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-open-orchestrator")?.disabled).toBe(true);
-		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-project-settings")?.disabled).toBeFalsy();
 	});
 

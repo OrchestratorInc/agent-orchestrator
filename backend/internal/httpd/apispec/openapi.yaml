@@ -19181,6 +19181,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinkRefused:
+          type: boolean
         accountLinked:
           type: boolean
         browserRemoteAccess:
@@ -19216,6 +19218,7 @@ components:
       required:
       - enabled
       - accountLinked
+      - accountLinkRefused
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
@@ -20432,6 +20435,8 @@ components:
         previewUrl:
           type: string
         rawUrl:
+          type: string
+        shareUrl:
           type: string
         size:
           format: int64

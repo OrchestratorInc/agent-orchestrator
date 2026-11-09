@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Circle, Clock, Loader2, X } from "lucide-react";
+import { Check, ChevronRight, Circle, Clock, Loader2, X } from "@/components/app-icons";
 import { type CSSProperties, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";

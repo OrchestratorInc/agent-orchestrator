@@ -719,6 +719,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
 		waking = true
 	}
+	if sessionFound && s.accountMoveAwaitingTarget(ctx, cfg.SessionID) {
+		waking = true
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -1366,6 +1369,8 @@ func (s *Service) Send(
 			return domain.ConversationTurn{}, err
 		}
 	}
+	behindAccountMove := !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil &&
+		s.accountMoveAwaitingTarget(ctx, id)
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
 		if controller, controllerErr := s.Controller(id); controllerErr == nil {
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
@@ -1393,10 +1398,10 @@ func (s *Service) Send(
 		msg.Text = reports.AppendToUserMessage(msg.Text)
 	}
 	var turn domain.ConversationTurn
-	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {
+	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil || behindAccountMove {
 		// Keep messages on the durable queue until provisioning finishes so a
 		// new message cannot overtake the opening prompt during handoff.
-		turn, err = s.queueWithoutController(ctx, record, msg)
+		turn, err = s.queueWithoutController(ctx, record, msg, behindAccountMove)
 		if errors.Is(err, ErrNotProvisioning) {
 			// Startup may have become ready after the first read. The store
 			// refused a stale queue append; hand the message to its controller.
@@ -2892,7 +2897,7 @@ func (s *Service) relayChatTurn(
 			return "", err
 		}
 		if record.HibernatedAt != nil {
-			turn, err := s.queueWithoutController(ctx, record, msg)
+			turn, err := s.queueWithoutController(ctx, record, msg, false)
 			if err == nil {
 				if turn.ID != "" {
 					s.startBackgroundWake(id)
@@ -3089,7 +3094,7 @@ func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionVal
 		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
 	}
 	if configID == "mode" && isCopilotAutopilot(value.Select) {
-		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+		return fmt.Errorf("%w: Copilot Autopilot bypasses Orchestrator approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
 	}
 	return nil
 }

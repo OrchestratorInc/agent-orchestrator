@@ -1506,6 +1506,46 @@ func TestActivity_NewNativeConversationClearsPriorConversationCheckpoint(t *test
 	}
 }
 
+// TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity pins the
+// plugin-side child filter from the lifecycle side: the OpenCode plugins forward
+// only parent-session events, so folded subagent activity must never move the
+// persisted native id (the restore handle) or reset the parent conversation
+// checkpoint. A child id arriving here would be a plugin regression.
+func TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
+		t.Run(string(harness), func(t *testing.T) {
+			m, store, _ := newManager()
+			rec := working("mer-1")
+			rec.Harness = harness
+			rec.Metadata.RuntimeLaunchID = "launch-current"
+			rec.Metadata.AgentSessionID = "native-parent"
+			rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+			rec.Metadata.LatestUserPrompt = "parent prompt"
+			rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointPrompt
+			store.sessions[rec.ID] = rec
+
+			for _, s := range []ports.ActivitySignal{
+				{Valid: true, State: domain.ActivityActive, Event: "active", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityBlocked, Event: "permission-blocked", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityActive, Event: "permission-resolved", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityActive, Event: "active", LaunchID: "launch-current", AgentSessionID: "native-parent", ToolName: "read", ToolUseID: "folded-child-tool"},
+			} {
+				if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+					t.Fatalf("%s: %v", s.Event, err)
+				}
+				got := store.sessions[rec.ID].Metadata
+				if got.AgentSessionID != "native-parent" {
+					t.Fatalf("after %s: AgentSessionID = %q, want native-parent", s.Event, got.AgentSessionID)
+				}
+				if got.ConversationCheckpointState != domain.ConversationCheckpointPrompt || got.LatestUserPrompt != "parent prompt" {
+					t.Fatalf("after %s: checkpoint = %q prompt = %q, want the parent turn intact",
+						s.Event, got.ConversationCheckpointState, got.LatestUserPrompt)
+				}
+			}
+		})
+	}
+}
+
 func TestActivity_NewRuntimeLaunchClearsPriorConversationCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
 	rec := working("mer-1")

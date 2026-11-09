@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -484,6 +485,10 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 	account, err := s.find(ctx, def)
 	if err != nil {
 		return domain.AgentAccount{}, err
+	}
+	// A custom Codex model provider does not use the account's sign-in.
+	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+		return account, nil
 	}
 	r := s.cachedReading(account.ID)
 	if !r.knownUnusable() {
