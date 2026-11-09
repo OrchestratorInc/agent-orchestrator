@@ -147,13 +147,9 @@ function UpdatePill({ children, ...props }: React.ComponentProps<typeof Button>)
 	);
 }
 
-function LeadDot({ tone = "accent" }: { tone?: "accent" | "danger" }) {
-	return (
-		<span
-			aria-hidden="true"
-			className={cn("size-2 rounded-full", tone === "accent" ? "bg-logo-accent" : "bg-destructive")}
-		/>
-	);
+/** Marks a failed update; the other states keep the slot empty. */
+function FailedDot() {
+	return <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />;
 }
 
 /**
@@ -225,7 +221,8 @@ export function SidebarUpdateRow({
 	const action = useSidebarUpdateAction(status);
 	if (action === null) return null;
 
-	let lead: React.ReactNode;
+	// Empty for the calm states, so every title still lines up with Settings.
+	let lead: React.ReactNode = null;
 	let title: string;
 	let titleContent: React.ReactNode = null;
 	let caption: React.ReactNode = null;
@@ -246,7 +243,6 @@ export function SidebarUpdateRow({
 				/>
 			);
 		}
-		lead = <LeadDot />;
 		pill = (
 			<UpdatePill
 				aria-label={
@@ -283,7 +279,6 @@ export function SidebarUpdateRow({
 		const version = displayVersion(action.version);
 		title = t("shell.updateReadyToInstall");
 		caption = t("shell.updateRestartToFinish");
-		lead = <LeadDot />;
 		pill = (
 			<UpdatePill
 				aria-label={
@@ -300,7 +295,7 @@ export function SidebarUpdateRow({
 	} else {
 		title = t("shell.updateFailed");
 		caption = action.phase === "install" ? t("shell.updateInstallFailed") : t("shell.updateDownloadFailed");
-		lead = <LeadDot tone="danger" />;
+		lead = <FailedDot />;
 		pill = (
 			<UpdatePill
 				aria-label={t("shell.retryUpdate")}
