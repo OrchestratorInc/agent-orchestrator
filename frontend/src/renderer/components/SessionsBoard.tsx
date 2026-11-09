@@ -271,6 +271,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
 			freestyle={startsInPlace || autoStartPending}
 			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
+			harness={workspace?.orchestratorAgent ?? workspace?.sessions.find((session) => session.kind === "orchestrator")?.provider}
 		/>;
 	}
 
