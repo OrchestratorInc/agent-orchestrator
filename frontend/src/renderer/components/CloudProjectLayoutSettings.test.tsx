@@ -222,8 +222,15 @@ it("shows the working folder in the app's language", async () => {
 	}
 });
 
-it("lists a workspace's repositories as its own, without an agent start choice, and adds a local folder", async () => {
-	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }] }) });
+// The control plane answers a settings write with the whole project, layout included.
+function workspacePatches() {
+	mocks.patch.mockImplementation((_org: string, _id: string, body: { config: Record<string, unknown> }) =>
+		Promise.resolve({ project: project({ layout: "workspace", ...body.config }) }));
+}
+
+it("lists a workspace's repositories as its own, without an agent start choice, and saves an uploaded folder at once", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x", branch: "develop" }] }) });
 	mocks.createRepository.mockResolvedValue({
 		repository: repository("9", "notes"),
 		created: true,
@@ -232,7 +239,8 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
 	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
 	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import" });
-	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	const onSaveState = vi.fn();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} />);
 
 	expect(await screen.findByText("Workspace repositories")).toBeInTheDocument();
 	expect(screen.queryByText("Agent starts in")).toBeNull();
@@ -242,16 +250,20 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 	await waitFor(() => expect(push).toHaveBeenCalledWith({ folder: "/Users/me/notes", pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git", branch: "main" }));
 	// The new repository goes in the workspace's own GitHub account.
 	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from AO" });
-	expect(await screen.findByText("../notes")).toBeInTheDocument();
-	fireEvent.submit(document.getElementById("project-settings-form")!);
+	// Saved without Save, so leaving Settings never strands the new repository;
+	// a stored branch is kept.
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2]).toEqual({
-		config: { repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/notes" }] },
+		config: { repos: [{ url: "https://github.com/acme/11x", branch: "develop" }, { url: "https://github.com/acme/notes" }] },
 	});
+	expect(await screen.findByText("../notes")).toBeInTheDocument();
+	// Nothing is left to save.
+	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ dirty: false, phase: "saved" })));
 	choose.mockRestore();
 });
 
 it("names a folder's repository before uploading it, and retries without making it again", async () => {
+	workspacePatches();
 	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
 	mocks.createRepository.mockReset().mockResolvedValue({
 		repository: repository("9", "notes-app"),
@@ -274,7 +286,8 @@ it("names a folder's repository before uploading it, and retries without making 
 	await userEvent.type(name, "notes-app");
 	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
 
-	expect(await screen.findByText("Could not upload notes: remote hung up")).toBeInTheDocument();
+	expect(await screen.findByText("Could not upload notes.")).toBeInTheDocument();
+	expect(screen.getByText("Could not upload notes: remote hung up")).toBeInTheDocument();
 	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes-app", owner: "acme", description: "Uploaded from AO" });
 	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
 
@@ -283,4 +296,83 @@ it("names a folder's repository before uploading it, and retries without making 
 	expect(push).toHaveBeenCalledTimes(2);
 	choose.mockRestore();
 	push.mockRestore();
+});
+
+it("checks a folder's repository against the workspace before making it", async () => {
+	mocks.createRepository.mockReset();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }] }) });
+	vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/11x");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/11x", repos: [] });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	// A new acme/11x would be the repository already in the workspace.
+	expect(await screen.findByText("acme/11x is listed twice.")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+	const name = screen.getByLabelText("Repository name for /Users/me/11x");
+	await userEvent.clear(name);
+	await userEvent.type(name, "alice");
+	// The main repository's folder is taken too.
+	expect(await screen.findByText("acme/alice is already the main repository.")).toBeInTheDocument();
+	await userEvent.clear(name);
+	await userEvent.type(name, "repository");
+	expect(await screen.findByText(/which AO uses itself/)).toBeInTheDocument();
+	await userEvent.clear(name);
+	await userEvent.type(name, "site.git");
+	expect(await screen.findByText(/is not a valid repository name/)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+	expect(mocks.createRepository).not.toHaveBeenCalled();
+});
+
+it("offers no folder upload once the workspace is full", async () => {
+	const repos = Array.from({ length: 10 }, (_, i) => ({ url: `https://github.com/acme/r${i}` }));
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos }) });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	expect(await screen.findByRole("button", { name: "Add a local folder" })).toBeDisabled();
+	expect(screen.getAllByText("A project can have at most 10 additional repositories.").length).toBeGreaterThan(0);
+});
+
+it("says a repository folder uploads its commits and holds the dialog open while it uploads", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	mocks.createRepository.mockReset().mockResolvedValue({ repository: repository("9", "notes"), created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" });
+	vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [{ name: "notes", path: "/Users/me/notes", relativePath: ".", branch: "auto", remote: "", hasRemote: false, isRepo: true, hasCommit: true }] });
+	vi.spyOn(aoBridge.app, "getRepositoryBranch").mockResolvedValue("draft");
+	let finishPush: (value: Awaited<ReturnType<typeof aoBridge.cloud.pushFolderToRepository>>) => void = () => undefined;
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockImplementation(() => new Promise((resolve) => { finishPush = resolve; }));
+	const onSaveState = vi.fn();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	expect(await screen.findByText("Uploads the commits of draft, not uncommitted changes")).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+	await waitFor(() => expect(push).toHaveBeenCalledOnce());
+	// Settings waits for an upload as for a save in flight.
+	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ requestPending: true, phase: "saving" })));
+
+	finishPush({ status: "pushed", branch: "main", commit: "abc", source: "head" });
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ requestPending: false, phase: "saved", dirty: false })));
+	push.mockRestore();
+});
+
+it("asks to sign in again when an upload finds the session expired", async () => {
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	mocks.createRepository.mockReset().mockResolvedValue({ repository: repository("9", "notes"), created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" });
+	vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "error", code: "signed_out", message: "Your AO Cloud session expired." });
+	const signIn = vi.spyOn(aoBridge.cloud, "signIn").mockResolvedValue(undefined as never);
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
+
+	expect(await screen.findByText("Your AO Cloud session expired. Sign in again, then try again.")).toBeInTheDocument();
+	expect(signIn).toHaveBeenCalledOnce();
+	expect(mocks.patch).not.toHaveBeenCalled();
+	push.mockRestore();
+	signIn.mockRestore();
 });

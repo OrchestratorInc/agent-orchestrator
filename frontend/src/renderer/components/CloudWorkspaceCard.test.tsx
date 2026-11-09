@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
 	role: "admin" as string | undefined,
 	chooseDirectory: vi.fn(),
 	scanImportFolder: vi.fn(),
+	getRepositoryBranch: vi.fn(),
 	openExternal: vi.fn(),
+	signIn: vi.fn(),
 	pushFolderToRepository: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	listGitHubInstallations: vi.fn(),
@@ -25,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
-		app: { chooseDirectory: mocks.chooseDirectory, scanImportFolder: mocks.scanImportFolder, openExternal: mocks.openExternal },
+		app: { chooseDirectory: mocks.chooseDirectory, scanImportFolder: mocks.scanImportFolder, getRepositoryBranch: mocks.getRepositoryBranch, openExternal: mocks.openExternal },
 		cloud: { pushFolderToRepository: mocks.pushFolderToRepository },
 	},
 }));
@@ -75,9 +77,13 @@ function repo(fullName: string, githubRepositoryId: string) {
 	return { githubRepositoryId, name, fullName, htmlUrl: `https://github.com/${fullName}`, defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" };
 }
 
-function renderCard(onCreated = vi.fn()) {
-	render(<CloudWorkspaceCard onAuthRequired={vi.fn()} onBack={vi.fn()} onCreated={onCreated} />, { wrapper: Providers });
-	return onCreated;
+function renderCard(onCreated = vi.fn(), onBusyChange?: (busy: boolean) => void) {
+	const view = render(<CloudWorkspaceCard onAuthRequired={vi.fn()} onBack={vi.fn()} onCreated={onCreated} onBusyChange={onBusyChange} />, { wrapper: Providers });
+	return Object.assign(onCreated, { unmount: view.unmount });
+}
+
+function scanned(path: string, overrides: Record<string, unknown>) {
+	return { path, repos: [{ name: "notes", path, relativePath: ".", branch: "auto", remote: "", hasRemote: false, isRepo: true, hasCommit: true, status: "ok", ...overrides }] };
 }
 
 async function addRepository(user: ReturnType<typeof userEvent.setup>, fullName: string) {
@@ -89,6 +95,7 @@ beforeEach(() => {
 	mocks.role = "admin";
 	mocks.chooseDirectory.mockReset();
 	mocks.scanImportFolder.mockReset().mockImplementation(async ({ path }: { path: string }) => ({ path, repos: [] }));
+	mocks.getRepositoryBranch.mockReset().mockResolvedValue(undefined);
 	mocks.openExternal.mockReset();
 	mocks.pushFolderToRepository.mockReset().mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import" });
 	mocks.listUserProviderConnections.mockReset().mockResolvedValue({
@@ -123,18 +130,48 @@ describe("CloudWorkspaceCard", () => {
 		expect(mocks.pushFolderToRepository).not.toHaveBeenCalled();
 	});
 
-	it("says a git repository folder uploads its commits, not its uncommitted changes", async () => {
+	it("names the checked-out branch a git repository folder uploads, not its origin's default", async () => {
 		const user = userEvent.setup();
 		renderCard();
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
-		mocks.scanImportFolder.mockResolvedValue({
-			path: "/Users/me/notes",
-			repos: [{ name: "notes", path: "/Users/me/notes", relativePath: ".", branch: "draft", remote: "", hasRemote: false, isRepo: true, hasCommit: true, status: "ok" }],
-		});
+		// The scan reports origin's default branch ("auto" without one); the
+		// push sends what is checked out.
+		mocks.scanImportFolder.mockResolvedValue(scanned("/Users/me/notes", { branch: "main" }));
+		mocks.getRepositoryBranch.mockResolvedValue("draft");
 
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 
 		expect(await screen.findByText("Uploads the commits of draft, not uncommitted changes")).toBeInTheDocument();
+		expect(mocks.getRepositoryBranch).toHaveBeenCalledWith("/Users/me/notes");
+	});
+
+	it("says a detached repository folder uploads its checked-out commit", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.scanImportFolder.mockResolvedValue(scanned("/Users/me/notes", {}));
+
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+
+		expect(await screen.findByText("Uploads the checked-out commit and its history, not uncommitted changes")).toBeInTheDocument();
+		expect(screen.queryByText(/commits of auto/)).not.toBeInTheDocument();
+	});
+
+	it("treats a linked worktree as a repository and a repository without commits as files", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/notes-wt");
+		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/notes-wt", { isRepo: false, hasCommit: false, needsGitInit: true, branch: "" }));
+		mocks.getRepositoryBranch.mockResolvedValueOnce("wt-branch");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		expect(await screen.findByText("Uploads the commits of wt-branch, not uncommitted changes")).toBeInTheDocument();
+
+		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/draft");
+		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/draft", { hasCommit: false }));
+		// git names the unborn branch, but there is no commit to push.
+		mocks.getRepositoryBranch.mockResolvedValueOnce("main");
+		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
+		expect(await screen.findByText("Uploaded to a new private repository")).toBeInTheDocument();
 	});
 
 	it("creates a workspace from repositories and a local folder", async () => {
@@ -200,7 +237,9 @@ describe("CloudWorkspaceCard", () => {
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
-		expect((await screen.findAllByText("Could not upload notes: remote hung up")).length).toBeGreaterThan(0);
+		// The reason in the app's language, with git's own words beside it.
+		expect((await screen.findAllByText("Could not upload notes.")).length).toBeGreaterThan(0);
+		expect(screen.getByText("Could not upload notes: remote hung up")).toBeInTheDocument();
 		expect(mocks.createGitHubProject).not.toHaveBeenCalled();
 		// Once made, the repository's name is fixed.
 		expect(screen.queryByLabelText("Repository name for notes")).not.toBeInTheDocument();
@@ -209,6 +248,82 @@ describe("CloudWorkspaceCard", () => {
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ws-1"));
 		expect(mocks.createGitHubRepository).toHaveBeenCalledTimes(1);
 		expect(mocks.pushFolderToRepository).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		["shallow_repository", "notes is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", false],
+		["lfs_unsupported", "notes uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", false],
+		["branch_exists", "The repository for notes already has commits, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove notes and add its repository from GitHub instead.", false],
+		// GitHub's own refusal may name the files, so it stays as detail.
+		["workflows_refused", "GitHub refused notes because it contains .github/workflows files and the AO GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", true],
+		["file_too_large", "notes has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", true],
+	])("explains a %s upload refusal in the app's language", async (code, text, keepsDetail) => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.pushFolderToRepository.mockResolvedValue({ status: "error", code, message: "English text from the main process" });
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		expect((await screen.findAllByText(text)).length).toBeGreaterThan(0);
+		// A message that says nothing more is not repeated.
+		expect(screen.queryByText("English text from the main process") !== null).toBe(keepsDetail);
+	});
+
+	it("keeps the main process's detail for a refusal it explains further", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.pushFolderToRepository.mockResolvedValue({ status: "error", code: "folder_has_repositories", message: "notes holds git repositories of its own (lib, vendor/x)." });
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		expect((await screen.findAllByText(/notes contains other git repositories or submodules/)).length).toBeGreaterThan(0);
+		expect(screen.getByText("notes holds git repositories of its own (lib, vendor/x).")).toBeInTheDocument();
+	});
+
+	it("says an owner or admin is needed only when the project create is refused", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.createGitHubRepository.mockRejectedValueOnce(new CloudCpError("You cannot create repositories here.", { status: 403, code: "forbidden" }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		expect((await screen.findAllByText("You cannot create repositories here.")).length).toBeGreaterThan(0);
+		expect(screen.queryByText(/needs an organization owner or admin/)).not.toBeInTheDocument();
+
+		mocks.createGitHubProject.mockRejectedValueOnce(new CloudCpError("Forbidden.", { status: 403, code: "forbidden" }));
+		await user.click(screen.getByRole("button", { name: "Create" }));
+		expect(await screen.findByText("Forbidden. A workspace with more than one repository needs an organization owner or admin.")).toBeInTheDocument();
+	});
+
+	it("reports itself busy while creating, and stops when closed mid-upload", async () => {
+		const user = userEvent.setup();
+		const onBusyChange = vi.fn();
+		const card = renderCard(vi.fn(), onBusyChange);
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		let finishPush: (value: unknown) => void = () => undefined;
+		mocks.pushFolderToRepository.mockImplementation(() => new Promise((resolve) => { finishPush = resolve; }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		await waitFor(() => expect(mocks.pushFolderToRepository).toHaveBeenCalledOnce());
+		expect(onBusyChange).toHaveBeenLastCalledWith(true);
+
+		card.unmount();
+		expect(onBusyChange).toHaveBeenLastCalledWith(false);
+		finishPush({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		// Nothing more runs for a card that is gone: no project, no navigation.
+		expect(mocks.createGitHubProject).not.toHaveBeenCalled();
+		expect(card).not.toHaveBeenCalled();
 	});
 
 	it("asks which account gets new repositories when several are connected", async () => {

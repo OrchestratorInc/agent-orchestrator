@@ -548,6 +548,32 @@ export function useFinishCloudProjectCreate() {
 	};
 }
 
+/**
+ * Tells the card's container whether it is creating, so a dialog holding it
+ * stays open (Escape, an outside click) until the work ends: a folder upload
+ * runs for minutes and cannot be cancelled. Reports false when it unmounts.
+ */
+export function useReportBusy(busy: boolean, onBusyChange?: (busy: boolean) => void) {
+	const report = useRef(onBusyChange);
+	report.current = onBusyChange;
+	useEffect(() => {
+		report.current?.(busy);
+	}, [busy]);
+	useEffect(() => () => report.current?.(false), []);
+}
+
+/** False once the component unmounts, so work that outlives it stops instead of acting for it. */
+export function useMountedRef() {
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+	return mounted;
+}
+
 /** What a new cloud project is: one main repository (and more beside it), or a workspace. */
 export type CloudCreateKind = "project" | "workspace";
 

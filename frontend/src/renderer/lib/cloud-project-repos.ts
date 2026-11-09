@@ -50,16 +50,19 @@ export function projectRepositoryUrls(project: Pick<CloudCpProject, "repositoryU
 /**
  * The GitHub repository name for a local folder: GitHub's own rule (letters,
  * digits, ".", "-" and "_", at most 100) with every other run of characters
- * made one "-". A name that is left empty, or only dots, becomes "repo".
+ * made one "-". A trailing ".git" is dropped (the control plane refuses it,
+ * since the git endpoint adds its own). A name that is left empty, or only
+ * dots, becomes "repo".
  */
 export function gitHubRepositoryNameFromFolder(folderName: string): string {
-	const name = folderName.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, 100).replace(/[-.]+$/g, "");
+	let name = folderName.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, 100);
+	while (/[-.]$/.test(name) || /\.git$/i.test(name)) name = name.replace(/\.git$/i, "").replace(/[-.]+$/g, "");
 	return name === "" ? "repo" : name;
 }
 
 /** Whether GitHub and the control plane accept name for a new repository. */
 export function isValidGitHubRepositoryName(name: string): boolean {
-	return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") && name !== "." && name !== "..";
+	return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") && name !== "." && name !== ".." && !/\.git$/i.test(name);
 }
 
 /**

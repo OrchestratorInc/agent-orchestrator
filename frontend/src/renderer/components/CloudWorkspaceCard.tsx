@@ -19,7 +19,11 @@ import { CloudCpError } from "../lib/cloud-cp";
 import {
 	createdRepositoryUrl,
 	createFolderRepository,
+	describeLocalFolder,
+	folderLabel,
 	FolderPushError,
+	committedUploadHint,
+	folderPushErrorText,
 	grantedRepositoryForRemote,
 	pushFolderToCreatedRepository,
 	repositoryOwner,
@@ -57,6 +61,8 @@ import {
 	useCloudCoderSetup,
 	useCloudGitHubAppConnection,
 	useFinishCloudProjectCreate,
+	useMountedRef,
+	useReportBusy,
 } from "./CloudProjectSetup";
 import { GitHubIcon } from "./GitHubIcon";
 import { SearchablePicker } from "./SearchablePicker";
@@ -84,17 +90,18 @@ export type WorkspaceMember =
 		/** The new repository's name, which is also its folder in the workspace. */
 		name: string;
 		/**
-		 * The checked-out branch when the folder is a git repository with a
-		 * commit: its commits are uploaded, not its uncommitted changes.
+		 * Set when the folder is the top of a git repository with a commit: its
+		 * checked-out commit and history are uploaded, not its uncommitted
+		 * changes. branch is absent when HEAD is detached.
 		 */
-		committedBranch?: string;
+		committed?: { branch?: string };
 		/** Set once the control plane made the repository; a retry never makes it again. */
 		created?: CreatedFolderRepository;
 		/** The folder is in its repository; a retry skips it. */
 		pushed?: boolean;
 	};
 
-type MemberProgress = { phase: "creating" | "uploading" | "done" | "failed"; message?: string };
+type MemberProgress = { phase: "creating" | "uploading" | "done" | "failed"; message?: string; detail?: string };
 
 let nextMemberId = 0;
 const memberId = () => `member-${++nextMemberId}`;
@@ -106,10 +113,6 @@ export function workspaceMemberUrl(member: WorkspaceMember, owner: string | unde
 	return canonicalGitHubUrl(`${owner || "new"}/${member.name}`);
 }
 
-function folderLabel(path: string): string {
-	return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
-}
-
 export function CloudWorkspaceCard({
 	dialog = false,
 	onAuthRequired,
@@ -117,6 +120,7 @@ export function CloudWorkspaceCard({
 	onClose,
 	onCreated,
 	onKindChange,
+	onBusyChange,
 }: {
 	dialog?: boolean;
 	onAuthRequired: () => void;
@@ -125,6 +129,8 @@ export function CloudWorkspaceCard({
 	onCreated: (projectId: string) => void;
 	/** Switches the card back to a single project. */
 	onKindChange?: (kind: CloudCreateKind) => void;
+	/** Whether a create (uploads included) is running; a dialog stays open meanwhile. */
+	onBusyChange?: (busy: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -152,6 +158,8 @@ export function CloudWorkspaceCard({
 	// The create request's key, kept while its body stays the same so a retry
 	// after a lost answer cannot make a second project.
 	const idempotency = useRef<{ body: string; key: string } | null>(null);
+	const mounted = useMountedRef();
+	useReportBusy(isCreating, onBusyChange);
 
 	const nameTrimmed = name.trim();
 	const nameInvalid = nameTrimmed === "" || [...nameTrimmed].length > 120;
@@ -200,15 +208,7 @@ export function CloudWorkspaceCard({
 		}
 		// A git repository whose origin the org already grants joins as that
 		// repository instead of being uploaded again.
-		let remote = "";
-		let committedBranch: string | undefined;
-		try {
-			const scanned = (await aoBridge.app.scanImportFolder({ path, mode: "project" })).repos[0];
-			remote = scanned?.remote ?? "";
-			if (scanned?.relativePath === "." && scanned.isRepo && scanned.hasCommit) committedBranch = scanned.branch || "HEAD";
-		} catch {
-			// Unreadable as a repository: it is uploaded as a folder.
-		}
+		const { remote, committed } = await describeLocalFolder(path);
 		const existing = grantedRepositoryForRemote(remote, granted);
 		if (existing) {
 			if (members.some((member) => member.kind === "repository" && member.githubRepositoryId === existing.githubRepositoryId)) {
@@ -218,7 +218,7 @@ export function CloudWorkspaceCard({
 			update([...members, { id: memberId(), kind: "repository", githubRepositoryId: existing.githubRepositoryId, fullName: existing.fullName, fromFolder: path }]);
 			return;
 		}
-		update([...members, { id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committedBranch ? { committedBranch } : {}) }]);
+		update([...members, { id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committed ? { committed } : {}) }]);
 	};
 	const remove = (id: string) => {
 		update(members.filter((member) => member.id !== id));
@@ -241,23 +241,32 @@ export function CloudWorkspaceCard({
 			setMembers([...working]);
 		};
 		const mark = (id: string, value: MemberProgress) => setProgress((current) => ({ ...current, [id]: value }));
-		let current: string | undefined;
+		let current: { id: string; path: string } | undefined;
+		// Which request failed: only the project create is refused for a
+		// member's role, so only its 403 says an owner or admin is needed.
+		let step: "repository" | "upload" | "project" = "repository";
 		try {
 			for (const [index, member] of working.entries()) {
 				if (member.kind !== "folder" || member.pushed) continue;
-				current = member.id;
+				current = { id: member.id, path: member.path };
 				let created = member.created;
 				if (!created) {
+					step = "repository";
 					mark(member.id, { phase: "creating" });
 					created = await createFolderRepository(client, org.id, { name: member.name.trim(), owner });
+					// Closed meanwhile: nothing more runs for a card that is gone.
+					if (!mounted.current) return;
 					save(index, { ...member, created });
 				}
+				step = "upload";
 				mark(member.id, { phase: "uploading" });
 				await pushFolderToCreatedRepository(member.path, created);
+				if (!mounted.current) return;
 				save(index, { ...member, created, pushed: true });
 				mark(member.id, { phase: "done" });
 			}
 			current = undefined;
+			step = "project";
 			// The new repositories are the org's now; the pickers list them.
 			void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org.id] });
 
@@ -279,16 +288,22 @@ export function CloudWorkspaceCard({
 			if (idempotency.current?.body !== bodyKey) idempotency.current = { body: bodyKey, key: crypto.randomUUID() };
 			const { project } = await client.createGitHubProject(org.id, body, { idempotencyKey: idempotency.current.key });
 			await finishCreate(project, offering);
+			if (!mounted.current) return;
 			onCreated(project.id);
 		} catch (err) {
+			if (!mounted.current) return;
 			if ((err instanceof CloudCpError && err.status === 401) || (err instanceof FolderPushError && err.code === "signed_out")) onAuthRequired();
 			if (err instanceof CloudCpError && err.code === "repository_owner_required") setOwnerRequired(true);
 			if (err instanceof CloudCpError && (err.code === "github_installation_required" || err.code === "github_installation_ineligible")) setInstallationNeeded(true);
-			const message = err instanceof CloudCpError && err.status === 403
-				? t("cloudWorkspace.forbidden", { defaultValue: "{{message}} A workspace with more than one repository needs an organization owner or admin.", message: err.message })
-				: err instanceof Error ? err.message : t("createProject.couldNotAdd");
-			if (current !== undefined) mark(current, { phase: "failed", message });
-			setSubmitError(message);
+			const failure = err instanceof FolderPushError && current !== undefined
+				? folderPushErrorText(t, err, current.path)
+				: {
+					message: err instanceof CloudCpError && err.status === 403 && step === "project"
+						? t("cloudWorkspace.forbidden", { defaultValue: "{{message}} A workspace with more than one repository needs an organization owner or admin.", message: err.message })
+						: err instanceof Error ? err.message : t("createProject.couldNotAdd"),
+				};
+			if (current !== undefined) mark(current.id, { phase: "failed", ...failure });
+			setSubmitError(failure.message);
 			setIsCreating(false);
 		}
 	};
@@ -447,8 +462,8 @@ function WorkspaceMemberRow({ member, owner, progress, disabled, onRename, onRem
 			: undefined
 		: member.created
 			? member.created.repository.fullName
-			: member.committedBranch
-				? t("cloudWorkspace.uploadsCommits", { defaultValue: "Uploads the commits of {{branch}}, not uncommitted changes", branch: member.committedBranch })
+			: member.committed
+				? committedUploadHint(t, member.committed)
 				: t("cloudWorkspace.newPrivateRepository", { defaultValue: "Uploaded to a new private repository" });
 	return (
 		<li className="flex min-w-0 items-center gap-3 px-3 py-2">
@@ -460,6 +475,9 @@ function WorkspaceMemberRow({ member, owner, progress, disabled, onRename, onRem
 				{detail ? <span className="block truncate text-[12px] leading-5 text-muted-foreground">{detail}</span> : null}
 				{progress?.phase === "failed" && progress.message ? (
 					<span className="block text-pretty text-[12px] leading-5 text-destructive" role="alert">{progress.message}</span>
+				) : null}
+				{progress?.phase === "failed" && progress.detail ? (
+					<span className="block whitespace-pre-line text-pretty text-[12px] leading-5 text-muted-foreground">{progress.detail}</span>
 				) : null}
 			</span>
 			{member.kind === "folder" && !member.created ? (

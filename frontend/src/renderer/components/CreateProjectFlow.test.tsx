@@ -33,6 +33,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	scanImportFolder: vi.fn(),
 	connectProviderAuth: vi.fn(),
 	openExternal: vi.fn(),
+	pushFolderToRepository: vi.fn(),
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ vi.mock("../lib/bridge", () => ({
 		},
 		cloud: {
 			connectProviderAuth: bridgeMocks.connectProviderAuth,
+			pushFolderToRepository: bridgeMocks.pushFolderToRepository,
 		},
 	},
 }));
@@ -120,6 +122,7 @@ const cloudMocks = vi.hoisted(() => ({
 	syncGitHubInstallation: vi.fn(),
 	listGitHubRepositories: vi.fn(),
 	createGitHubProject: vi.fn(),
+	createGitHubRepository: vi.fn(),
 	createStandaloneProject: vi.fn(),
 	getCoderTemplateParameters: vi.fn(),
 	listProjects: vi.fn(),
@@ -177,6 +180,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			syncGitHubInstallation: cloudMocks.syncGitHubInstallation,
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
+			createGitHubRepository: cloudMocks.createGitHubRepository,
 			createStandaloneProject: cloudMocks.createStandaloneProject,
 			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
 			evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) =>
@@ -433,6 +437,8 @@ beforeEach(() => {
 	cloudMocks.syncGitHubInstallation.mockReset().mockResolvedValue({ installation: {} });
 	cloudMocks.listGitHubRepositories.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	cloudMocks.createGitHubProject.mockReset().mockResolvedValue({ project: { id: "cp-app" } });
+	cloudMocks.createGitHubRepository.mockReset();
+	bridgeMocks.pushFolderToRepository.mockReset();
 	cloudMocks.createStandaloneProject.mockReset().mockResolvedValue({ project: { id: "cp-standalone" } });
 	cloudMocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [] });
 	githubDaemonMocks.getGitHubStatus.mockReset().mockResolvedValue({ connected: false });
@@ -2122,6 +2128,55 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled();
 		await user.click(screen.getByRole("tab", { name: "Project" }));
 		expect(screen.getByRole("heading", { name: "Create cloud project" })).toBeInTheDocument();
+	});
+
+	it("keeps the cloud dialog open while a workspace folder uploads", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{ id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization", status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "" }],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{ githubRepositoryId: "555", name: "api", fullName: "acme/api", htmlUrl: "https://github.com/acme/api", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" }],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubRepository.mockResolvedValue({
+			repository: { githubRepositoryId: "77", name: "notes", fullName: "acme/notes", htmlUrl: "https://github.com/acme/notes", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" },
+			created: true,
+			pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git",
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "ws-1", config: { layout: "workspace" } } });
+		bridgeMocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		bridgeMocks.scanImportFolder.mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+		let finishPush: (value: unknown) => void = () => undefined;
+		bridgeMocks.pushFolderToRepository.mockReset().mockImplementation(() => new Promise((resolve) => { finishPush = resolve; }));
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		const view = render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow mode="choose" sourceSignal={null} {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+		view.rerender(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow mode="choose" sourceSignal={{ source: "cloud", nonce: 1 }} {...noop} />
+			</ShellProvider>,
+		);
+
+		await user.click(await screen.findByRole("tab", { name: "Workspace" }));
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		await waitFor(() => expect(bridgeMocks.pushFolderToRepository).toHaveBeenCalledOnce());
+
+		// The upload cannot be cancelled, so Escape leaves the dialog where it is.
+		await user.keyboard("{Escape}");
+		expect(screen.getByRole("heading", { name: "Create cloud workspace" })).toBeInTheDocument();
+
+		finishPush({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("ws-1"));
+		expect(cloudMocks.createGitHubProject).toHaveBeenCalledOnce();
 	});
 
 	it("creates a project from a connected GitHub App repository", async () => {

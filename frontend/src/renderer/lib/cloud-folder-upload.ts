@@ -5,6 +5,7 @@
 // whose origin is a repository the org's GitHub App already grants is used as
 // that repository instead of being uploaded again.
 
+import type { TFunction } from "i18next";
 import type { PushFolderResult } from "../../preload";
 import { aoBridge } from "./bridge";
 import type { CloudCpClient, CloudCpGitHubAppRepository } from "./cloud-cp";
@@ -33,6 +34,56 @@ export function grantedRepositoryForRemote(remote: string, granted: readonly Clo
 /** The account a repository belongs to: "acme" for acme/widgets. */
 export function repositoryOwner(fullName: string): string {
 	return fullName.split("/")[0] ?? "";
+}
+
+/** The last segment of a local path: "notes" for /Users/me/notes/. */
+export function folderLabel(path: string): string {
+	return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+}
+
+/**
+ * What uploading a folder will send, as far as the app can tell before it
+ * runs: the folder's origin, and, when the folder is the top of a git
+ * repository with a commit, that its checked-out commit (and history) is
+ * uploaded rather than its files. branch is the checked-out branch, absent
+ * when HEAD is detached. The main process makes the same choice when it
+ * pushes (main/cloud-folder-push.ts).
+ */
+export type LocalFolderInfo = {
+	remote: string;
+	committed?: { branch?: string };
+};
+
+export async function describeLocalFolder(path: string): Promise<LocalFolderInfo> {
+	let remote = "";
+	let top: { isRepo: boolean; hasCommit: boolean; needsGitInit?: boolean } | undefined;
+	try {
+		const scanned = (await aoBridge.app.scanImportFolder({ path, mode: "project" })).repos[0];
+		remote = scanned?.remote ?? "";
+		if (scanned?.relativePath === ".") top = scanned;
+	} catch {
+		// Unreadable as a repository: it is uploaded as a folder.
+	}
+	let branch: string | undefined;
+	try {
+		// The checked-out branch, only for the top of a repository; undefined
+		// when detached, for a folder inside a repository, or outside any.
+		branch = (await aoBridge.app.getRepositoryBranch(path)) || undefined;
+	} catch {
+		branch = undefined;
+	}
+	if (top?.isRepo && top.hasCommit) return { remote, committed: { branch } };
+	// A linked worktree (or a submodule checkout) has a .git file, which the
+	// scan reads as a plain folder; git still reports its branch at its top.
+	if (top?.needsGitInit && branch) return { remote, committed: { branch } };
+	return { remote };
+}
+
+/** What a repository folder uploads: its checked-out commit and history, never uncommitted changes. */
+export function committedUploadHint(t: TFunction, committed: { branch?: string }): string {
+	return committed.branch
+		? t("cloudWorkspace.uploadsCommits", { defaultValue: "Uploads the commits of {{branch}}, not uncommitted changes", branch: committed.branch })
+		: t("cloudWorkspace.uploadsCheckedOutCommit", { defaultValue: "Uploads the checked-out commit and its history, not uncommitted changes" });
 }
 
 export async function createFolderRepository(
@@ -68,4 +119,40 @@ export async function pushFolderToCreatedRepository(folder: string, created: Cre
 
 export function createdRepositoryUrl(created: CreatedFolderRepository): string {
 	return canonicalGitHubUrl(created.repository.fullName);
+}
+
+/**
+ * The translated reason for each code the main process answers a failed
+ * upload with. A code it adds later falls back to push_failed's.
+ */
+const PUSH_ERROR_TEXT: Record<string, (t: TFunction, folder: string) => string> = {
+	invalid_request: (t, folder) => t("cloudWorkspace.pushError.invalidRequest", { defaultValue: "AO could not upload {{folder}}.", folder }),
+	signed_out: (t) => t("cloudWorkspace.pushError.signedOut", { defaultValue: "Your AO Cloud session expired. Sign in again, then try again." }),
+	folder_unavailable: (t, folder) => t("cloudWorkspace.pushError.folderUnavailable", { defaultValue: "{{folder}} cannot be uploaded.", folder }),
+	folder_too_large: (t, folder) => t("cloudWorkspace.pushError.folderTooLarge", { defaultValue: "{{folder}} is too large to upload. Add its large files to its .gitignore, or make it a git repository and add it from GitHub.", folder }),
+	folder_has_repositories: (t, folder) => t("cloudWorkspace.pushError.folderHasRepositories", { defaultValue: "{{folder}} contains other git repositories or submodules, whose files would not be uploaded. Add each of them to the workspace on its own.", folder }),
+	git_unavailable: (t) => t("cloudWorkspace.pushError.gitUnavailable", { defaultValue: "Uploading a folder needs git 2.31 or newer on this computer." }),
+	import_failed: (t, folder) => t("cloudWorkspace.pushError.importFailed", { defaultValue: "AO could not prepare {{folder}} for upload.", folder }),
+	push_failed: (t, folder) => t("cloudWorkspace.pushError.pushFailed", { defaultValue: "Could not upload {{folder}}.", folder }),
+	push_forbidden: (t, folder) => t("cloudWorkspace.pushError.pushForbidden", { defaultValue: "AO Cloud did not let you upload {{folder}} to its repository. Check that the AO GitHub App still has access to it, then try again.", folder }),
+	branch_exists: (t, folder) => t("cloudWorkspace.pushError.branchExists", { defaultValue: "The repository for {{folder}} already has commits, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove {{folder}} and add its repository from GitHub instead.", folder }),
+	shallow_repository: (t, folder) => t("cloudWorkspace.pushError.shallowRepository", { defaultValue: "{{folder}} is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", folder }),
+	lfs_unsupported: (t, folder) => t("cloudWorkspace.pushError.lfsUnsupported", { defaultValue: "{{folder}} uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", folder }),
+	file_too_large: (t, folder) => t("cloudWorkspace.pushError.fileTooLarge", { defaultValue: "{{folder}} has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", folder }),
+	workflows_refused: (t, folder) => t("cloudWorkspace.pushError.workflowsRefused", { defaultValue: "GitHub refused {{folder}} because it contains .github/workflows files and the AO GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", folder }),
+};
+
+/**
+ * Codes whose translated reason says everything the main process's message
+ * does; any other code keeps that message as a detail (the folders it names,
+ * git's own words, the git version it found).
+ */
+const SELF_EXPLAINED_CODES = new Set(["signed_out", "push_forbidden", "branch_exists", "shallow_repository", "lfs_unsupported"]);
+
+/** A failed upload in the app's language, with the main process's message as detail where it adds to it. */
+export function folderPushErrorText(t: TFunction, error: FolderPushError, folder: string): { message: string; detail?: string } {
+	const text = PUSH_ERROR_TEXT[error.code] ?? PUSH_ERROR_TEXT.push_failed;
+	const message = text(t, folderLabel(folder));
+	const detail = error.message.trim();
+	return SELF_EXPLAINED_CODES.has(error.code) || detail === "" || detail === message ? { message } : { message, detail };
 }

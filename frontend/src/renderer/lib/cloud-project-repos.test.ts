@@ -150,8 +150,15 @@ describe("cloud workspaces", () => {
 		expect(gitHubRepositoryNameFromFolder("café & co")).toBe("caf-co");
 		expect(gitHubRepositoryNameFromFolder("...")).toBe("repo");
 		expect(gitHubRepositoryNameFromFolder("a".repeat(120))).toHaveLength(100);
+		// The control plane refuses a name ending in ".git".
+		expect(gitHubRepositoryNameFromFolder("site.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("site.GIT.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("site-.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("-.git")).toBe("git");
+		expect(gitHubRepositoryNameFromFolder("digit")).toBe("digit");
 		expect(isValidGitHubRepositoryName("api-v2.1_x")).toBe(true);
-		for (const name of ["", ".hidden", "a b", "a/b", "x".repeat(101)]) expect(isValidGitHubRepositoryName(name), name).toBe(false);
+		expect(isValidGitHubRepositoryName("gitops")).toBe(true);
+		for (const name of ["", ".hidden", "a b", "a/b", "x".repeat(101), "site.git", "site.Git"]) expect(isValidGitHubRepositoryName(name), name).toBe(false);
 	});
 
 	it("checks a workspace's repositories as equals", () => {

@@ -8,7 +8,7 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
-import type { CloudCpAgentStartsIn, CloudCpProject, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAgentStartsIn, type CloudCpProject, type CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { CODER_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
 import {
 	additionalReposProblem,
@@ -18,6 +18,7 @@ import {
 	isCloudWorkspaceProject,
 	isValidGitHubRepositoryName,
 	isStandaloneCloudProject,
+	MAX_PROJECT_ADDITIONAL_REPOS,
 	MAX_PROJECT_RULES_BYTES,
 	normalizeWorkingDirectory,
 	projectAdditionalRepos,
@@ -29,7 +30,8 @@ import {
 	utf8Bytes,
 	workingDirectoryProblem,
 } from "../lib/cloud-project-repos";
-import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
+import { additionalReposProblemMessage, CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
+import { useMountedRef, useReportBusy } from "./CloudProjectSetup";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
@@ -38,7 +40,19 @@ import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { FolderPlus, LoaderCircle } from "@/components/app-icons";
 import { aoBridge } from "../lib/bridge";
-import { createdRepositoryUrl, createFolderRepository, grantedRepositoryForRemote, pushFolderToCreatedRepository, repositoryOwner, type CreatedFolderRepository } from "../lib/cloud-folder-upload";
+import {
+	committedUploadHint,
+	createdRepositoryUrl,
+	createFolderRepository,
+	describeLocalFolder,
+	folderLabel,
+	FolderPushError,
+	folderPushErrorText,
+	grantedRepositoryForRemote,
+	pushFolderToCreatedRepository,
+	repositoryOwner,
+	type CreatedFolderRepository,
+} from "../lib/cloud-folder-upload";
 
 type LoadedProps = { project: CloudCpProject; readOnly: boolean; onSaveState?: (state: ProjectSettingsSaveState) => void };
 
@@ -70,7 +84,11 @@ function CloudProjectSettingsPage({ projectId, cloudOrgId, onSaveState, children
  * Saves one settings page's patch on "Save changes" and reports its state to
  * the dialog the way the Scripts page does.
  */
-function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable: boolean, onSaveState?: (state: ProjectSettingsSaveState) => void) {
+/**
+ * busy is other work the page must finish before the dialog closes (a folder
+ * upload): it reads as a save in flight, so closing waits for it.
+ */
+function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable: boolean, onSaveState?: (state: ProjectSettingsSaveState) => void, busy = false) {
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const [savedAt, setSavedAt] = useState(false);
@@ -84,15 +102,15 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 	});
 	useEffect(() => {
 		onSaveState?.({
-			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : savedAt && !dirty ? "saved" : "idle",
+			phase: mutation.isPending || busy ? "saving" : mutation.isError ? "failed" : savedAt && !dirty ? "saved" : "idle",
 			dirty,
-			requestPending: mutation.isPending,
+			requestPending: mutation.isPending || busy,
 			// An invalid draft cannot be saved, so closing the dialog drops it
 			// instead of waiting for a save that never starts.
 			unsaveable: dirty && unsaveable,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
-	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
+	}, [busy, dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
 	return { mutation, edited: () => setSavedAt(false) };
 }
 
@@ -166,17 +184,48 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined || removedInUse.length > 0;
 	const workingDirectoryError = workingDirectoryProblem(workingDirectory, { standalone });
 	const workingDirectoryInvalid = workingDirectoryError !== undefined;
-	const { mutation, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState);
+	// A folder upload in flight keeps the dialog open until it ends.
+	const [uploading, setUploading] = useState(false);
+	const { mutation, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState, uploading);
 	const locked = readOnly || mutation.isPending;
+	const savedRepos = (urls: readonly string[]) => urls.map((url) => {
+		const branch = storedRepos.find((repo) => sameRepository(repo.url, url))?.branch;
+		return branch ? { url, branch } : { url };
+	});
+	const addToDraft = (url: string) => setExtras((current) => current.some((item) => sameRepository(item, url)) ? current : [...current.filter((item) => item !== ""), url]);
+	// What the saved workspace and the draft would make of one more
+	// repository; checked before a folder's repository is made.
+	const workspaceFolderProblem = (url: string) => {
+		for (const list of [saved.extras, filledExtras]) {
+			const problem = additionalReposProblem(project.repositoryUrl, [...list, url]);
+			if (problem && (problem.kind === "limit" || sameRepository(problem.url, url))) return additionalReposProblemMessage(t, problem);
+		}
+		return undefined;
+	};
+	// An uploaded folder's repository is saved into the workspace at once, on
+	// top of what is saved (the draft's other edits stay a draft).
+	const saveUploadedRepository = async (url: string) => {
+		if (sameRepository(project.repositoryUrl, url) || saved.extras.some((item) => sameRepository(item, url))) {
+			addToDraft(url);
+			return;
+		}
+		try {
+			await mutation.mutateAsync({ config: { repos: savedRepos([...saved.extras, url]) } });
+		} catch (err) {
+			// Left in the draft, so Save tries again.
+			addToDraft(url);
+			edited();
+			throw err;
+		}
+		setSaved((current) => ({ ...current, extras: [...current.extras, url] }));
+		addToDraft(url);
+	};
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
 		const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
 		if (reposChanged) {
 			// Keep a stored branch for a repository that stays.
-			config.repos = filledExtras.map((url) => {
-				const branch = storedRepos.find((repo) => sameRepository(repo.url, url))?.branch;
-				return branch ? { url, branch } : { url };
-			});
+			config.repos = savedRepos(filledExtras);
 		}
 		if (!workspace && startsIn !== saved.startsIn) config.agentStartsIn = startsIn;
 		// Saved as the control plane stores it, so the field shows what was saved.
@@ -207,11 +256,19 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 					disabled={locked}
 					loading={repos.isLoading}
 				/>
-				<AddLocalFolder project={project} disabled={locked} onAdded={(url) => {
-					if (extras.some((item) => sameRepository(item, url)) || sameRepository(project.repositoryUrl, url)) return;
-					setExtras([...extras.filter((item) => item !== ""), url]);
-					edited();
-				}} />
+				<AddLocalFolder
+					project={project}
+					disabled={locked}
+					atLimit={saved.extras.length >= MAX_PROJECT_ADDITIONAL_REPOS || filledExtras.length >= MAX_PROJECT_ADDITIONAL_REPOS}
+					folderProblem={workspaceFolderProblem}
+					onAddExisting={(url) => {
+						if (extras.some((item) => sameRepository(item, url)) || sameRepository(project.repositoryUrl, url)) return;
+						addToDraft(url);
+						edited();
+					}}
+					onUploaded={saveUploadedRepository}
+					onBusyChange={setUploading}
+				/>
 				{repos.isError ? <p role="alert" className="text-xs text-error">{t("createProject.githubReposFailed", { defaultValue: "Failed to load repositories." })}</p> : null}
 				{removedInUse.length > 0 ? <p role="alert" className="text-xs text-error">{t("settings.cloudProject.repositoryUsedByScripts", { defaultValue: "{{repositories}} is still used by a Setup or Cleanup step. Move or delete that step in Scripts first.", repositories: removedInUse.join(", ") })}</p> : null}
 			</Field>
@@ -276,94 +333,148 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 /**
  * Uploads a local folder into a new private repository in the workspace's
  * GitHub account (or, when its origin is a repository the org already grants,
- * uses that one) and hands its URL to the editor; Save adds it. The new
- * repository's name starts as the folder's and can be changed before upload.
+ * hands that one to the editor). The new repository's name starts as the
+ * folder's and can be changed before upload. Once uploaded, onUploaded saves it
+ * into the workspace right away, so leaving Settings never strands a
+ * repository that was made and filled. While it runs, onBusyChange keeps the
+ * Settings dialog open: an upload cannot be cancelled.
  */
-function AddLocalFolder({ project, disabled, onAdded }: { project: CloudCpProject; disabled: boolean; onAdded: (url: string) => void }) {
+function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisting, onUploaded, onBusyChange }: {
+	project: CloudCpProject;
+	disabled: boolean;
+	/** The workspace has as many repositories as it can hold. */
+	atLimit: boolean;
+	/** Why a repository at this URL could not join the workspace, if it could not. */
+	folderProblem: (url: string) => string | undefined;
+	onAddExisting: (url: string) => void;
+	onUploaded: (url: string) => Promise<void>;
+	onBusyChange: (busy: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const repos = useCloudGitHubAppRepositories(project.orgId);
-	const [phase, setPhase] = useState<"idle" | "creating" | "uploading">("idle");
-	const [pending, setPending] = useState<{ folder: string; name: string } | null>(null);
+	const mounted = useMountedRef();
+	const [phase, setPhase] = useState<"idle" | "creating" | "uploading" | "saving">("idle");
+	const [pending, setPending] = useState<{ folder: string; name: string; committed?: { branch?: string } } | null>(null);
 	// Kept across a failed upload, so a retry pushes to the repository already made.
 	const [created, setCreated] = useState<{ folder: string; repository: CreatedFolderRepository } | null>(null);
-	const [error, setError] = useState<string | null>(null);
+	const [error, setError] = useState<{ message: string; detail?: string } | null>(null);
+	const busy = phase !== "idle";
+	useReportBusy(busy, onBusyChange);
+	const owner = repositoryOwner(gitHubFullName(project.repositoryUrl) ?? "");
 	const choose = async () => {
 		setError(null);
 		const folder = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
-		if (!folder) return;
-		let remote = "";
-		try {
-			remote = (await aoBridge.app.scanImportFolder({ path: folder, mode: "project" })).repos[0]?.remote ?? "";
-		} catch {
-			// Unreadable as a repository: it is uploaded as a folder.
-		}
+		if (!folder || !mounted.current) return;
+		const { remote, committed } = await describeLocalFolder(folder);
+		if (!mounted.current) return;
 		const existing = grantedRepositoryForRemote(remote, repos.data ?? []);
 		if (existing) {
-			onAdded(canonicalGitHubUrl(existing.fullName));
+			onAddExisting(canonicalGitHubUrl(existing.fullName));
 			return;
 		}
 		setCreated(null);
-		setPending({ folder, name: gitHubRepositoryNameFromFolder(folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "") });
+		setPending({ folder, name: gitHubRepositoryNameFromFolder(folderLabel(folder)), ...(committed ? { committed } : {}) });
 	};
+	const madeForPending = pending !== null && created?.folder === pending.folder ? created.repository : undefined;
+	const nameInvalid = pending !== null && !madeForPending && !isValidGitHubRepositoryName(pending.name.trim());
+	// Checked before anything is made: a repository the workspace cannot take
+	// would be left on GitHub.
+	const plannedUrl = pending === null || nameInvalid ? undefined
+		: madeForPending ? createdRepositoryUrl(madeForPending) : canonicalGitHubUrl(`${owner || "new"}/${pending.name.trim()}`);
+	const problem = plannedUrl ? folderProblem(plannedUrl) : undefined;
 	const upload = async () => {
-		if (!pending) return;
+		if (!pending || nameInvalid || problem) return;
 		setError(null);
+		let repository = madeForPending;
 		try {
-			let repository = created?.folder === pending.folder ? created.repository : undefined;
 			if (!repository) {
 				setPhase("creating");
-				const owner = repositoryOwner(gitHubFullName(project.repositoryUrl) ?? "");
 				repository = await createFolderRepository(client, project.orgId, { name: pending.name.trim(), owner: owner || undefined });
 				setCreated({ folder: pending.folder, repository });
 			}
 			setPhase("uploading");
 			await pushFolderToCreatedRepository(pending.folder, repository);
-			await queryClient.invalidateQueries({ queryKey: cloudGitHubAppReposQueryKey(baseUrl, project.orgId) });
+		} catch (caught) {
+			if ((caught instanceof CloudCpError && caught.status === 401) || (caught instanceof FolderPushError && caught.code === "signed_out")) void aoBridge.cloud.signIn();
+			if (mounted.current) {
+				setError(caught instanceof FolderPushError
+					? folderPushErrorText(t, caught, pending.folder)
+					: { message: caught instanceof Error ? caught.message : t("settings.project.saveFailed") });
+				setPhase("idle");
+			}
+			return;
+		}
+		void queryClient.invalidateQueries({ queryKey: cloudGitHubAppReposQueryKey(baseUrl, project.orgId) });
+		const url = createdRepositoryUrl(repository);
+		// The repository is filled; it joins the workspace even if this page
+		// has gone, so it is never left out.
+		setPhase("saving");
+		try {
+			await onUploaded(url);
+			if (!mounted.current) return;
 			setPending(null);
 			setCreated(null);
-			onAdded(createdRepositoryUrl(repository));
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : t("settings.project.saveFailed"));
+			if (caught instanceof CloudCpError && caught.status === 401) void aoBridge.cloud.signIn();
+			if (!mounted.current) return;
+			setPending(null);
+			setCreated(null);
+			setError({
+				message: t("cloudWorkspace.uploadedNotSaved", { defaultValue: "{{name}} was uploaded, but adding it to the workspace failed. Save to add it.", name: repository.repository.fullName }),
+				...(caught instanceof Error && caught.message ? { detail: caught.message } : {}),
+			});
 		} finally {
-			setPhase("idle");
+			if (mounted.current) setPhase("idle");
 		}
 	};
-	const busy = phase !== "idle";
-	const nameInvalid = pending !== null && created?.folder !== pending.folder && !isValidGitHubRepositoryName(pending.name.trim());
 	return <div className="space-y-2">
-		{pending ? <div className="flex flex-wrap items-center gap-2">
-			<span className="min-w-0 truncate font-mono text-sm text-settings-label" title={pending.folder}>{pending.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop()}</span>
-			<Input
-				aria-label={t("cloudWorkspace.repositoryName", { defaultValue: "Repository name for {{folder}}", folder: pending.folder })}
-				className="h-7 w-48 font-mono text-[12px]"
-				value={created?.folder === pending.folder ? created.repository.repository.name : pending.name}
-				maxLength={100}
-				spellCheck={false}
-				autoCapitalize="off"
-				autoComplete="off"
-				disabled={disabled || busy || created?.folder === pending.folder}
-				aria-invalid={nameInvalid || undefined}
-				onChange={(event) => { setPending({ ...pending, name: event.target.value }); setError(null); }}
-			/>
-			<Button type="button" variant="outline" size="sm" disabled={disabled || busy || nameInvalid} onClick={() => void upload()}>
-				{busy ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-				{phase === "creating"
-					? t("cloudWorkspace.creatingRepository", { defaultValue: "Creating repository" })
-					: phase === "uploading"
-						? t("cloudWorkspace.uploading", { defaultValue: "Uploading" })
-						: t("cloudWorkspace.upload", { defaultValue: "Upload" })}
-			</Button>
-			<Button type="button" variant="quiet" size="sm" disabled={busy} onClick={() => { setPending(null); setError(null); }}>
-				{t("createProject.cancel", { defaultValue: "Cancel" })}
-			</Button>
-		</div> : <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => void choose()}>
+		{pending ? <div className="space-y-1">
+			<div className="flex flex-wrap items-center gap-2">
+				<span className="min-w-0 truncate font-mono text-sm text-settings-label" title={pending.folder}>{folderLabel(pending.folder)}</span>
+				<Input
+					aria-label={t("cloudWorkspace.repositoryName", { defaultValue: "Repository name for {{folder}}", folder: pending.folder })}
+					className="h-7 w-48 font-mono text-[12px]"
+					value={madeForPending ? madeForPending.repository.name : pending.name}
+					maxLength={100}
+					spellCheck={false}
+					autoCapitalize="off"
+					autoComplete="off"
+					disabled={disabled || busy || madeForPending !== undefined}
+					aria-invalid={nameInvalid || problem !== undefined || undefined}
+					onChange={(event) => { setPending({ ...pending, name: event.target.value }); setError(null); }}
+				/>
+				<Button type="button" variant="outline" size="sm" disabled={disabled || busy || nameInvalid || problem !== undefined} onClick={() => void upload()}>
+					{busy ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+					{phase === "creating"
+						? t("cloudWorkspace.creatingRepository", { defaultValue: "Creating repository" })
+						: phase === "uploading"
+							? t("cloudWorkspace.uploading", { defaultValue: "Uploading" })
+							: phase === "saving"
+								? t("cloudWorkspace.addingToWorkspace", { defaultValue: "Adding to the workspace" })
+								: t("cloudWorkspace.upload", { defaultValue: "Upload" })}
+				</Button>
+				<Button type="button" variant="quiet" size="sm" disabled={busy} onClick={() => { setPending(null); setError(null); }}>
+					{t("createProject.cancel", { defaultValue: "Cancel" })}
+				</Button>
+			</div>
+			<p className="text-xs text-settings-muted">
+				{pending.committed
+					? committedUploadHint(t, pending.committed)
+					: t("cloudWorkspace.newPrivateRepository", { defaultValue: "Uploaded to a new private repository" })}
+			</p>
+		</div> : <Button type="button" variant="outline" size="sm" disabled={disabled || atLimit} onClick={() => void choose()}>
 			<FolderPlus aria-hidden="true" className="size-icon-sm" />
 			{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}
 		</Button>}
+		{atLimit && !pending ? <p className="text-xs text-settings-muted">{t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: MAX_PROJECT_ADDITIONAL_REPOS })}</p> : null}
 		{nameInvalid ? <p role="alert" className="text-xs text-error">{t("cloudWorkspace.invalidRepositoryName", { defaultValue: "{{name}} is not a valid repository name: use letters, digits, \".\", \"-\" and \"_\", up to 100 characters.", name: pending?.name ?? "" })}</p> : null}
-		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
+		{problem ? <p role="alert" className="text-xs text-error">{problem}</p> : null}
+		{error ? <div role="alert" className="text-xs">
+			<p className="text-error">{error.message}</p>
+			{error.detail ? <p className="whitespace-pre-line text-settings-muted">{error.detail}</p> : null}
+		</div> : null}
 	</div>;
 }
 

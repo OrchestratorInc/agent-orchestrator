@@ -40,6 +40,7 @@ import {
 	useCloudCoderSetup,
 	useCloudGitHubAppConnection,
 	useFinishCloudProjectCreate,
+	useReportBusy,
 } from "./CloudProjectSetup";
 import { CloudWorkspaceCard } from "./CloudWorkspaceCard";
 import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
@@ -226,6 +227,9 @@ export function CreateProjectFlow({
 	const [projectImportShake, setProjectImportShake] = useState(false);
 	const [isChoosingPath, setIsChoosingPath] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
+	// A cloud card is creating (a workspace may be uploading folders for
+	// minutes); its dialog stays open until it ends.
+	const [cloudCreating, setCloudCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
@@ -831,13 +835,16 @@ export function CreateProjectFlow({
 						localChosen={localChosen}
 						onLocalChosenChange={setLocalChosen}
 						onCloudCreated={onCloudProjectCreated}
+						onCloudBusyChange={setCloudCreating}
 						onCloudSelect={() => setOffering("cloud")}
 						onCloudBack={() => setOffering("local")}
 						onSignIn={cloudSignIn}
 						onCreateStandaloneAgent={onCreateStandaloneAgent}
 						open={modePickerOpen && !settingsOpen}
 						onOpenChange={(open) => {
-							if (isBusy) return;
+							// Escape or an outside click while a cloud create runs: the
+							// upload cannot be cancelled, so the dialog stays.
+							if (isBusy || cloudCreating) return;
 							setModePickerOpen(open);
 							// Dismissed without picking a kind — don't let a stale dropped
 							// path hijack the next manual "New Project" click, and reopen
@@ -1229,6 +1236,7 @@ function CreateProjectSourceDialog({
 	localChosen,
 	onLocalChosenChange,
 	onCloudCreated,
+	onCloudBusyChange,
 	onCloudSelect,
 	onCloudBack,
 	onSignIn,
@@ -1251,6 +1259,8 @@ function CreateProjectSourceDialog({
 	localChosen: boolean;
 	onLocalChosenChange: (chosen: boolean) => void;
 	onCloudCreated: (projectId: string) => void;
+	/** Whether the cloud card is creating; the dialog ignores close requests meanwhile. */
+	onCloudBusyChange?: (busy: boolean) => void;
 	onSignIn: () => void;
 	onCloudSelect: () => void;
 	onCloudBack: () => void;
@@ -1278,7 +1288,7 @@ function CreateProjectSourceDialog({
 					<div className="flex w-full flex-col items-center gap-3">
 						{!hostId && cloudEnabled && offering === "cloud" ? (
 							cloudAvailable ? (
-								<CloudCreateCard dialog onAuthRequired={onSignIn} onBack={onCloudBack} onClose={() => onOpenChange(false)} onCreated={onCloudCreated} />
+								<CloudCreateCard dialog onAuthRequired={onSignIn} onBack={onCloudBack} onClose={() => onOpenChange(false)} onCreated={onCloudCreated} onBusyChange={onCloudBusyChange} />
 							) : (
 								<CloudSignInPanel dialog disabled={disabled} onBack={onCloudBack} onSignIn={onSignIn} />
 							)
@@ -1337,6 +1347,7 @@ function CloudCreateCard(props: {
 	onBack: () => void;
 	onClose?: () => void;
 	onCreated: (projectId: string) => void;
+	onBusyChange?: (busy: boolean) => void;
 }) {
 	const [kind, setKind] = useState<CloudCreateKind>("project");
 	return kind === "workspace"
@@ -1351,6 +1362,7 @@ function CloudProjectCard({
 	onClose,
 	onCreated,
 	onKindChange,
+	onBusyChange,
 }: {
 	dialog?: boolean;
 	onAuthRequired: () => void;
@@ -1359,6 +1371,7 @@ function CloudProjectCard({
 	onCreated: (projectId: string) => void;
 	/** Switches the card to a cloud workspace. */
 	onKindChange?: (kind: CloudCreateKind) => void;
+	onBusyChange?: (busy: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
@@ -1393,6 +1406,7 @@ function CloudProjectCard({
 
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
+	useReportBusy(isCreating, onBusyChange);
 	const finishCreate = useFinishCloudProjectCreate();
 	// Repositories come from the GitHub App installation and are selected by
 	// their numeric id (create goes through POST /github/projects). The project
