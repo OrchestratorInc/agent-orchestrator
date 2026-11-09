@@ -291,8 +291,8 @@ func TestIngestorReadsOpenCodeStepsIncrementally(t *testing.T) {
 
 	result, err := ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)
-	if result.More || result.RetryAt == nil {
-		t.Fatalf("first result = %+v, want a poll of the active database", result)
+	if result.More || result.RetryAt != nil {
+		t.Fatalf("first result = %+v, want one complete read and no poll", result)
 	}
 	assertTokenAggregate(t, store, session.ID, 120)
 

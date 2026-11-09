@@ -236,6 +236,16 @@ func (s *Store) ListWatchableUsageSources(ctx context.Context) ([]domain.UsageSo
 	return out, nil
 }
 
+// ListFinalizingUsageSourceIDs returns the sources whose session ended and
+// still need a final read.
+func (s *Store) ListFinalizingUsageSourceIDs(ctx context.Context) ([]int64, error) {
+	ids, err := s.qr.ListFinalizingUsageSourceIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list finalizing usage sources: %w", err)
+	}
+	return ids, nil
+}
+
 // HasPendingUsageDiscovery reports whether a live binding has a durable reason
 // to retry source discovery. Healthy active bindings are excluded unless their
 // provider has a dynamic child inventory, such as Kimi agents.

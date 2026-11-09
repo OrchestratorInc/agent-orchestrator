@@ -37,14 +37,13 @@ type ingestorStore interface {
 
 // IngestorConfig controls bounded processing of one transcript source.
 type IngestorConfig struct {
-	ChunkBytes         int64
-	RecordBytes        int
-	FinalizationWait   time.Duration
-	Clock              func() time.Time
-	Pricing            *pricing.Manager
-	OnPricingError     func(error)
-	SQLiteChunkRows    int
-	SQLitePollInterval time.Duration
+	ChunkBytes       int64
+	RecordBytes      int
+	FinalizationWait time.Duration
+	Clock            func() time.Time
+	Pricing          *pricing.Manager
+	OnPricingError   func(error)
+	SQLiteChunkRows  int
 	// RequestAttributionRepair asks for a legacy repair pass. See
 	// notifyLateRouteEvidence for the one window it closes.
 	RequestAttributionRepair func()
@@ -62,15 +61,14 @@ type IngestResult struct {
 	ReplacementSourceID int64
 }
 
-// Ingestor incrementally processes registered transcript files when the
-// watcher, a hook, startup reconciliation, or a retry timer requests work.
+// Ingestor incrementally processes registered transcript files when a usage
+// read, a finalizing session, or a retry timer requests work.
 type Ingestor struct {
 	store            ingestorStore
 	chunkBytes       int64
 	recordBytes      int
 	finalizationWait time.Duration
 	sqliteChunkRows  int
-	sqlitePoll       time.Duration
 	now              func() time.Time
 	pricing          *pricing.Manager
 	onPricingError   func(error)
@@ -94,9 +92,6 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 	if cfg.SQLiteChunkRows <= 0 {
 		cfg.SQLiteChunkRows = defaultSQLiteChunkRows
 	}
-	if cfg.SQLitePollInterval <= 0 {
-		cfg.SQLitePollInterval = defaultSQLitePollInterval
-	}
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
@@ -109,7 +104,6 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 		recordBytes:      cfg.RecordBytes,
 		finalizationWait: cfg.FinalizationWait,
 		sqliteChunkRows:  cfg.SQLiteChunkRows,
-		sqlitePoll:       cfg.SQLitePollInterval,
 		now:              cfg.Clock,
 		pricing:          cfg.Pricing,
 		onPricingError:   cfg.OnPricingError,
@@ -119,8 +113,8 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 }
 
 // Ingest processes one source from its durable cursor. It never loops on an
-// incomplete trailing record; a later filesystem event will enqueue the source
-// again after the provider finishes the record.
+// incomplete trailing record; the next read after the provider finishes the
+// record picks it up.
 func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, error) {
 	if err := ctx.Err(); err != nil {
 		return IngestResult{}, err

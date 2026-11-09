@@ -112,6 +112,13 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
   )
 ORDER BY us.artifact_path, us.generation, us.id;
 
+-- name: ListFinalizingUsageSourceIDs :many
+SELECT us.id
+FROM usage_sources us
+JOIN usage_bindings ub ON ub.id = us.binding_id
+WHERE ub.state = 'finalizing'
+ORDER BY us.id;
+
 -- name: HasPendingUsageDiscovery :one
 SELECT CAST(EXISTS (
     SELECT 1

@@ -16,10 +16,7 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-const (
-	defaultSQLiteChunkRows    = 1000
-	defaultSQLitePollInterval = 15 * time.Second
-)
+const defaultSQLiteChunkRows = 1000
 
 type sqliteUsageReader func(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
@@ -188,11 +185,6 @@ func (i *Ingestor) ingestSQLite(
 		return result, i.completeBinding(ctx, source.Source.BindingID, now)
 	}
 	result.More = progressed && !atEnd
-	if !result.More && result.RetryAt == nil &&
-		(source.BindingState == domain.UsageBindingActive || source.BindingState == domain.UsageBindingDiscovering) {
-		next := now.Add(i.sqlitePoll)
-		result.RetryAt = &next
-	}
 	return result, nil
 }
 

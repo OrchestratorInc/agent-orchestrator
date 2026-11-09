@@ -771,10 +771,12 @@ func TestCoordinatorCollectsCodexUsageFromFilesystemEvents(t *testing.T) {
 
 	waitForWatchableSource(ctx, t, store, transcript)
 	appendJSONLRecord(t, transcript, codexTokenLine("2026-07-28T10:00:00Z", 100, 60, 0, 20, 5))
-	waitForTokenAggregate(t, store, session.ID, 120)
+	time.Sleep(100 * time.Millisecond)
+	assertTokenAggregate(t, store, session.ID, 0)
+	waitForFlushedTokenAggregate(t, coordinator, store, session.ID, 120)
 
 	appendJSONLRecord(t, transcript, codexTokenLine("2026-07-28T10:01:00Z", 150, 90, 0, 30, 8))
-	waitForTokenAggregate(t, store, session.ID, 180)
+	waitForFlushedTokenAggregate(t, coordinator, store, session.ID, 180)
 }
 
 func TestIngestorPersistsAppendOnlyUsageAcrossRestartAndFinalization(t *testing.T) {
@@ -1323,8 +1325,18 @@ func rewriteUsageFixture(path, content string) error {
 
 func waitForTokenAggregate(t *testing.T, store *sqlite.Store, sessionID domain.SessionID, total int64) {
 	t.Helper()
+	waitForFlushedTokenAggregate(t, nil, store, sessionID, total)
+}
+
+func waitForFlushedTokenAggregate(t *testing.T, coordinator *Coordinator, store *sqlite.Store, sessionID domain.SessionID, total int64) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		if coordinator != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			coordinator.Flush(ctx)
+			cancel()
+		}
 		aggregates, err := store.ListUsageModelAggregates(context.Background(), sessionID)
 		mustNoError(t, err)
 		var got int64
