@@ -5794,17 +5794,18 @@ func normalizeWorkspacePath(p string) string {
 
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
-		ProjectID:         cfg.ProjectID,
-		IssueID:           cfg.IssueID,
-		AutomationRunID:   cfg.AutomationRunID,
-		ClientRequestID:   cfg.ClientRequestID,
-		ClientRequestHash: cfg.ClientRequestHash,
-		Kind:              cfg.Kind,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		Harness:           cfg.Harness,
-		DisplayName:       cfg.DisplayName,
-		Activity:          domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		ProjectID:           cfg.ProjectID,
+		IssueID:             cfg.IssueID,
+		AutomationRunID:     cfg.AutomationRunID,
+		ClientRequestID:     cfg.ClientRequestID,
+		ClientRequestHash:   cfg.ClientRequestHash,
+		Kind:                cfg.Kind,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Harness:             cfg.Harness,
+		DisplayName:         cfg.DisplayName,
+		DisplayNameExplicit: cfg.DisplayNameExplicit,
+		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),

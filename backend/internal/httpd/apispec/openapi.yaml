@@ -16628,6 +16628,8 @@ components:
           type: string
         terminalHandleId:
           type: string
+        terminalTitle:
+          type: string
         terminateOnPrMerge:
           type: boolean
         updatedAt:
@@ -21483,6 +21485,8 @@ components:
           type: string
         sessionId:
           type: string
+        terminalTitle:
+          type: string
         title:
           type: string
         workingDir:
@@ -21968,6 +21972,8 @@ components:
         displayName:
           maxLength: 100
           type: string
+        displayNameExplicit:
+          type: boolean
         effort:
           maxLength: 32
           type: string
