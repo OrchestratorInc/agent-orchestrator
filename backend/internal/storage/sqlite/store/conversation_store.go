@@ -1674,7 +1674,7 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
-	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", time.Time{}, now)
 }
 
 // SettleTurnWithFailureCode retains a provider-classified cause beside the raw
@@ -1685,6 +1685,7 @@ func (s *Store) SettleTurnWithFailureCode(
 	state domain.TurnState,
 	errMessage string,
 	failureCode domain.ConversationFailureCode,
+	usageLimitResetsAt time.Time,
 	now time.Time,
 ) error {
 	q, unlock := s.conversationWriter(ctx)
@@ -1716,11 +1717,12 @@ func (s *Store) SettleTurnWithFailureCode(
 	}
 
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
-		State:        state,
-		ErrorMessage: errMessage,
-		FailureCode:  string(failureCode),
-		CompletedAt:  sql.NullTime{Time: now, Valid: true},
-		ID:           turn.ID,
+		State:              state,
+		ErrorMessage:       errMessage,
+		FailureCode:        string(failureCode),
+		CompletedAt:        sql.NullTime{Time: now, Valid: true},
+		UsageLimitResetsAt: timeToNullTime(usageLimitResetsAt),
+		ID:                 turn.ID,
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}

@@ -939,10 +939,9 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	var usageLimitResetsAt time.Time
 	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
-		if reset, ok := c.claudeUsageLimitReset(time.Now()); ok {
-			turnErr = ports.NewChatProviderFailure(turnErr.Error(), "Resets at "+reset.Format(time.RFC3339), turnErr)
-		}
+		usageLimitResetsAt, _ = c.claudeUsageLimitReset(time.Now())
 	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
@@ -998,6 +997,7 @@ func (c *conversation) finishPrompt(
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, FailureCode: failureCode, Err: turnErr,
+		UsageLimitResetsAt: usageLimitResetsAt,
 	})
 	// Release the turn before announcing readiness, not after. A consumer that
 	// reacts to ChatControllerReady by sending the next turn — AO's own queue

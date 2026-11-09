@@ -133,11 +133,18 @@ func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
 								}
 								failedAt := time.Date(2026, 10, 17, 9, 30, 0, 0, time.UTC)
 								limit := domain.ParseConversationUsageLimit(event.Err.Error(), &failedAt)
-								if limit == nil || (limit.ResetsAt != nil) != !tc.reset.IsZero() {
-									t.Fatalf("native quota lost its reset semantics: %+v, %v", limit, event.Err)
+								if limit == nil {
+									t.Fatalf("native quota was not recognised: %v", event.Err)
 								}
-								if !tc.reset.IsZero() && !limit.ResetsAt.Equal(tc.reset) {
-									t.Fatalf("reset = %v, want %v", limit.ResetsAt, tc.reset)
+								reset := event.UsageLimitResetsAt
+								if reset.IsZero() && limit.ResetsAt != nil {
+									reset = *limit.ResetsAt
+								}
+								if !reset.Equal(tc.reset) {
+									t.Fatalf("reset = %v, want %v; error = %q", reset, tc.reset, event.Err)
+								}
+								if tc.rateLimit != "" && event.Err.Error() != "You've hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)" {
+									t.Fatalf("provider text was changed: %q", event.Err)
 								}
 							} else if event.TurnState != domain.TurnStateCompleted || event.Err != nil {
 								t.Fatalf("follow-up retained quota failure: %+v", event)

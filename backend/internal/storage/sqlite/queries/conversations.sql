@@ -724,8 +724,10 @@ WHERE id = ?;
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
-WHERE id = ?;
+SET state = sqlc.arg(state), error_message = sqlc.arg(error_message), failure_code = sqlc.arg(failure_code),
+    completed_at = COALESCE(completed_at, sqlc.narg(completed_at)),
+    usage_limit_resets_at = COALESCE(sqlc.narg(usage_limit_resets_at), usage_limit_resets_at)
+WHERE id = sqlc.arg(id);
 
 -- A streamed assistant item may not receive item/completed when steering causes
 -- the provider to finish the turn without replaying it: the accumulated text is

@@ -137,7 +137,7 @@ import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
 import { StagedAttachmentItems } from "./StagedAttachmentItems";
-import { UsageLimitNotice } from "./UsageLimitNotice";
+import { UsageLimitMarker, UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
@@ -634,15 +634,17 @@ export function TurnOutcome({
 	if (state === "failed" && usageLimit) {
 		return (
 			<div className="group/message flex min-w-0 flex-col gap-2" data-turn-outcome={state}>
-				<UsageLimitNotice
-					compact={!retry}
-					usageLimit={usageLimit}
-					onResume={retry?.onRetry}
-					pending={retry?.pending}
-					disabled={retry?.disabled}
-					error={retry?.error}
-				/>
+				<UsageLimitMarker />
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+				{retry ? (
+					<UsageLimitNotice
+						usageLimit={usageLimit}
+						onResume={retry.onRetry}
+						pending={retry.pending}
+						disabled={retry.disabled}
+						error={retry.error}
+					/>
+				) : null}
 				<TurnActions
 					copyText={copyText}
 					onRollback={onRollback}

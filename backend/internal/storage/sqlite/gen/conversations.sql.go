@@ -5023,16 +5023,19 @@ func (q *Queries) SettleConversationMessage(ctx context.Context, arg SettleConve
 
 const settleConversationTurn = `-- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
-WHERE id = ?
+SET state = ?1, error_message = ?2, failure_code = ?3,
+    completed_at = COALESCE(completed_at, ?4),
+    usage_limit_resets_at = COALESCE(?5, usage_limit_resets_at)
+WHERE id = ?6
 `
 
 type SettleConversationTurnParams struct {
-	State        domain.TurnState
-	ErrorMessage string
-	FailureCode  string
-	CompletedAt  sql.NullTime
-	ID           string
+	State              domain.TurnState
+	ErrorMessage       string
+	FailureCode        string
+	CompletedAt        sql.NullTime
+	UsageLimitResetsAt sql.NullTime
+	ID                 string
 }
 
 func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversationTurnParams) error {
@@ -5041,6 +5044,7 @@ func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversa
 		arg.ErrorMessage,
 		arg.FailureCode,
 		arg.CompletedAt,
+		arg.UsageLimitResetsAt,
 		arg.ID,
 	)
 	return err
