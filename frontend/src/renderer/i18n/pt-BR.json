@@ -3792,6 +3792,7 @@
 	"usage.limits.signedOut": "Desconectado",
 	"usage.limits.thisComputer": "Login deste computador",
 	"usage.limits.paceLeft": "Neste ritmo: restará cerca de {{value}} na redefinição",
+	"usage.limits.paceRanOut": "Neste ritmo já acabou",
 	"usage.limits.paceRunsOut": "Neste ritmo acaba em {{value}}",
 	"usage.windows.experimental": "Experimental",
 	"usage.windows.about": "Feito com as leituras de limite que o AO faz a cada 5 minutos, mais ou menos, enquanto está em execução. As partes tracejadas são projeções: onde uma janela termina se mantiver o ritmo atual.",

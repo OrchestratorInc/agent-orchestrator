@@ -3792,6 +3792,7 @@
 	"usage.limits.signedOut": "Déconnecté",
 	"usage.limits.thisComputer": "Connexion de cet ordinateur",
 	"usage.limits.paceLeft": "À ce rythme : environ {{value}} restant à la réinitialisation",
+	"usage.limits.paceRanOut": "À ce rythme, déjà épuisé",
 	"usage.limits.paceRunsOut": "À ce rythme, épuisé dans {{value}}",
 	"usage.windows.experimental": "Expérimental",
 	"usage.windows.about": "Construit à partir des relevés de limites qu'AO effectue environ toutes les 5 minutes pendant son exécution. Les parties en pointillés sont des projections : où une fenêtre arrive si son rythme actuel se maintient.",

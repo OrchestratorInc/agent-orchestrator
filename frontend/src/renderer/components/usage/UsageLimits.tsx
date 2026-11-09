@@ -118,10 +118,10 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}
 			</span>
 			{pace ? (
-				<p className={cn("col-span-2 col-start-3 -mt-2 inline-flex items-center gap-1.5 text-xs tabular-nums", runsOutIn ? "text-warning" : "text-muted-foreground")}>
-					{runsOutIn ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
-					{runsOutIn
-						? t("usage.limits.paceRunsOut", { value: runsOutIn })
+				<p className={cn("col-span-2 col-start-3 -mt-2 inline-flex items-center gap-1.5 text-xs tabular-nums", pace.runsOutAt ? "text-warning" : "text-muted-foreground")}>
+					{pace.runsOutAt ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
+					{pace.runsOutAt
+						? runsOutIn ? t("usage.limits.paceRunsOut", { value: runsOutIn }) : t("usage.limits.paceRanOut")
 						: t("usage.limits.paceLeft", { value: new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((leftAtReset ?? 0) / 100) })}
 				</p>
 			) : null}
