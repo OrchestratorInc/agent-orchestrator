@@ -1486,6 +1486,8 @@
 	"settings.close": "Fermer les paramètres",
 	"settings.connectMobile": "Connecter le mobile",
 	"settings.developerMode": "Mode développeur",
+	"cliShadow.checkVersion": "Exécuter ao version",
+	"cliShadow.checkVersionDescription": "Exécute l’autre fichier ao pour vérifier sa version.",
 	"cliShadow.titleOlder": "Votre terminal exécute un ao plus ancien (v{{version}})",
 	"cliShadow.titleNewer": "Votre terminal exécute un ao plus récent (v{{version}})",
 	"cliShadow.titleDifferent": "Votre terminal exécute un autre ao",

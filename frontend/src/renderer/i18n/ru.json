@@ -1524,6 +1524,8 @@
 	"settings.githubPat.remove": "Удалить",
 	"settings.connectMobile": "Подключить мобильное устройство",
 	"settings.developerMode": "Режим разработчика",
+	"cliShadow.checkVersion": "Запустить ao version",
+	"cliShadow.checkVersionDescription": "Запускает другой исполняемый файл ao для проверки его версии.",
 	"cliShadow.titleOlder": "Ваш терминал запускает более старый ao (v{{version}})",
 	"cliShadow.titleNewer": "Ваш терминал запускает более новый ao (v{{version}})",
 	"cliShadow.titleDifferent": "Ваш терминал запускает другой ao",

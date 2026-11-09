@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 
 // Remembers the dismissed path, not a yes/no: a different ao appearing later is
 // a new problem and warns again.
-const DISMISSED_PATH_KEY = "ao.cli-shadow-dismissed-path.v1";
+const DISMISSED_PATH_KEY = "ao.cli-shadow-dismissed-identity.v2";
 
 function readDismissedPath(): string | null {
 	try {
@@ -32,8 +32,8 @@ export function CliShadowBanner() {
 	// A matching or newer ao rarely breaks anything, so it stays in Settings. A
 	// version that cannot be read may be just as old, so it still warns.
 	if (status?.kind !== "shadowed" || (status.relation !== "older" && status.relation !== "different")) return null;
-	if (status.shadowPath === dismissedPath) return null;
-	const { shadowPath } = status;
+	const dismissalKey = JSON.stringify([status.shadowPath, status.shadowTarget, status.shadowIdentity]);
+	if (dismissalKey === dismissedPath) return null;
 	return (
 		<section
 			aria-live="polite"
@@ -54,8 +54,8 @@ export function CliShadowBanner() {
 				aria-label={t("cliShadow.dismiss")}
 				className="-mt-1 -mr-1 text-[var(--color-text-import-muted)]"
 				onClick={() => {
-					writeDismissedPath(shadowPath);
-					setDismissedPath(shadowPath);
+					writeDismissedPath(dismissalKey);
+					setDismissedPath(dismissalKey);
 				}}
 			>
 				<X className="size-icon-base" aria-hidden="true" />

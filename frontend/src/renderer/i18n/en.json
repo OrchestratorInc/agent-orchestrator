@@ -1463,6 +1463,8 @@
 	"settings.githubPat.remove": "Remove",
 	"settings.connectMobile": "Connect mobile",
 	"settings.developerMode": "Developer mode",
+	"cliShadow.checkVersion": "Run ao version",
+	"cliShadow.checkVersionDescription": "This runs the other ao executable to check its version.",
 	"cliShadow.titleOlder": "Your terminal runs an older ao (v{{version}})",
 	"cliShadow.titleNewer": "Your terminal runs a newer ao (v{{version}})",
 	"cliShadow.titleDifferent": "Your terminal runs a different ao",

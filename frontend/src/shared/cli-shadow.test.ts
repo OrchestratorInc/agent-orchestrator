@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { nodeCliShadowIo } from "../main/cli-link-fs";
-import { inspectCliShadow, replaceCliShadow, type CliShadowIo, type CliShadowRequest } from "./cli-shadow";
+import { inspectCliShadow, replaceCliShadow as replaceCliShadowImpl, type CliShadowIo, type CliShadowRequest } from "./cli-shadow";
+
+async function replaceCliShadow(io: CliShadowIo, req: CliShadowRequest, expected: { path: string; target: string; identity?: string }) {
+	return replaceCliShadowImpl(io, req, { ...expected, identity: expected.identity ?? await io.identity(expected.path) ?? "missing" });
+}
 
 const roots: string[] = [];
 
@@ -31,10 +35,41 @@ async function executable(directory: string, version: string, status = 0): Promi
 const request = (shellPath: string | undefined, bundledPath: string | undefined, platform: NodeJS.Platform = "darwin", isPackaged = true): CliShadowRequest =>
 	({ platform, shellPath, bundledPath, isPackaged });
 
-const inspect = (shellPath: string | undefined, bundledPath: string | undefined, platform: NodeJS.Platform = "darwin", isPackaged = true) =>
-	inspectCliShadow(nodeCliShadowIo(), request(shellPath, bundledPath, platform, isPackaged));
+const inspect = async (shellPath: string | undefined, bundledPath: string | undefined, platform: NodeJS.Platform = "darwin", isPackaged = true) => {
+	const io = nodeCliShadowIo();
+	const probeIdentity = shellPath ? await io.identity(path.join(shellPath.split(":")[0] ?? "", "ao")) : null;
+	return inspectCliShadow(io, { ...request(shellPath, bundledPath, platform, isPackaged), probeIdentity: probeIdentity ?? undefined });
+};
 
 describe("inspectCliShadow", () => {
+	it("does not execute a different file using consent for an earlier identity", async () => {
+		const { shadowDir, bundledPath } = await layout();
+		const shadowPath = await executable(shadowDir, "old");
+		const real = nodeCliShadowIo();
+		const identity = await real.identity(shadowPath) as string;
+		await writeFile(shadowPath, "#!/bin/sh\necho changed\n");
+		const executed: string[] = [];
+		const io = { ...real, version: async (file: string) => { executed.push(file); return real.version(file); } };
+		await expect(inspectCliShadow(io, { ...request(shadowDir, bundledPath), probeIdentity: identity })).resolves.toMatchObject({ versionChecked: false });
+		expect(executed).not.toContain(shadowPath);
+	});
+
+	it("does not execute the other ao during passive inspection", async () => {
+		const { shadowDir, bundledPath } = await layout();
+		const shadowPath = await executable(shadowDir, "old");
+		const real = nodeCliShadowIo();
+		const executed: string[] = [];
+		const io = { ...real, version: async (file: string) => { executed.push(file); return real.version(file); } };
+		await inspectCliShadow(io, { ...request(shadowDir, bundledPath), probeIdentity: undefined });
+		expect(executed).not.toContain(shadowPath);
+	});
+	it("does not suggest a global uninstall for a local npm executable", async () => {
+		const { root, shadowDir, bundledPath } = await layout();
+		const pkgDir = path.join(root, "project/node_modules/ao-cli/bin");
+		await mkdir(pkgDir, { recursive: true });
+		await symlink(await executable(pkgDir, "old"), path.join(shadowDir, "ao"));
+		await expect(inspect(shadowDir, bundledPath)).resolves.toMatchObject({ fix: { kind: "manual", command: `rm ${path.join(shadowDir, "ao")}` } });
+	});
 	it("names the other ao, its version, and the bundled path when another ao wins", async () => {
 		const { shadowDir, appDir, bundledPath } = await layout();
 		const shadowPath = await executable(shadowDir, "ao version dev");
@@ -166,8 +201,6 @@ describe("inspectCliShadow fix", () => {
 	it.each([
 		["Cellar/ao/0.1.0/bin/ao", "brew uninstall ao"],
 		["Caskroom/ao-app/0.1.0/ao", "brew uninstall --cask ao-app"],
-		["lib/node_modules/ao-cli/bin/ao", "npm uninstall -g ao-cli"],
-		["lib/node_modules/@scope/ao-cli/bin/ao", "npm uninstall -g @scope/ao-cli"],
 	])("leaves a writable package-manager install at %s to its manager", async (relative, command) => {
 		const { shadowDir, bundledPath } = await linkedInto(relative);
 		await expect(inspect(shadowDir, bundledPath)).resolves.toMatchObject({ fix: { kind: "manual", command } });
@@ -197,6 +230,29 @@ describe("inspectCliShadow fix", () => {
 });
 
 describe("replaceCliShadow", () => {
+	it("refuses a regular file edited after inspection", async () => {
+		const { shadowDir, bundledPath } = await layout();
+		const shadowPath = await executable(shadowDir, "old");
+		const io = nodeCliShadowIo();
+		const identity = await io.identity(shadowPath) as string;
+		await writeFile(shadowPath, "#!/bin/sh\necho updated\n");
+		await expect(replaceCliShadow(io, request(shadowDir, bundledPath), { path: shadowPath, target: await io.realpath(shadowPath) as string, identity })).resolves.toMatchObject({ ok: false, code: "changed" });
+		await expect(readFile(shadowPath, "utf8")).resolves.toContain("updated");
+	});
+	it("refuses a file changed while the staged link is verified", async () => {
+		const { shadowDir, bundledPath } = await layout();
+		const shadowPath = await executable(shadowDir, "old");
+		const real = nodeCliShadowIo();
+		const identity = await real.identity(shadowPath) as string;
+		const io: CliShadowIo = { ...real, version: async (file) => {
+			if (file.endsWith(".tmp")) await writeFile(shadowPath, "#!/bin/sh\necho updated\n");
+			return real.version(file);
+		} };
+		await expect(replaceCliShadow(io, request(shadowDir, bundledPath), { path: shadowPath, target: await real.realpath(shadowPath) as string, identity })).resolves.toMatchObject({ ok: false, code: "changed" });
+		await expect(readFile(shadowPath, "utf8")).resolves.toContain("updated");
+		await expect(readdir(shadowDir)).resolves.toEqual(["ao"]);
+	});
+
 	it("replaces a symlink and leaves the file it pointed to", async () => {
 		const { root, shadowDir, bundledPath } = await layout();
 		const oldDir = path.join(root, "old");

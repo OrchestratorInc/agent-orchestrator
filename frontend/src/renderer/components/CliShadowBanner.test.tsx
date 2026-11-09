@@ -11,6 +11,8 @@ const shadowed: Shadowed = {
 	kind: "shadowed",
 	shadowPath: "/Users/me/.local/bin/ao",
 	shadowTarget: "/Users/me/old/ao",
+	shadowIdentity: "identity-1",
+	versionChecked: true,
 	shadowVersion: "0.13.0",
 	bundledPath: "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao",
 	bundledVersion: "0.14.8",
@@ -25,6 +27,15 @@ function mockStatus(status: CliShadowStatus) {
 describe("CliShadowBanner", () => {
 	beforeEach(() => window.localStorage.clear());
 	afterEach(() => vi.restoreAllMocks());
+
+	it("only checks the version when requested for the displayed file", async () => {
+		const inspect = mockStatus({ ...shadowed, versionChecked: false, shadowVersion: null, relation: "different" });
+		render(<CliShadowBanner />);
+		await screen.findByRole("status");
+		expect(inspect).toHaveBeenCalledWith(undefined);
+		fireEvent.click(screen.getByRole("button", { name: "Run ao version" }));
+		await waitFor(() => expect(inspect).toHaveBeenCalledWith("identity-1"));
+	});
 
 	it("says older and keeps both paths in the details", async () => {
 		mockStatus(shadowed);
@@ -97,15 +108,15 @@ describe("CliShadowBanner", () => {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
-	it("warns again when a different ao appears after a dismissal", async () => {
+	it("warns again when a different ao appears at the same path after a dismissal", async () => {
 		mockStatus(shadowed);
 		const first = render(<CliShadowBanner />);
 		fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
 		first.unmount();
 
-		mockStatus({ ...shadowed, shadowPath: "/opt/homebrew/bin/ao" });
+		mockStatus({ ...shadowed, shadowIdentity: "identity-2" });
 		render(<CliShadowBanner />);
-		expect((await screen.findByRole("status")).querySelector("details")).toHaveTextContent("/opt/homebrew/bin/ao");
+		expect((await screen.findByRole("status")).querySelector("details")).toHaveTextContent(shadowed.shadowPath);
 	});
 
 	it("replaces only after the confirm, passing what the user saw, then clears the notice", async () => {
@@ -120,7 +131,7 @@ describe("CliShadowBanner", () => {
 		inspect.mockResolvedValue({ kind: "match" });
 		const buttons = screen.getAllByRole("button", { name: "Use this app's ao" });
 		fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
-		await waitFor(() => expect(replace).toHaveBeenCalledWith("/Users/me/.local/bin/ao", "/Users/me/old/ao"));
+		await waitFor(() => expect(replace).toHaveBeenCalledWith("/Users/me/.local/bin/ao", "/Users/me/old/ao", "identity-1"));
 		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
 	});
 

@@ -80,6 +80,15 @@ export function nodeCliShadowIo(): CliShadowIo {
 	const io = nodeCliLinkIo();
 	return {
 		...io,
+		async identity(value) {
+			try {
+				const entry = await lstat(value, { bigint: true });
+				const target = await stat(value, { bigint: true });
+				return [entry, target].map((s) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`).join("/");
+			} catch {
+				return null;
+			}
+		},
 		// A shell skips a directory named ao, though it passes an X_OK check.
 		async isExecutableFile(value) {
 			try {

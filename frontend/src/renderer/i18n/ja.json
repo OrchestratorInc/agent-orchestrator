@@ -1459,6 +1459,8 @@
 	"settings.close": "設定を閉じる",
 	"settings.connectMobile": "モバイル接続",
 	"settings.developerMode": "開発者モード",
+	"cliShadow.checkVersion": "ao version を実行",
+	"cliShadow.checkVersionDescription": "別の ao 実行ファイルを実行してバージョンを確認します。",
 	"cliShadow.titleOlder": "ターミナルで古い ao が実行されます (v{{version}})",
 	"cliShadow.titleNewer": "ターミナルで新しい ao が実行されます (v{{version}})",
 	"cliShadow.titleDifferent": "ターミナルで別の ao が実行されます",

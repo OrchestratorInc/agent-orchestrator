@@ -1459,6 +1459,8 @@
 	"settings.close": "설정 닫기",
 	"settings.connectMobile": "모바일 연결",
 	"settings.developerMode": "개발자 모드",
+	"cliShadow.checkVersion": "ao version 실행",
+	"cliShadow.checkVersionDescription": "다른 ao 실행 파일을 실행하여 버전을 확인합니다.",
 	"cliShadow.titleOlder": "터미널에서 이전 버전의 ao가 실행됩니다 (v{{version}})",
 	"cliShadow.titleNewer": "터미널에서 최신 버전의 ao가 실행됩니다 (v{{version}})",
 	"cliShadow.titleDifferent": "터미널에서 다른 ao가 실행됩니다",

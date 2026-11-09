@@ -11,19 +11,20 @@ type Shadowed = Extract<CliShadowStatus, { kind: "shadowed" }>;
 
 // The notice and the Settings row each hold a status, and a fix from either
 // one has to clear both.
-const refreshers = new Set<() => void>();
+const refreshers = new Set<(status: CliShadowStatus) => void>();
 
-function refreshCliShadowStatus(): void {
-	for (const refresh of refreshers) refresh();
+async function refreshCliShadowStatus(identity?: string): Promise<void> {
+	const status = await aoBridge.cliShadow.inspect(identity);
+	for (const refresh of refreshers) refresh(status);
 }
 
 export function useCliShadowStatus(): CliShadowStatus | null {
 	const [status, setStatus] = useState<CliShadowStatus | null>(null);
 	const latest = useRef(0);
-	const load = useCallback(async () => {
+	const load = useCallback(async (identity?: string) => {
 		const request = ++latest.current;
 		try {
-			const next = await aoBridge.cliShadow.inspect();
+			const next = await aoBridge.cliShadow.inspect(identity);
 			if (request === latest.current) setStatus(next);
 		} catch {
 			// An advisory check that fails has nothing to tell the user.
@@ -31,7 +32,10 @@ export function useCliShadowStatus(): CliShadowStatus | null {
 	}, []);
 	useEffect(() => {
 		void load();
-		const refresh = () => void load();
+		const refresh = (next: CliShadowStatus) => {
+			latest.current += 1;
+			setStatus(next);
+		};
 		refreshers.add(refresh);
 		return () => {
 			refreshers.delete(refresh);
@@ -66,9 +70,19 @@ function PathText({ path }: { path: string }) {
 export function CliShadowDetails({ status, className }: { status: Shadowed; className?: string }) {
 	const { t } = useTranslation();
 	const unknown = t("cliShadow.versionUnknown");
+	const [checking, setChecking] = useState(false);
 	return (
 		<details className={cn("text-xs", className)}>
 			<summary className="cursor-pointer select-none">{t("cliShadow.details")}</summary>
+			{!status.versionChecked ? (
+				<Button type="button" variant="link" disabled={checking} onClick={() => {
+					setChecking(true);
+					void refreshCliShadowStatus(status.shadowIdentity).catch(() => undefined).finally(() => setChecking(false));
+				}}>
+					{t("cliShadow.checkVersion")}
+				</Button>
+			) : null}
+			{!status.versionChecked ? <p>{t("cliShadow.checkVersionDescription")}</p> : null}
 			<dl className="mt-1 flex flex-col gap-1.5 leading-relaxed">
 				<div>
 					<dt>{t("cliShadow.terminalRuns", { version: status.shadowVersion ?? unknown })}</dt>
@@ -104,14 +118,14 @@ export function CliShadowActions({ status, surface }: { status: Shadowed; surfac
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await aoBridge.cliShadow.replace(status.shadowPath, status.shadowTarget);
+			const result = await aoBridge.cliShadow.replace(status.shadowPath, status.shadowTarget, status.shadowIdentity);
 			if (result.ok) setConfirming(false);
 			else setError(result.message);
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : t("cliShadow.replaceFailed"));
 		} finally {
 			setBusy(false);
-			refreshCliShadowStatus();
+			void refreshCliShadowStatus().catch(() => undefined);
 		}
 	};
 

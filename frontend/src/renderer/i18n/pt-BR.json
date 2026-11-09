@@ -1486,6 +1486,8 @@
 	"settings.close": "Fechar configurações",
 	"settings.connectMobile": "Conectar mobile",
 	"settings.developerMode": "Modo desenvolvedor",
+	"cliShadow.checkVersion": "Executar ao version",
+	"cliShadow.checkVersionDescription": "Executa o outro arquivo ao para verificar sua versão.",
 	"cliShadow.titleOlder": "Seu terminal executa um ao mais antigo (v{{version}})",
 	"cliShadow.titleNewer": "Seu terminal executa um ao mais recente (v{{version}})",
 	"cliShadow.titleDifferent": "Seu terminal executa outro ao",

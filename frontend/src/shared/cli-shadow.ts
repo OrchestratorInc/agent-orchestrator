@@ -28,6 +28,8 @@ export type CliShadowStatus =
 		shadowPath: string;
 		// What shadowPath resolves to. A replace only goes ahead while it still does.
 		shadowTarget: string;
+		shadowIdentity: string;
+		versionChecked: boolean;
 		shadowVersion: string | null;
 		bundledPath: string;
 		bundledVersion: string | null;
@@ -40,6 +42,7 @@ export type CliShadowIo = Pick<
 	"lstat" | "canWrite" | "realpath" | "join" | "parent" | "version" | "symlink" | "rename" | "remove"
 > & {
 	isExecutableFile(path: string): Promise<boolean>;
+	identity(path: string): Promise<string | null>;
 };
 
 export type CliShadowRequest = {
@@ -50,6 +53,8 @@ export type CliShadowRequest = {
 	bundledPath: string | undefined;
 	isPackaged: boolean;
 	appImage?: string;
+	// Explicit permission to run ao version, scoped to the file the user saw.
+	probeIdentity?: string;
 };
 
 export type CliShadowReplaceResult =
@@ -88,8 +93,6 @@ function packageManagerRemoval(target: string): string | null {
 	if (formula) return `brew uninstall ${shellQuote(formula)}`;
 	const cask = /\/Caskroom\/([^/]+)\//.exec(target)?.[1];
 	if (cask) return `brew uninstall --cask ${shellQuote(cask)}`;
-	const npmPackage = /.*\/node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(target)?.[1];
-	if (npmPackage) return `npm uninstall -g ${shellQuote(npmPackage)}`;
 	return null;
 }
 
@@ -97,6 +100,7 @@ async function chooseFix(io: CliShadowIo, request: CliShadowRequest, bundledPath
 	const removal = packageManagerRemoval(shadowTarget);
 	if (removal) return { kind: "manual", command: removal };
 	if (!(await io.canWrite(io.parent(shadowPath)))) return { kind: "manual", command: `sudo rm ${shellQuote(shadowPath)}` };
+	if (shadowTarget.includes("/node_modules/")) return { kind: "manual", command: `rm ${shellQuote(shadowPath)}` };
 	// A link into a translocated app, an AppImage mount, or a checkout goes stale.
 	const support = cliLinkSupport({ platform: request.platform, isPackaged: request.isPackaged, appImage: request.appImage, appCliPath: bundledPath });
 	if (!support.ok) return { kind: "manual", command: `rm ${shellQuote(shadowPath)}` };
@@ -118,8 +122,11 @@ export async function inspectCliShadow(io: CliShadowIo, request: CliShadowReques
 		const target = await io.realpath(candidate);
 		if (target === bundledReal) return { kind: "match" };
 		const shadowTarget = target ?? candidate;
+		const shadowIdentity = await io.identity(candidate);
+		if (!shadowIdentity) return { kind: "unknown" };
+		// Only an explicit check of this exact file may execute the shadow CLI.
 		const [shadowLine, bundledLine, fix] = await Promise.all([
-			io.version(candidate).catch(() => null),
+			(request.probeIdentity === shadowIdentity) ? io.version(candidate).catch(() => null) : Promise.resolve(null),
 			io.version(bundledPath).catch(() => null),
 			chooseFix(io, request, bundledPath, candidate, shadowTarget),
 		]);
@@ -127,6 +134,8 @@ export async function inspectCliShadow(io: CliShadowIo, request: CliShadowReques
 			kind: "shadowed",
 			shadowPath: candidate,
 			shadowTarget,
+			shadowIdentity,
+			versionChecked: request.probeIdentity === shadowIdentity,
 			shadowVersion: shadowLine && (parseVersion(shadowLine) ?? shadowLine),
 			bundledPath,
 			bundledVersion: bundledLine && (parseVersion(bundledLine) ?? bundledLine),
@@ -146,11 +155,11 @@ export async function inspectCliShadow(io: CliShadowIo, request: CliShadowReques
 export async function replaceCliShadow(
 	io: CliShadowIo,
 	request: CliShadowRequest,
-	expected: { path: string; target: string },
+	expected: { path: string; target: string; identity: string },
 ): Promise<CliShadowReplaceResult> {
 	const changed = (): CliShadowReplaceResult => ({ ok: false, code: "changed", message: `${expected.path} changed. Review it before replacing.` });
 	const status = await inspectCliShadow(io, request);
-	if (status.kind !== "shadowed" || status.fix.kind !== "replace" || status.shadowPath !== expected.path || status.shadowTarget !== expected.target) return changed();
+	if (status.kind !== "shadowed" || status.fix.kind !== "replace" || status.shadowPath !== expected.path || status.shadowTarget !== expected.target || status.shadowIdentity !== expected.identity) return changed();
 	const stagedPath = `${expected.path}.${randomUUID()}.tmp`;
 	let staged = false;
 	let verifying = false;
@@ -160,7 +169,7 @@ export async function replaceCliShadow(
 		verifying = true;
 		await io.version(stagedPath);
 		verifying = false;
-		if ((await io.realpath(expected.path)) !== expected.target) return changed();
+		if ((await io.realpath(expected.path)) !== expected.target || (await io.identity(expected.path)) !== expected.identity) return changed();
 		await io.rename(stagedPath, expected.path);
 		staged = false;
 		return { ok: true };

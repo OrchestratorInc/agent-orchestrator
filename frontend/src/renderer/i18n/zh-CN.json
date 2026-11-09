@@ -1441,6 +1441,8 @@
 	"settings.close": "关闭设置",
 	"settings.connectMobile": "连接手机",
 	"settings.developerMode": "开发者模式",
+	"cliShadow.checkVersion": "运行 ao version",
+	"cliShadow.checkVersionDescription": "运行另一个 ao 可执行文件以检查其版本。",
 	"cliShadow.titleOlder": "你的终端运行的是较旧的 ao (v{{version}})",
 	"cliShadow.titleNewer": "你的终端运行的是较新的 ao (v{{version}})",
 	"cliShadow.titleDifferent": "你的终端运行的是另一个 ao",

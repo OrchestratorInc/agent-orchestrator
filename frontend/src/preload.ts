@@ -768,8 +768,8 @@ const api = {
 			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 	},
 	cliShadow: {
-		inspect: () => ipcRenderer.invoke("cliShadow:inspect") as Promise<import("./shared/cli-shadow").CliShadowStatus>,
-		replace: (path: string, target: string) => ipcRenderer.invoke("cliShadow:replace", path, target) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
+		inspect: (identity?: string) => ipcRenderer.invoke("cliShadow:inspect", identity) as Promise<import("./shared/cli-shadow").CliShadowStatus>,
+		replace: (path: string, target: string, identity: string) => ipcRenderer.invoke("cliShadow:replace", path, target, identity) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
 		reveal: () => ipcRenderer.invoke("cliShadow:reveal") as Promise<void>,
 	},
 	updateSettings: {

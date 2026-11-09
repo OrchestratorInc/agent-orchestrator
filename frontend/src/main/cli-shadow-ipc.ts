@@ -17,10 +17,12 @@ export function registerCliShadowIpc(input: {
 		isPackaged: input.isPackaged(),
 		appImage: input.appImage,
 	});
-	ipcMain.handle("cliShadow:inspect", async () => inspectCliShadow(io, await request()));
-	ipcMain.handle("cliShadow:replace", async (_event, path: unknown, target: unknown): Promise<CliShadowReplaceResult> => {
-		if (typeof path !== "string" || typeof target !== "string") return { ok: false, code: "changed", message: "Nothing to replace." };
-		return replaceCliShadow(io, await request(), { path, target });
+	ipcMain.handle("cliShadow:inspect", async (_event, identity: unknown) => {
+		return inspectCliShadow(io, { ...await request(), probeIdentity: typeof identity === "string" ? identity : undefined });
+	});
+	ipcMain.handle("cliShadow:replace", async (_event, path: unknown, target: unknown, identity: unknown): Promise<CliShadowReplaceResult> => {
+		if (typeof path !== "string" || typeof target !== "string" || typeof identity !== "string") return { ok: false, code: "changed", message: "Nothing to replace." };
+		return replaceCliShadow(io, await request(), { path, target, identity });
 	});
 	// Takes no path from the renderer: it only ever reveals the current other ao.
 	ipcMain.handle("cliShadow:reveal", async () => {
