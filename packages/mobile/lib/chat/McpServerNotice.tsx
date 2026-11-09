@@ -29,8 +29,9 @@ export function McpServerNotice({ noticeKey, servers, visible }: {
 	noticeKey: string;
 	servers: readonly McpServer[];
 	/**
-	 * Whether the conversation is on screen. The chat stays mounted under pushed
-	 * routes, so a covered chat must not use up the session's one note — the
+	 * Whether the chat screen is focused. It stays mounted under pushed routes
+	 * and under chat sheets, which are bottom sheets over the composer where the
+	 * note sits, so a covered chat must not use up the session's one note — the
 	 * desktop's `active` prop.
 	 */
 	visible: boolean;

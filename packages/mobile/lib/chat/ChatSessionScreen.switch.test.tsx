@@ -67,7 +67,7 @@ vi.mock("react-native", async () => ({
 }));
 vi.mock("expo-router", async () => {
 	const Toolbar = Object.assign(await host("StackToolbar"), { Button: await host("StackToolbarButton") });
-	return { Stack: { Toolbar }, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
+	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
@@ -137,7 +137,7 @@ vi.mock("../session/startupPoll", () => ({ STARTUP_POLL_MS: 1_000 }));
 vi.mock("../session/useStartupSession", () => ({ useStartupSession: (_config: unknown, session: unknown) => session }));
 vi.mock("../session/useSessionPreview", () => ({ useSessionPreview: () => false }));
 vi.mock("../toolbarIcon", () => ({ toolbarIcon: (name: string) => name }));
-vi.mock("./useChatViewLease", () => ({ useChatViewLease: () => true }));
+vi.mock("./useChatViewLease", () => ({ useChatViewLease: () => {} }));
 vi.mock("../pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("../usePRSummaries", () => ({ usePRSummaries: () => ({ summaryFor: () => undefined }) }));
 vi.mock("../reviewView", () => ({ reviewRouteForPR: vi.fn(), reviewRouteForSession: vi.fn(), sessionPRReadyForReview: () => undefined }));

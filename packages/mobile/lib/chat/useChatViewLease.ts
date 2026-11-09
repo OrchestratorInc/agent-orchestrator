@@ -26,10 +26,8 @@ export function coveredOnlyBySheets(routes: readonly StackRoute[] | undefined, k
  * accepts the lease (the registration, or a renewal if that failed). The daemon
  * wakes a hibernated chat before it answers that request and reports the wake no
  * other way, so this is when the screen should read the conversation again.
- *
- * Returns whether the chat is on screen (focused, or under chat sheets only).
  */
-export function useChatViewLease(config: ServerConfig | null, sessionId: string, onViewing?: () => void): boolean {
+export function useChatViewLease(config: ServerConfig | null, sessionId: string, onViewing?: () => void): void {
 	const focused = useIsFocused();
 	const navigation = useNavigation();
 	const { key } = useRoute();
@@ -101,5 +99,4 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string,
 			}
 		};
 	}, [config, sessionId, viewing]);
-	return viewing;
 }
