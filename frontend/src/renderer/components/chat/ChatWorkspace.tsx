@@ -393,6 +393,7 @@ export interface ChatWorkspaceProps {
 	controllerTransitioning?: boolean;
 	/** The handoff is an account move: the chat stays as it is, with no arrival chrome. */
 	accountMoving?: boolean;
+	accountMoveQueues?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
 	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
@@ -735,6 +736,7 @@ function ChatWorkspaceContent({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	accountMoving = false,
+	accountMoveQueues = false,
 	loadingQuietly,
 	historyPending = false,
 	agentResuming = false,
@@ -1939,7 +1941,7 @@ function ChatWorkspaceContent({
 					data-testid="chat-conversation-panel"
 					hidden={reviewerActive || shellActive}
 					inert={
-						reviewerActive || shellActive || agentInputDisabled || controllerTransitioning
+						reviewerActive || shellActive || agentInputDisabled || (controllerTransitioning && !accountMoveQueues)
 							? true
 							: undefined
 					}
@@ -2120,7 +2122,7 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onInterrupt={turn && !newWorkDisabled && !openingStarting && !accountMoveQueues ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
@@ -2139,14 +2141,14 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || startupQueues}
+										willQueue={Boolean(turn) || startupQueues || accountMoveQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning" || cloudStarting
+											session?.provisionState === "provisioning" || cloudStarting || accountMoveQueues
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
