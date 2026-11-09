@@ -626,7 +626,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
 		for i, file := range files {
-			if file.modTime.Before(recent) {
+			if !file.modTime.IsZero() && file.modTime.Before(recent) {
 				results[i] = parsed{err: errInactive}
 				continue
 			}
