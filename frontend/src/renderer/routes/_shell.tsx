@@ -11,7 +11,6 @@ import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
-import { CliShadowBanner } from "../components/CliShadowBanner";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
@@ -73,8 +72,9 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
+import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -199,13 +199,18 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }
@@ -307,6 +312,7 @@ const ShellCenter = memo(function ShellCenter({
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
+	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();
@@ -714,7 +720,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					: `Failed to spawn orchestrator (${spawnResponse.status})`;
 				throw new Error(message);
 			}
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", {
+			void captureRendererEvent("ao.orchestrators.spawned", {
 				project_id: workspace.id,
 				source,
 			});
@@ -742,7 +748,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			void captureRendererEvent("ao.orchestrators.spawn_failed", {
 				project_id: workspace.id,
 				source,
 			});
@@ -770,7 +776,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				orchestratorAgent: input.orchestratorAgent as WorkspaceSummary["orchestratorAgent"],
 				sessions: [],
 			};
-			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
@@ -895,7 +901,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				surface: "project_board",
 			});
 			const reportFailure = (code: string | undefined) => {
-				void captureRendererEvent("ao.renderer.project_clone_failed", { error_code: code || "unknown" });
+				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
 			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
@@ -1052,7 +1058,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					});
 					throw failure;
 				}
-				void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
+				void captureRendererEvent("ao.projects.removed", { project_id: projectId });
 				// The archive is asynchronous (202); refresh the cloud queries so the
 				// merged board drops the project and its sessions on the next fetch.
 				await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
@@ -1076,7 +1082,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				});
 				throw failure;
 			}
-			void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
+			void captureRendererEvent("ao.projects.removed", { project_id: projectId });
 			updateWorkspaces((current) => current.filter((item) => item.id !== projectId));
 			if (isLastWorkspace) {
               void navigate({ to: "/" });
@@ -1591,7 +1597,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						</main>
 					</div>
 					<DaemonFailureBanner status={daemonStatus} />
-					<CliShadowBanner />
 					{/* On macOS, keep a window-drag strip over
               the traffic-light band only. The fixed TitlebarNav renders after
               this strip so its no-drag buttons remain clickable. */}

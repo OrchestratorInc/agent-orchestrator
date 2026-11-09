@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
+	sessionWorkspaceReady,
 	attentionZone,
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
@@ -423,5 +424,14 @@ describe("attentionZone", () => {
 	it("prioritizes merge as the highest-ROI zone", () => {
 		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
+	});
+});
+
+describe("sessionWorkspaceReady", () => {
+	it("follows the daemon's published workspace, not the start state", () => {
+		expect(sessionWorkspaceReady({ workspacePublished: false })).toBe(false);
+		expect(sessionWorkspaceReady({ workspacePublished: true })).toBe(true);
+		// An older daemon that does not report it.
+		expect(sessionWorkspaceReady({})).toBe(true);
 	});
 });

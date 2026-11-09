@@ -14,7 +14,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 	const [githubUrl, setGithubUrl] = useState("https://github.com/OrchestratorInc/agent-orchestrator/issues/new");
 	useEffect(() => {
 		if (!active) return;
-		void captureRendererEvent("ao.renderer.support_opened");
+		void captureRendererEvent("ao.support.opened");
 		let cancelled = false;
 		void collectReportProblemDiagnostics().then((diagnostics) => {
 			if (!cancelled) setGithubUrl(reportProblemDestinationUrl(diagnostics));

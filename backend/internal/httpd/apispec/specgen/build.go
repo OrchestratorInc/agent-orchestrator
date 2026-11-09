@@ -160,6 +160,8 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersConversationFindResponse":                  "ConversationFindResponse",
+	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -1544,6 +1546,18 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/find", id: "findConversation", tag: "conversations",
+			summary:    "Find literal occurrences in the active conversation branch",
+			pathParams: []any{controllers.ConversationFindParam{}, controllers.ConversationFindQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ConversationFindResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/find-window", id: "findConversationWindow", tag: "conversations",
+			summary:    "Load a read-only transcript page around a find result",
+			pathParams: []any{controllers.ConversationFindParam{}, controllers.ConversationFindWindowQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ConversationSnapshotResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/conversations/search", id: "searchConversations", tag: "conversations",

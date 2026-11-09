@@ -2482,6 +2482,52 @@ func (q *Queries) SelectConversationActivityByProviderItem(ctx context.Context, 
 	return i, err
 }
 
+const selectConversationActivityByRequest = `-- name: SelectConversationActivityByRequest :one
+SELECT id, conversation_id, turn_id, sequence, revision, kind, status, summary, detail_json, request_id, provider_item_id, created_at, updated_at, command_output, command_output_truncated, streamed_text, streamed_text_truncated, branch_id FROM conversation_activities
+WHERE conversation_id = ? AND request_id = ?
+LIMIT 1
+`
+
+type SelectConversationActivityByRequestParams struct {
+	ConversationID string
+	RequestID      string
+}
+
+// A question reaches the store with only its request id, and the chat host
+// replays pending requests after a reconnect. Matching on the request id is
+// what keeps that replay on the row AO already stored: the
+// (conversation_id, request_id) index forbids a second row, and failing the
+// insert stops the whole projection with the turn still running (#7944).
+// Only an in-flight row is refreshed. A settled row stays settled: a replay
+// must not reopen a question the user answered (resolved) or one
+// settleOrphanedWork already failed with its turn - revived, it would sit
+// pending on a failed turn, where the dock never shows it.
+func (q *Queries) SelectConversationActivityByRequest(ctx context.Context, arg SelectConversationActivityByRequestParams) (ConversationActivity, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationActivityByRequest, arg.ConversationID, arg.RequestID)
+	var i ConversationActivity
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Kind,
+		&i.Status,
+		&i.Summary,
+		&i.DetailJson,
+		&i.RequestID,
+		&i.ProviderItemID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CommandOutput,
+		&i.CommandOutputTruncated,
+		&i.StreamedText,
+		&i.StreamedTextTruncated,
+		&i.BranchID,
+	)
+	return i, err
+}
+
 const selectConversationBranch = `-- name: SelectConversationBranch :one
 WITH RECURSIVE lineage(id, parent_branch_id, replaced_turn_id, provider_scope_id, depth) AS (
     SELECT branch.id, branch.parent_branch_id, branch.replaced_turn_id,
@@ -4959,6 +5005,33 @@ func (q *Queries) SettleConversationActivity(ctx context.Context, arg SettleConv
 		arg.UpdatedAt,
 		arg.ConversationID,
 		arg.ProviderItemID,
+	)
+	return err
+}
+
+const settleConversationActivityByRequest = `-- name: SettleConversationActivityByRequest :exec
+UPDATE conversation_activities
+SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
+WHERE conversation_id = ? AND request_id = ? AND status IN ('pending', 'running')
+`
+
+type SettleConversationActivityByRequestParams struct {
+	Status         domain.ActivityStatus
+	Summary        string
+	DetailJson     string
+	UpdatedAt      time.Time
+	ConversationID string
+	RequestID      string
+}
+
+func (q *Queries) SettleConversationActivityByRequest(ctx context.Context, arg SettleConversationActivityByRequestParams) error {
+	_, err := q.db.ExecContext(ctx, settleConversationActivityByRequest,
+		arg.Status,
+		arg.Summary,
+		arg.DetailJson,
+		arg.UpdatedAt,
+		arg.ConversationID,
+		arg.RequestID,
 	)
 	return err
 }

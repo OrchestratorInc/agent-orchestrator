@@ -30,13 +30,13 @@ describe("Report a problem", () => {
 		const { rerender } = render(<ReportProblemContent active={false} />);
 		expect(captureRendererEvent).not.toHaveBeenCalled();
 		rerender(<ReportProblemContent active />);
-		expect(captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.renderer.support_opened");
+		expect(captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.support.opened");
 		rerender(<ReportProblemContent active />);
 		expect(captureRendererEvent).toHaveBeenCalledTimes(1);
 		rerender(<ReportProblemContent active={false} />);
 		rerender(<ReportProblemContent active />);
 		expect(captureRendererEvent).toHaveBeenCalledTimes(2);
-		expect(captureRendererEvent).toHaveBeenLastCalledWith("ao.renderer.support_opened");
+		expect(captureRendererEvent).toHaveBeenLastCalledWith("ao.support.opened");
 	});
 	it("opens a standalone agent with the prompt filled in", async () => {
 		const launch = vi.spyOn(aoBridge.triage, "launch");

@@ -274,10 +274,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				// Cloud refused a model the account's list lacks: the list the picker
 				// showed is older than Cloud's, so it is read again (the message says why).
 				if (err instanceof CloudCpError && err.code === "MODEL_UNAVAILABLE" && cloudOrg?.id && input.agent) {
@@ -318,10 +318,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 					);
 				}
 				if (!data?.workerId) throw new Error(t("newTask.noSession"));
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return data.workerId;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				if (
 					err instanceof TaskCreateError &&
 					err.code &&
@@ -363,10 +363,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw new TaskCreateError(apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
-			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
+			void captureRendererEvent("ao.tasks.created", { scope: "standalone" });
 			return data.session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				void captureRendererEvent("ao.tasks.create_failed", { scope: "standalone" });
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},

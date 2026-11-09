@@ -79,6 +79,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/terminaltitle"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -275,7 +276,7 @@ func Run(buildVersion string) error {
 			"agent": cfg.Agent,
 		},
 	})
-	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, log)
+	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, storeHasPriorState(store), log)
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
@@ -858,6 +859,10 @@ func Run(buildVersion string) error {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
 		shellTermSvc.SetAgentTracker(ctx, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
+	}
+	// Titles are followed whether or not any terminal UI is open.
+	if rt, ok := runtimeAdapter.(ports.TerminalTitleWatcher); ok {
+		go terminaltitle.NewManager(rt, store, cfg.AppRunID, log).Run(ctx)
 	}
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)

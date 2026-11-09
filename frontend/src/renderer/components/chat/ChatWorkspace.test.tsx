@@ -1,4 +1,5 @@
 import { isMacPlatform } from "../../lib/platform";
+import { clientForSessionHost } from "../../lib/host-clients";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
@@ -2062,9 +2063,12 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(dock.getByRole("button", { name: "Continue" }));
 		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 		expect(onDecide).not.toHaveBeenCalled();
-		input.status = "resolved";
-		input.inputResponse = { action: "accept", content: { first_value: "Native" } };
-		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
+		const resolved = structuredClone(snapshot);
+		const answered = resolved.items.find((item) => item.id === "input-1");
+		if (!answered || answered.kind !== "activity") throw new Error("missing resolved input activity");
+		answered.status = "resolved";
+		answered.inputResponse = { action: "accept", content: { first_value: "Native" } };
+		rerender(<ChatWorkspace snapshot={resolved} onResolveInput={onResolveInput} />);
 		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
 		const history = within(screen.getByRole("region", { name: "Agent question history" }));
 		expect(history.getByText("Which direction should we take?")).toBeVisible();
@@ -3391,6 +3395,49 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Latest tall historical prompt")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+	});
+
+	it.each([false, true])("lets the reader scroll away from a find result and navigate again (history window=%s)", async (loadHistory) => {
+		try {
+			stubVirtualTimelineGeometry();
+			vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{ top: 0, bottom: 100 }] as unknown as DOMRectList);
+			vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue({ top: 20, bottom: 30, height: 10 } as DOMRect);
+			const snapshot = chatFixtureLongHistory(100);
+			const prompts = snapshot.items.filter((item): item is ConversationMessage => item.kind === "message" && item.role === "user");
+			prompts[40]!.text = "needle in the middle";
+			prompts[70]!.text = "needle further down";
+			const hits = [prompts[40]!, prompts[70]!].map((message) => ({ messageId: message.id, revision: message.revision, sequence: message.sequence, block: 0, start: 0, end: 6 }));
+			const get = vi.fn(async (path: string) => ({ data: path.endsWith("find-window")
+				? { ...snapshot, controller: "ready", messages: snapshot.items.filter((item) => item.kind === "message"), activities: snapshot.items.filter((item) => item.kind === "activity") }
+				: { conversationId: snapshot.conversationId, transcriptRevision: "find-regression", occurrences: hits, total: 2 }, response: new Response() }));
+			vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+			const visible = loadHistory ? { ...snapshot, hasMoreBefore: true, oldestSequence: prompts[80]!.sequence, turns: snapshot.turns.slice(80), items: snapshot.items.filter((item) => item.sequence >= prompts[80]!.sequence) } : snapshot;
+			render(<ChatWorkspace snapshot={visible} />);
+			const log = screen.getByRole("log");
+			log.focus();
+			fireEvent.keyDown(log, { key: "f", metaKey: true });
+			const input = await screen.findByRole("searchbox");
+			fireEvent.change(input, { target: { value: "needle" } });
+			await screen.findByText("1/2");
+			// jsdom does not emit scroll events for the virtualizer's programmatic writes.
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle in the middle")).toBeInTheDocument(); });
+			log.scrollTop = 0;
+			fireEvent.scroll(log);
+			// Let the virtualizer unmount the result and commit its next visible window.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+			expect(log.scrollTop).toBe(0);
+			expect(screen.queryByText("needle in the middle")).not.toBeInTheDocument();
+			fireEvent.keyDown(input, { key: "Enter" });
+			await screen.findByText("2/2");
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle further down")).toBeInTheDocument(); });
+			fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+			await screen.findByText("1/2");
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle in the middle")).toBeInTheDocument(); });
+			const top = log.scrollTop;
+			fireEvent.keyDown(input, { key: "Escape" });
+			expect(log.scrollTop).toBe(top);
+			expect(get.mock.calls.some(([path]) => path.endsWith("find-window"))).toBe(loadHistory);
+		} finally { vi.restoreAllMocks(); }
 	});
 
 	it("scrolls virtual history, keeps all minimap targets, and returns to the latest turn", async () => {
@@ -5538,7 +5585,7 @@ describe("ChatWorkspace message actions", () => {
 				},
 			],
 		};
-		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
+		const view = render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
 
 		expect(screen.getByText("2 / 3")).toBeVisible();
 		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
@@ -5548,6 +5595,14 @@ describe("ChatWorkspace message actions", () => {
 			}),
 		);
 		expect(onActivateBranch).toHaveBeenCalledWith("branch-previous");
+		view.rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("2 / 3")).toBeVisible();
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, branchPoints: [{
+			turnId: "turn-1", position: 3, total: 4, previousBranchId: "branch-new-previous", nextBranchId: "branch-new-next",
+		}] }} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("3 / 4")).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Previous conversation branch" }));
+		expect(onActivateBranch).toHaveBeenLastCalledWith("branch-new-previous");
 	});
 
 	it("does not label a provider-native branch as exact context", () => {
