@@ -2820,6 +2820,54 @@ func TestACPDriverParksAndResolvesStructuredElicitation(t *testing.T) {
 	}
 }
 
+// A question has no deadline: answers given after the approval deadline still
+// reach the agent, instead of an empty form that reads as "no answers".
+func TestACPQuestionWaitsPastTheApprovalDeadline(t *testing.T) {
+	expired := make(chan time.Time)
+	close(expired)
+	restore := timeAfter
+	timeAfter = func(time.Duration) <-chan time.Time { return expired }
+	t.Cleanup(func() { timeAfter = restore })
+
+	c := &conversation{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		pendingInputs: make(map[string]*parkedInput),
+		events:        make(chan ports.ChatEvent, 16),
+	}
+	result := make(chan ports.ChatInputResponse, 1)
+	go func() {
+		response, _ := c.RequestInput(context.Background(), ports.ChatInputRequest{
+			Mode: ports.ChatInputModeForm, Message: "Which approach?",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{"choice": map[string]any{"type": "string"}}},
+		})
+		result <- response
+	}()
+	requested := nextEvent(t, c.Events())
+	if requested.Kind != ports.ChatEventInputRequested {
+		t.Fatalf("first event = %#v, want the question", requested)
+	}
+	select {
+	case response := <-result:
+		t.Fatalf("question closed before it was answered: %#v", response)
+	case event := <-c.Events():
+		t.Fatalf("question closed before it was answered: %s", event.Kind)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	answer := ports.ChatInputResponse{Action: ports.ChatInputActionAccept, Content: map[string]any{"choice": "native"}}
+	if err := c.ResolveInput(context.Background(), requested.RequestID, answer); err != nil {
+		t.Fatalf("ResolveInput: %v", err)
+	}
+	select {
+	case response := <-result:
+		if !reflect.DeepEqual(response, answer) {
+			t.Fatalf("agent got %#v, want %#v", response, answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("answer never reached the agent")
+	}
+}
+
 func TestValidateInputResponseRejectsValuesOutsideTheProviderSchema(t *testing.T) {
 	request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
 		"required": []any{"choice", "fast"},

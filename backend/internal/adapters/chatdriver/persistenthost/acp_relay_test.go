@@ -470,7 +470,8 @@ func TestACPRelaySettlesStalledPromptAfterReattach(t *testing.T) {
 }
 
 // A turn parked on a permission or elicitation is silent by design; the
-// daemon waits up to approvalWait for the user.
+// daemon waits up to approvalWait for a permission, and without limit for a
+// question.
 func TestACPRelayStallWatchdogWaitsOnTheClient(t *testing.T) {
 	relay, _ := startStallTestPrompt(t)
 	permission, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"sessionId":"session-live","toolCall":{"toolCallId":"t1"},"options":[]}}`+"\n"), 1, true)
