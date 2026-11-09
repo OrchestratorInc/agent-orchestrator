@@ -54,6 +54,12 @@ export type ConversationTurn = {
 	rolledBack?: boolean;
 	diff?: TurnDiff;
 	plan?: ConversationPlan;
+	/**
+	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
+	 * chat read newest first): just before the loaded events, which its first
+	 * loaded item would otherwise place it among.
+	 */
+	anchorSequence?: number;
 };
 
 export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";

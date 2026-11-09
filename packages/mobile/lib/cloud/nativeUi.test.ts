@@ -39,6 +39,18 @@ describe("cloud session actions sheet", () => {
 		expect(open(undefined).map(([label]) => label)).not.toContain("Artifacts");
 	});
 
+	// As a local chat's sheet: the switch sits with the session, above Archive,
+	// and reads as under way while it runs.
+	it("offers switching a Chat session to Terminal UI and a Terminal UI one back to Chat", () => {
+		const session = (interfaceSwitch?: { to: "chat" | "tui"; switching: boolean }, terminated = false) =>
+			cloudSessionMenuGroups({ terminated, pinned: false, canShowAgentTerminal: false, interfaceSwitch }).at(-1)!.items.map((item) => [item.action, item.label, item.disabled ?? false]);
+		expect(session({ to: "tui", switching: false })).toEqual([["switch_tui", "Switch to Terminal UI", false], ["delete", "Archive", false]]);
+		expect(session({ to: "chat", switching: false })[0]).toEqual(["switch_chat", "Switch to Chat", false]);
+		expect(session({ to: "chat", switching: true })[0]).toEqual(["switch_chat", "Switching to Chat…", true]);
+		expect(session(undefined).map(([action]) => action)).toEqual(["delete"]);
+		expect(session({ to: "tui", switching: false }, true).map(([action]) => action)).toEqual(["restore"]);
+	});
+
 	it("offers the agent's terminal beside the chat of a Terminal UI session, and Restore once archived", () => {
 		const groups = cloudSessionMenuGroups({ terminated: true, pinned: true, canShowAgentTerminal: true });
 		expect(titles(groups)).toEqual([

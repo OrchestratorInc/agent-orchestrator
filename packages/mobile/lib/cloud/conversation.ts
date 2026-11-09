@@ -201,6 +201,11 @@ function scriptRunActivity(run: ScriptRun): ConversationActivity {
 export type CloudSnapshotOptions = {
 	/** The viewer's own model and settings for the composer (stored per session on the phone). */
 	settings?: ConversationSnapshot["settings"];
+	/**
+	 * The events are the newest part of the history (older pages load on
+	 * demand), so the first of them is not the session's first.
+	 */
+	partial?: boolean;
 };
 
 /**
@@ -221,11 +226,29 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 	const runs = new Map<string, { run: ScriptRun; activity: ConversationActivity }>();
 	const items: ConversationItem[] = [];
 	let usage: ConversationUsage | undefined;
+	const partial = options.partial === true;
+	// A turn whose prompt is above the loaded events began before every prompt
+	// here (a prompt queued while it ran sits inside it, ahead of its later
+	// events): it sorts before them, in the order of its first loaded event.
+	const windowStart = events[0]?.sequence ?? 0;
+	const windowSpan = (events.at(-1)?.sequence ?? 0) - windowStart + 2;
 
 	for (const event of events) {
 		const payload = payloadOf(event);
 		const turnId = turnIdOf(event);
-		if (turnId && !turns.has(turnId)) turns.set(turnId, { id: turnId, state: "queued", requestedAt: event.createdAt });
+		if (turnId && !turns.has(turnId)) {
+			// A turn starts with its prompt. One whose first event here is any other
+			// began before the loaded events (a page starts inside the turn a later
+			// prompt queued in, or inside a very long one): it had started.
+			const startedEarlier = partial && event.type !== "chat.user_message" && event.type !== "chat.turn_started";
+			const promptAbove = partial && event.type !== "chat.user_message";
+			turns.set(turnId, {
+				...(startedEarlier
+					? { id: turnId, state: "running", requestedAt: event.createdAt, startedAt: event.createdAt }
+					: { id: turnId, state: "queued", requestedAt: event.createdAt }),
+				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
+			});
+		}
 		const turn = turnId ? turns.get(turnId) : undefined;
 
 		if (turn && event.type === "chat.turn_started") {
@@ -486,7 +509,7 @@ export function cloudConversationSnapshot(session: CloudSession, events: readonl
 		items,
 		latestSequence: events.at(-1)?.sequence ?? 0,
 		oldestSequence: events[0]?.sequence ?? 1,
-		hasMoreBefore: false,
+		hasMoreBefore: partial,
 		settings: options.settings ?? {},
 		...(usage ? { usage } : {}),
 		capabilities: active && steerable.has(active.id) ? ["steer"] : [],

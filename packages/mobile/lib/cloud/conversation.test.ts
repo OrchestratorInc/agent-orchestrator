@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requestDockModel } from "../chat/requestDockModel";
+import { groupConversationByTurn } from "../chat/timelineModel";
 import { appendCloudEvents, cloudConversationSnapshot, cloudTurnDiff, runningCloudTurnId } from "./conversation";
 import type { CloudClientEvent, CloudSession } from "./types";
 
@@ -158,5 +159,27 @@ describe("cloud conversation projection", () => {
 			{ path: "new.ts", status: "renamed", additions: 1, deletions: 1, oldPath: "old.ts" },
 			{ path: "n.ts", status: "added", additions: 1, deletions: 0, oldPath: undefined },
 		]);
+	});
+
+	// The chat opens on its newest page, which can begin inside an earlier turn:
+	// a prompt queued while a long turn ran sits inside that turn's events.
+	it("reads a page that starts inside a turn as the newest part of a longer history", () => {
+		sequence = 40;
+		const events = [
+			event("chat.user_message", { turnId: "t2", text: "Then add tests" }),
+			event("chat.assistant_delta", { turnId: "t1", itemId: "a", text: "Still working" }),
+			event("chat.turn_completed", { turnId: "t1" }),
+			event("chat.turn_started", { turnId: "t2" }),
+		];
+		const partial = cloudConversationSnapshot(session(), events, { partial: true });
+		expect(partial.hasMoreBefore).toBe(true);
+		expect(partial.turns.find((turn) => turn.id === "t1")).toMatchObject({ state: "completed", startedAt: events[1].createdAt });
+		// t1 began above the page, so it reads before the prompt queued inside it.
+		expect(groupConversationByTurn(partial).map((group) => group.turnId)).toEqual(["t1", "t2"]);
+
+		// Read as a whole history, the same events would put t1 after t2's prompt.
+		const whole = cloudConversationSnapshot(session(), events);
+		expect(whole.hasMoreBefore).toBe(false);
+		expect(groupConversationByTurn(whole).map((group) => group.turnId)).toEqual(["t2", "t1"]);
 	});
 });

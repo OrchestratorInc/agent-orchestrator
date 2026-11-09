@@ -16,7 +16,7 @@ export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" |
  * terminal (a Terminal UI session's view, beside the chat), its project, and
  * Restore for an archived one. See lib/cloud/sessionMenu.
  */
-export type CloudConversationMenuAction = "agent_terminal" | "project" | "restore";
+export type CloudConversationMenuAction = "agent_terminal" | "project" | "restore" | "switch_chat";
 
 export type ConversationMenuSection = {
 	// Switching to Terminal UI and Archive act on the session, not the
@@ -47,6 +47,8 @@ export type ConversationMenuState = {
 	canSwitchToTerminal?: boolean;
 	/** A switch to Terminal UI is starting or under way. */
 	switchingToTerminal?: boolean;
+	/** A switch back to Chat is starting or under way (a cloud Terminal UI session). */
+	switchingToChat?: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
 	/** Files in the session's artifact directory, when known. */
@@ -120,6 +122,13 @@ export function conversationMenuItem(action: ConversationMenuAction, state: Conv
 		case "agent_terminal": return { action, label: "Agent terminal", subtitle: "The agent's own Terminal UI", icon: { ios: "terminal", android: "terminal" } };
 		case "project": return { action, label: "Project", icon: { ios: "folder", android: "folder" } };
 		case "restore": return { action, label: "Restore", subtitle: "Start its sandbox again where it left off", icon: { ios: "arrow.uturn.backward", android: "history" } };
+		case "switch_chat": return {
+			action,
+			label: state.switchingToChat ? "Switching to Chat…" : "Switch to Chat",
+			subtitle: "Same session, worktree and conversation",
+			disabled: state.switchingToChat,
+			icon: { ios: "bubble.left", android: "chat_bubble" },
+		};
 	}
 }
 

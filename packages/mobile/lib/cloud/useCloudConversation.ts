@@ -4,6 +4,7 @@ import { AppState } from "react-native";
 import { shouldPoll } from "../appStatePoll";
 import type { ConversationSnapshot } from "../chat/types";
 import type { CloudClient } from "./client";
+import { cloudChatKey, prependOlderCloudEvents, readCloudChatEvents, readOlderCloudChatEvents, retainCloudChat, retainedCloudChat, streamedCloudChatEvents, type CloudChatHistory } from "./chatHistory";
 import { appendCloudEvents, cloudConversationSnapshot, mergeCloudEvents, runningCloudTurnId } from "./conversation";
 import { followCloudSessionEvents } from "./eventStream";
 import { CloudError, cloudErrorMessage, isPlanRefusal, planResetCopy } from "./errors";
@@ -88,6 +89,10 @@ export type CloudConversation = {
 	chooseSettings(settings: CloudTurnSettings): Promise<void>;
 	refresh(): Promise<void>;
 	retryStartup(): Promise<void>;
+	/** An older page of the history is being read. */
+	loadingOlder: boolean;
+	/** Reads the page before the oldest loaded event (the chat opens on its newest page). */
+	loadOlder(): Promise<void>;
 };
 
 /**
@@ -95,12 +100,19 @@ export type CloudConversation = {
  * row every few seconds, chat events as the session's stream delivers them
  * (with a poll behind it), a presence heartbeat so the sandbox does not
  * idle-pause under a reader, and a wake on open.
+ *
+ * Its history reads newest first (chatHistory.ts): the newest page, then the
+ * half hour before it, and older pages on request. A chat reopened within the
+ * hour shows what it held at once and reads only what is newer.
  */
 export function useCloudConversation(input: { client: CloudClient; orgId: string | undefined; sessionId: string; initial?: CloudSession; active: boolean }): CloudConversation {
 	const { client, orgId, sessionId, initial, active } = input;
 	const [session, setSession] = useState<CloudSession | null>(initial ?? null);
-	const [events, setEvents] = useState<CloudClientEvent[]>([]);
-	const [eventsLoaded, setEventsLoaded] = useState(false);
+	const chatKey = orgId ? cloudChatKey(client.baseUrl, orgId, sessionId) : undefined;
+	const [events, setEvents] = useState<CloudClientEvent[]>(() => (chatKey && retainedCloudChat(chatKey)?.events) || []);
+	const [history, setHistory] = useState<CloudChatHistory | undefined>(() => chatKey ? retainedCloudChat(chatKey)?.history : undefined);
+	const [eventsLoaded, setEventsLoaded] = useState(() => Boolean(chatKey && retainedCloudChat(chatKey)));
+	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [shown, setShown] = useState<ShownCatalog | undefined>(() => knownCatalog(orgId, sessionId, initial));
 	const models: CloudChatModel[] = shown?.catalog.models ?? [];
@@ -113,7 +125,13 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 	const [wakeAttempt, setWakeAttempt] = useState(0);
 	const eventsRef = useRef<CloudClientEvent[]>([]);
 	eventsRef.current = events;
+	const historyRef = useRef(history);
+	historyRef.current = history;
 	const loadingEvents = useRef(false);
+	const loadingOlderRef = useRef(false);
+	// Changes when the list starts over (another session, or the newest page
+	// again), so a read made for the earlier list is dropped.
+	const generation = useRef(0);
 	const [streaming, setStreaming] = useState(false);
 	const streamingRef = useRef(false);
 	streamingRef.current = streaming;
@@ -121,10 +139,24 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 	const [foreground, setForeground] = useState(() => shouldPoll(AppState.currentState));
 	const resumed = useRef(false);
 
+	/** Holds the list and what it lacks, and keeps them for a reopen. */
+	const hold = useCallback((key: string | undefined, nextEvents: CloudClientEvent[], nextHistory: CloudChatHistory | undefined) => {
+		eventsRef.current = nextEvents;
+		historyRef.current = nextHistory;
+		setEvents(nextEvents);
+		setHistory(nextHistory);
+		if (key) retainCloudChat(key, nextEvents, nextHistory);
+	}, []);
+
 	useEffect(() => {
+		const held = chatKey ? retainedCloudChat(chatKey) : undefined;
+		generation.current++;
+		eventsRef.current = held?.events ?? [];
+		historyRef.current = held?.history;
 		setSession(initial ?? null);
-		setEvents([]);
-		setEventsLoaded(false);
+		setEvents(held?.events ?? []);
+		setHistory(held?.history);
+		setEventsLoaded(Boolean(held));
 		setError(null);
 		setWake({ phase: "idle" });
 		resumed.current = false;
@@ -154,20 +186,19 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		if (!orgId || loadingEvents.current) return;
 		loadingEvents.current = true;
 		lastPoll.current = Date.now();
+		const own = generation.current;
 		try {
-			let held = eventsRef.current;
-			let after = held.at(-1)?.sequence ?? 0;
-			for (let page = 0; page < 50; page++) {
-				const result = await client.listChatEvents(orgId, sessionId, { after });
-				held = appendCloudEvents(held, result.events ?? []);
-				if (!result.hasMore || result.nextAfter <= after) break;
-				after = result.nextAfter;
-			}
-			// The stream may have added events while these pages loaded.
-			const merged = mergeCloudEvents(eventsRef.current, held);
-			if (merged !== eventsRef.current) {
-				eventsRef.current = merged;
-				setEvents(merged);
+			const read = await readCloudChatEvents(client, orgId, sessionId, eventsRef.current);
+			if (own !== generation.current) return;
+			if (read.startOver) {
+				// A new list: an older read in flight was for the one it replaces. The
+				// stream may have added events while this read ran; those after it stay.
+				generation.current++;
+				hold(chatKey, appendCloudEvents(read.events, eventsRef.current), read.startOver.history);
+			} else {
+				// The stream may have added events while this page loaded.
+				const merged = mergeCloudEvents(eventsRef.current, read.events);
+				if (merged !== eventsRef.current) hold(chatKey, merged, historyRef.current);
 			}
 			setEventsLoaded(true);
 		} catch (cause) {
@@ -175,7 +206,45 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		} finally {
 			loadingEvents.current = false;
 		}
-	}, [client, orgId, sessionId]);
+	}, [chatKey, client, hold, orgId, sessionId]);
+
+	const loadOlder = useCallback(async (recent = false) => {
+		const held = historyRef.current;
+		if (!orgId || !held || loadingOlderRef.current) return;
+		if (!held.hasOlder) {
+			if (held.recentPending) hold(chatKey, eventsRef.current, { ...held, recentPending: false });
+			return;
+		}
+		const own = generation.current;
+		loadingOlderRef.current = true;
+		setLoadingOlder(true);
+		if (recent) hold(chatKey, eventsRef.current, { ...held, recentPending: false });
+		try {
+			const read = await readOlderCloudChatEvents(client, orgId, sessionId, eventsRef.current, held, { recent });
+			if (own !== generation.current) return;
+			if (read.restart) {
+				// The control plane stopped reading back (a rollback): the whole history, forward.
+				const whole = await readCloudChatEvents(client, orgId, sessionId, []);
+				if (own !== generation.current) return;
+				generation.current++;
+				hold(chatKey, appendCloudEvents(whole.events, eventsRef.current), whole.startOver?.history);
+				return;
+			}
+			hold(chatKey, prependOlderCloudEvents(eventsRef.current, read.older), read.history);
+		} catch {
+			// The control stays: another press reads the page again.
+		} finally {
+			loadingOlderRef.current = false;
+			setLoadingOlder(false);
+		}
+	}, [chatKey, client, hold, orgId, sessionId]);
+
+	// The half hour before the newest page, read right after it, so the chat
+	// opens on the recent exchange without reading the whole history.
+	const recentPending = Boolean(eventsLoaded && history?.recentPending);
+	useEffect(() => {
+		if (active && recentPending) void loadOlder(true);
+	}, [active, loadOlder, recentPending]);
 
 	// Live polling while the screen is in front.
 	useEffect(() => {
@@ -208,10 +277,10 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 			client, orgId, sessionId,
 			resumeAfter: () => eventsRef.current.at(-1)?.sequence ?? 0,
 			onEvents: (incoming) => {
-				const merged = mergeCloudEvents(eventsRef.current, incoming);
+				// None below a list that lacks older history: the hole they would leave is never read.
+				const merged = mergeCloudEvents(eventsRef.current, streamedCloudChatEvents(eventsRef.current, historyRef.current, incoming));
 				if (merged === eventsRef.current) return;
-				eventsRef.current = merged;
-				setEvents(merged);
+				hold(chatKey, merged, historyRef.current);
 			},
 			onOpenChange: setStreaming,
 		});
@@ -219,7 +288,7 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 			stop();
 			setStreaming(false);
 		};
-	}, [active, client, eventsLoaded, foreground, orgId, sessionId]);
+	}, [active, chatKey, client, eventsLoaded, foreground, hold, orgId, sessionId]);
 
 	// Opening a paused session wakes it, once per visit (the desktop does the same).
 	useEffect(() => {
@@ -308,8 +377,9 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		if (!session || !eventsLoaded) return null;
 		return cloudConversationSnapshot(session, events, {
 			settings: { model: settings.model ?? session.model, reasoningEffort: settings.reasoningEffort, approvalMode: settings.approvalMode },
+			partial: Boolean(history?.hasOlder),
 		});
-	}, [events, eventsLoaded, session, settings]);
+	}, [events, eventsLoaded, history?.hasOlder, session, settings]);
 
 	const send = useCallback(async (text: string, attachmentIds: readonly string[] = []) => {
 		const body = text.trim();
@@ -375,6 +445,8 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		await AsyncStorage.setItem(settingsKey(orgId, sessionId), JSON.stringify(merged)).catch(() => {});
 	}, [orgId, sessionId, settings]);
 
+	const loadOlderPage = useCallback(() => loadOlder(), [loadOlder]);
+
 	const refresh = useCallback(async () => {
 		await Promise.all([loadSession(), loadEvents()]);
 	}, [loadEvents, loadSession]);
@@ -405,5 +477,7 @@ export function useCloudConversation(input: { client: CloudClient; orgId: string
 		chooseSettings,
 		refresh,
 		retryStartup,
+		loadingOlder,
+		loadOlder: loadOlderPage,
 	};
 }

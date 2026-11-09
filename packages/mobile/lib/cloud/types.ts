@@ -356,7 +356,15 @@ export type CloudClientEvent = {
 	createdAt: string;
 };
 
-export type CloudChatEventsPage = { events: CloudClientEvent[]; hasMore: boolean; nextAfter: number };
+export type CloudChatEventsPage = {
+	events: CloudClientEvent[];
+	hasMore: boolean;
+	nextAfter: number;
+	/** Only on a page read with `before`: older events remain above the after cursor. Absent, the control plane read forward. */
+	hasOlder?: boolean;
+	/** Only on a page read with `before`: the cursor for the next older page. */
+	nextBefore?: number;
+};
 
 export type CloudApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
 
@@ -428,3 +436,29 @@ export type CloudNotification = {
 };
 
 export type CloudNotificationPage = CloudPage<CloudNotification> & { unreadCount: number; latestSequence: number };
+
+/** A switch of a session between Chat and Terminal UI, as the daemon's (contract: SessionInterfaceTransition). */
+export type CloudInterfaceTransition = {
+	id: string;
+	sessionId: string;
+	sourceMode: "chat" | "tui";
+	targetMode: "chat" | "tui";
+	policy: "drain" | "interrupt";
+	phase: "requested" | "preflighting" | "draining" | "source_stopping" | "source_stopped" | "target_starting" | "activating" | "completed" | "failed" | "cancelled" | "recovery_required";
+	nativeConversationId?: string;
+	errorCode?: string;
+	errorDetail?: string;
+	noticeAcknowledgedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	completedAt?: string;
+};
+
+/** Whether the session can switch now, and the switch under way (contract: SessionInterfaceTransitionStatus). */
+export type CloudInterfaceTransitionStatus = {
+	supported: boolean;
+	targetMode: "chat" | "tui";
+	reasonCode?: string;
+	reason?: string;
+	transition?: CloudInterfaceTransition;
+};

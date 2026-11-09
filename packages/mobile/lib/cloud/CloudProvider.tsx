@@ -5,6 +5,7 @@ import { getAccountAccessToken, loadAccount, onAccountChange, signInToAccount, s
 import { clearAccountHosts, syncAccountHosts } from "../accountHosts";
 import { shouldPoll } from "../appStatePoll";
 import { fetch as expoFetch } from "expo/fetch";
+import { forgetCloudAccountCaches } from "./accountCaches";
 import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
@@ -90,6 +91,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 
 	const reset = useCallback(() => {
 		generation.current++;
+		forgetCloudAccountCaches();
 		setMe(null);
 		setOrg(null);
 		setProjects([]);

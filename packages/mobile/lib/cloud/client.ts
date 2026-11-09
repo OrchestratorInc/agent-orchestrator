@@ -6,6 +6,8 @@ import type {
 	CloudArtifactVersionSummary,
 	CloudAttachment,
 	CloudChatEventsPage,
+	CloudInterfaceTransition,
+	CloudInterfaceTransitionStatus,
 	CloudChatModels,
 	CloudGitHubInstallation,
 	CloudGitHubRepository,
@@ -290,9 +292,25 @@ export function createCloudClient(options: CloudClientOptions) {
 		retryStartup: (orgId: string, sessionId: string) =>
 			json<{ session: CloudSession }>("POST", `${session(orgId, sessionId)}/startup-retry`),
 
+		// ---- Switching between Chat and Terminal UI
+		getInterfaceTransition: (orgId: string, sessionId: string) =>
+			json<CloudInterfaceTransitionStatus>("GET", `${session(orgId, sessionId)}/interface-transition`),
+		/** `model` and `reasoningEffort` start a Chat session's Terminal UI on what its chat had chosen (Chat to terminal only). */
+		startInterfaceTransition: (orgId: string, sessionId: string, input: { targetMode: "chat" | "tui"; policy: "drain" | "interrupt"; model?: string; reasoningEffort?: string }, idempotencyKey = options.newKey()) =>
+			json<{ transition: CloudInterfaceTransition }>("POST", `${session(orgId, sessionId)}/interface-transition`, { body: input, idempotencyKey }),
+		cancelInterfaceTransition: (orgId: string, sessionId: string) =>
+			json<{ ok: boolean }>("DELETE", `${session(orgId, sessionId)}/interface-transition`),
+		acknowledgeInterfaceTransitionNotice: (orgId: string, sessionId: string, transitionId: string) =>
+			json<{ ok: boolean }>("PUT", `${session(orgId, sessionId)}/interface-transition/${seg(transitionId)}/notice-acknowledgement`),
+
 		// ---- Chat
-		listChatEvents: (orgId: string, sessionId: string, query: { after: number; limit?: number; signal?: AbortSignal }) =>
-			json<CloudChatEventsPage>("GET", `${session(orgId, sessionId)}/chat-events`, { query: { after: query.after, limit: query.limit ?? 500 }, signal: query.signal }),
+		/**
+		 * A page of the chat's events: forward from `after`, or, with `before`,
+		 * the newest below it (see chatHistory.ts); `since` narrows a `before`
+		 * read to events created at or after a time.
+		 */
+		listChatEvents: (orgId: string, sessionId: string, query: { after?: number; before?: number; since?: string; limit?: number; signal?: AbortSignal }) =>
+			json<CloudChatEventsPage>("GET", `${session(orgId, sessionId)}/chat-events`, { query: { after: query.after, before: query.before, since: query.since, limit: query.limit ?? 500 }, signal: query.signal }),
 		sendMessage: (orgId: string, sessionId: string, input: CloudSendMessageInput, idempotencyKey = options.newKey()) =>
 			json<{ event: unknown }>("POST", `${session(orgId, sessionId)}/messages`, { body: input, idempotencyKey }),
 		cancelTurn: (orgId: string, sessionId: string, turnId: string) =>

@@ -3,6 +3,7 @@ import type { SessionPRSummary } from "../api";
 import type { CloudClient } from "./client";
 import { useCloud } from "./CloudProvider";
 import { cloudPRSummary } from "./pullRequests";
+import { forgetOnCloudAccountChange } from "./accountCaches";
 
 // The cloud half of usePRSummaries: a cloud session's pull-request detail
 // (title, branches, diff size, CI and review) from the control plane, fetched
@@ -41,6 +42,7 @@ function retain(key: string, summaries: SessionPRSummary[]) {
 export function clearCloudPRSummaries() {
 	retained.clear();
 }
+forgetOnCloudAccountChange(clearCloudPRSummaries);
 
 export type CloudPRSummaryLookup = {
 	summaryFor(sessionId: string, number: number): SessionPRSummary | undefined;

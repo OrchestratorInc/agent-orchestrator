@@ -46,6 +46,10 @@ describe("cloud startup checklist", () => {
 		expect(cloudStartupView(session({ desiredState: "paused", observedState: "stopped" }), turns())).toBeUndefined();
 		expect(cloudStartupView(session({ observedState: "stopped" }), turns())).toBeUndefined();
 		expect(cloudStartupView(session({ isTerminated: true }), turns())).toBeUndefined();
+		// Read newest first, a long chat's loaded page may hold only a queued
+		// message; the older history it lacks means the session has worked.
+		const reconnecting = session({ observedState: "running", runtimeConnected: true });
+		expect(cloudStartupView(reconnecting, { turns: [{ id: "t9", state: "queued" }], hasMoreBefore: true } as never)).toBeUndefined();
 	});
 
 	it("reports a failed start on the step that failed, with the reason", () => {

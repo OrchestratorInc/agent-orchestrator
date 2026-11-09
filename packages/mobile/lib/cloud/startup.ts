@@ -41,7 +41,7 @@ export function cloudStartupIndex(session: CloudSession): number {
 	return observed === "bootstrapping" ? 2 : 3;
 }
 
-type Turns = Pick<ConversationSnapshot, "turns">;
+type Turns = Pick<ConversationSnapshot, "turns"> & Partial<Pick<ConversationSnapshot, "hasMoreBefore">>;
 
 /**
  * The checklist for a session that is starting for the first time, or whose
@@ -72,7 +72,8 @@ export function cloudStartupView(session: CloudSession, snapshot: Turns | null |
 		};
 	}
 
-	const worked = turns.some((turn) => turn.state !== "queued");
+	// History older than the loaded page means the session has worked before.
+	const worked = Boolean(snapshot?.hasMoreBefore) || turns.some((turn) => turn.state !== "queued");
 	if (worked || (!snapshot && reached >= 2)) return undefined;
 	// Up, but the opening brief has not been picked up yet: the agent is still
 	// starting as far as the person can tell.

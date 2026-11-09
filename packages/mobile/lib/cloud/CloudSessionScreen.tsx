@@ -26,7 +26,17 @@ import { InlineBanner } from "../InlineBanner";
 import { openGitHub } from "../openGitHub";
 import { useOpenPage } from "../pageNavigation";
 import { reviewRouteForPR, sessionPRReadyForReview } from "../reviewView";
+import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { startupVisible } from "../session/sessionStartup";
+import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
+import {
+	mobileInterfaceTransitionIsActive,
+	mobileInterfaceTransitionIsBusy,
+	mobileInterfaceTransitionIsCancellable,
+	mobileInterfaceTransitionRecoveryMessage,
+	mobileInterfaceTransitionStoppingSource,
+	useInterfaceTransitionWith,
+} from "../session/useInterfaceTransition";
 import { Spinner } from "../Spinner";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useApp } from "../store";
@@ -42,6 +52,8 @@ import { useCloud } from "./CloudProvider";
 import { CloudSignIn } from "./components";
 import { CloudTerminalView } from "./CloudTerminalView";
 import { cloudErrorMessage } from "./errors";
+import { cloudInterfaceTransitionBackend, cloudSwitchNoticeShown, cloudTerminalBusy, useCloudSwitchEnded } from "./interfaceTransition";
+import { interfaceModeName, switchNotice, switchPhaseLabel, switchPhaseShortLabel } from "./interfaceSwitchCopy";
 import { cloudChatStageTitle, cloudLifecycleStage, cloudStartupProblem } from "./lifecycle";
 import { CLOUD_HOST_ID, cloudSessionRow } from "./mapping";
 import { ARCHIVE_CLOUD_SESSION_CONFIRM, cloudSessionMenuGroups } from "./sessionMenu";
@@ -70,8 +82,9 @@ const PLAN_OPTION_ID = "plan";
  * composer (model, effort, approvals and attachments), the request card in its
  * place, banners for what the sandbox is doing, and "⋯" opening the same
  * actions sheet. A Terminal UI session shows its agent's terminal instead, with
- * the composer's Chat switch to come back. Opening it wakes a paused sandbox
- * and keeps it awake while read.
+ * the composer's Chat switch to come back. "⋯" switches the session itself
+ * between Chat and Terminal UI, as a machine session's screens do. Opening it
+ * wakes a paused sandbox and keeps it awake while read.
  */
 export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const t = useTheme();
@@ -111,6 +124,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
+	// A switch of interface (from here or the desktop) shows the new one's own view.
+	useEffect(() => { setView(null); }, [tui]);
 	const terminated = Boolean(session?.isTerminated);
 	const project = session ? projects.find((item) => item.id === session.projectId) : undefined;
 	const harness = session?.harness ?? "";
@@ -144,6 +159,76 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const retryStart = useCallback(() => {
 		void runAction("retry", async () => { await conversation.retryStartup(); await cloud.refreshSessions(); });
 	}, [cloud, conversation, runAction]);
+
+	// Switching the session between Chat and Terminal UI, as a machine
+	// session's screens do and the desktop's switch asks Cloud. A finished
+	// switch reads the session again, which moves this screen to the new view.
+	const interfaceBackend = useMemo(() => org?.id && !terminated ? cloudInterfaceTransitionBackend(client, org.id) : null, [client, org?.id, terminated]);
+	const { refresh: refreshConversation } = conversation;
+	const { refreshSessions } = cloud;
+	const readSwitchedSession = useCallback(async () => {
+		await Promise.all([refreshConversation(), refreshSessions()]);
+	}, [refreshConversation, refreshSessions]);
+	const interfaceSwitch = useInterfaceTransitionWith(interfaceBackend, sessionId, readSwitchedSession);
+	const switchTarget = tui ? "tui" as const : "chat" as const;
+	const switchTo = tui ? "chat" as const : "tui" as const;
+	const transition = interfaceSwitch.transition;
+	const switchActive = mobileInterfaceTransitionIsActive(transition);
+	const handoff = useInterfaceHandoff(transition, switchTarget);
+	useCloudSwitchEnded(switchActive ? transition?.id : undefined, () => void readSwitchedSession().catch(() => {}));
+	// The card covers the screen once the current interface starts stopping;
+	// until then (draining lasts as long as the agent's turn) a banner says it.
+	const switchCardShown = mobileInterfaceTransitionStoppingSource(transition) || handoff.pending;
+	const switchRecovery = mobileInterfaceTransitionRecoveryMessage(transition);
+	const notice = switchActive || !cloudSwitchNoticeShown(transition) ? undefined : switchNotice(transition);
+	const canSwitch = !terminated && (Boolean(interfaceSwitch.status?.supported) || switchActive);
+	const switching = interfaceSwitch.starting || switchActive || handoff.pending;
+	// Terminal UI starts on the model and effort chosen in the chat, as the desktop's switch sends them.
+	const chosenModel = conversation.settings.model;
+	const chosenEffort = conversation.settings.reasoningEffort;
+	const startSwitch = useCallback(async (policy: "drain" | "interrupt") => {
+		try {
+			await interfaceSwitch.start(switchTo, policy, { model: chosenModel, reasoningEffort: chosenEffort });
+		} catch (error) {
+			Alert.alert("Couldn't switch interface", cloudErrorMessage(error));
+		}
+	}, [chosenEffort, chosenModel, interfaceSwitch, switchTo]);
+	// Work in flight is finished or stopped first, as the person chooses.
+	const askSwitchPolicy = useCallback(() => {
+		Alert.alert(`Switch to ${interfaceModeName(switchTo)}?`, "Keep the same Orchestrator session, worktree, and native agent conversation.", [
+			{ text: `Keep ${interfaceModeName(switchTarget)}`, style: "cancel" },
+			{ text: "Finish, then switch", onPress: () => void startSwitch("drain") },
+			{ text: "Stop and switch", style: "destructive", onPress: () => void startSwitch("interrupt") },
+		]);
+	}, [startSwitch, switchTarget, switchTo]);
+	const chatBusy = Boolean(snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	const switchOrgId = org?.id;
+	const requestSwitch = useCallback(() => {
+		if (switching || !switchOrgId) return;
+		haptics.tap();
+		if (switchTo === "tui") {
+			if (chatBusy) askSwitchPolicy();
+			else void startSwitch("drain");
+			return;
+		}
+		// From Terminal UI the list can lag what was typed in the terminal: read
+		// the session first. An idle terminal is stopped directly (cloudTerminalBusy).
+		void client.getSession(switchOrgId, sessionId).then(
+			({ session: latest }) => { if (cloudTerminalBusy(latest)) askSwitchPolicy(); else void startSwitch("interrupt"); },
+			() => askSwitchPolicy(),
+		);
+	}, [askSwitchPolicy, chatBusy, client, sessionId, startSwitch, switchOrgId, switchTo, switching]);
+	const cancelSwitch = useCallback(() => void interfaceSwitch.cancel().catch(() => {}), [interfaceSwitch]);
+	const [recheckingSwitch, setRecheckingSwitch] = useState(false);
+	const recheckSwitch = useCallback(async () => {
+		setRecheckingSwitch(true);
+		try { await interfaceSwitch.refresh(); } finally { setRecheckingSwitch(false); }
+	}, [interfaceSwitch]);
+	const [readingSwitched, setReadingSwitched] = useState(false);
+	const retryHandoff = useCallback(async () => {
+		setReadingSwitched(true);
+		try { await readSwitchedSession(); } catch { /* the card stays with Retry */ } finally { setReadingSwitched(false); }
+	}, [readSwitchedSession]);
 
 	// Files go up to the session when the message is sent, where the
 	// organization's plan takes them; a sent one shows from a copy kept on the phone.
@@ -246,10 +331,11 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		terminated,
 		pinned,
 		canShowAgentTerminal: tui && current === "chat",
+		interfaceSwitch: canSwitch ? { to: switchTo, switching } : undefined,
 		pullRequest: prNumber === undefined ? undefined : { number: prNumber },
 		projectName: project?.displayName,
 		artifactCount: artifactsOffered ? artifactCount : undefined,
-	}) : undefined, [artifactCount, artifactsOffered, current, hasSession, pinned, prNumber, project?.displayName, terminated, tui]);
+	}) : undefined, [artifactCount, artifactsOffered, canSwitch, current, hasSession, pinned, prNumber, project?.displayName, switchTo, switching, terminated, tui]);
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
 	useEffect(() => {
@@ -287,6 +373,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		pull_requests: () => { if (prNumber !== undefined && prUrl) openPage(reviewRouteForPR(sessionId, { number: prNumber, url: prUrl }, CLOUD_HOST_ID)); },
 		delete: archive,
 		restore,
+		switch_tui: requestSwitch,
+		switch_chat: requestSwitch,
 	};
 	const menuActionsRef = useRef(menuActions);
 	menuActionsRef.current = menuActions;
@@ -373,11 +461,66 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				checklist ? (problem?.phase === "retrying" ? <InlineBanner tone="muted" icon="busy" title="Still starting" body={problem.message} /> : null)
 					: <InlineBanner tone="muted" icon="busy" title={stageTitle} body={problem?.phase === "retrying" ? problem.message : "Messages you send now are delivered once the agent is ready."} />
 			) : null}
-			{tui && current === "chat" ? (
-				<InlineBanner tone="muted" icon="terminal" title="This session runs in its terminal" body="Messages are typed into the agent's terminal." action="Terminal" onPress={() => setView("agent")} />
+			{switchActive && !switchCardShown ? (
+				<InlineBanner
+					tone="warning"
+					icon="busy"
+					title={switchRecovery || `Switching to ${interfaceModeName(switchTo)} · ${switchPhaseShortLabel(transition?.phase)}`}
+					body={interfaceSwitch.fetchFailed ? `Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : "."}` : undefined}
+					action={mobileInterfaceTransitionIsCancellable(transition) ? (interfaceSwitch.cancelling ? "Cancelling…" : "Cancel") : undefined}
+					onPress={interfaceSwitch.cancelling ? undefined : cancelSwitch}
+					secondary={interfaceSwitch.fetchFailed || switchRecovery ? (recheckingSwitch ? "Retrying…" : "Retry") : undefined}
+					onSecondary={recheckingSwitch ? undefined : () => void recheckSwitch()}
+				/>
+			) : notice && transition ? (
+				<InlineBanner
+					tone={notice.recovered ? "warning" : "danger"}
+					icon={notice.recovered ? "checkCircle" : "warning"}
+					title={`${notice.text}${interfaceSwitch.acknowledgeNoticeError ? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}` : ""}`}
+					action={interfaceSwitch.acknowledgingNotice ? "Dismissing…" : "Dismiss"}
+					onPress={interfaceSwitch.acknowledgingNotice ? undefined : () => void interfaceSwitch.acknowledgeNotice(transition.id).catch(() => {})}
+				/>
+			) : null}
+			{tui && current === "chat" && !switchActive ? (
+				<InlineBanner
+					tone="muted"
+					icon="terminal"
+					title="This session runs in its terminal"
+					body="Messages are typed into the agent's terminal."
+					action="Terminal"
+					onPress={() => setView("agent")}
+					secondary={canSwitch ? "Switch to Chat" : undefined}
+					onSecondary={canSwitch ? requestSwitch : undefined}
+				/>
 			) : null}
 			{conversation.error && snapshot ? <InlineBanner tone="danger" icon="offline" title="Showing the last update" body={conversation.error} action="Retry" onPress={() => void conversation.refresh()} /> : null}
 		</>
+	);
+
+	// Over whichever view is showing, from the moment the current interface
+	// starts stopping until this screen shows the new one.
+	const switchCard = !switchCardShown ? null : handoff.stalled ? (
+		<InterfaceSwitchCard
+			title={`${interfaceModeName(switchTo)} is ready`}
+			message="This screen hasn't switched over yet. Retry, or go back and open the session again."
+			ready
+			retryable
+			retrying={readingSwitched}
+			onRetry={() => void retryHandoff()}
+		/>
+	) : (
+		<InterfaceSwitchCard
+			title={switchRecovery ? "Interface recovery blocked" : `Switching to ${switchTo === "tui" ? "Terminal" : "Chat"}`}
+			message={switchRecovery || switchPhaseLabel(switchTo, transition?.phase)}
+			blocked={Boolean(switchRecovery)}
+			cancellable={mobileInterfaceTransitionIsCancellable(transition)}
+			cancelling={interfaceSwitch.cancelling}
+			onCancel={cancelSwitch}
+			error={interfaceSwitch.error}
+			retryable={interfaceSwitch.fetchFailed || Boolean(switchRecovery)}
+			retrying={recheckingSwitch}
+			onRetry={() => void recheckSwitch()}
+		/>
 	);
 
 	if (current === "agent") {
@@ -386,6 +529,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				{headerItems}
 				{banners}
 				<CloudTerminalView client={client} orgId={org.id} sessionId={session.id} kind="agent" workerEpoch={session.workerEpoch} onShowChat={() => setView("chat")} />
+				{switchCard}
 			</View>
 		);
 	}
@@ -400,6 +544,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				) : (
 					<View style={styles.center}><Spinner accessibilityLabel="Loading conversation" /></View>
 				)}
+				{switchCard}
 			</View>
 		);
 	}
@@ -415,8 +560,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 						<MessageFileSourceContext.Provider value={fileSource}>
 							<ChatTimeline
 								snapshot={snapshot}
-								loadingOlder={false}
-								onLoadOlder={noop}
+								loadingOlder={conversation.loadingOlder}
+								onLoadOlder={conversation.loadOlder}
 								approvalPending={deciding}
 								inputPending={false}
 								onDecide={decide}
@@ -471,7 +616,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					configOptions={configOptions}
 					models={conversation.models}
 					disabled={terminated || wake.phase === "refused" || tui}
-					pending={conversation.sending}
+					// Held while the switch stops this interface: the next one takes the message.
+					pending={conversation.sending || mobileInterfaceTransitionIsBusy(transition)}
 					interrupting={conversation.stopping}
 					onSend={send}
 					onAcknowledgeSend={acknowledge}
@@ -492,6 +638,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, CLOUD_HOST_ID)) : undefined}
 				/>
 			</KeyboardFollower>
+			{switchCard}
 		</View>
 	);
 }
@@ -499,7 +646,6 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 const NO_SKILLS: never[] = [];
 const NO_IDS: string[] = [];
 const NO_PATHS: string[] = [];
-function noop() {}
 async function acknowledge() {}
 async function loadNoSkills() { return NO_SKILLS; }
 async function loadNoFiles() { return { paths: NO_PATHS, truncated: false }; }

@@ -43,6 +43,22 @@ describe("cloud client", () => {
 		expect(JSON.parse(String(calls[0].init.body))).toEqual({ projectId: "p", kind: "worker", harness: "codex", displayName: "Fix it", prompt: "Fix it" });
 	});
 
+	it("asks the session's switch between Chat and Terminal UI on the desktop's routes", async () => {
+		const { client, calls } = harness(() => ok({ supported: true, targetMode: "tui" }));
+		await client.getInterfaceTransition("o", "s");
+		await client.startInterfaceTransition("o", "s", { targetMode: "tui", policy: "drain", model: "claude-opus-5-5" });
+		await client.cancelInterfaceTransition("o", "s");
+		await client.acknowledgeInterfaceTransitionNotice("o", "s", "t-1");
+		expect(calls.map((call) => [call.init.method, call.url.replace("https://api.example.test/api/cloud/v1", "")])).toEqual([
+			["GET", "/orgs/o/sessions/s/interface-transition"],
+			["POST", "/orgs/o/sessions/s/interface-transition"],
+			["DELETE", "/orgs/o/sessions/s/interface-transition"],
+			["PUT", "/orgs/o/sessions/s/interface-transition/t-1/notice-acknowledgement"],
+		]);
+		expect(JSON.parse(String(calls[1].init.body))).toEqual({ targetMode: "tui", policy: "drain", model: "claude-opus-5-5" });
+		expect((calls[1].init.headers as Record<string, string>)["Idempotency-Key"]).toBe("key-1");
+	});
+
 	it("reuses a caller's idempotency key so a retried send is not duplicated", async () => {
 		const { client, calls } = harness(() => ok({ event: {} }, 202));
 		await client.sendMessage("o", "s", { text: "hi" }, "msg-1");
