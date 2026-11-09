@@ -79,7 +79,10 @@ export type PushFolderErrorCode =
 export type PushFolderResult =
 	/** leftOut: the secret-looking files an import did not upload (isSecretLookingPath). */
 	| { status: "pushed"; branch: string; commit: string; source: "head" | "import"; leftOut: string[] }
-	| { status: "error"; code: PushFolderErrorCode; message: string };
+	| PushFolderFailure;
+
+/** files: for secret_files, the secret-looking files the folder's history holds. */
+export type PushFolderFailure = { status: "error"; code: PushFolderErrorCode; message: string; files?: string[] };
 
 /**
  * What uploading a folder would do, before anything is uploaded: whether its
@@ -88,7 +91,7 @@ export type PushFolderResult =
  */
 export type PushFolderPreview =
 	| { status: "ok"; source: "head" | "import"; leftOut: string[] }
-	| { status: "error"; code: PushFolderErrorCode; message: string };
+	| PushFolderFailure;
 
 export interface GitRunOptions {
 	cwd?: string;
@@ -124,9 +127,13 @@ export interface PushFolderDeps {
 }
 
 class PushFolderError extends Error {
-	constructor(readonly code: PushFolderErrorCode, message: string) {
+	constructor(readonly code: PushFolderErrorCode, message: string, readonly files?: string[]) {
 		super(message);
 	}
+}
+
+function failure(error: PushFolderError, message = error.message): PushFolderFailure {
+	return { status: "error", code: error.code, message, ...(error.files ? { files: error.files } : {}) };
 }
 
 const defaultGit: GitRunner = (args, options) =>
@@ -302,7 +309,7 @@ function shownFiles(files: readonly string[]): string {
 }
 
 function secretFilesError(folderName: string, files: readonly string[]): PushFolderError {
-	return new PushFolderError("secret_files", `${folderName}'s history holds files that look like secrets (${shownFiles(files)}), so Orchestrator does not upload it: they would reach GitHub. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.`);
+	return new PushFolderError("secret_files", `${folderName}'s history holds files that look like secrets (${shownFiles(files)}), so Orchestrator does not upload it: they would reach GitHub. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.`, [...files]);
 }
 
 /** The folder, resolved, when it is a directory that may be uploaded. */
@@ -570,7 +577,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 		}
 		return { status: "pushed", branch, commit: commit ?? "", source, leftOut };
 	} catch (error) {
-		if (error instanceof PushFolderError) return { status: "error", code: error.code, message: redact(error.message, token) };
+		if (error instanceof PushFolderError) return failure(error, redact(error.message, token));
 		return { status: "error", code: "invalid_request", message: redact(error instanceof Error ? error.message : String(error), token) };
 	} finally {
 		if (gitDir) await fs.rm(gitDir, { recursive: true, force: true }).catch(() => undefined);
@@ -610,7 +617,7 @@ export async function previewFolderUpload(input: unknown, deps: PushFolderDeps):
 		const leftOut = (await listImportFiles(realFolder, gitDir, git, env)).filter(isSecretLookingPath);
 		return { status: "ok", source: "import", leftOut };
 	} catch (error) {
-		if (error instanceof PushFolderError) return { status: "error", code: error.code, message: error.message };
+		if (error instanceof PushFolderError) return failure(error);
 		return { status: "error", code: "import_failed", message: error instanceof Error ? error.message : String(error) };
 	} finally {
 		if (gitDir) await fs.rm(gitDir, { recursive: true, force: true }).catch(() => undefined);

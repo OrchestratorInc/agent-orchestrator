@@ -270,7 +270,7 @@ it("says which secret-looking files a picked folder's upload leaves out, and ref
 	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
 	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload")
 		.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [".env", "config/.npmrc"] })
-		.mockResolvedValueOnce({ status: "error", code: "secret_files", message: "history holds .env" });
+		.mockResolvedValueOnce({ status: "error", code: "secret_files", message: "history holds .env", files: [".env"] });
 	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockClear();
 	mocks.createRepository.mockClear();
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
@@ -281,7 +281,8 @@ it("says which secret-looking files a picked folder's upload leaves out, and ref
 	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
-	expect(await screen.findByText(/The history of notes holds files that look like secrets/)).toBeInTheDocument();
+	expect(await screen.findByText(/The history of notes holds files that look like secrets \(\.env\)/)).toBeInTheDocument();
+	expect(screen.queryByText("history holds .env")).toBeNull();
 	expect(screen.queryByLabelText("Repository name for /Users/me/notes")).toBeNull();
 	expect(push).not.toHaveBeenCalled();
 	expect(mocks.createRepository).not.toHaveBeenCalled();

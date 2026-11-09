@@ -85,7 +85,7 @@ export async function describeLocalFolder(path: string): Promise<LocalFolderInfo
 		preview = undefined;
 	}
 	const checked: Pick<LocalFolderInfo, "leftOut" | "refusal"> = preview?.status === "error"
-		? (preview.code === "invalid_request" ? {} : { refusal: new FolderPushError(preview.code, preview.message) })
+		? (preview.code === "invalid_request" ? {} : { refusal: new FolderPushError(preview.code, preview.message, preview.files) })
 		: preview?.leftOut.length ? { leftOut: preview.leftOut } : {};
 	if (top?.isRepo && top.hasCommit) return { remote, committed: { branch }, ...checked };
 	// A linked worktree (or a submodule checkout) has a .git file, which the
@@ -94,10 +94,28 @@ export async function describeLocalFolder(path: string): Promise<LocalFolderInfo
 	return { remote, ...checked };
 }
 
+/**
+ * A notice names every file up to this many; past it, the first three and a
+ * count (never "and 1 more", which would hide one name to save none).
+ */
+const NAMED_FILES = 4;
+
+function shownFileNames(files: readonly string[]): string {
+	return (files.length > NAMED_FILES ? files.slice(0, 3) : files).join(", ");
+}
+
+/** Why a repository folder whose history holds secret-looking files is not uploaded, naming them. */
+function secretFilesText(t: TFunction, folder: string, files: readonly string[]): string {
+	const shown = shownFileNames(files);
+	return files.length > NAMED_FILES
+		? t("cloudWorkspace.pushError.secretFilesMore", { defaultValue: "The history of {{folder}} holds files that look like secrets ({{files}} and {{count}} more), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.", folder, files: shown, count: files.length - 3 })
+		: t("cloudWorkspace.pushError.secretFiles", { defaultValue: "The history of {{folder}} holds files that look like secrets ({{files}}), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.", folder, files: shown });
+}
+
 /** The notice for files an upload leaves out because they look like secrets. */
 export function leftOutNotice(t: TFunction, files: readonly string[]): string {
-	const shown = files.slice(0, 3).join(", ");
-	return files.length > 3
+	const shown = shownFileNames(files);
+	return files.length > NAMED_FILES
 		? t("cloudWorkspace.leftOutSecretsMore", { defaultValue: "Leaves out files that look like secrets: {{files}} and {{count}} more", files: shown, count: files.length - 3 })
 		: t("cloudWorkspace.leftOutSecrets", { defaultValue: "Leaves out files that look like secrets: {{files}}", files: shown });
 }
@@ -124,7 +142,12 @@ export async function createFolderRepository(
 
 /** A folder upload the main process refused or that failed, with its reason. */
 export class FolderPushError extends Error {
-	constructor(readonly code: Extract<PushFolderResult, { status: "error" }>["code"], message: string) {
+	constructor(
+		readonly code: Extract<PushFolderResult, { status: "error" }>["code"],
+		message: string,
+		/** For secret_files: the secret-looking files the folder's history holds. */
+		readonly files?: readonly string[],
+	) {
 		super(message);
 		this.name = "FolderPushError";
 	}
@@ -137,7 +160,7 @@ export async function pushFolderToCreatedRepository(folder: string, created: Cre
 		pushPath: created.pushPath,
 		branch: created.repository.defaultBranch || "main",
 	});
-	if (result.status !== "pushed") throw new FolderPushError(result.code, result.message);
+	if (result.status !== "pushed") throw new FolderPushError(result.code, result.message, result.files);
 }
 
 export function createdRepositoryUrl(created: CreatedFolderRepository): string {
@@ -162,7 +185,6 @@ const PUSH_ERROR_TEXT: Record<string, (t: TFunction, folder: string) => string> 
 	shallow_repository: (t, folder) => t("cloudWorkspace.pushError.shallowRepository", { defaultValue: "{{folder}} is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", folder }),
 	lfs_unsupported: (t, folder) => t("cloudWorkspace.pushError.lfsUnsupported", { defaultValue: "{{folder}} uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", folder }),
 	file_too_large: (t, folder) => t("cloudWorkspace.pushError.fileTooLarge", { defaultValue: "{{folder}} has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", folder }),
-	secret_files: (t, folder) => t("cloudWorkspace.pushError.secretFiles", { defaultValue: "The history of {{folder}} holds files that look like secrets, so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.", folder }),
 	workflows_refused: (t, folder) => t("cloudWorkspace.pushError.workflowsRefused", { defaultValue: "GitHub refused {{folder}} because it contains .github/workflows files and the Orchestrator GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", folder }),
 };
 
@@ -175,6 +197,8 @@ const SELF_EXPLAINED_CODES = new Set(["signed_out", "push_forbidden", "branch_ex
 
 /** A failed upload in the app's language, with the main process's message as detail where it adds to it. */
 export function folderPushErrorText(t: TFunction, error: FolderPushError, folder: string): { message: string; detail?: string } {
+	// Names the files itself, so the main process's message would only repeat it.
+	if (error.code === "secret_files" && error.files?.length) return { message: secretFilesText(t, folderLabel(folder), error.files) };
 	const text = PUSH_ERROR_TEXT[error.code] ?? PUSH_ERROR_TEXT.push_failed;
 	const message = text(t, folderLabel(folder));
 	const detail = error.message.trim();

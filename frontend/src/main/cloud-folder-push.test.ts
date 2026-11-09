@@ -479,9 +479,9 @@ describe("secret-looking files", () => {
 		await git(folder, "rm", "--quiet", ".env");
 		await git(folder, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "-m", "drop env");
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
-		expect(result).toMatchObject({ status: "error", code: "secret_files", message: expect.stringContaining(".env") });
+		expect(result).toMatchObject({ status: "error", code: "secret_files", message: expect.stringContaining(".env"), files: [".env"] });
 		expect(await git(remote, "branch", "--list")).toBe("");
-		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files" });
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
 	});
 
 	it("previews what an upload leaves out without uploading anything", async () => {

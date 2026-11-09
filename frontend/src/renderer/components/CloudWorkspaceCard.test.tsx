@@ -134,14 +134,14 @@ describe("CloudWorkspaceCard", () => {
 		const user = userEvent.setup();
 		renderCard();
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
-		mocks.previewFolderUpload.mockResolvedValue({ status: "error", code: "secret_files", message: "notes's history holds files that look like secrets (.env)" });
+		mocks.previewFolderUpload.mockResolvedValue({ status: "error", code: "secret_files", message: "notes's history holds files that look like secrets (.env)", files: [".env"] });
 
 		await user.type(screen.getByLabelText("Workspace name"), "Notes");
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 
-		expect(await screen.findByText(/The history of notes holds files that look like secrets/)).toBeInTheDocument();
-		// Which files, from the main process.
-		expect(screen.getByText("notes's history holds files that look like secrets (.env)")).toBeInTheDocument();
+		// Said once, naming the files.
+		expect(await screen.findByText("The history of notes holds files that look like secrets (.env), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.")).toBeInTheDocument();
+		expect(screen.queryByText(/notes's history holds/)).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Repository name for notes")).not.toBeInTheDocument();
 		expect(mocks.createGitHubRepository).not.toHaveBeenCalled();
 	});

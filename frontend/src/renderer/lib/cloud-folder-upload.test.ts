@@ -8,6 +8,7 @@ import {
 	folderPushErrorText,
 	gitHubFullNameFromRemote,
 	grantedRepositoryForRemote,
+	leftOutNotice,
 	pushFolderToCreatedRepository,
 } from "./cloud-folder-upload";
 
@@ -76,5 +77,21 @@ describe("cloud folder upload", () => {
 		// A code this build does not know reads as a failed upload.
 		expect(folderPushErrorText(t, new FolderPushError("brand_new" as never, "Something new"), "/w/notes"))
 			.toEqual({ message: "Could not upload notes.", detail: "Something new" });
+	});
+
+	it("names the secret-looking files a refused folder's history holds, once", () => {
+		const t = appI18n.t.bind(appI18n);
+		expect(folderPushErrorText(t, new FolderPushError("secret_files", "notes's history holds ... (.env)", [".env"]), "/w/notes"))
+			.toEqual({ message: "The history of notes holds files that look like secrets (.env), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub." });
+		expect(folderPushErrorText(t, new FolderPushError("secret_files", "...", [".env", "a.pem", "id_rsa", "x.key", "y.p12"]), "/w/notes").message)
+			.toContain("(.env, a.pem, id_rsa and 2 more)");
+	});
+
+	it("names up to four left-out files before counting the rest", () => {
+		const t = appI18n.t.bind(appI18n);
+		expect(leftOutNotice(t, [".env", ".ssh/config", "config/.env.production", "id_rsa"]))
+			.toBe("Leaves out files that look like secrets: .env, .ssh/config, config/.env.production, id_rsa");
+		expect(leftOutNotice(t, [".env", "a.pem", "id_rsa", "x.key", "y.p12"]))
+			.toBe("Leaves out files that look like secrets: .env, a.pem, id_rsa and 2 more");
 	});
 });
