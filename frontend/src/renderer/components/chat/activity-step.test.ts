@@ -248,6 +248,8 @@ describe("describeCommandStep", () => {
 		const lookup = 'for p in AGENTS.md ../AGENTS.md; do if [ -f "$p" ]; then printf "\\n%s\\n" "$p"; cat "$p"; fi; done';
 		expect(done(lookup)).toBe("Looked for AGENTS.md");
 		expect(live(lookup)).toBe("Looking for AGENTS.md");
+		const prefixedLookup = '"ls -la; rg --files --hidden; for p in /AGENTS.md /Users/AGENTS.md; do if [ -f \\"$p" ]; then printf "\\n%s\\n" "$p"; cat "$p"; fi; done\'';
+		expect(done(prefixedLookup)).toBe("Looked for AGENTS.md");
 		expect(done('for p in AGENTS.md ../AGENTS.md; do if [ -f "$p" ]; then cat "$p"; rm "$p"; fi; done')).not.toBe("Looked for AGENTS.md");
 		expect(done("if [ -f a.ts ]; then cat a.ts; fi")).toBe("Read a.ts");
 		expect(done("if ! grep -q TODO notes.md; then echo none; fi")).toBe("Searched for TODO");

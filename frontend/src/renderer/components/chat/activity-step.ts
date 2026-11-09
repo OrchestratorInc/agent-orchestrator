@@ -839,15 +839,15 @@ export function commandIntent(command: string): { program?: string; writes: bool
 
 /** A loop that checks candidate paths and reads the one that exists. */
 function conditionalFileLookup(command: string): string | undefined {
-	const header = /^\s*for\s+([A-Za-z_]\w*)\s+in\s+([\s\S]*?)(?:;\s*|\n\s*)do\b/.exec(command);
+	const header = /\bfor\s+([A-Za-z_]\w*)\s+in\s+([^;]+);\s*do\b/.exec(command);
 	if (!header) return undefined;
 	const variable = header[1]!;
-	const body = command.slice(header[0].length);
+	const body = command.slice(header.index + header[0].length);
 	const reference = `\\$\\{?${variable}\\}?`;
-	const path = `["']?${reference}["']?`;
-	const check = `(?:\\[\\s*-f\\s+${path}\\s*\\]|test\\s+-f\\s+${path})`;
-	const read = `(?:printf\\s+[^;]*;\\s*)?cat\\s+${path}`;
-	if (!new RegExp(`^\\s*if\\s+${check}\\s*;\\s*then\\s+${read}\\s*;?\\s*(?:break\\s*;\\s*)?fi\\s*;?\\s*done\\s*$`).test(body)) return undefined;
+	if (!/\bif\s+\[\s+-f\s+/.test(body) || !/\bcat\s+/.test(body) || !/\bfi\s*;\s*done\b/.test(body)) return undefined;
+	if (!new RegExp(reference).test(body)) return undefined;
+	// Only name a lookup when the loop has no other work that the label would hide.
+	if (/(?:^|;)\s*(?:then\s+)?(?:rm|rmdir|mv|cp|chmod|touch|mkdir|tee|git|npm|pnpm|yarn|bun|go|cargo)\b/.test(body)) return undefined;
 	const paths = tokenize(header[2]!).filter((word) => !word.operator).map((word) => fileBasename(word.text));
 	const name = paths[0];
 	return name && looksLikeFile(name) && paths.every((path) => path === name) ? name : undefined;
