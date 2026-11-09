@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2 } from "@/components/app-icons";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ProjectSettingsSection } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
@@ -23,6 +23,7 @@ import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
+import { ConductorImport } from "./ConductorImport";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
@@ -34,6 +35,7 @@ type ScriptKind = "setup" | "cleanup";
 export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	const { t } = useTranslation();
 	const client = useQueryClient();
+	const [imports, setImports] = useState(0);
 	const query = useQuery({
 		queryKey: ["project", projectId],
 		queryFn: async () => {
@@ -64,7 +66,8 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		});
 		if (error) throw apiErrorException(error);
 	};
-	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
+	return <ScriptsEditor key={`${projectId}:${imports}`} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
+		notice={scratch ? undefined : <ConductorImport projectId={project.id} onImported={() => setImports((count) => count + 1)} />}
 		save={save} onSaveState={onSaveState} onSaved={() => {
 			void client.invalidateQueries({ queryKey: ["project", projectId] });
 			void client.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -224,9 +227,10 @@ function CopyVariableButton({ text, label }: { text: string; label: string }) {
 	</Button>;
 }
 
-function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
+function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, notice, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
+	notice?: ReactNode;
 	scratch: boolean;
 	postCreate?: ScriptStepDraft[];
 	preRemove?: ScriptStepDraft[];
@@ -310,6 +314,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		setSavedAt(false);
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-3" onSubmit={(event) => { event.preventDefault(); if (!timeoutError) mutation.mutate(commands); }}>
+		{notice}
 		<Tabs className="flex flex-1 flex-col gap-3" value={activeTab} onValueChange={(value) => setActiveTab(value as ScriptKind)}>
 			<TabsList aria-label={t("settings.project.scripts")} className="shrink-0 self-start">
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>

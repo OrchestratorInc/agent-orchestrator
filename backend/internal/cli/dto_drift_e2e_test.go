@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/conductorimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -320,6 +321,10 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 
 func (f *fakeProjectManager) SetPermissions(_ context.Context, id domain.ProjectID, in projectsvc.SetPermissionsInput) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: in.Permissions}}}, nil
+}
+
+func (f *fakeProjectManager) ConductorImport(context.Context, domain.ProjectID) (conductorimport.Plan, error) {
+	return conductorimport.Plan{}, nil
 }
 
 func (f *fakeProjectManager) ForgetPermissions(_ context.Context, id domain.ProjectID) (projectsvc.Project, error) {

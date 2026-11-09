@@ -1892,6 +1892,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/conductor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview the project's Conductor settings merged into its config */
+        get: operations["getProjectConductorImport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/config": {
         parameters: {
             query?: never;
@@ -5672,6 +5689,23 @@ export interface components {
             releaseNotesUrl?: string;
             updateAvailable: boolean;
             version?: string;
+        };
+        ConductorimportCueDraft: {
+            command: string;
+            key: string;
+            name: string;
+        };
+        ConductorimportItem: {
+            detail?: string;
+            key: string;
+        };
+        ConductorimportPlan: {
+            added: components["schemas"]["ConductorimportItem"][];
+            config: components["schemas"]["ProjectConfig"];
+            cues: components["schemas"]["ConductorimportCueDraft"][];
+            skipped: components["schemas"]["ConductorimportItem"][];
+            source: string;
+            warnings: components["schemas"]["ConductorimportItem"][];
         };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -14960,6 +14994,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemoveProjectResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProjectConductorImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConductorimportPlan"];
                 };
             };
             /** @description Bad Request */

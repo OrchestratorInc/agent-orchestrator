@@ -4783,6 +4783,45 @@ paths:
       summary: Atomically replace a project's display name and config
       tags:
       - projects
+  /api/v1/projects/{id}/conductor:
+    get:
+      operationId: getProjectConductorImport
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConductorimportPlan'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Preview the project's Conductor settings merged into its config
+      tags:
+      - projects
   /api/v1/projects/{id}/config:
     put:
       operationId: setProjectConfig
@@ -16534,6 +16573,58 @@ components:
       - updateAvailable
       - daemon
       - imageDirectory
+      type: object
+    ConductorimportCueDraft:
+      properties:
+        command:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+      required:
+      - key
+      - name
+      - command
+      type: object
+    ConductorimportItem:
+      properties:
+        detail:
+          type: string
+        key:
+          type: string
+      required:
+      - key
+      type: object
+    ConductorimportPlan:
+      properties:
+        added:
+          items:
+            $ref: '#/components/schemas/ConductorimportItem'
+          type: array
+        config:
+          $ref: '#/components/schemas/ProjectConfig'
+        cues:
+          items:
+            $ref: '#/components/schemas/ConductorimportCueDraft'
+          type: array
+        skipped:
+          items:
+            $ref: '#/components/schemas/ConductorimportItem'
+          type: array
+        source:
+          type: string
+        warnings:
+          items:
+            $ref: '#/components/schemas/ConductorimportItem'
+          type: array
+      required:
+      - source
+      - config
+      - cues
+      - added
+      - warnings
+      - skipped
       type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:

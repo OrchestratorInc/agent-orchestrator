@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/conductorimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -6827,11 +6828,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		}
 		stepCtx, cancel := context.WithTimeout(ctx, timeout)
 		out := &setupOutput{}
-		env := agentlaunch.MergeEnv(projectEnv, map[string]string{
-			"AO_SOURCE_TREE_PATH": sourcePath,
-			"AO_WORKTREE_PATH":    workspacePath,
-		})
-		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
+		err := runWorkspaceStep(stepCtx, workspacePath, command, scriptEnv(projectEnv, sourcePath, workspacePath), out)
 		timedOut := ctx.Err() == nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
@@ -6840,6 +6837,12 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		}
 	}
 	return nil
+}
+
+func scriptEnv(projectEnv map[string]string, sourcePath, workspacePath string) map[string]string {
+	env := conductorimport.Env(sourcePath, workspacePath)
+	env["AO_SOURCE_TREE_PATH"], env["AO_WORKTREE_PATH"] = sourcePath, workspacePath
+	return agentlaunch.MergeEnv(projectEnv, env)
 }
 
 // stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").

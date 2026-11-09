@@ -203,6 +203,9 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	if got := rt.created[0].Env["AO_CUE_COMMAND"]; got != "" {
 		t.Fatalf("cue command = %q", got)
 	}
+	if env := rt.created[0].Env; env["CONDUCTOR_ROOT_PATH"] != root || env["CONDUCTOR_WORKSPACE_PATH"] != root || env["CONDUCTOR_PORT"] == "" {
+		t.Fatalf("conductor variables = %q %q %q", env["CONDUCTOR_ROOT_PATH"], env["CONDUCTOR_WORKSPACE_PATH"], env["CONDUCTOR_PORT"])
+	}
 }
 
 func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {

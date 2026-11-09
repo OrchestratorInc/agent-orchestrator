@@ -125,10 +125,7 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 			continue
 		}
 		out := &cleanupOutput{}
-		env := agentlaunch.MergeEnv(project.Config.Env, map[string]string{
-			"AO_SOURCE_TREE_PATH": project.Path,
-			"AO_WORKTREE_PATH":    workspacePath,
-		})
+		env := scriptEnv(project.Config.Env, project.Path, workspacePath)
 		stepCtx, cancel := ctx, context.CancelFunc(func() {})
 		if timeout > 0 {
 			stepCtx, cancel = context.WithTimeout(ctx, timeout)

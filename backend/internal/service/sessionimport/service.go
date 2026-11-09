@@ -1,6 +1,7 @@
 package sessionimport
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -624,7 +625,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened}
+			c := Candidate{ID: id, Harness: cmp.Or(importer.as, harness), Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened}
 			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if _, own := managed[source.nativeID]; own {
@@ -723,6 +724,15 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
 	}
+	adopt := harnessImporters[source.harness].adopt
+	if adopt != nil {
+		written, err := adopt(ctx, source)
+		if err != nil {
+			result.Error = fmt.Sprintf("Import failed: %v", err)
+			return result
+		}
+		source = written
+	}
 	now := time.Now().UTC()
 	mode := domain.SessionModeTUI
 	if s.supportsChat != nil && s.supportsChat(source.harness) {
@@ -735,6 +745,9 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
 	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
 	if createErr != nil {
+		if adopt != nil {
+			_ = os.Remove(source.path)
+		}
 		result.Error = fmt.Sprintf("Import failed: %v", createErr)
 		return result
 	}

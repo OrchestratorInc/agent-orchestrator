@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
+	"github.com/aoagents/agent-orchestrator/backend/internal/conductorimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -367,9 +369,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
 	env := s.pinnedEnv(projectEnv)
-	if env == nil {
-		env = make(map[string]string, 3)
-	}
+	maps.Copy(env, s.conductorEnv(ctx, projectID, workingDir))
 	// A user shell must never inherit the worker-only browser automation bearer
 	// from an unusual daemon launch environment.
 	env["AO_BROWSER_CAPABILITY"] = ""
@@ -499,6 +499,7 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
 	env := s.pinnedEnv(projectEnv)
+	maps.Copy(env, s.conductorEnv(ctx, projectID, workingDir))
 	readiness, err := prepareCueShellReadiness(s.dataDir, argv, env)
 	if err != nil {
 		return ShellTerminal{}, err
@@ -1122,6 +1123,19 @@ func (s *Service) resolveShellTerminalWorkingDir(ctx context.Context, projectID 
 		return "", "", err
 	}
 	return dir, projectID, nil
+}
+
+// conductorEnv gives a project's terminals the variables Conductor sets, so
+// imported Cues and habits keep working.
+func (s *Service) conductorEnv(ctx context.Context, projectID domain.ProjectID, workingDir string) map[string]string {
+	if projectID == "" || s.projects == nil {
+		return nil
+	}
+	root, err := s.projects.ProjectRoot(ctx, projectID)
+	if err != nil || root == "" {
+		return nil
+	}
+	return conductorimport.Env(root, workingDir)
 }
 
 // resolveProjectRootOrDataDir picks the project root when a project is named,

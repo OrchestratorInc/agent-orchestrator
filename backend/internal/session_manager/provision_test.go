@@ -790,9 +790,9 @@ func TestApplySymlinksRejectsParentTraversal(t *testing.T) {
 func TestRunPostCreate(t *testing.T) {
 	workspace := t.TempDir()
 	source := t.TempDir()
-	command := `printf '%s|%s|%s' "$PROJECT_TOKEN" "$AO_SOURCE_TREE_PATH" "$AO_WORKTREE_PATH" > out.txt`
+	command := `printf '%s|%s|%s|%s|%s|%s' "$PROJECT_TOKEN" "$AO_SOURCE_TREE_PATH" "$AO_WORKTREE_PATH" "$CONDUCTOR_ROOT_PATH" "$CONDUCTOR_WORKSPACE_PATH" "$CONDUCTOR_IS_LOCAL" > out.txt`
 	if runtime.GOOS == "windows" {
-		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
+		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%^|%CONDUCTOR_ROOT_PATH%^|%CONDUCTOR_WORKSPACE_PATH%^|%CONDUCTOR_IS_LOCAL%> out.txt`
 	}
 	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
@@ -801,7 +801,7 @@ func TestRunPostCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-create command did not run in workspace: %v", err)
 	}
-	if !strings.Contains(string(output), "setup-value|"+source+"|"+workspace) {
+	if !strings.Contains(string(output), "setup-value|"+source+"|"+workspace+"|"+source+"|"+workspace+"|1") {
 		t.Fatalf("post-create environment = %q", output)
 	}
 	// A failing command surfaces an error.

@@ -37,6 +37,7 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Get("/projects/{id}", c.get)
 	r.Put("/projects/{id}", c.updateSettings)
 	r.Put("/projects/{id}/config", c.setConfig)
+	r.Get("/projects/{id}/conductor", c.conductorImport)
 	r.Patch("/projects/{id}/permissions", c.setPermissions)
 	r.Delete("/projects/{id}/permissions", c.forgetPermissions)
 	r.Delete("/projects/{id}", c.remove)
@@ -271,6 +272,19 @@ func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ProjectResponse{Project: p})
+}
+
+func (c *ProjectsController) conductorImport(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/projects/{id}/conductor")
+		return
+	}
+	plan, err := c.Mgr.ConductorImport(r.Context(), projectID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, plan)
 }
 
 func (c *ProjectsController) remove(w http.ResponseWriter, r *http.Request) {

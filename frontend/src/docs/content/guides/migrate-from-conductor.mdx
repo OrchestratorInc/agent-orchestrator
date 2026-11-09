@@ -1,9 +1,9 @@
 ---
 title: Move from Conductor
-description: Save Conductor Cloud work before 13 November and set up your repositories in Orchestrator.
+description: Bring Conductor repositories, settings, chats, and Cloud work to Orchestrator.
 ---
 
-Conductor Cloud goes read-only on Friday, 13 November 2026, and Conductor starts deleting Cloud data on Friday, 20 November. The local Conductor app keeps working until early 2027, and its files stay on your Mac.
+Conductor Cloud goes read-only on Friday, 13 November 2026, and Conductor starts deleting Cloud data on Friday, 20 November. The local Conductor app keeps working until early 2027, and its files stay on your Mac. This guide moves both to Orchestrator. Orchestrator only reads Conductor's files; it never changes them.
 
 ## Save your Conductor Cloud work before 13 November
 
@@ -27,7 +27,7 @@ Git does not push ignored files such as `.env`. Copy those separately.
 
 ### Transfer the workspaces you want to continue
 
-Right-click each Cloud workspace and choose **Transfer to local**. Conductor moves the workspace and its chats to your Mac.
+Right-click each Cloud workspace and choose **Transfer to local**. Conductor moves the workspace and its chats to your Mac, and Orchestrator can then import those chats.
 
 </Step>
 <Step>
@@ -46,7 +46,7 @@ Copy your Cloud setup script, environment variables, secrets, run actions, and r
 </Step>
 </Steps>
 
-## Move a repository
+## Move a local repository
 
 <Steps>
 <Step>
@@ -58,50 +58,51 @@ Choose **New project → Open a local folder** and pick the repository Conductor
 </Step>
 <Step>
 
-### Copy the Conductor settings
+### Import the Conductor settings
 
-Conductor keeps a repository's settings in `.conductor/settings.toml`, with personal overrides in `.conductor/settings.local.toml`, or in `conductor.json` in older repositories. Open **Project settings → Scripts** and copy each setting:
+Open **Project settings → Scripts**. If the repository has `.conductor/settings.toml`, `.conductor/settings.local.toml`, or `conductor.json`, a **Conductor settings found in** row appears at the top. Choose **Review**, check the list, then choose **Import**.
 
 | Conductor | Orchestrator |
 | --- | --- |
 | `scripts.setup` | a **Setup** step |
 | `scripts.archive` | a **Cleanup** step |
-| `scripts.run` actions | one command **Cue** each |
-| `environment_variables` | project **Environment** variables |
-| `prompts.general` | **Instructions** |
-| Files to copy, `.worktreeinclude`, or `file_include_globs` | a **Setup** step that copies them, before your setup script |
+| `scripts.run` actions | one command **Cue** each, with its `args` and `cwd` |
+| `environment_variables` and `environment_variables.local` | project **Environment** variables |
+| `prompts.general` | agent rules |
+| `.worktreeinclude`, `file_include_globs`, or the default `.env*` | a **Setup** step that copies those files into each new worktree |
 
-A Setup step runs in the new worktree, so a copy step looks like this:
+`settings.local.toml` overrides `settings.toml`, as in Conductor, and `conductor.json` is read only when neither exists. The import adds to the project and never replaces anything: it skips a step the project already has, a variable name you already set, and a Cue name already in use. Running it again changes nothing.
 
-```sh
-cp "$AO_SOURCE_TREE_PATH/.env" .env
-```
+The review lists every key it leaves out, such as `git.*`, `run_mode`, other `prompts.*`, hidden actions, and Cloud-only actions and variables.
 
-</Step>
-<Step>
-
-### Rename the Conductor variables
-
-Setup and Cleanup steps get Orchestrator's names instead of Conductor's:
-
-| Conductor | Orchestrator |
-| --- | --- |
-| `CONDUCTOR_ROOT_PATH` | `$AO_SOURCE_TREE_PATH` |
-| `CONDUCTOR_WORKSPACE_PATH` | `$AO_WORKTREE_PATH` |
-| `CONDUCTOR_WORKSPACE_NAME` | `$(basename "$AO_WORKTREE_PATH")` |
-| `CONDUCTOR_PORT` | none; set the port in the command |
-| `CONDUCTOR_DEFAULT_BRANCH` | none; name the branch in the command |
-| `CONDUCTOR_IS_LOCAL` | none |
+The copy step runs before your setup script, as in Conductor, so a setup script that reads `.env` still finds it. Each worktree gets its own copy.
 
 </Step>
 <Step>
 
-### Continue the work
+### Import your chats
 
-Start a session on each branch you want to continue. Your Conductor chats stay readable in the Conductor app.
+Open **Project settings → General → Earlier chats** and choose **Import chats…**. Conductor runs Claude Code and Codex on your Mac, so the chats from your Conductor workspaces are listed here. Orchestrator also reads Conductor's own chat history, so a Claude chat that Claude Code has no history for on this Mac, such as one from a workspace you transferred from Conductor Cloud, is listed too. Importing such a chat writes it into Claude Code's history on this Mac, so Claude Code can continue it. Each one becomes an Orchestrator session you can continue. The list shows chats active in the last 30 days.
+
+Import a workspace's chats and open each one once before you archive the workspace in Conductor. The first open copies the workspace's uncommitted changes into the session. The import skips archived workspaces and chats whose workspace folder no longer exists.
 
 </Step>
 </Steps>
+
+## Conductor variables
+
+Local Setup and Cleanup steps, terminals, and Cues also get the Conductor names, so most imported scripts and run actions work unchanged. Agents and Orchestrator Cloud do not get them.
+
+| Conductor | Local Setup, Cleanup, terminals, and Cues | Orchestrator Cloud |
+| --- | --- | --- |
+| `CONDUCTOR_ROOT_PATH` | the project folder, same as `AO_SOURCE_TREE_PATH` in Setup | use `AO_WORKTREE_PATH` |
+| `CONDUCTOR_WORKSPACE_PATH` | the session's worktree | use `AO_WORKTREE_PATH` |
+| `CONDUCTOR_WORKSPACE_NAME` | the worktree folder name | use `AO_SESSION_ID` |
+| `CONDUCTOR_IS_LOCAL` | `1` | not set |
+| `CONDUCTOR_PORT` | the first of ten ports for the worktree, from 10000 to 32699 | not set |
+| `CONDUCTOR_DEFAULT_BRANCH` | not set | not set |
+
+Each worktree keeps its `CONDUCTOR_PORT`. Orchestrator picks it from the worktree's path, so two worktrees can rarely get the same ports; if a dev server reports that its port is in use, set the port in that command. The import review marks each step and Cue that uses a name Orchestrator does not set; replace it before you rely on that command.
 
 ## Move Conductor Cloud work
 
@@ -115,9 +116,9 @@ Follow [Cloud sessions](/guides/cloud) to create a project from the same GitHub 
 </Step>
 <Step>
 
-### Set up your scripts
+### Copy your scripts
 
-Open the Cloud project's **Project settings** and add the Cloud settings you wrote down:
+Open the Cloud project's **Project settings** and copy each Conductor Cloud setting by hand:
 
 - **Scripts → Setup:** your Cloud Computer install script first, then the repository's setup script.
 - **Scripts → Cleanup:** the archive script.
@@ -132,7 +133,7 @@ Rename the Conductor variables using the table above. Conductor Cloud ran Amazon
 
 ### Continue the work
 
-Start a session on each branch you pushed. For a workspace you transferred to your Mac, add its repository as in [Move a repository](#move-a-repository).
+Start a session on each branch you pushed. For a workspace you transferred to your Mac, import its chats as in [Import your chats](#import-your-chats). A chat that stays in Conductor Cloud cannot be continued; keep the export for reference.
 
 </Step>
 </Steps>
@@ -151,6 +152,6 @@ Sharing needs everyone signed in to Orchestrator.
 <details>
 <summary>Verification scope</summary>
 
-Checked against the Orchestrator source and Conductor's public announcement on 10 November 2026. Conductor Cloud could not be tested.
+Checked against the Orchestrator source and Conductor's public documentation on 9 November 2026. The settings import was tested with sample repositories. The chat import was tested with a sample Conductor database built from a real Claude Code session, and Claude Code continued the imported chats. Neither was tested with a live Conductor install, and Conductor Cloud could not be tested.
 
 </details>

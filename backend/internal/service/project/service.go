@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/conductorimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
@@ -66,6 +67,9 @@ type Manager interface {
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
 	Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error)
+
+	// ConductorImport previews the project's Conductor settings merged into its config.
+	ConductorImport(ctx context.Context, id domain.ProjectID) (conductorimport.Plan, error)
 }
 
 // SessionTeardowner is the narrow session-service surface project removal
@@ -1168,6 +1172,29 @@ func (m *Service) SetPermissions(ctx context.Context, id domain.ProjectID, in Se
 		permissions = domain.PermissionModeBypassPermissions
 	}
 	return m.storePermissions(ctx, id, permissions)
+}
+
+// ConductorImport reads the Conductor settings in the project's checkout. It changes nothing.
+func (m *Service) ConductorImport(ctx context.Context, id domain.ProjectID) (conductorimport.Plan, error) {
+	if err := validateProjectID(id); err != nil {
+		return conductorimport.Plan{}, err
+	}
+	row, ok, err := m.store.GetProject(ctx, string(id))
+	if err != nil {
+		return conductorimport.Plan{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	if !ok || !row.ArchivedAt.IsZero() {
+		return conductorimport.Plan{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	root := row.Path
+	if row.Kind.WithDefault() == domain.ProjectKindScratch {
+		root = ""
+	}
+	plan, err := conductorimport.Read(ctx, root, row.Config)
+	if err != nil {
+		return conductorimport.Plan{}, apierr.Invalid("CONDUCTOR_SETTINGS_UNREADABLE", "The Conductor settings in this repository could not be read: "+err.Error(), nil)
+	}
+	return plan, nil
 }
 
 // ForgetPermissions clears the remembered approval policy. Existing sessions keep theirs.
