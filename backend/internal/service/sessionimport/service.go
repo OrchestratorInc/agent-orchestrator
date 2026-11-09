@@ -68,6 +68,7 @@ type Result struct {
 type selection struct {
 	candidate Candidate
 	source    transcript
+	cacheKey  string
 }
 
 // sourceFiles is one native conversation on disk; Codex may split it into segments.
@@ -78,9 +79,6 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
-	// fingerprint covers the exact content inputs (including WAL/metadata) the
-	// importer read. It also pins selection and first-open copy validation.
-	fingerprint string
 }
 
 type parsed struct {
@@ -559,7 +557,7 @@ func (f sourceFiles) nativeID() string {
 }
 
 func (f sourceFiles) cacheKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
 }
 
 // Scan offers chats active within recentDays and hides missing, malformed and unreadable sources.
@@ -648,7 +646,6 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 					return ctxErr
 				}
 				count := len(source.messages)
-				source.fingerprint = file.fingerprint
 				source.messages = nil // Retain only metadata between preview and import.
 				results[i] = parsed{source: source, count: count, err: err}
 				return nil
@@ -685,7 +682,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			} else if sessionID, ok := managed[source.nativeID]; ok {
 				c.SessionID = sessionID
 			}
-			selected[id] = selection{candidate: c, source: source}
+			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey()}
 		}
 	}
 	s.selections, s.cache = selected, cache
@@ -759,7 +756,8 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	}
 	dest := dests.destination(source.cwd)
 	project := dest.id
-	if readErr != nil || !dest.eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd {
+	if readErr != nil || !dest.eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd || source.fingerprint != item.source.fingerprint {
+		delete(s.cache, item.cacheKey)
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
 	}
@@ -825,22 +823,6 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			})
 		}
 		_ = group.Wait()
-		// After the reads, each provider store is discovered once for the whole
-		// batch rather than once per chat, which made large imports quadratic.
-		discovered := map[[2]string]discovery{}
-		for i, id := range chunk {
-			item, selected := s.selections[id]
-			if !selected || item.candidate.SessionID != "" || reads[i].err != nil || item.source.fingerprint == "" || ctx.Err() != nil {
-				continue
-			}
-			key := [2]string{string(item.source.harness), canonical(item.source.root)}
-			found, ok := discovered[key]
-			if !ok {
-				found.files, found.err = s.discoverFor(ctx, item.source.harness, item.source.root, projects)
-				discovered[key] = found
-			}
-			reads[i].err = found.match(item.source)
-		}
 		for i, id := range chunk {
 			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err))
 		}

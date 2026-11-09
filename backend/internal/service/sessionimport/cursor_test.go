@@ -307,10 +307,6 @@ func TestCursorScanInvalidatesWALAndSidecarChanges(t *testing.T) {
 	if err := os.WriteFile(sidecar, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stamp := time.Unix(1793600010, 0)
-	if err := os.Chtimes(sidecar, stamp, stamp); err != nil {
-		t.Fatal(err)
-	}
 	preview, err = svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 0 {
 		t.Fatalf("sidecar moved outside registered project: %#v, %v", preview, err)

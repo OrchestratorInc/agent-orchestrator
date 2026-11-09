@@ -25,8 +25,8 @@ func TestAiderProjectHistoryDiscoveryAndNativeMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if groups[0].fingerprint == "" || groups[0].fingerprint != got.fingerprint {
-		t.Fatalf("native snapshot was not fingerprinted: %+v", groups[0])
+	if got.fingerprint == "" {
+		t.Fatalf("native snapshot was not fingerprinted: %+v", got)
 	}
 	wantTexts(t, got.messages, "user: make a greeting\nwith two lines", "assistant: Hello", "user: next turn", "assistant: Done")
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.title != "make a greeting with two lines" {

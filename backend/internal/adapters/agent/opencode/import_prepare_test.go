@@ -479,7 +479,7 @@ func TestPrepareImportedOpenCodeSessionHoldsTheSelectedHistory(t *testing.T) {
 	})
 }
 
-func TestNativeSessionFingerprintsCoverContent(t *testing.T) {
+func TestNativeSessionFingerprintCoversContent(t *testing.T) {
 	for name, edit := range map[string]func(fakeOpenCodeEnv, *testing.T){
 		// Same length as "KIWI": a count or length check would miss it.
 		"same-length text edit": func(e fakeOpenCodeEnv, t *testing.T) {
@@ -504,7 +504,7 @@ func TestNativeSessionFingerprintsCoverContent(t *testing.T) {
 	}
 }
 
-func TestNativeSessionFingerprintsIgnoreCopiedIdentity(t *testing.T) {
+func TestNativeSessionFingerprintIgnoresCopiedIdentity(t *testing.T) {
 	_, env := newFakeOpenCode(t)
 	launch := t.TempDir()
 	target := derivedOpenCodeID(ocSourceID, launch)

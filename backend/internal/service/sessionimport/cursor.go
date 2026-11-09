@@ -32,6 +32,9 @@ func readCursorTranscript(ctx context.Context, root string, paths ...string) (tr
 	if err != nil {
 		return t, err
 	}
+	if t.fingerprint, err = cursorstore.Fingerprint(ctx, t.root, paths[0]); err != nil {
+		return t, err
+	}
 	t.path, t.paths, t.nativeID, t.cwd = paths[0], paths, archive.ID, archive.CWD
 	t.title, t.last = importTitle(archive.Title), archive.Updated
 	if t.title == cursorPlaceholderTitle {
@@ -65,17 +68,9 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil || !filepath.IsLocal(rel) || filepath.Dir(filepath.Dir(filepath.Dir(rel))) != "." {
 			return nil //nolint:nilerr // Only chats/<cwd hash>/<id>/store.db is native state.
 		}
-		fingerprint, err := cursorstore.Fingerprint(ctx, root, path)
-		if err != nil {
-			return nil //nolint:nilerr // Missing or unsafe archive inputs are ineligible.
-		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil //nolint:nilerr // A file can disappear during discovery.
-		}
-		archive, err := cursorstore.Read(ctx, root, path)
-		if err != nil {
-			return nil //nolint:nilerr // A corrupt conversation must not hide its neighbors.
 		}
 		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
 		// a newer AO copy could hide the eligible original with the same id.
@@ -85,7 +80,7 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 				modTime = sidecar.ModTime()
 			}
 		}
-		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: archive.ID, modTime: modTime, size: info.Size(), fingerprint: fingerprint})
+		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: filepath.Base(filepath.Dir(path)), modTime: modTime, size: info.Size()})
 		return nil
 	})
 	return files, err

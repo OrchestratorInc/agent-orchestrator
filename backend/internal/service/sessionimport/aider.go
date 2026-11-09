@@ -56,11 +56,7 @@ func discoverAiderProject(ctx context.Context, project string) ([]sourceFiles, e
 	}
 	project = canonical(project)
 	path := filepath.Join(project, aiderImportHistory)
-	snapshot, err := readAiderTranscript(ctx, project, path)
-	if err != nil {
-		return nil, err
-	}
-	return []sourceFiles{{harness: domain.HarnessAider, root: project, paths: []string{path}, key: aider.NativeHistoryID(project), modTime: info.ModTime(), size: info.Size(), fingerprint: snapshot.fingerprint}}, nil
+	return []sourceFiles{{harness: domain.HarnessAider, root: project, paths: []string{path}, key: aider.NativeHistoryID(project), modTime: info.ModTime(), size: info.Size()}}, nil
 }
 
 func readAiderTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
