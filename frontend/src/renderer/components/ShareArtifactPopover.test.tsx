@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle } from "./ShareArtifactPopover";
+import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, useArtifactShareFile } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -381,4 +383,14 @@ describe("ShareArtifactButton", () => {
 		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
 	});
 
+});
+
+describe("useArtifactShareFile", () => {
+	it("shares a file by its artifact ID, which a rename keeps, so the renamed file finds its link", () => {
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useArtifactShareFile({ id: "art-1", sessionId: "sess-1", path: "final/report.html", projectId: "proj-1" }), { wrapper });
+		expect(result.current).toEqual({ sessionId: "sess-1", path: "final/report.html", projectId: "proj-1", artifactId: "art-1" });
+		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
+		expect(untracked.result.current).not.toHaveProperty("artifactId");
+	});
 });
