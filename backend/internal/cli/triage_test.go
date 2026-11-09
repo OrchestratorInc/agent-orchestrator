@@ -341,7 +341,7 @@ func TestTriageSessionsOnlyIncludesRecentSafeFields(t *testing.T) {
 	}
 	body.WriteString(`]}`)
 	deps.HTTPClient = &http.Client{Transport: triageRoundTrip(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != "http://127.0.0.1:1234/api/v1/sessions" {
+		if r.URL.String() != "http://127.0.0.1:1234/api/v1/sessions?limit=20" {
 			t.Errorf("unexpected URL %s", r.URL)
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body.String()))}, nil
@@ -353,6 +353,47 @@ func TestTriageSessionsOnlyIncludesRecentSafeFields(t *testing.T) {
 	}
 	if strings.Count(out.String(), "id=") != 20 || !strings.HasPrefix(out.String(), "id=s24 ") || strings.Contains(out.String(), "private-content") || strings.Contains(out.String(), "id=s0 ") {
 		t.Fatal(out.String())
+	}
+}
+
+func TestTriageSessionsPagesLargeArchive(t *testing.T) {
+	deps, _, _ := triageTestDeps(t)
+	sessions := make([]sessionDTO, 5000)
+	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	for i := range sessions {
+		sessions[i] = sessionDTO{ID: fmt.Sprintf("s%d", i), Harness: "codex", IsTerminated: true, Status: "done", UpdatedAt: now.Add(-time.Duration(i) * time.Minute)}
+	}
+	unpaged, err := json.Marshal(sessionListResponse{Sessions: sessions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unpaged) <= 1<<20 {
+		t.Fatalf("unpaged fixture is only %d bytes", len(unpaged))
+	}
+	page, err := json.Marshal(sessionListResponse{Sessions: sessions[:20]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	deps.HTTPClient = &http.Client{Transport: triageRoundTrip(func(r *http.Request) (*http.Response, error) {
+		requests++
+		body := unpaged
+		if r.URL.Query().Get("limit") == "20" {
+			body = page
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})}
+	var out bytes.Buffer
+	if err := (&commandContext{deps: deps}).triageSessions(context.Background(), 1234, &out); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || strings.Count(out.String(), "id=") != 20 {
+		t.Fatalf("requests=%d, output=%s", requests, out.String())
+	}
+	for i := 0; i < 20; i++ {
+		if !strings.Contains(out.String(), fmt.Sprintf("id=s%d ", i)) {
+			t.Errorf("missing recent session s%d", i)
+		}
 	}
 }
 

@@ -243,7 +243,7 @@ func triageLogTail(ctx context.Context, path string) (string, error) {
 }
 
 func (c *commandContext) triageSessions(ctx context.Context, port int, out io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s:%d/api/v1/sessions", config.LoopbackHost, port), http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s:%d/api/v1/sessions?limit=20", config.LoopbackHost, port), http.NoBody)
 	if err != nil {
 		return err
 	}
