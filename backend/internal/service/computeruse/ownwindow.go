@@ -81,7 +81,7 @@ func (s *Service) ownWindowDrags(arguments map[string]any) ([]ownWindowDrag, Own
 	}
 	if len(drags) != len(steps) {
 		return nil, nil, actionRefused("COMPUTER_USE_OWN_WINDOW_BATCH", "run_steps", 0,
-			"A drag in AO's own window runs from AO's desktop app, not Cua Driver. Send it in a run_steps batch of only drag steps that each name AO's pid and window_id, with no wait_for or expect; send other actions in another batch.")
+			"A drag in an Orchestrator window runs from the Orchestrator desktop app, not Cua Driver. Send it in a run_steps batch of only drag steps that each name the Orchestrator pid and window_id, with no wait_for or expect; send other actions in another batch.")
 	}
 	return drags, app, nil
 }
@@ -92,14 +92,14 @@ func (s *Service) runOwnWindowDrags(ctx context.Context, sessionID string, sessi
 	for index, step := range drags {
 		if step.drag["from_zoom"] == true {
 			return nil, actionRefused("COMPUTER_USE_OWN_WINDOW_ZOOM", "drag", index+1,
-				"A drag in AO's own window takes coordinates from a get_window_state screenshot, not a zoom image. Measure them on the window's screenshot.")
+				"A drag in an Orchestrator window takes coordinates from a get_window_state screenshot, not a zoom image. Measure them on the window's screenshot.")
 		}
 		s.mu.Lock()
 		scale, known := s.frames[frameKey(session, step.pid, step.windowID)]
 		s.mu.Unlock()
 		if !known {
 			return nil, actionRefused("COMPUTER_USE_READ_FIRST", "drag", index+1,
-				"Read AO's window with get_window_state first, then measure the drag on that screenshot.")
+				"Read the Orchestrator window with get_window_state first, then measure the drag on that screenshot.")
 		}
 		drag := map[string]any{"windowId": step.windowID}
 		for key, name := range map[string]string{"from_x": "fromX", "to_x": "toX"} {
@@ -130,7 +130,7 @@ func (s *Service) runOwnWindowDrags(ctx context.Context, sessionID string, sessi
 		"ok":    ok,
 		"route": "ao_desktop",
 		"steps": reports,
-		"note":  "AO's desktop ran these drags in its own window: the pointer did not move and focus did not change. The observation shows the window afterwards; check it for the effect you wanted.",
+		"note":  "The Orchestrator desktop app ran these drags in its own window: the pointer did not move and focus did not change. The observation shows the window afterwards; check it for the effect you wanted.",
 	}, nil
 }
 

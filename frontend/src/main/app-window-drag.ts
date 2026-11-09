@@ -61,7 +61,7 @@ export async function dragInAppWindow(
 	signal?: AbortSignal,
 ): Promise<AppDragResult> {
 	const window = findWindow(windows, finite(args.windowId, "windowId"));
-	if (!window) fail("APP_WINDOW_NOT_FOUND", "No AO window has this window_id; read AO's windows with list_windows again.");
+	if (!window) fail("APP_WINDOW_NOT_FOUND", "No Orchestrator window has this window_id; read the Orchestrator windows with list_windows again.");
 	const bounds = window.getBounds();
 	const content = window.getContentBounds();
 	const local = (x: unknown, y: unknown, name: string): Point => [
