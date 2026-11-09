@@ -366,6 +366,27 @@ describe("ArtifactsView", () => {
 		expect(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]).toBeChecked();
 	});
 
+	it.each(["gallery", "list"] as const)("describes each %s checkbox with its project, session and path", async (view) => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ view });
+		mocks.workspaces = [{
+			id: "ao",
+			name: "agent-orchestrator",
+			path: "/code/ao",
+			sessions: [
+				session("ao-1", "Draft the report", [{ name: "report.md", updatedAt: "2026-10-11T10:00:00Z" }]),
+				session("ao-2", "Review the report", [{ name: "report.md", updatedAt: "2026-10-10T10:00:00Z" }]),
+			],
+		}];
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		const boxes = screen.getAllByRole("checkbox", { name: "Select report.md" });
+		expect(boxes).toHaveLength(2);
+		expect(boxes[0]).toHaveAccessibleDescription("agent-orchestrator · Draft the report · report.md");
+		expect(boxes[1]).toHaveAccessibleDescription("agent-orchestrator · Review the report · report.md");
+	});
+
 	it("keeps the artifacts that failed to delete selected and says why", async () => {
 		const user = userEvent.setup();
 		mocks.del.mockImplementation(async (_path: string, { params }: { params: { path: { sessionId: string } } }) => (

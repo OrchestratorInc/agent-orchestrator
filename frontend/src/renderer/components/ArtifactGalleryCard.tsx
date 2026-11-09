@@ -1,6 +1,6 @@
 import { BrowserIcon } from "./icons";
 import { File, FileText } from "@/components/app-icons";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { cn } from "../lib/utils";
@@ -18,6 +18,12 @@ export type ArtifactCardSelection = {
 	/** Set when this person may not delete the file, with why. */
 	disabledReason?: string;
 	label: string;
+	/**
+	 * Which project, session and path the file belongs to. The card is hidden
+	 * from assistive technology while selecting, so this describes the
+	 * checkbox and tells same-named files apart.
+	 */
+	description: string;
 	onToggle: () => void;
 };
 
@@ -31,6 +37,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 }) {
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 	const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
+	const descriptionId = useId();
 	return (
 		<li className={cn("group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10", selection?.selected && "ring-2 ring-primary")}>
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
@@ -54,8 +61,10 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 					</span>
 				</span>
 			</Pressable>
+			{selection ? <span id={descriptionId} className="sr-only">{selection.description}</span> : null}
 			{selection ? (
 				<Checkbox
+					aria-describedby={descriptionId}
 					aria-label={selection.label}
 					checked={selection.selected}
 					className="absolute left-2 top-2 z-[2] size-5 bg-background"

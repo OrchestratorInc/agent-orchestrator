@@ -206,13 +206,14 @@ export function ArtifactsView() {
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [selecting, confirmingBulkDelete]);
-	const selectionFor = (row: ArtifactRow): ArtifactCardSelection | undefined => {
+	const selectionFor = (row: ArtifactRow, projectName: string): ArtifactCardSelection | undefined => {
 		if (!selecting) return undefined;
 		const id = artifactKey(row);
 		return {
 			selected: selectedIds.has(id),
 			disabledReason: deleteBlockedReason(row),
 			label: t("artifacts.selectArtifact", { name: row.name }),
+			description: `${projectName} · ${row.sessionTitle} · ${row.path}`,
 			onToggle: () => toggleSelected(id),
 		};
 	};
@@ -335,12 +336,12 @@ export function ArtifactsView() {
 								<div>
 									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
-											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} selection={selectionFor(row)} />
+											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
 									</ArtifactSection> : null}
 									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
-											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} selection={selectionFor(row)} />
+											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
 									</ArtifactSection> : null}
 									{visibleGroups.map((group) => {
@@ -356,7 +357,7 @@ export function ArtifactsView() {
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
-													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} previewLive={livePreviewSections.get(artifactKey(row)) === `project:${group.id}`} onPreview={openPreview} selection={selectionFor(row)} />
+													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} previewLive={livePreviewSections.get(artifactKey(row)) === `project:${group.id}`} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 												))}
 											</ArtifactSection>
 										);
@@ -448,6 +449,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
+	const selectionDescriptionId = useId();
 
 	const open = () => {
 		onPreview(row, projectName);
@@ -465,8 +467,10 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					"group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent",
 					selection?.selected && "ring-2 ring-primary",
 				)}>
+					{selection ? <span id={selectionDescriptionId} className="sr-only">{selection.description}</span> : null}
 					{selection ? (
 						<Checkbox
+							aria-describedby={selectionDescriptionId}
 							aria-label={selection.label}
 							checked={selection.selected}
 							className="relative z-[2]"
