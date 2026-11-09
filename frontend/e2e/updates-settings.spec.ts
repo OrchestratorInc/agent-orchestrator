@@ -81,3 +81,62 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await expect(page.getByTestId("sidebar-update-ready").getByRole("button", { name: "Restart to install update v2.0.0" })).toHaveText("Restart");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toBeEnabled();
 });
+
+for (const width of [1400, 900]) {
+	test(`@P0 download progress track spans the text column at ${width}px`, async ({ page }) => {
+		await page.setViewportSize({ width, height: 800 });
+		await installFakeBridge(page, {
+			version: "0.14.10-nightly.202611042028",
+			updateSettings: { enabled: true, channel: "nightly", nightlyAck: true, feature: null },
+			updateStatus: { state: "downloading", version: "0.14.10-nightly.202611052338", percent: 10, transferred: 25_600_000, total: 250_400_000 },
+		});
+		await page.goto("/#/settings");
+		await page.getByRole("button", { name: "Updates", exact: true }).click();
+
+		const progress = page.getByRole("progressbar", { name: "Download progress" });
+		const statusLine = page.getByTestId("update-status-line");
+		const action = page.getByRole("button", { name: /^Updating…/ });
+		const widths: number[] = [];
+		for (const percent of [0, 10, 57, 100]) {
+			await page.evaluate((value) => {
+				window.__aoFakeUpdates!.setStatus({ state: "downloading", version: "0.14.10-nightly.202611052338", percent: value, transferred: value * 1_000_000, total: 100_000_000 });
+			}, percent);
+			await expect(progress).toHaveAttribute("value", String(percent));
+			const bar = (await progress.boundingBox())!;
+			const line = (await statusLine.boundingBox())!;
+			const button = (await action.boundingBox())!;
+			// Starts at the text column and runs up to the actions, not just under
+			// the longest text line (the old track stopped under "Built …").
+			expect(Math.abs(bar.x - line.x)).toBeLessThan(1);
+			expect(button.x - (bar.x + bar.width)).toBeGreaterThanOrEqual(0);
+			expect(button.x - (bar.x + bar.width)).toBeLessThan(48);
+			widths.push(bar.width);
+		}
+		// The track never depends on progress; only the fill does.
+		expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(1);
+	});
+}
+
+for (const [label, version, settingsText, sidebarText] of [
+	["prefixed nightly", "v0.14.10-nightly.202611052338", "Updating to v0.14.10-nightly.202611052338", /^Nightly 0\.14\.10 · /],
+	["prefixed stable", "v2.0.0", "Updating to v2.0.0", /^v2\.0\.0$/],
+	["bare stable", "2.0.0", "Updating to v2.0.0", /^v2\.0\.0$/],
+] as const) {
+	test(`@P0 update labels show one v for a ${label} version`, async ({ page }) => {
+		await installFakeBridge(page, {
+			version: "0.14.10-nightly.202611042028",
+			updateSettings: { enabled: true, channel: "nightly", nightlyAck: true, feature: null },
+			updateStatus: { state: "available", version },
+		});
+		await page.goto("/#/settings");
+		await page.getByRole("button", { name: "Updates", exact: true }).click();
+		await expect(page.getByTestId("update-status-line")).toContainText(settingsText);
+		const available = page.getByTestId("sidebar-update-available");
+		await expect(available.getByText(sidebarText)).toBeVisible();
+		await page.evaluate((v) => {
+			window.__aoFakeUpdates!.setStatus({ state: "downloading", version: v, percent: 5 });
+		}, version);
+		await expect(page.getByTestId("update-status-line")).toContainText(settingsText);
+		expect(await page.locator("body").innerText()).not.toMatch(/\bvv\d/);
+	});
+}

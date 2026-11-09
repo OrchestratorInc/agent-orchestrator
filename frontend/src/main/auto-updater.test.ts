@@ -855,7 +855,7 @@ describe("startAutoUpdates", () => {
       // The user still learns an update exists, from what discovery already found.
       expect(statusMessages().at(-1)?.payload).toMatchObject({
         state: "available",
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) {
@@ -5445,7 +5445,7 @@ describe("disk preflight refusal (#6607)", () => {
       expect(module.getUpdateStatus()).toMatchObject({
         state: "error",
         message: DISK_MESSAGE,
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) Object.defineProperty(process, "resourcesPath", originalResourcesPath);

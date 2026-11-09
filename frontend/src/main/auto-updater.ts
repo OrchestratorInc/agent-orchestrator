@@ -1009,7 +1009,9 @@ async function configureDirectPrereleaseFeed(
     (semver.valid(runningVersion) === null || semver.gt(tag, runningVersion))
   ) {
     directFeedDiscoveredAvailable = {
-      version: tag,
+      // Release tags carry a "v" prefix; status versions are bare (electron-updater's
+      // info.version), and every label adds its own "v".
+      version: semver.valid(tag)!,
       ...(directFeedReleaseNotes !== undefined ? { notes: directFeedReleaseNotes } : {}),
     };
   }

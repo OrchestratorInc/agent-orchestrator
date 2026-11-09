@@ -31,7 +31,10 @@ function SettingsRowLabel({
 		<div className="flex min-w-0 flex-1 items-start gap-(--size-settings-row-icon-gap)">
 			{lead}
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
-			<div className="min-w-0">
+			{/* flex-1: the column takes the width up to the control, so a full-width
+			    child (the Updates progress track) spans it instead of shrink-wrapping
+			    to the longest text line. */}
+			<div className="min-w-0 flex-1">
 				<div className="text-sm leading-5 text-settings-label">{label}</div>
 				<div className="mt-0.5 text-pretty text-control leading-4 text-settings-muted">{description}</div>
 			</div>

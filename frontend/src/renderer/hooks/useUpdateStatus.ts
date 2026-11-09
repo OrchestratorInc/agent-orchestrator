@@ -18,7 +18,13 @@ const WAITING_STATES = ["available", "downloaded", "error"];
 const POLL_MS = 3_000;
 const WAITING_POLL_EVERY = 10; // every 30s
 
-function receive(status: UpdateStatus) {
+/** Labels add their own "v"; a tag-shaped "v1.2.3" would render "vv1.2.3". */
+function withBareVersion(status: UpdateStatus): UpdateStatus {
+	return /^v\d/i.test(status.version ?? "") ? { ...status, version: status.version!.slice(1) } : status;
+}
+
+function receive(raw: UpdateStatus) {
+	const status = withBareVersion(raw);
 	current = status;
 	revision += 1;
 	for (const listener of listeners) listener(status);
@@ -40,7 +46,7 @@ function connect() {
 		pending = true;
 		const requestedRevision = revision;
 		try {
-			const next = await aoBridge.updates.getStatus();
+			const next = withBareVersion(await aoBridge.updates.getStatus());
 			// An unchanged poll result would re-render every subscriber (the Sidebar).
 			if (live && requestedRevision === revision && !sameUpdateStatus(next, current)) receive(next);
 		} catch {
