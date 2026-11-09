@@ -17644,6 +17644,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - zcode
           - hermes
           - fake
           type: string
@@ -18362,6 +18363,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - zcode
           - hermes
           - cloudflared
           - cua-driver
@@ -21817,6 +21819,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - zcode
           - hermes
           type: string
         issueId:

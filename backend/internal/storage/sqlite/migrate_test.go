@@ -1086,3 +1086,53 @@ INSERT INTO projects (id, path, registered_at) VALUES ('alpha', '/repos/alpha', 
 		t.Fatalf("OpenReadOnly migrated projects schema:\n%s", schema)
 	}
 }
+
+// TestZcodeHarnessMigrationAddsZcodeToLegacyQMConstraint seeds the QM-variant
+// post-0163 constraint (... 'omp', 'unreal-agent', 'fx', 'qm', 'fake') and
+// runs every migration through the zcode harness migration, asserting the
+// zcode insertion kept the legacy 'qm' entry. Without the QM-safe shape, the
+// replace() source string omits 'qm' and no-ops, leaving zcode session
+// inserts to fail with a CHECK violation on installs that took the legacy QM
+// branch.
+func TestZcodeHarnessMigrationAddsZcodeToLegacyQMConstraint(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	upTo(t, db, 163)
+
+	// Simulate a legacy QM-variant database: swap the post-0163 constraint
+	// (fx, no qm) to the QM variant (fx, qm).
+	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
+		t.Fatalf("enable writable_schema: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE sqlite_master
+SET sql = replace(sql, ?, ?)
+WHERE type = 'table' AND name = 'sessions'`,
+		`CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'fake'))`,
+		`CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'kimchi', 'prime-agent', 'autohand', 'omp', 'unreal-agent', 'fx', 'qm', 'fake'))`,
+	); err != nil {
+		t.Fatalf("seed legacy qm harness constraint: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA writable_schema = RESET`); err != nil {
+		t.Fatalf("reparse legacy qm harness constraint: %v", err)
+	}
+
+	// Run every migration through the zcode harness migration.
+	upTo(t, db, 20261031000000000)
+
+	var schema string
+	if err := db.QueryRow(
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'",
+	).Scan(&schema); err != nil {
+		t.Fatalf("read sessions schema: %v", err)
+	}
+	for _, harness := range []string{"'zcode'", "'qm'", "'omp'"} {
+		if !strings.Contains(schema, harness) {
+			t.Fatalf("sessions.harness CHECK is missing %s after the zcode harness migration:\n%s", harness, schema)
+		}
+	}
+}

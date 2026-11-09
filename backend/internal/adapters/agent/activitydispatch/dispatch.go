@@ -34,6 +34,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -67,6 +68,7 @@ var Derivers = map[string]DeriveFunc{
 	"auggie":       auggie.DeriveActivityState,
 	"goose":        activitystate.StandardDeriveActivityState,
 	"openhands":    activitystate.StandardDeriveActivityState,
+	"zcode":        zcode.DeriveActivityState,
 	"devin":        activitystate.StandardDeriveActivityState,
 	"cursor":       cursor.DeriveActivityState,
 	"qwen":         activitystate.StandardDeriveActivityState,
@@ -120,6 +122,7 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessCommandCode: SignalCoveragePartial,
 	domain.HarnessContinue:    SignalCoveragePartial,
 	domain.HarnessMemcode:     SignalCoveragePartial,
+	domain.HarnessZCode:       SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

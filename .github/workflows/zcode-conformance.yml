@@ -1,0 +1,99 @@
+name: ZCode source-built TUI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/internal/adapters/agent/zcode/**'
+      - 'backend/internal/adapters/chatdriver/zcodeprotocol/**'
+      - '.github/workflows/zcode-conformance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zcode-conformance-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  source-built-tui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          repository: zai-org/ZCode
+          ref: aac4755666d09fdcd70272fcf063c077a639015f
+          path: upstream-zcode
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.33.2'
+          run_install: false
+      - name: Build pinned upstream CLI and interactive TUI
+        working-directory: upstream-zcode
+        env:
+          HUSKY: '0'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: 'false'
+        run: |
+          pnpm --filter '@zcode/cli...' install --frozen-lockfile
+          pnpm --filter '@zcode/cli...' build
+          echo "AO_ZCODE_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      - name: Archive pinned unmodified native runtime
+        working-directory: upstream-zcode
+        run: |
+          node --input-type=module <<'NODE'
+          import { cp, mkdir, realpath } from 'node:fs/promises';
+          import { dirname, resolve } from 'node:path';
+          import { createRequire } from 'node:module';
+          const runtime = resolve('../zcode-native-runtime');
+          await mkdir(resolve(runtime, 'node_modules'), { recursive: true });
+          for (const name of ['zcode.cjs', 'provider', 'THIRD-PARTY-NOTICES.md']) {
+            await cp(resolve('apps/zcode-cli/packages/cli/dist', name), resolve(runtime, name), { recursive: true });
+          }
+          // The protocol bundle keeps its external browser assets. The TUI is
+          // intentionally excluded: upstream's SEA collector requires a dist
+          // directory for the source-only root @zcode/shared package.
+          await cp(await realpath(dirname(createRequire(resolve('apps/zcode-cli/packages/cli/package.json')).resolve('playwright-core/package.json'))), resolve(runtime, 'node_modules/playwright-core'), { recursive: true });
+          NODE
+          echo 'Stock app-server/headless runtime; TUI dependency closure excluded' > ../zcode-native-runtime/SCOPE
+          git rev-parse HEAD > ../zcode-native-runtime/SOURCE_COMMIT
+          node --version > ../zcode-native-runtime/NODE_VERSION
+          tar -czf ../zcode-native-runtime.tar.gz -C .. zcode-native-runtime
+          sha256sum ../zcode-native-runtime.tar.gz > ../zcode-native-runtime.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zcode-v3.15.1-linux-runtime
+          path: |
+            zcode-native-runtime.tar.gz
+            zcode-native-runtime.sha256
+          retention-days: 7
+      - name: Verify source-built CLI lifecycle against localhost provider
+        if: always()
+        working-directory: backend
+        env:
+          AO_ZCODE_ENTRY: ${{ github.workspace }}/upstream-zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs
+        run: go test -race -count=1 -timeout=5m -run '^TestSourceBuiltZCode' -v ./internal/adapters/agent/zcode
+
+      - name: Build exact-head AO evidence executable
+        if: always()
+        working-directory: backend
+        run: go build -o ../ao-proof ./cmd/ao
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zcode-ao-proof-linux
+          path: ao-proof
+          retention-days: 7

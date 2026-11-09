@@ -2161,7 +2161,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsZCode := !strings.Contains(schema, "'zcode'")
+	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsZCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2290,6 +2291,12 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
+	if needsZCode {
+		// Same shape as the DeepSeek repair: the zcode harness migration
+		// rewrites the known variants by exact string, and any database that
+		// missed it still ends with the 'fake' fixture harness to anchor on.
+		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
 	}
 	for _, r := range repairs {
 		if _, err := db.Exec(

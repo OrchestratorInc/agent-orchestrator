@@ -170,3 +170,5 @@ func hostFileBusy(err error) bool {
 	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
 		errors.Is(err, windows.ERROR_ACCESS_DENIED)
 }
+
+func configureProviderOwnership(_ Protocol) error { return nil }

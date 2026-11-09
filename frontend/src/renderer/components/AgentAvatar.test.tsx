@@ -7,6 +7,7 @@ import geminiLogo from "../assets/agents/gemini.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
+import zcodeLogo from "../assets/agents/zcode.png";
 
 function themeSources(name: string) {
 	const mark = screen.getByRole("img", { name });
@@ -17,6 +18,10 @@ describe("AgentAvatar", () => {
 	it("renders the bundled Memcode mark", () => {
 		render(<AgentAvatar provider="memcode" />);
 		expect(screen.getByRole("img", { name: "memcode" })).toHaveAttribute("src", memcodeLogo);
+	});
+	it("renders the bundled ZCode mark instead of the initial fallback", () => {
+		render(<AgentAvatar provider="zcode" />);
+		expect(screen.getByRole("img", { name: "zcode" })).toHaveAttribute("src", zcodeLogo);
 	});
 	it("renders the official fx light and dark marks under one accessible name", () => {
 		render(<AgentAvatar provider="fx" />);

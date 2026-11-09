@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package persistenthost
 
@@ -53,3 +53,5 @@ func openHostFile(path string) (*os.File, error) {
 
 // hostFileBusy is a Windows sharing conflict, which Unix does not have.
 func hostFileBusy(error) bool { return false }
+
+func configureProviderOwnership(_ Protocol) error { return nil }

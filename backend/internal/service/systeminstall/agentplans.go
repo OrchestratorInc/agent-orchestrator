@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetZCode:       "https://github.com/zai-org/ZCode",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
@@ -284,6 +285,16 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetZCode:
+		// ZCode is open source (zai-org/ZCode, Apache-2.0). The desktop
+		// release bundles only the protocol runtime, and similarly named npm
+		// packages are not official ZCode distributions, so AO requires the
+		// source-built CLI on PATH and drives it through `zcode app-server`.
+		plans = []Plan{manualPlan(
+			target,
+			"Build the CLI from the official open-source repo https://github.com/zai-org/ZCode: install Node >= 24 and pnpm, run `pnpm install` at the repo root, then `pnpm -r build` inside apps/zcode-cli, and expose apps/zcode-cli/packages/cli/dist/zcode.cjs (or a wrapper for it) as `zcode` on PATH. AO runs Chat through `zcode app-server`. The desktop release does not include the CLI, and similarly named npm packages are not official ZCode distributions.",
+			agentDocumentationURLs[target],
+		)}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

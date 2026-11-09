@@ -35,6 +35,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessZCode,
 		domain.HarnessHermes,
 	} {
 		if !r.SupportsChat(harness) {
