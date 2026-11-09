@@ -4572,6 +4572,25 @@ describe("ChatWorkspace message actions", () => {
 		await waitFor(() => expect(getChatDraftBoundary(snapshot.sessionId)).toBeUndefined());
 	});
 
+	it("draws a restored inline edit as a bubble when its message is not in the timeline", async () => {
+		const snapshot = idleSnapshot();
+		writeChatInlineEdit(snapshot.sessionId, {
+			turnId: "turn-not-in-timeline",
+			text: "restored edit",
+			content: [],
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onEditMessage={vi.fn(async () => undefined)} />);
+		const restored = await screen.findByRole("textbox", { name: "Edit message" });
+		const bubble = restored.closest(".cursor-chat-human-message");
+		expect(bubble).not.toBeNull();
+		// Cancel and Send sit on their own row under the bubble.
+		const send = screen.getByRole("button", { name: "Send edited message" });
+		expect(bubble).not.toContainElement(send);
+		expect(bubble!.parentElement).toHaveClass("flex-col");
+		expect(bubble!.parentElement).toContainElement(send);
+	});
+
 	it("does not expose an accepted inline edit when a hidden replacement committed a later revision", async () => {
 		const snapshot = idleSnapshot();
 		let acceptFirstEdit!: () => void;
