@@ -947,11 +947,10 @@ const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
 const SESSION_IMPORT_SURFACE_SET = new Set(["home", "project_board"]);
 const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "project_offer", "project_dialog", "settings"]);
 const SESSION_IMPORT_OPEN_OUTCOME_SET = new Set(["succeeded", "failed", "open_elsewhere"]);
-const IMPORTABLE_AGENT_SET = new Set<string>(IMPORTABLE_AGENTS);
 
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
-	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENT_SET.has(agent));
+	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
 	return agents.length ? agents.join(",") : undefined;
 }
 
@@ -1076,7 +1075,7 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.session_import_first_open": {
 			if (typeof properties?.outcome === "string" && SESSION_IMPORT_OPEN_OUTCOME_SET.has(properties.outcome)) safe.outcome = properties.outcome;
-			if (typeof properties?.agent === "string" && IMPORTABLE_AGENT_SET.has(properties.agent)) safe.agent = properties.agent;
+			if (typeof properties?.agent === "string" && IMPORTABLE_AGENTS.has(properties.agent)) safe.agent = properties.agent;
 			if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
 			const duration = nonNegativeNumber(properties?.duration_ms);
 			if (duration !== undefined) safe.duration_ms = duration;
