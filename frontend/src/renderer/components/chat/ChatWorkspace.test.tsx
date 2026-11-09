@@ -2948,6 +2948,15 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 
+	it("uses the report heading only while the welcome override is supplied", () => {
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} welcomeHeading={appI18n.t("report.heading")} />);
+		expect(screen.getByRole("heading", { name: "What went wrong?" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "What went wrong?" })).not.toBeInTheDocument();
+	});
+
 	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {
 		const user = userEvent.setup();
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, workspaceId: STANDALONE_WORKSPACE_ID, requestedOutput: "artifact" }} />);

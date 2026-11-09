@@ -1309,6 +1309,7 @@
 	"report.email": "E-Mail",
 	"report.github": "GitHub",
 	"report.githubAction": "Kopieren & GitHub-Issue erstellen",
+	"report.heading": "Was ist schiefgelaufen?",
 	"report.subtitle": "Ein Problem gefunden? Erzählen Sie uns, was passiert ist.",
 	"report.title": "Problem melden",
 	"report.titleLabel": "Titel",

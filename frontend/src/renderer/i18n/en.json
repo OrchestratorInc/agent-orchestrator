@@ -1296,6 +1296,7 @@
 	"report.email": "Email",
 	"report.github": "GitHub",
 	"report.githubAction": "Copy & Create GitHub Issue",
+	"report.heading": "What went wrong?",
 	"report.title": "Report a problem",
 	"report.titleLabel": "Title",
 	"report.titlePlaceholder": "Brief Title",

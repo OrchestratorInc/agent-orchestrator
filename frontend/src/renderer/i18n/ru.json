@@ -1345,6 +1345,7 @@
 	"report.email": "Электронная почта",
 	"report.github": "GitHub",
 	"report.githubAction": "Копировать и создать GitHub Issue",
+	"report.heading": "Что пошло не так?",
 	"report.title": "Сообщить о проблеме",
 	"report.titleLabel": "Заголовок",
 	"report.titlePlaceholder": "Краткий заголовок",

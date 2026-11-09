@@ -1330,6 +1330,7 @@
 	"report.email": "E-mail",
 	"report.github": "GitHub",
 	"report.githubAction": "Copiar e criar issue no GitHub",
+	"report.heading": "O que deu errado?",
 	"report.subtitle": "Encontrou um problema? Conte o que aconteceu.",
 	"report.title": "Relatar um problema",
 	"report.titleLabel": "Título",

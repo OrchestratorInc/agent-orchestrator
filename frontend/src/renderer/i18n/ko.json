@@ -1309,6 +1309,7 @@
 	"report.email": "이메일",
 	"report.github": "GitHub",
 	"report.githubAction": "복사하고 GitHub 이슈 만들기",
+	"report.heading": "무엇이 잘못되었나요?",
 	"report.subtitle": "문제를 발견하셨나요? 상황을 알려 주세요.",
 	"report.title": "문제 보고",
 	"report.titleLabel": "제목",

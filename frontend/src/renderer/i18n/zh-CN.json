@@ -1291,6 +1291,7 @@
 	"report.email": "邮件",
 	"report.github": "GitHub",
 	"report.githubAction": "复制并创建 GitHub Issue",
+	"report.heading": "哪里出了问题？",
 	"report.subtitle": "发现了问题？告诉我们发生了什么。",
 	"report.title": "报告问题",
 	"report.titleLabel": "标题",

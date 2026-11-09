@@ -1309,6 +1309,7 @@
 	"report.email": "メール",
 	"report.github": "GitHub",
 	"report.githubAction": "コピーして GitHub Issue を作成",
+	"report.heading": "何がうまくいきませんでしたか？",
 	"report.subtitle": "問題を見つけましたか？内容を教えてください。",
 	"report.title": "問題を報告",
 	"report.titleLabel": "タイトル",

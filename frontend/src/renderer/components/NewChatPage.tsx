@@ -400,6 +400,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				sessionRole="worker"
 				hideHeader
 				centerInWindow
+				welcomeHeading={report ? t("report.heading") : undefined}
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
 				// A Cloud task cannot carry files yet, so its composer offers none.

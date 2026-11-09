@@ -407,6 +407,14 @@ describe("New chat opened from Report a problem", () => {
 	};
 	beforeEach(() => prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] }));
 
+	it.each([
+		{ report: true, heading: "What went wrong?" },
+		{ report: false, heading: undefined },
+	])("overrides the welcome heading only for report mode (report: $report)", ({ report, heading }) => {
+		renderReport(STANDALONE_WORKSPACE_ID, report);
+		expect(h.workspace?.welcomeHeading).toBe(heading);
+	});
+
 	it("stays on Scratchpad with the project picker locked", () => {
 		const { queryClient } = renderReport(STANDALONE_WORKSPACE_ID, true);
 		expect(picker(queryClient)).toBeDisabled();
