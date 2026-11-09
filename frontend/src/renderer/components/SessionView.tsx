@@ -75,7 +75,7 @@ import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -1532,15 +1532,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		session && !isOrchestrator ? (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<TopbarButton
+					<Button size="icon-sm"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						<Plus aria-hidden="true" className="size-icon-md" />
-					</TopbarButton>
+					</Button>
 				</TooltipTrigger>
 				<TooltipContent shortcut={newTerminalError ? undefined : "new-shell-terminal"} side="bottom">
 					{newTerminalError ?? t("terminal.new")}
@@ -2858,7 +2858,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<PageTopbarTrailingAction>
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
@@ -2866,7 +2866,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								handleToggleInspector();
 							}}
 							style={noDragStyle}
-							variant="icon"
+							variant="quiet"
 						>
 							<span className="relative inline-flex">
 								<PanelRight className="size-icon-md" aria-hidden="true" />
@@ -2878,7 +2878,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									/>
 								) : null}
 							</span>
-						</TopbarButton>
+						</Button>
 					</TooltipTrigger>
 					<TooltipContent shortcut="toggle-inspector" side="bottom">
 						{isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}

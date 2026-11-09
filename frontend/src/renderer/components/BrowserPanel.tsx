@@ -1311,7 +1311,7 @@ export function BrowserPanelView({
 											onClick={() => void reconnectRuntime()}
 											size="sm"
 											type="button"
-											variant="outline"
+											variant="secondary"
 										>
 											{t("browser.reconnectRuntime")}
 										</Button>

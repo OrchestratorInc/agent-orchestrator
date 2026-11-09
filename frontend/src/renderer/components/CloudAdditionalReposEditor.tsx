@@ -141,7 +141,7 @@ export function CloudAdditionalReposEditor({
 					</Button>
 				</div>
 			))}
-			<Button ref={addButtonRef} type="button" variant="outline" size="sm" disabled={!canAdd} onClick={add}>
+			<Button ref={addButtonRef} type="button" variant="secondary" size="sm" disabled={!canAdd} onClick={add}>
 				<Plus aria-hidden="true" className="size-icon-sm" />
 				{t("cloudRepos.add", { defaultValue: "Add a repository" })}
 			</Button>

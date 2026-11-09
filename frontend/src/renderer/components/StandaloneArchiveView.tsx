@@ -14,7 +14,7 @@ import { useUiStore } from "../stores/ui-store";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
@@ -99,15 +99,14 @@ export function StandaloneArchiveView() {
 					</PageTopbarTitle>
 				}
 				actions={
-					<TopbarButton
-						className="topbar-control--labeled"
+					<Button size="sm"
 						onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 						type="button"
 						variant="primary"
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						{t("standalone.archive.newAgent")}
-					</TopbarButton>
+					</Button>
 				}
 			/>
 

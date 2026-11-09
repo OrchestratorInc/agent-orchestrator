@@ -751,8 +751,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Button
 						type="button"
-						variant="footer-primary"
-						className="rounded-md shadow-lg"
+						variant="primary"
 						onClick={startBridge}
 						disabled={busy || enabled}
 					>

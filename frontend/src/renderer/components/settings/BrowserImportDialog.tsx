@@ -299,7 +299,7 @@ export function BrowserImportDialog({
 					<div className="flex-1" />
 					{view !== "running" ? (
 						<DialogClose asChild>
-							<Button type="button" variant="footer">
+							<Button type="button" variant="secondary">
 								{view === "result" ? t("settings.browserImport.done") : t("confirm.cancel")}
 							</Button>
 						</DialogClose>
@@ -309,7 +309,7 @@ export function BrowserImportDialog({
 							disabled={loading || sourceLoading || !source || selectedProfiles.length === 0 || (!includeCookies && !includeHistory) || !namesValid}
 							onClick={() => void startImport()}
 							type="button"
-							variant="footer-primary"
+							variant="primary"
 						>
 							{t(error?.recoverable && source ? "settings.browserImport.retry" : "settings.browserImport.start")}
 						</Button>

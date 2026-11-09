@@ -110,13 +110,14 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
+							triggerVariant="ghost"
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}
 							options={projectOptions}
 							onChange={(value) => onProjectChange?.(value)}
 							menuAlign="start"
 							menuClassName="w-48 max-h-72"
-							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md bg-transparent! px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground hover:bg-interactive-hover! hover:text-foreground data-[state=open]:bg-transparent! data-[state=open]:hover:bg-interactive-hover! data-[state=open]:text-foreground"
+							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground"
 							menuItemClassName="gap-1!"
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">
