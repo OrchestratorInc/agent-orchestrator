@@ -106,28 +106,7 @@ type Service struct {
 // data directory holds its managed worktrees, which are never import sources.
 func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) bool) *Service {
 	home, _ := os.UserHomeDir()
-	claude, codex := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CODEX_HOME")
-	if claude == "" {
-		claude = filepath.Join(home, ".claude")
-	}
-	if codex == "" {
-		codex = filepath.Join(home, ".codex")
-	}
-	pi := os.Getenv("PI_CODING_AGENT_DIR")
-	if pi == "" {
-		pi = filepath.Join(home, ".pi", "agent")
-	}
-	// Kimchi 1.24.3's entry point ignores config-root overrides and always uses
-	// homedir/.config/kimchi/harness. Only offer the root its runtime can load.
-	kimchi := filepath.Join(home, ".config", "kimchi", "harness")
-	qwen := os.Getenv(qwenHomeEnv)
-	if qwen == "" {
-		qwen = filepath.Join(home, ".qwen")
-	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessPi: pi, domain.HarnessCopilot: copilotRoot(home), domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
-	if opencode := openCodeRoot(home); opencode != "" {
-		roots[domain.HarnessOpenCode] = opencode
-	}
+	roots := map[domain.AgentHarness]string{}
 	for harness, importer := range harnessImporters {
 		if importer.root == nil {
 			continue
@@ -405,103 +384,77 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discoverFor lists one harness's conversations through the discovery its
 // importer provides.
-func (s *Service) discoverFor(ctx context.Context, harness domain.AgentHarness, root string, projects []string) ([]sourceFiles, error) {
+func discoverFor(ctx context.Context, harness domain.AgentHarness, root string, projects []string) ([]sourceFiles, error) {
 	importer := harnessImporters[harness]
-	switch {
-	case importer.discoverRegistered != nil:
+	if importer.discoverRegistered != nil {
 		files, err := importer.discoverRegistered(ctx, projects)
 		return registeredSources(files, projects), err
-	default:
-		return s.discover(ctx, harness, root)
+	}
+	return importer.discover(ctx, root)
+}
+
+// walkSources lists the transcripts under root/dir without reading them,
+// newest first. keyOf names a file's conversation; "" skips the file.
+func walkSources(harness domain.AgentHarness, dir string, keyOf func(path, name string) string) func(context.Context, string) ([]sourceFiles, error) {
+	return func(ctx context.Context, root string) ([]sourceFiles, error) {
+		byKey := map[string]*sourceFiles{}
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if walkErr != nil {
+				return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
+			}
+			if entry.IsDir() {
+				if entry.Name() == "subagents" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			key := keyOf(path, entry.Name())
+			if !entry.Type().IsRegular() || key == "" {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return nil //nolint:nilerr // Unreadable files are ineligible.
+			}
+			group := byKey[key]
+			if group == nil {
+				group = &sourceFiles{harness: harness, root: root, key: key}
+				byKey[key] = group
+			}
+			group.paths = append(group.paths, path)
+			group.size += info.Size()
+			if info.ModTime().After(group.modTime) {
+				group.modTime = info.ModTime()
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		out := make([]sourceFiles, 0, len(byKey))
+		for _, group := range byKey {
+			group.paths = codexSegments(group.paths)
+			out = append(out, *group)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })
+		return out, nil
 	}
 }
 
-// discover lists transcripts without reading them, newest first.
-func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
-	if importer, ok := harnessImporters[harness]; ok {
-		return importer.discover(ctx, root)
+// jsonlKey keeps each JSONL file as its own conversation.
+func jsonlKey(path, name string) string {
+	if strings.HasSuffix(name, ".jsonl") {
+		return path
 	}
-	// Per-harness layouts that do not fit the projects/sessions directory model
-	// discover their own conversations.
-	switch harness {
-	case domain.HarnessCopilot:
-		return discoverCopilot(ctx, root)
-	case domain.HarnessKimchi:
-		// Kimchi stores one JSONL per conversation under sessions/<cwd-dashed>/,
-		// like Pi, but AO's own resume copies live there too; discoverKimchi skips
-		// them using the importer's excluded data directory.
-		return discoverKimchi(ctx, root, s.excluded)
-	case domain.HarnessOpenCode:
-		// OpenCode stores conversations in a SQLite database, not a projects tree.
-		return discoverOpenCode(ctx, root)
-	}
-	byKey := map[string]*sourceFiles{}
-	dir := filepath.Join(root, "projects")
-	switch harness {
-	case domain.HarnessCodex, domain.HarnessPi, domain.HarnessOMP:
-		// Archived Codex threads are not resumable without unarchiving them in
-		// Codex. Pi and OMP store one JSONL per conversation under
-		// sessions/<cwd-dashed>/.
-		dir = filepath.Join(root, "sessions")
-	}
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkErr != nil {
-			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
-		}
-		if entry.IsDir() {
-			if entry.Name() == "subagents" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return nil
-		}
-		key := path
-		switch harness {
-		case domain.HarnessClaudeCode, domain.HarnessPi, domain.HarnessOMP:
-			// Each JSONL is one conversation; the default key (its path) groups it alone.
-			if !strings.HasSuffix(entry.Name(), ".jsonl") {
-				return nil
-			}
-		case domain.HarnessCodex:
-			if key = nativeconfig.CodexRolloutThread(path); key == "" {
-				return nil
-			}
-		case domain.HarnessQwen:
-			if !qwenIsTranscript(path, entry.Name()) {
-				return nil
-			}
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil //nolint:nilerr // Unreadable files are ineligible.
-		}
-		group := byKey[key]
-		if group == nil {
-			group = &sourceFiles{harness: harness, root: root, key: key}
-			byKey[key] = group
-		}
-		group.paths = append(group.paths, path)
-		group.size += info.Size()
-		if info.ModTime().After(group.modTime) {
-			group.modTime = info.ModTime()
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	out := make([]sourceFiles, 0, len(byKey))
-	for _, group := range byKey {
-		group.paths = codexSegments(group.paths)
-		out = append(out, *group)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })
-	return out, nil
+	return ""
+}
+
+// codexKey groups a thread's rollout segments.
+func codexKey(path, _ string) string {
+	return nativeconfig.CodexRolloutThread(path)
 }
 
 // codexThreadSegments finds one thread's rollout files. It runs before each
@@ -598,17 +551,12 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
 	projects := s.registeredDiscoveryRoots(dests)
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessCopilot, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen, domain.HarnessOpenCode}
-	for harness := range harnessImporters {
-		harnesses = append(harnesses, harness)
-	}
-	for _, harness := range harnesses {
+	for harness, importer := range harnessImporters {
 		configured, ok := s.roots[harness]
-		importer := harnessImporters[harness]
 		if !ok && importer.discoverRegistered == nil {
 			continue
 		}
-		files, err := s.discoverFor(ctx, harness, canonical(configured), projects)
+		files, err := discoverFor(ctx, harness, canonical(configured), projects)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Preview{}, ctxErr

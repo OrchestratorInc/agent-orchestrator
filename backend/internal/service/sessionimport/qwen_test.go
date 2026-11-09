@@ -122,8 +122,7 @@ func TestQwenDiscoverSkipsArchiveAndNonTranscripts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := New(&importStore{}, "", chatSupported)
-	files, err := svc.discover(context.Background(), domain.HarnessQwen, canonical(root))
+	files, err := discoverFor(context.Background(), domain.HarnessQwen, canonical(root), nil)
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}

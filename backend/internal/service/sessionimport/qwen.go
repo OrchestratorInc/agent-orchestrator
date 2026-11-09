@@ -23,6 +23,13 @@ const qwenHomeEnv = "QWEN_HOME"
 // qwenIsTranscript reports whether a walked file is a live Qwen chat transcript.
 // Archived chats live under chats/archive and are intentionally skipped, as are
 // the project directory's memory/, meta.json and other non-transcript files.
+func qwenKey(path, name string) string {
+	if qwenIsTranscript(path, name) {
+		return path
+	}
+	return ""
+}
+
 func qwenIsTranscript(path, name string) bool {
 	return strings.HasSuffix(name, ".jsonl") && filepath.Base(filepath.Dir(path)) == "chats"
 }

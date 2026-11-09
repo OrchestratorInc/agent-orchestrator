@@ -349,32 +349,24 @@ type claudeNode struct {
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
-	if importer, ok := harnessImporters[harness]; ok {
-		return importer.read(ctx, root, paths...)
+	if read := harnessImporters[harness].read; read != nil {
+		return read(ctx, root, paths...)
 	}
-	if harness == domain.HarnessOMP {
-		return readOMPTranscript(ctx, root, paths...)
-	}
-	if harness == domain.HarnessPi {
-		return readPiTranscript(ctx, root, paths...)
-	}
-	if harness == domain.HarnessKimchi {
-		return readKimchiTranscript(ctx, root, paths...)
-	}
+	return transcript{harness: harness, root: root}, errors.New("no transcript reader")
+}
+
+func readClaudeTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	return readJSONLTranscript(ctx, domain.HarnessClaudeCode, root, paths...)
+}
+
+func readCodexTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	return readJSONLTranscript(ctx, domain.HarnessCodex, root, paths...)
+}
+
+func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
-	}
-	// Harnesses whose transcript format differs from the Claude/Codex JSONL
-	// handled below parse in their own file.
-	switch harness {
-	case domain.HarnessCopilot:
-		return readCopilotTranscript(ctx, root, paths...)
-	case domain.HarnessQwen:
-		return readQwenTranscript(ctx, root, paths...)
-	case domain.HarnessOpenCode:
-		// OpenCode's history lives in a SQLite database read by session id.
-		return readOpenCodeTranscript(ctx, root, paths...)
 	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)

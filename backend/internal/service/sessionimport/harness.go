@@ -2,6 +2,8 @@ package sessionimport
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -9,8 +11,7 @@ import (
 
 // harnessImporter keeps a provider's layout and parser in its own file.
 // Registration adds one map entry here, its importedHarnesses hooks in
-// session_manager, and one IMPORTABLE_AGENTS entry in the UI; the harnesses
-// Scan lists itself are dispatched in service.go and transcript.go instead.
+// session_manager, and one IMPORTABLE_AGENTS entry in the UI.
 // The callbacks must only read provider state, confine file reads with os.Root
 // (or open SQLite mode=ro), and return the exact CLI resume identity.
 // Discovery sets sourceFiles.key to the native ID.
@@ -31,12 +32,40 @@ type harnessImporter struct {
 
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
-	domain.HarnessAider: {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
+	// Archived Codex threads are not resumable without unarchiving them in Codex.
+	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
+	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
+	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: readKimchiTranscript},
+	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: readOMPTranscript},
+	domain.HarnessOpenCode: {root: openCodeRoot, discover: discoverOpenCode, read: readOpenCodeTranscript},
+	domain.HarnessPi:       {root: piRoot, discover: walkSources(domain.HarnessPi, "sessions", jsonlKey), read: readPiTranscript},
+	domain.HarnessQwen:     {root: qwenRoot, discover: walkSources(domain.HarnessQwen, "projects", qwenKey), read: readQwenTranscript},
+	domain.HarnessCline:    {root: clineRoot, discover: discoverCline, read: readClineTranscript},
+	domain.HarnessCursor:   {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
+	domain.HarnessGrok:     {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
+	domain.HarnessGemini:   {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
+}
 
-	domain.HarnessCline:  {root: clineRoot, discover: discoverCline, read: readClineTranscript},
-	domain.HarnessCursor: {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
-	domain.HarnessGrok:   {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
+func claudeRoot(home string) string {
+	return envOr("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+}
+func codexRoot(home string) string { return envOr("CODEX_HOME", filepath.Join(home, ".codex")) }
+func piRoot(home string) string {
+	return envOr("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
+}
+func qwenRoot(home string) string { return envOr(qwenHomeEnv, filepath.Join(home, ".qwen")) }
+
+// Kimchi 1.24.3's entry point ignores config-root overrides and always uses
+// homedir/.config/kimchi/harness. Only offer the root its runtime can load.
+func kimchiRoot(home string) string { return filepath.Join(home, ".config", "kimchi", "harness") }
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {

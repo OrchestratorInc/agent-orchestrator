@@ -84,11 +84,8 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
 	hooks := importedHarnesses[rec.Harness]
-	if hooks.configEnvKey != "" {
-		key = hooks.configEnvKey
-	}
+	key := hooks.configEnvKey
 	if key == "" {
 		return
 	}

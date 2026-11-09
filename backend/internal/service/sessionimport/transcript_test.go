@@ -138,8 +138,7 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	segment := writeFile(t, filepath.Join(day, "08", "rollout-2026-10-08T04-09-28-"+codexThread+"_01a11885-8f9f-76d1-a6d0-3b60c45dc3a5.jsonl"), `{"type":"session_meta","payload":{"id":"`+codexThread+`","cwd":"/work/repo","source":"vscode"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"second prompt"}}
 `)
-	svc := New(&importStore{}, "", chatSupported)
-	files, err := svc.discover(context.Background(), domain.HarnessCodex, canonical(root))
+	files, err := discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil)
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 {
 		t.Fatalf("files = %#v, %v", files, err)
 	}
@@ -156,12 +155,12 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	}
 	// While Codex compresses a segment both copies exist; the plain file is current.
 	zstdFile(t, segment+".zst", "corrupt")
-	files, err = svc.discover(context.Background(), domain.HarnessCodex, canonical(root))
+	files, err = discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil)
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 || strings.HasSuffix(files[0].paths[1], ".zst") {
 		t.Fatalf("twin files = %#v, %v", files, err)
 	}
 	writeFile(t, filepath.Join(root, "archived_sessions", "rollout-2026-01-01T00-00-00-01a99999-0000-7000-8000-000000000000.jsonl"), "{}")
-	if files, _ = svc.discover(context.Background(), domain.HarnessCodex, canonical(root)); len(files) != 1 {
+	if files, _ = discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil); len(files) != 1 {
 		t.Fatalf("archived Codex threads are not resumable: %#v", files)
 	}
 }

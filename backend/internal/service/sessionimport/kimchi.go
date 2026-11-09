@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -61,83 +59,6 @@ type kimchiNode struct {
 	editTarget             string
 	at                     time.Time
 	dropped                bool
-}
-
-// discoverKimchi lists Kimchi conversations without reading full histories.
-// Each JSONL under sessions/<cwd-dashed>/ is one conversation. Folders whose
-// conversation cwd is inside an excluded AO data directory are skipped: those
-// hold AO's own copy-and-resume copies of imported chats (see the kimchi agent
-// adapter), so offering them again would duplicate the original the copy was
-// made from. The header cwd, not the lossy dashed folder name, decides this.
-func discoverKimchi(ctx context.Context, root string, excluded []string) ([]sourceFiles, error) {
-	byKey := map[string]*sourceFiles{}
-	dir := filepath.Join(root, "sessions")
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkErr != nil {
-			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
-		}
-		if entry.IsDir() || !entry.Type().IsRegular() {
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), ".jsonl") {
-			return nil
-		}
-		if kimchiCopyExcluded(path, excluded) {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil //nolint:nilerr // Unreadable files are ineligible.
-		}
-		group := &sourceFiles{harness: domain.HarnessKimchi, root: root, key: path}
-		group.paths = append(group.paths, path)
-		group.size += info.Size()
-		group.modTime = info.ModTime()
-		byKey[path] = group
-		return nil
-	})
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	out := make([]sourceFiles, 0, len(byKey))
-	for _, group := range byKey {
-		out = append(out, *group)
-	}
-	return out, nil
-}
-
-// kimchiCopyExcluded reports whether a session file is AO's own resume copy,
-// detected by its header cwd falling inside an excluded AO data directory. The
-// header is the first JSONL record; an unreadable or headerless file is not
-// treated as excluded, so a genuine conversation is never hidden by a read
-// error.
-func kimchiCopyExcluded(path string, excluded []string) bool {
-	if len(excluded) == 0 {
-		return false
-	}
-	f, err := os.Open(path) //nolint:gosec // provider-owned path from the scanned root
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	var header struct {
-		Type string `json:"type"`
-		CWD  string `json:"cwd"`
-	}
-	dec := json.NewDecoder(f)
-	if err := dec.Decode(&header); err != nil || header.Type != "session" || header.CWD == "" {
-		return false
-	}
-	cwd := canonical(header.CWD)
-	for _, dir := range excluded {
-		if dir != "" && pathWithin(dir, cwd) {
-			return true
-		}
-	}
-	return false
 }
 
 // readKimchiTranscript reads one Kimchi conversation JSONL. It reuses the
