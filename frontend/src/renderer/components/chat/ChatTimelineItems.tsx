@@ -9,7 +9,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentURL, HUMAN_ATTACHMENTS_CLASS, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
@@ -136,7 +136,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { UsageLimitMarker, UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -1070,7 +1070,7 @@ export function HumanMessage({
 				<>
 					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
 					{hasAttachments ? (
-						<div className={cn(HUMAN_ATTACHMENTS_CLASS, animateIn && "chat-human-message-enter")}>
+						<AttachmentStrip className={cn(animateIn && "chat-human-message-enter")}>
 							{annotationSummary}
 							<StagedAttachmentItems
 								paths={attachments}
@@ -1080,7 +1080,7 @@ export function HumanMessage({
 								className="contents"
 							/>
 							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
-						</div>
+						</AttachmentStrip>
 					) : null}
 					{showBubble ? (
 						<div
@@ -3345,7 +3345,7 @@ export function SteerMessage({
 				<>
 					{/* As on a sent message: attachments above the text, outside its bubble. */}
 					{attachments.length > 0 || remainingContent.length > 0 ? (
-						<div className={HUMAN_ATTACHMENTS_CLASS}>
+						<AttachmentStrip>
 							<StagedAttachmentItems
 								paths={attachments}
 								sessionId={sessionId}
@@ -3360,7 +3360,7 @@ export function SteerMessage({
 								imageAlt={(position) => `Steered attachment ${position}`}
 								className="contents"
 							/>
-						</div>
+						</AttachmentStrip>
 					) : null}
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">

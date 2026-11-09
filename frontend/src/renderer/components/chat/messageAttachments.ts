@@ -54,13 +54,6 @@ export function formatAttachmentSize(bytes: number): string {
 }
 
 /**
- * The row of attachments above a user's bubble, capped to the bubble's own width.
- * Outside the bubble so a long message's fold can never clip them. Lists inside
- * it use `contents`, so every kind of attachment wraps as one row.
- */
-export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-wrap items-start justify-end gap-2";
-
-/**
  * One size for anything attached to a sent message, so a mixed row lines up: the
  * height of an image tile and the width of the widest one. Text on top, a pill below.
  */

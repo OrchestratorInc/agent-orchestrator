@@ -8,12 +8,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { ConversationContentItems } from "./ConversationContentItems";
 import {
-	HUMAN_ATTACHMENTS_CLASS,
 	IMAGE_ATTACHMENT_PATH,
 	stagedAttachmentParts,
 	withAttachmentReferences,
 } from "./messageAttachments";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 
 export interface HumanMessageEditorProps {
 	/** The full prompt text, including AO's attached-files block when the message had one. */
@@ -157,7 +156,7 @@ export function HumanMessageEditor({
 		<>
 			{/* Above the box and outside its fold, where the bubble draws them. */}
 			{leading || attachments.length > 0 || cloudAttachments || otherContent.length > 0 ? (
-				<div className={HUMAN_ATTACHMENTS_CLASS}>
+				<AttachmentStrip>
 					{leading}
 					<StagedAttachmentItems
 						paths={attachments}
@@ -174,7 +173,7 @@ export function HumanMessageEditor({
 						imageLabel={t("chat.edit.image")}
 						className="contents"
 					/>
-				</div>
+				</AttachmentStrip>
 			) : null}
 			<div
 				ref={box}

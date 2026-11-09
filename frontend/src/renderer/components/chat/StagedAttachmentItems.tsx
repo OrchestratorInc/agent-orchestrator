@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -8,6 +9,24 @@ import { Pressable } from "../ui/pressable";
 import { ChatImage, ChatImageAttachmentRow, ChatImageDialog } from "./ChatImage";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, attachmentPreviewKind, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+
+/**
+ * The attachments above a user's bubble: one row, capped to the bubble's width,
+ * that scrolls sideways and fades out at an edge with more past it. Outside the
+ * bubble so a long message's fold can never clip them. Lists inside it use
+ * `contents`, so every kind of attachment shares the row. The single inner row
+ * is what the fade watches resize as images load.
+ */
+export function AttachmentStrip({ className, children }: { className?: string; children: ReactNode }) {
+	const scroller = useRef<HTMLDivElement>(null);
+	useEdgeFade(scroller, "x");
+	return (
+		// Padded out and pulled back so a tile's focus ring isn't clipped by the scroller.
+		<div ref={scroller} className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-contain p-0.5", className)}>
+			<div className="flex w-max items-start gap-2">{children}</div>
+		</div>
+	);
+}
 
 /** A file chip's words: the name, then its type and, when it is known, its size. */
 export function AttachmentFileText({ name, bytes, nameClassName }: { name: string; bytes?: number; nameClassName?: string }) {
