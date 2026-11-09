@@ -886,6 +886,12 @@ function ChatWorkspaceContent({
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
+	// The stopped-agent banner is showing for real (not part of a wake or a
+	// reconnect-in-progress). It is then the single source of truth for the
+	// dead controller: the live turn row must stop claiming liveness, or its
+	// spinner and elapsed timer keep counting next to the stopped banner.
+	const agentStopped = snapshot.controller.state === "stopped" &&
+		!(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting);
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -1930,7 +1936,7 @@ function ChatWorkspaceContent({
 						staleBinary={session?.staleBinary}
 						hostId={activeRemoteHostId}
 						// Only a resume starts a stopped agent, on the new release.
-						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
+						agentStopped={agentStopped}
 					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
@@ -1987,6 +1993,7 @@ function ChatWorkspaceContent({
 									// brief says the sandbox is still coming up until its worker connects.
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
+									turnLiveSuppressed={agentStopped}
 								/>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
@@ -2761,6 +2768,7 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	turnLiveSuppressed = false,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2806,6 +2814,8 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** The stopped-agent banner is showing; a durable running turn must not also claim liveness. */
+	turnLiveSuppressed?: boolean;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -4626,6 +4636,7 @@ export function Timeline({
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
+									turnLiveSuppressed={turnLiveSuppressed}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -4679,7 +4690,7 @@ export function Timeline({
 						<LiveResponseStatus startupLabel={rowStartup.label ?? t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
 							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
-					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
+					) : turn?.state === "running" && !turnLiveSuppressed && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : openingPending && !groups.some((group) => group.live) ? (
 						// Before the brief has a turn of its own (still being created).
@@ -4877,6 +4888,7 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation,
 	workerUpdates = false,
 	tight = false,
+	turnLiveSuppressed = false,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -4920,6 +4932,8 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
+	/** The stopped-agent banner is showing; this turn's live row must not claim liveness. */
+	turnLiveSuppressed?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
 	const { t } = useTranslation();
@@ -5082,7 +5096,7 @@ const TurnGroup = memo(function TurnGroup({
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
 	// from setup to work does not move anything.
 	const workingRow =
-		startup || group.live ? (
+		startup || (group.live && !turnLiveSuppressed) ? (
 			<LiveResponseStatus
 				startedAt={group.liveStartedAt}
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}

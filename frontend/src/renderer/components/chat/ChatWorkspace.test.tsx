@@ -2182,6 +2182,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	// The controller died mid-turn, so the durable turn is still "running" — but
+	// the stopped banner owns that state. One source of truth: the live row with
+	// its spinner and elapsed timer must go, or it would keep counting for hours
+	// next to a stopped controller.
+	it("never shows the stopped banner and the live turn spinner together", () => {
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items = snapshot.items.filter(
+			(item) =>
+				!(
+					item.kind === "activity" &&
+					item.activityKind === "approval" &&
+					item.status === "pending"
+				),
+		);
+		snapshot.controller = { state: "stopped" };
+		render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+	});
+
 	it("offers Restore, not Resume, on a terminated session", async () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();
