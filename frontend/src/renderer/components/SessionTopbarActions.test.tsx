@@ -359,6 +359,17 @@ describe("SessionTopbarActions without Developer Mode", () => {
 
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
 	});
+
+	it("closes the archive confirm on the first Escape", async () => {
+		const user = userEvent.setup();
+		renderTopbarSessions([worker, orchestrator], worker.id);
+
+		await user.click(screen.getByRole("button", { name: "Archive session" }));
+		await screen.findByRole("dialog");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
 });
 
 describe("SessionTopbarActions orchestrator actions", () => {
@@ -380,7 +391,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		renderTopbar(sessionWith({ kind }));
 
 		const runner = screen.getByRole("button", { name: "Run a cue" });
-		expect(runner.querySelector(".lucide-play")).not.toBeNull();
+		expect(runner.querySelector(".icon-play")).not.toBeNull();
 		expect(runner).toBeEnabled();
 		expect(screen.getByTestId("workspace-topbar-actions")).toContainElement(runner);
 	});

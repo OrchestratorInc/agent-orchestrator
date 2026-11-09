@@ -171,6 +171,13 @@ export function resetSessionPreviewWarmth() {
 
 export type SessionPreviewAnimation = "enter" | "none";
 
+// A portal stays a React child of the row (the archive confirm does), so its
+// focus and pointer events reach the row's handlers. Only the row's own DOM asks
+// for a preview; otherwise the confirm opens the card on top of itself.
+function isFromRow(event: FocusEvent | PointerEvent) {
+	return event.currentTarget.contains(event.target as Node);
+}
+
 /**
  * Open state for one row's hover preview. The row owns its pointer and focus
  * events through `triggerProps`, so leaving a row always cancels a pending
@@ -297,9 +304,15 @@ export function useSessionPreviewHover(suppressed: boolean) {
 				if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-session-preview-card]")) return;
 				hide();
 			},
-			onFocus: request,
+			// Focus moved here from another control previews the row. Focus from
+			// nowhere is the archive confirm handing it back on close: with the pointer
+			// elsewhere, nothing would ever close the card.
+			onFocus: (event: FocusEvent) => {
+				if (isFromRow(event) && event.relatedTarget) request();
+			},
 			onPointerEnter: (event: PointerEvent) => {
 				claimFromRadix(event);
+				if (!isFromRow(event)) return;
 				hoveredRow = event.currentTarget;
 				if (event.pointerType === "touch") return;
 				// Crossed on the way to another row's card: that card keeps the pointer.

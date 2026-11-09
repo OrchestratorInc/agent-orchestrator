@@ -7,6 +7,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const actions: ProjectOrchestratorAction = {
 	projectId: undefined,
+	hostId: undefined,
 	orchestrator: undefined,
 	isSpawning: false,
 	isProjectRestarting: false,

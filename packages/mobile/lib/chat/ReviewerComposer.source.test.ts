@@ -25,7 +25,8 @@ describe("reviewer attachment composer", () => {
 		expect(source).toContain("const makeStyles = composerStyleRules;");
 		expect(source).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(source).toContain("<MicKey");
-		expect(source).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
+		expect(source).toContain("style={[styles.input, listening && hiddenField]}");
+		expect(source).not.toContain("onContentSizeChange");
 	});
 
 	// The field is read-only while the reviewer is stopped, so dictating into it

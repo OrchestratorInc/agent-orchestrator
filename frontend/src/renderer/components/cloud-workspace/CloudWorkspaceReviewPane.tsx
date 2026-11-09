@@ -1,5 +1,5 @@
 import { useQueries } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorkspaceReview";

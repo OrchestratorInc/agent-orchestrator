@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Info, Loader2 } from "lucide-react";
+import { Info, Loader2 } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { ConversationContentSummary } from "../../types/conversation";
 import { cn } from "../../lib/utils";

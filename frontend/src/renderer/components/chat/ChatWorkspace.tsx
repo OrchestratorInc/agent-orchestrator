@@ -7,6 +7,7 @@ import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -41,7 +42,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
+import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -54,6 +55,7 @@ import {
 	useVirtualizer,
 	type Virtualizer,
 } from "@tanstack/react-virtual";
+import { isShownAORender } from "../../lib/mcp-tool";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
@@ -105,12 +107,15 @@ import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
+	sessionIsActive,
 	type SessionKind,
 	type WorkspaceSession,
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
+import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
+import { TabContextMenu, type TabMenuSpec } from "../TabContextMenu";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -266,7 +271,7 @@ export interface ChatRetryControl {
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
 type ShellTerminalTarget = Extract<TerminalTarget, { kind: "shell" }>;
-type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void };
+type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void; menu?: TabMenuSpec };
 type ChatAuxiliaryTab =
 	| { key: string; kind: "reviewer"; terminal: { handleId: string; harness: string } }
 	| { key: string; kind: "reviewer-chat"; terminal: { reviewId: string; harness: string } }
@@ -283,9 +288,11 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onSelect,
 	onClose,
 	onRename,
+	stripShellHandleIds,
 }: {
 	tabKey: string;
 	shell: ShellTerminal;
+	stripShellHandleIds: readonly string[];
 	isActive: boolean;
 	onSelect: (handleId: string) => void;
 	onClose: (handleId: string) => void;
@@ -300,6 +307,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onRename={onRename ? (title) => onRename(shell.handleId, title) : undefined}
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
+				stripShellHandleIds={stripShellHandleIds}
 			/>
 		</DraggableWorkspaceTab>
 	);
@@ -384,6 +392,8 @@ export interface ChatWorkspaceProps {
 	accountMoving?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
+	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
+	historyPending?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -469,6 +479,8 @@ export interface ChatWorkspaceProps {
 	 * stay available.
 	 */
 	composerLockedPlaceholder?: string;
+	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
+	savedCopy?: boolean;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -721,6 +733,7 @@ function ChatWorkspaceContent({
 	controllerTransitioning,
 	accountMoving = false,
 	loadingQuietly,
+	historyPending = false,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -772,6 +785,7 @@ function ChatWorkspaceContent({
 	agentSwitch,
 	composerNotice,
 	composerLockedPlaceholder,
+	savedCopy = false,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -867,9 +881,11 @@ function ChatWorkspaceContent({
 	if (snapshot.controller.state === "ready" || snapshot.controller.state === "busy") wakingFromHibernate.current = false;
 	if (snapshot.controller.state === "stopped" && !resumingAgent) wakingFromHibernate.current = false;
 	const suppressStopped = wakingFromHibernate.current && snapshot.controller.state === "stopped";
+	// A terminated session has no agent to resume: only a restore brings it back.
+	const terminated = Boolean(session && !sessionIsActive(session));
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
-	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent &&
+	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
@@ -980,6 +996,8 @@ function ChatWorkspaceContent({
 	// session temporarily becomes terminated and later returns.
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
+	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -990,8 +1008,8 @@ function ChatWorkspaceContent({
 				: []),
 			...(shellTerminals ?? []).map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableTabKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
@@ -1443,28 +1461,31 @@ function ChatWorkspaceContent({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
-				if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
+			!hideHeader ? aoBridge.app.onCloseShellTerminalShortcut(() => {
+				if (closeFocusedSplitPane) closeFocusedSplitPane();
+				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
-			}),
-		[activeWorkspaceTab, onCloseShellTerminal, shellTarget],
+			}) : undefined,
+		[activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget],
 	);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
 		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
 		};
-	}, [selectAdjacentTab]);
+	}, [hideHeader, selectAdjacentTab]);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
-			Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
+			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, onCloseShellTerminal, shellTarget]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget]);
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.
@@ -1662,14 +1683,14 @@ function ChatWorkspaceContent({
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
-	const arrivingInChat = Boolean(controllerTransitioning) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
-	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	const arrivingInChat = (Boolean(controllerTransitioning) || historyPending) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
+	const arrivingPlaceholder = historyPending || snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
-	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	const arrivingWithHistory = arrivingInChat && (historyPending || Boolean(session?.lastUserMessageAt));
 	// A chat started from the new chat page holds the start-up shimmer from the
 	// send until the agent picks the brief up, on that page and on the session's.
 	// Arriving from the new chat page, whose header strip is empty, the session's
@@ -1888,20 +1909,23 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
-						controller={snapshot.controller}
-						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
-						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
-						automaticWakePending={suppressStopped}
-						reconnecting={startupReconnecting}
-						onResume={newWorkDisabled ? undefined : onResumeAgent}
-						resuming={resumingAgent}
-						resumeError={resumeError}
-						onOpenShell={onOpenShell}
-						openingShell={openingShell}
-						shellError={shellError}
-					/>
+					{savedCopy ? null : (
+						<ControllerBanner
+							controller={snapshot.controller}
+							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
+							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+							transitioning={controllerTransitioning || agentResuming}
+							automaticWakePending={suppressStopped}
+							reconnecting={startupReconnecting}
+							terminated={terminated}
+							onResume={newWorkDisabled ? undefined : onResumeAgent}
+							resuming={resumingAgent}
+							resumeError={resumeError}
+							onOpenShell={onOpenShell}
+							openingShell={openingShell}
+							shellError={shellError}
+						/>
+					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner
 						staleBinary={session?.staleBinary}
@@ -1914,6 +1938,7 @@ function ChatWorkspaceContent({
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
+							sessionId={snapshot.sessionId}
 							onLinkOpen={onLinkOpen}
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}
@@ -1969,7 +1994,6 @@ function ChatWorkspaceContent({
 						</ChatLinkProvider>
 
 						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
-							<div aria-hidden="true" className="chat-composer-fade" />
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2074,7 +2098,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
@@ -2087,6 +2111,8 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
+												: terminated && snapshot.controller.state === "stopped"
+												? t(resumingAgent ? "shell.restoringSession" : "chat.archived.placeholder")
 												: agentResuming
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
@@ -2267,6 +2293,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     it would just be the same list twice.
  *   - a plan row the daemon marked superseded: an older copy of a list the agent
  *     keeps across turns, which a later turn or run carries.
+ *   - a completed html_render call. AO records the page it showed as a render row
+ *     right after it, and the call's own answer is a note to the agent.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2286,6 +2314,8 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
+		// The page an html_render call shows is its own row right after it.
+		if (isShownAORender(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -2380,8 +2410,6 @@ function ChatHeader({
 	const {
 		scrollRef: tabsOverflowRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade,
-		showRightFade,
 	} = useTabScrollEdges([tabScrollWatch]);
 	const previousTabCountRef = useRef(orderedAuxiliaryTabs.length);
 	useEffect(() => {
@@ -2391,6 +2419,10 @@ function ChatHeader({
 	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
 	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
 	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
+	const stripShellHandleIds = useMemo(
+		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal.handleId] : [])),
+		[orderedAuxiliaryTabs],
+	);
 	// The chat tab is "selected" only when neither terminal pane is the body.
 	const timelineActive = !workspaceActiveTabKey && !reviewerActive && !shellActiveHandleId;
 	// Match CenterPane: when the sidebar is off-canvas, the fixed TitlebarNav
@@ -2420,12 +2452,12 @@ function ChatHeader({
 						role="tablist"
 					>
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
+							<motion.div ref={tabsOverflowRef} className="edge-fade edge-fade-x scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
 								{/* The macOS header is a window drag region outside its controls; the
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
-								<div className="flex shrink-0 self-stretch">
+								<SessionTabSlot>
 									{session ? (
 										<SessionPaneTab
 											isActive={timelineActive}
@@ -2445,7 +2477,7 @@ function ChatHeader({
 											title={label}
 										/>
 									)}
-								</div>
+								</SessionTabSlot>
 								<Reorder.Group
 									as="div"
 									axis="x"
@@ -2461,6 +2493,7 @@ function ChatHeader({
 											onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
 											onSelect={selectShellTerminal}
 											shell={tab.terminal}
+											stripShellHandleIds={stripShellHandleIds}
 											tabKey={tab.key}
 										/>
 									) : (
@@ -2471,10 +2504,16 @@ function ChatHeader({
 													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
 													label={t("terminal.reviewer")}
 													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
+													tabKey={tab.key}
+													tabMenu
 													title={tab.terminal.harness}
 												/>
 											) : (
-												tab.tab.content
+												tab.tab.menu ? (
+													<TabContextMenu spec={{ ...tab.tab.menu, closeShortcut: tab.key === workspaceActiveTabKey }}>
+														{tab.tab.content}
+													</TabContextMenu>
+												) : tab.tab.content
 											)}
 										</DraggableWorkspaceTab>
 									))}
@@ -2482,8 +2521,6 @@ function ChatHeader({
 								{workspaceTabActions}
 								</div>
 							</motion.div>
-							{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 						</div>
 					</div>
 			}
@@ -2502,6 +2539,7 @@ function ControllerBanner({
 	transitioning,
 	automaticWakePending,
 	reconnecting,
+	terminated = false,
 	onResume,
 	resuming,
 	resumeError,
@@ -2518,6 +2556,8 @@ function ControllerBanner({
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
 	reconnecting?: boolean;
+	/** The session is archived, so `onResume` restores it instead of resuming its agent. */
+	terminated?: boolean;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -2525,6 +2565,7 @@ function ControllerBanner({
 	openingShell?: boolean;
 	shellError?: string;
 }) {
+	const { t } = useTranslation();
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
@@ -2552,8 +2593,14 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : "The agent controller stopped",
-			tone: waking || restarting ? "text-muted-foreground" : "text-destructive",
+			title: terminated
+				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
+				: waking
+					? "Waking agent…"
+					: restarting
+						? "Reconnecting to the agent…"
+						: "The agent controller stopped",
+			tone: terminated || waking || restarting ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2563,7 +2610,7 @@ function ControllerBanner({
 
 	return (
 		<div
-			role={actionable ? "alert" : "status"}
+			role={actionable && !terminated ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
 		>
@@ -2572,12 +2619,14 @@ function ControllerBanner({
 					aria-hidden="true"
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
 				/>
+			) : terminated ? (
+				<Archive aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			) : (
 				<TriangleAlert aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.state === "stopped" && waking ? (
+				{controller.state === "stopped" && waking && !terminated ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
 				) : restarting ? (
 					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
@@ -2587,7 +2636,7 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							History is kept. Resume the agent or open a shell in the same worktree.
+							{terminated ? t("chat.archived.body") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{resumeError || shellError ? (
 							<span className="text-xs leading-snug text-destructive">
@@ -2603,10 +2652,11 @@ function ControllerBanner({
 									onClick={resumeClick}
 									disabled={resuming}
 								>
-									{resuming ? "Resuming…" : "Resume agent"}
+									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : "Resume agent"}
 								</Button>
 							) : null}
-							{onOpenShell ? (
+							{/* Once the worktree is gone a shell would open in the project root. */}
+							{onOpenShell && !terminated ? (
 								<Button
 									type="button"
 									size="sm"
@@ -2765,6 +2815,9 @@ export function Timeline({
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
+	// The transcript fades out under the top bar once it is scrolled, and above
+	// the composer while there is more below.
+	useEdgeFade(scroller);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -4505,7 +4558,7 @@ export function Timeline({
 				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
-				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
+				className="chat-scroll-viewport cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
@@ -5746,9 +5799,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? `${item.turnId}-${item.sequence}` : itemKey(item),
+			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
 			turnId: item.turnId,
-			anchor: item.sequence,
+			// A turn that began above the loaded history sorts where it began.
+			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
 		groupForTurn.set(item.turnId, group);

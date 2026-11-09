@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useReducedMotion } from "motion/react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/app-icons";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 

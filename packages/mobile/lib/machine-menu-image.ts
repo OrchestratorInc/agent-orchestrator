@@ -1,16 +1,7 @@
-import type { SFSymbol } from "sf-symbols-typescript";
-import type { MachineSymbol } from "./machineAppearance";
+import { machineSymbolNames, type MachineSymbol } from "./machineAppearance";
+import { symbols, type IOSSymbol } from "./symbols";
 
-const symbols: Record<MachineSymbol, SFSymbol> = {
-	server: "server.rack",
-	cloud: "cloud",
-	linux: "terminal",
-	desktop: "desktopcomputer",
-	laptop: "laptopcomputer",
-	"mac-mini": "macmini",
-	"mac-studio": "macstudio",
-};
-
-export function machineMenuImage(symbol: MachineSymbol): SFSymbol {
-	return symbols[symbol];
+/** A machine's SF Symbol, for a native menu action's image. */
+export function machineMenuImage(symbol: MachineSymbol): IOSSymbol {
+	return symbols[machineSymbolNames[symbol]].ios;
 }

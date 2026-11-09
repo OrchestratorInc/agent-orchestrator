@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle } from "lucide-react";
+import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";

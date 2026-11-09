@@ -5,6 +5,8 @@ import type { MessageKey } from "./messages";
 export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"new-session": "shortcut.new-session",
 	"new-shell-terminal": "shortcut.new-shell-terminal",
+	"split-shell-terminal": "shortcut.split-shell-terminal",
+	"split-shell-terminal-down": "shortcut.split-shell-terminal-down",
 	"close-shell-terminal": "shortcut.close-shell-terminal",
 	"reopen-closed-tab": "shortcut.reopen-closed-tab",
 	"keyboard-shortcuts": "shortcut.keyboard-shortcuts",

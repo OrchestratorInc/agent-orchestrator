@@ -50,7 +50,7 @@ export function UnpairedState() {
 		<EmptyState
 			icon="monitor-smartphone"
 			title="No machine paired"
-			action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
+			action={<Button title="Scan pairing code" icon="qrScanner" onPress={() => router.push("/pair")} />}
 		/>
 	);
 }

@@ -1,3 +1,4 @@
+import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
@@ -265,6 +266,7 @@ type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 class DaemonNotReadyError extends Error {
 	constructor() {
 		super("AO daemon API is not ready");
+		markApiError(this);
 	}
 }
 
@@ -842,33 +844,44 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 	});
 }
 
-export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) {
+export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
+	/** Saved hosts whose last lists show while they connect or are offline; only connected hosts are read. */
+	cachedHostIds?: string[];
+} = {}) {
 	const connected = useConnectedHosts();
+	const cachedHostIds = options.cachedHostIds;
+	const hostIds = useMemo(
+		() => cachedHostIds?.length ? [...new Set([...connected, ...cachedHostIds])] : connected,
+		[cachedHostIds, connected],
+	);
 	const projects = useQueries({
-		queries: connected.map((hostId) => ({
+		queries: hostIds.map((hostId) => ({
 			queryKey: remoteProjectsQueryKey(hostId),
 			queryFn: () => fetchRemoteProjects(hostId),
+			enabled: connected.includes(hostId),
 			retry: 1,
 			refetchInterval: 15_000,
 			subscribed: options.subscribed,
 		})),
 	});
 	const sessions = useQueries({
-		queries: connected.map((hostId) => ({
+		queries: hostIds.map((hostId) => ({
 			queryKey: remoteSessionsQueryKey(hostId),
 			queryFn: () => fetchRemoteSessions(hostId),
+			enabled: connected.includes(hostId),
 			retry: 1,
 			refetchInterval: 15_000,
 			subscribed: options.subscribed,
 		})),
 	});
+	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
 	return {
-		data: connected.flatMap((hostId, index) => projects[index]?.data
+		data: hostIds.flatMap((hostId, index) => projects[index]?.data
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? [])
 			: []),
-		loadedProjectHostIds: connected.filter((_, index) => projects[index]?.data !== undefined),
-		loadedSessionHostIds: connected.filter((_, index) => sessions[index]?.data !== undefined),
-		failedHostIds: connected.filter((_, index) => projects[index]?.isError || sessions[index]?.isError),
+		loadedProjectHostIds: live((index) => projects[index]?.data !== undefined),
+		loadedSessionHostIds: live((index) => sessions[index]?.data !== undefined),
+		failedHostIds: live((index) => Boolean(projects[index]?.isError || sessions[index]?.isError)),
 		refetch: () => Promise.all([...projects, ...sessions].map((query) => query.refetch())),
 	};
 }
@@ -991,6 +1004,14 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 		queryFn: () => fetchRemoteWorkspaces(hostId ?? ""),
 		select: selectRemoteSession,
 		enabled: Boolean(hostId && sessionId),
+		// The sidebar's lists (read, or kept from the last visit) show the session at
+		// once, also while the host is offline; the read then replaces them.
+		initialData: () => {
+			const projects = queryClient.getQueryData<Awaited<ReturnType<typeof fetchRemoteProjects>>>(remoteProjectsQueryKey(hostId ?? ""));
+			const sessions = queryClient.getQueryData<Awaited<ReturnType<typeof fetchRemoteSessions>>>(remoteSessionsQueryKey(hostId ?? ""));
+			return hostId && projects && sessions ? toRemoteWorkspaces(hostId, projects, sessions) : undefined;
+		},
+		initialDataUpdatedAt: () => queryClient.getQueryState(remoteSessionsQueryKey(hostId ?? ""))?.dataUpdatedAt,
 	});
 	const selectLocalSession = useMemo(
 		() => (workspaces: WorkspaceSummary[]) =>

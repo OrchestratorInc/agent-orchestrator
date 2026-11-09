@@ -459,10 +459,10 @@ describe("TeamsSection", () => {
 		await userEvent.click(await screen.findByText("Platform"));
 		const row = await shareRow("Fix checkout");
 		await userEvent.click(within(row).getByRole("button", { name: /Change access/ }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change access.");
 		// Back to what it was.
-		expect(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ })).toHaveTextContent("Write to the agent");
+		expect(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can write");
 
 		await userEvent.click(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Stop sharing with Platform" }));

@@ -33,11 +33,11 @@ for (const theme of ["dark", "light"]) {
 			await page.setViewportSize({ width: 1100, height: 850 });
 			await page.goto(`/e2e/chat-contrast/harness.html?theme=${theme}&transparency=${transparency}`);
 			const cases: [string, string, string | null][] = [
-				["Send and selected text", "Send message", "lucide-arrow-up"],
-				["Stop", "Stop turn", "lucide-square"],
-				["Continue", "Continue turn", "lucide-play"],
-				["Side-chat send", "Send message", "lucide-arrow-up"],
-				["Side-chat stop", "Stop turn", "lucide-square"],
+				["Send and selected text", "Send message", "icon-arrow-up"],
+				["Stop", "Stop turn", "icon-square"],
+				["Continue", "Continue turn", "icon-play"],
+				["Side-chat send", "Send message", "icon-arrow-up"],
+				["Side-chat stop", "Stop turn", "icon-square"],
 				["Message-edit send", "Send edited message", null],
 			];
 			for (const [section, label, icon] of cases) {

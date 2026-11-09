@@ -1,7 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import type { AgentReadinessSnapshot } from "./useAgentReadinessQuery";
 import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
 
@@ -29,7 +30,7 @@ export function followsSavedAccount(agent: AgentReadinessSnapshot | undefined): 
 }
 
 function unwrap<T>({ data, error }: { data?: T; error?: unknown }): T {
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as T;
 }
 
@@ -98,7 +99,7 @@ export function useAgentAccountActions() {
 		},
 		cancelLogin: async (operationId: string) => {
 			const { error } = await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		makeDefault: async (accountId: string) =>
 			setAccounts(unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } })).accounts),
