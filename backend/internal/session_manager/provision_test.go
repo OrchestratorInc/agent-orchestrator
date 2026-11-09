@@ -1016,6 +1016,7 @@ func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, st, _, _ := newManager()
+			m.dataDir = t.TempDir()
 			project := st.projects["mer"]
 			project.Config.PostCreate = []string{"# ao-timeout: 90m\ntrue"}
 			st.projects["mer"] = project

@@ -504,6 +504,11 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	}
 	m.cleanupSystemPromptDir(id)
 	m.cleanupAttachments(ctx, id)
+	if marker := m.workspaceSetupMarker(id); marker != "" {
+		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.logger.Warn("remove workspace Setup state", "sessionID", id, "error", err)
+		}
+	}
 	return nil
 }
 

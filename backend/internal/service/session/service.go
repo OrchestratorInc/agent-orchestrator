@@ -970,11 +970,19 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 	return ExitAgentOutcome{Session: session}, nil
 }
 
-// ResumeAgent relaunches an exited agent without restoring a terminated
-// session or recreating its workspace.
+// ResumeAgent relaunches an exited agent in its existing session, recovering
+// its workspace first if needed.
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
+		var setupErr *sessionmanager.SetupStepError
+		switch {
+		case errors.As(err, &setupErr):
+			return ResumeAgentOutcome{}, apierr.Conflict("WORKSPACE_PROVISION_FAILED", setupErr.PublicMessage(), nil)
+		case errors.Is(err, sessionmanager.ErrWorkspaceProvision):
+			return ResumeAgentOutcome{}, apierr.Conflict("WORKSPACE_PROVISION_FAILED",
+				"AO could not link the project's shared files into the workspace. Check the project's symlink settings and try again.", nil)
+		}
 		apiErr := toAPIError(err)
 		s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 		return ResumeAgentOutcome{}, apiErr

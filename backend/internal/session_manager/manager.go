@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -3559,6 +3560,11 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
+	if restored, ok, err := m.prepareResumeWorkspace(ctx, project, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: workspace: %w", operation, rec.ID, err)
+	} else if ok {
+		ws.Path, ws.Branch = restored.Path, restored.Branch
+	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
 		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 	}
@@ -4652,6 +4658,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
+		pendingSetup, err := m.prepareRestoredWorkspaceSetup(project, rec.ID, recreated)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 			ProjectID:     rec.ProjectID,
 			SessionID:     rec.ID,
@@ -4665,15 +4675,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
-		if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
-			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
-		}
-		if recreated {
-			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
-				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
-			}
-		}
-		return ws, nil
+		return m.finishRestoredWorkspace(ctx, project, rec.ID, ws, pendingSetup)
 	}
 	rows, err := m.workspaceProjectRestoreRows(ctx, project, rec)
 	if err != nil {
@@ -4687,6 +4689,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		recreated = recreated || missing
 	}
+	pendingSetup, err := m.prepareRestoredWorkspaceSetup(project, rec.ID, recreated)
+	if err != nil {
+		return ports.WorkspaceInfo{}, err
+	}
 	root, err := m.restoreWorkspaceProjectRows(ctx, rows)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -4696,26 +4702,93 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("mark repo %s active: %w", row.RepoName, err)
 		}
 	}
-	ws := workspaceInfoFromRepoInfo(root)
-	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
+	return m.finishRestoredWorkspace(ctx, project, rec.ID, workspaceInfoFromRepoInfo(root), pendingSetup)
+}
+
+func (m *Manager) workspaceSetupMarker(id domain.SessionID) string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "workspace-setup-pending", string(id))
+}
+
+func (m *Manager) workspaceSetupPending(id domain.SessionID) (bool, error) {
+	marker := m.workspaceSetupMarker(id)
+	if marker == "" {
+		return false, nil
+	}
+	_, err := os.Stat(marker)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		// A missing or non-directory path component cannot contain a marker.
+		return false, nil
+	default:
+		return false, fmt.Errorf("read workspace Setup state: %w", err)
+	}
+}
+
+// Record the obligation before the adapter can put a checkout on disk. Keep
+// the marker outside the worktree so it survives a failed Setup and a restart.
+func (m *Manager) prepareRestoredWorkspaceSetup(project domain.ProjectRecord, id domain.SessionID, recreated bool) (bool, error) {
+	if !recreated || (len(project.Config.PostCreate) == 0 && len(project.Config.Symlinks) == 0) {
+		return m.workspaceSetupPending(id)
+	}
+	marker := m.workspaceSetupMarker(id)
+	if marker == "" {
+		return false, errors.New("cannot record workspace Setup state without an AO data directory")
+	}
+	if err := os.MkdirAll(marker, 0o700); err != nil {
+		return false, fmt.Errorf("record workspace Setup state: %w", err)
+	}
+	return true, nil
+}
+
+func (m *Manager) finishRestoredWorkspace(ctx context.Context, project domain.ProjectRecord, id domain.SessionID, ws ports.WorkspaceInfo, pendingSetup bool) (ports.WorkspaceInfo, error) {
+	if err := m.restoreAttachments(ctx, id, ws); err != nil {
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
-	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
-			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
+	if pendingSetup {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, SetupBudget(project))
+		defer cancel()
+		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("setup restored workspace: %w: %w", ErrWorkspaceProvision, err)
+		}
+		if err := os.Remove(m.workspaceSetupMarker(id)); err != nil {
+			return ports.WorkspaceInfo{}, fmt.Errorf("clear workspace Setup state: %w", err)
 		}
 	}
 	return ws, nil
 }
 
-// provisionRecreatedWorkspace runs the project's Setup for a restore whose
-// worktree was reclaimed. Only such a restore runs Setup, so only it extends
-// a REST restore's budget, from now, by the Setup steps' limits; any other
-// restore keeps the request's ordinary budget.
-func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
-	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
-	defer cancel()
-	return m.provisionWorkspace(ctx, project, workspacePath)
+// prepareResumeWorkspace recovers a missing checkout or retries its pending
+// Setup before relaunch. Scratch sessions and ready worktrees need no restore.
+func (m *Manager) prepareResumeWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord) (ports.WorkspaceInfo, bool, error) {
+	if projectKindForSession(project, rec.ProjectID) == domain.ProjectKindScratch {
+		return ports.WorkspaceInfo{}, false, nil
+	}
+	missing, err := workspacePathMissing(rec.Metadata.WorkspacePath)
+	if err != nil {
+		return ports.WorkspaceInfo{}, false, err
+	}
+	if !missing {
+		pending, err := m.workspaceSetupPending(rec.ID)
+		if err != nil || !pending {
+			return ports.WorkspaceInfo{}, false, err
+		}
+	}
+	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
+	defer releaseWorkspaceGate()
+	ws, err := m.restoreSessionWorkspace(ctx, project, rec)
+	if err != nil {
+		return ports.WorkspaceInfo{}, false, err
+	}
+	if ws.Path == "" {
+		return ports.WorkspaceInfo{}, false, errors.New("restored workspace has no path")
+	}
+	m.logger.Info("resume: workspace ready", "sessionID", rec.ID, "path", ws.Path)
+	return ws, true, nil
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -6743,15 +6816,35 @@ type SetupStepError struct {
 }
 
 func (e *SetupStepError) Error() string {
-	cause := fmt.Sprintf("failed at step %d (%v)", e.Step, e.Err)
-	if e.TimedOut {
-		cause = fmt.Sprintf("stopped at step %d after %s", e.Step, stepMinutes(e.Timeout))
-	}
-	message := "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
+	message := e.message(fmt.Sprint(e.Err))
 	if e.Output != "" {
 		message += " Output: " + e.Output
 	}
 	return message
+}
+
+// PublicMessage describes the failed step without including command output,
+// arguments, or local paths that may be present in the underlying error.
+func (e *SetupStepError) PublicMessage() string {
+	var exitErr *exec.ExitError
+	switch {
+	case errors.Is(e.Err, context.Canceled):
+		return e.message("command canceled")
+	case errors.Is(e.Err, context.DeadlineExceeded):
+		return e.message("command timed out")
+	case errors.As(e.Err, &exitErr) && exitErr.ExitCode() >= 0:
+		return e.message(fmt.Sprintf("exit status %d", exitErr.ExitCode()))
+	default:
+		return e.message("command did not complete successfully")
+	}
+}
+
+func (e *SetupStepError) message(failure string) string {
+	cause := fmt.Sprintf("failed at step %d (%s)", e.Step, failure)
+	if e.TimedOut {
+		cause = fmt.Sprintf("stopped at step %d after %s", e.Step, stepMinutes(e.Timeout))
+	}
+	return "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
 }
 
 func (e *SetupStepError) Unwrap() error { return e.Err }

@@ -3,10 +3,14 @@ package httpd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,9 +18,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 func remainingRequestBudget(ctx context.Context) time.Duration {
@@ -288,6 +295,63 @@ func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	}
 }
 
+type resumeSetupProbe struct {
+	controllers.SessionService
+	ready bool
+}
+
+func (s *resumeSetupProbe) ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error) {
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 2*time.Minute)
+	defer cancel()
+	select {
+	case <-time.After(75 * time.Second):
+		s.ready = true
+		return sessionsvc.ResumeAgentOutcome{Session: domain.Session{ID: id}}, nil
+	case <-ctx.Done():
+		return sessionsvc.ResumeAgentOutcome{}, ctx.Err()
+	}
+}
+
+func TestResumeAgentRouteAllowsSetupBeyondDefaultTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc := &resumeSetupProbe{}
+		router := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/resume-agent", nil))
+		if response.Code != http.StatusOK || !svc.ready {
+			t.Fatalf("resume status = %d, setup completed = %v; body=%s", response.Code, svc.ready, response.Body)
+		}
+	})
+}
+
+type resumeSetupErrorManager struct {
+	*sessionmanager.Manager
+}
+
+func (resumeSetupErrorManager) ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error) {
+	return sessionmanager.RestoreResult{}, fmt.Errorf("resume: workspace: %w", &sessionmanager.SetupStepError{
+		Step: 2, Err: errors.New("private-command-argument"), Output: "private-script-output",
+	})
+}
+
+func TestResumeAgentRouteReportsSetupFailure(t *testing.T) {
+	svc := sessionsvc.NewWithDeps(sessionsvc.Deps{Manager: resumeSetupErrorManager{}})
+	router := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/resume-agent", nil))
+	var body envelope.APIError
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusConflict || body.Code != "WORKSPACE_PROVISION_FAILED" ||
+		!strings.Contains(body.Message, "Setup script failed at step 2") {
+		t.Fatalf("resume status = %d; body=%s", response.Code, response.Body)
+	}
+	if strings.Contains(response.Body.String(), "private-") {
+		t.Fatalf("resume exposed raw Setup diagnostics: %s", response.Body)
+	}
+}
+
 func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router := chi.NewRouter()
 	seen := map[string]bool{}
@@ -295,12 +359,13 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router.Post("/api/v1/sessions", record)
 	router.Post("/api/v1/orchestrators", record)
 	router.Post("/api/v1/sessions/{sessionId}/restore", record)
+	router.Post("/api/v1/sessions/{sessionId}/resume-agent", record)
 	router.Post("/api/v1/sessions/{sessionId}/send", record)
 	router.Get("/api/v1/sessions", record)
-	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
 	}
-	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
 	for call, setup := range want {
 		if seen[call] != setup {
 			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)

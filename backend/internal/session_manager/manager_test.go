@@ -2377,7 +2377,8 @@ func newExitedResumeManager(t *testing.T, runtime runtimeController, agent ports
 		Harness:   domain.HarnessCodex,
 		Activity:  domain.Activity{State: domain.ActivityExited},
 		Metadata: domain.SessionMetadata{
-			WorkspacePath:   "/ws/mer-1",
+			// A real directory: resume leaves a present workspace untouched.
+			WorkspacePath:   t.TempDir(),
 			Branch:          "ao/mer-1",
 			RuntimeHandleID: "tmux-mer-1",
 			RuntimeLaunchID: "launch-old",
@@ -2509,6 +2510,146 @@ func TestResumeAgent_RestartFailureLeavesSessionExited(t *testing.T) {
 	}
 	if !reflect.DeepEqual(lcm.cancelled, []string{"mer-1:launch-new"}) {
 		t.Fatalf("failed launch cleanup = %v, want waiting hooks released", lcm.cancelled)
+	}
+}
+
+func TestResumeAgent_RecreatesMissingWorkspaceBeforeRelaunch(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, st, ws := newExitedResumeManager(t, runtime, agent)
+	missing := filepath.Join(t.TempDir(), "removed", "mer-1")
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath = missing
+	st.sessions["mer-1"] = rec
+	ws.path = missing
+	runtime.onRestart = func() {
+		if len(ws.restoreConfigs) != 1 {
+			t.Fatalf("agent relaunched before the missing workspace was re-created: restores=%d", len(ws.restoreConfigs))
+		}
+	}
+
+	if _, err := m.ResumeAgentWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.restoreConfigs) != 1 {
+		t.Fatalf("restores = %d, want 1", len(ws.restoreConfigs))
+	}
+	cfg := ws.restoreConfigs[0]
+	if cfg.SessionID != "mer-1" || cfg.ProjectID != "mer" || cfg.Branch != "ao/mer-1" || cfg.Path != missing {
+		t.Fatalf("restore config = %+v, want the session's own branch and path", cfg)
+	}
+	if runtime.restarted != 1 {
+		t.Fatalf("restart = %d, want 1 after the workspace was re-created", runtime.restarted)
+	}
+	if got := st.sessions["mer-1"]; got.IsTerminated || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("resumed session = %+v, want live idle", got)
+	}
+}
+
+func TestResumeAgent_MissingWorkspaceRecreateFailureRefusesRelaunch(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, st, ws := newExitedResumeManager(t, runtime, agent)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath = filepath.Join(t.TempDir(), "removed", "mer-1")
+	st.sessions["mer-1"] = rec
+	ws.createErr = errors.New("worktree add failed")
+
+	_, err := m.ResumeAgentWithMode(ctx, "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "worktree add failed") {
+		t.Fatalf("resume error = %v, want the workspace re-create failure", err)
+	}
+	if runtime.restarted != 0 || baseRuntime.created != 0 {
+		t.Fatalf("agent relaunched without a workspace: restarted=%d created=%d", runtime.restarted, baseRuntime.created)
+	}
+	got := st.sessions["mer-1"]
+	if got.IsTerminated || got.Activity.State != domain.ActivityExited || got.Metadata.RuntimeLaunchID != "launch-old" {
+		t.Fatalf("failed resume changed session: %+v", got)
+	}
+}
+
+func TestResumeAgent_RetriesFailedSetupInExistingWorktree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Setup fixture uses POSIX shell syntax")
+	}
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	rt := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, st, _ := newExitedResumeManager(t, rt, agent)
+	repo := newManagerGitRepo(t)
+	managed := t.TempDir()
+	adapter, err := gitworktree.New(gitworktree.Options{
+		ManagedRoot: managed, RepoResolver: gitworktree.StaticRepoResolver{"mer": repo},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	project := st.projects["mer"]
+	project.Path = repo
+	project.Config.DefaultBranch = "main"
+	project.Config.PostCreate = []string{"echo setup >> setup-runs; test -f permit-setup"}
+	st.projects["mer"] = project
+	rec := st.sessions["mer-1"]
+	workspace := filepath.Join(managed, "mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	runManagerGit(t, repo, "branch", rec.Metadata.Branch)
+
+	resume := func() error {
+		_, err := m.ResumeAgentWithMode(ctx, rec.ID)
+		return err
+	}
+	requireSetupFailure := func() {
+		t.Helper()
+		var stepErr *SetupStepError
+		if err := resume(); !errors.As(err, &stepErr) {
+			t.Fatalf("resume error = %v, want Setup failure", err)
+		}
+		if rt.restarted != 0 || baseRuntime.created != 0 || st.sessions[rec.ID].Activity.State != domain.ActivityExited {
+			t.Fatalf("failed Setup launched the runtime or changed the exited session")
+		}
+	}
+	requireSetupFailure()
+
+	// Setup and the operator can leave changes in the worktree between attempts.
+	const dirty = "uncommitted user edit"
+	readme := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(readme, []byte(dirty), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Retry after a daemon restart with the same session store and data dir.
+	m = New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: adapter, Store: st,
+		Messenger: m.messenger, Lifecycle: m.lcm, DataDir: m.dataDir,
+		LookPath: m.lookPath, Executable: m.executable, NewLaunchID: m.newLaunchID,
+	})
+	requireSetupFailure()
+	if err := os.WriteFile(filepath.Join(workspace, "permit-setup"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt.onRestart = func() {
+		got, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+		if err != nil || string(got) != "setup\nsetup\nsetup\n" {
+			t.Fatalf("Setup runs at launch = %q, err=%v, want three attempts", got, err)
+		}
+		got, err = os.ReadFile(readme)
+		if err != nil || string(got) != dirty {
+			t.Fatalf("dirty tracked file = %q, err=%v, want %q", got, err, dirty)
+		}
+	}
+	if err := resume(); err != nil {
+		t.Fatal(err)
+	}
+	// A later resume of the same checkout must not run Setup again.
+	st.sessions[rec.ID] = rec
+	if err := resume(); err != nil {
+		t.Fatal(err)
+	}
+	if rt.restarted != 2 {
+		t.Fatalf("runtime restarted %d times, want 2", rt.restarted)
 	}
 }
 
@@ -4845,6 +4986,7 @@ func TestRestore_ScratchAllowsEmptyBranch(t *testing.T) {
 
 func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
 	m, _, _, _ := newManager()
+	m.dataDir = t.TempDir()
 	managed := filepath.Join(t.TempDir(), "workspaces")
 	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
 	if err != nil {
