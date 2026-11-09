@@ -443,3 +443,14 @@ jobs:
 
       - name: Run renderer smoke suite
         run: CI=true npm run test:e2e:renderer -- --shard=${{ matrix.shard }}/2
+
+      # Screenshots and attachments from failed specs, so a flaky pixel check
+      # can be inspected instead of only re-run.
+      - name: Upload renderer smoke results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-smoke-results-${{ matrix.shard }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { expect, test, type Locator } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
@@ -17,6 +18,22 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
+// A screenshot taken while the surface is still settling (the archive mounts
+// its cards a frame after it opens and tracks its height with a
+// ResizeObserver) can differ from the next one for reasons unrelated to what is
+// underneath. Wait until two consecutive captures match, as toHaveScreenshot
+// does, so the comparison below only sees what the hidden content changes.
+async function settledScreenshot(target: Locator): Promise<Buffer> {
+	let previous = await target.screenshot({ animations: "disabled" });
+	for (let attempt = 0; attempt < 20; attempt++) {
+		await target.page().waitForTimeout(100);
+		const next = await target.screenshot({ animations: "disabled" });
+		if (next.equals(previous)) return next;
+		previous = next;
+	}
+	throw new Error("surface never settled: consecutive screenshots kept changing");
+}
+
 async function expectOccludes(surface: Locator, underneath: Locator) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
@@ -26,11 +43,19 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 	}));
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
-	const before = await surface.screenshot({ animations: "disabled" });
+	const before = await settledScreenshot(surface);
 	await underneath.evaluateAll((elements) => {
 		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
 	});
-	const after = await surface.screenshot({ animations: "disabled" });
+	const after = await settledScreenshot(surface);
+	if (!before.equals(after)) {
+		// Keep both captures in test-results, which CI uploads on failure.
+		for (const [name, image] of [["surface-with-content-underneath", before], ["surface-with-content-hidden", after]] as const) {
+			const path = test.info().outputPath(`${name}.png`);
+			await writeFile(path, image);
+			await test.info().attach(name, { path, contentType: "image/png" });
+		}
+	}
 	expect(before.equals(after), "content underneath must not affect the surface's pixels").toBe(true);
 	await underneath.evaluateAll((elements) => {
 		for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
