@@ -17427,6 +17427,10 @@ components:
         afterSequence:
           format: int64
           type: integer
+        batchedDeliveries:
+          items:
+            $ref: '#/components/schemas/DomainConversationBatchedDelivery'
+          type: array
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
