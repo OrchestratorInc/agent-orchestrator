@@ -460,6 +460,13 @@ const desktopQuit = createDesktopQuitController({
 	},
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
+	// An outside quit (Homebrew, osascript, the Dock, SIGTERM) exits the app but
+	// keeps agents, like an update restart: nothing asked to stop them.
+	externalQuitStarted: () => { preserveAgentsOnQuit = true; },
+	exit: () => {
+		console.warn("AO: quit cleanup exceeded the outside-quit deadline; exiting");
+		app.exit(0);
+	},
 });
 // macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
 // there is nowhere to show the dialog, so the shortcut quits directly.
@@ -478,7 +485,7 @@ const quitConfirm = createQuitConfirmController({
 		};
 		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
-	quit: () => app.quit(),
+	quit: () => desktopQuit.backgroundQuit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -3222,7 +3229,7 @@ ipcMain.handle("menu:action", (event, action: string) => {
 		case "window.close":
 			return win.close();
 		case "app.quit":
-			return app.quit();
+			return desktopQuit.backgroundQuit();
 		case "help.shortcuts":
 			shell?.focus();
 			return shell?.send(KEYBOARD_SHORTCUTS_HELP_CHANNEL);
@@ -4287,8 +4294,9 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
-// Full exit drops the supervisor socket, stopping the app-owned daemon after
+// AO's own macOS Quit (menu, ⌘Q) closes the window and leaves the Dock; the
+// tray stays. A quit from outside (Apple Event from Homebrew/osascript/the Dock,
+// logout, SIGTERM) exits within a few seconds and keeps agents. Full exit drops the supervisor socket, stopping the app-owned daemon after
 // its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
