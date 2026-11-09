@@ -190,6 +190,62 @@ function collapseWhitespace(text) {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Learn the model's real context window during a fresh session's first turn.
+ *
+ * claude-agent-acp 0.70 starts a session at a 200k default unless the model id
+ * or label carries a "1m" token, and learns the real window only from the
+ * turn's result. A worker that does its whole task in one turn streams
+ * `size: 200000` throughout, so a 1M model such as claude-fable-5-1 reads as
+ * full at 200k (issue #8005). The SDK services getContextUsage once a turn is
+ * running, so ask it at the turn's first assistant message, once per model,
+ * without holding the stream. The next usage_update carries the window.
+ */
+export function patchClaudeContextWindowProbe(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes("// AO: ask the SDK for the model's real window.")) return false;
+	const original = [
+		"const inferred = inferContextWindowFromModel(model);",
+		"                                        if (inferred !== null) {",
+		"                                            session.contextWindowSize = inferred;",
+		"                                        }",
+	].join("\n");
+	const at = source.indexOf(original);
+	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {")) {
+		throw new Error("claude-agent-acp streamed window inference no longer matches AO's context window patch");
+	}
+	const replacement = `${original}
+                                        // AO: ask the SDK for the model's real window.
+                                        else if (session.aoWindowProbeModelId !== session.models.currentModelId) {
+                                            const probeModelId = session.models.currentModelId;
+                                            session.aoWindowProbeModelId = probeModelId;
+                                            void (async () => {
+                                                let probeTimer;
+                                                try {
+                                                    const contextUsage = await Promise.race([
+                                                        session.query.getContextUsage(),
+                                                        new Promise((_, reject) => {
+                                                            probeTimer = setTimeout(() => reject(new Error('Claude SDK context window timed out')), 2000);
+                                                        }),
+                                                    ]);
+                                                    // A result or a model switch while the probe ran already set the window.
+                                                    if (Number.isFinite(contextUsage.rawMaxTokens) && contextUsage.rawMaxTokens > 0 &&
+                                                        !session.contextWindowAuthoritative &&
+                                                        session.models.currentModelId === probeModelId) {
+                                                        session.contextWindowSize = contextUsage.rawMaxTokens;
+                                                        session.contextWindowAuthoritative = true;
+                                                    }
+                                                } catch (error) {
+                                                    this.logger.error('Failed to fetch Claude SDK context window:', error);
+                                                } finally {
+                                                    clearTimeout(probeTimer);
+                                                }
+                                            })();
+                                        }`;
+	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
+	return true;
+}
+
 // Reuse the pinned bridge's native task registry. Ending its process loses the
 // task monitor even when a background shell's process group survives. Claude
 // Code also starts cycles on its own after an AO turn, for example to answer a

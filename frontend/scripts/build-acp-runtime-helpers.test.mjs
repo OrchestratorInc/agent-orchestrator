@@ -17,6 +17,7 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeContextWindowProbe,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
@@ -290,6 +291,106 @@ describe("patchClaudeContextUsage", () => {
 		const { errors } = await publish(run, session, async () => { throw new Error("closed"); });
 		await vi.waitFor(() => expect(errors).toHaveLength(1));
 		expect(errors[0][0]).toBe("Failed to publish Claude context usage:");
+	});
+});
+
+describe("patchClaudeContextWindowProbe", () => {
+	const streamedWindowInference = `
+                                    if (!session.contextWindowAuthoritative &&
+                                        session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
+                                        const inferred = inferContextWindowFromModel(model);
+                                        if (inferred !== null) {
+                                            session.contextWindowSize = inferred;
+                                        }
+                                    }
+`;
+
+	function patchedMessageStart() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamedWindowInference);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(false);
+		const run = new Function("session", "model", `
+			const DEFAULT_CONTEXT_WINDOW = 200000;
+			const inferContextWindowFromModel = (text) => /\\b1m\\b/i.test(text) ? 1000000 : null;
+			${readFileSync(adapterPath, "utf8")}
+		`);
+		const errors = [];
+		const logger = { error: (...args) => errors.push(args) };
+		return { errors, messageStart: (session, model) => run.call({ logger }, session, model) };
+	}
+
+	function freshSession(modelId, getContextUsage) {
+		return {
+			contextWindowSize: 200000,
+			contextWindowAuthoritative: false,
+			models: { currentModelId: modelId },
+			query: { getContextUsage: vi.fn(getContextUsage) },
+		};
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("learns a fable session's 1M window at the turn's first message, before its result", async () => {
+		const { messageStart } = patchedMessageStart();
+		const session = freshSession("claude-fable-5-1", async () => ({ totalTokens: 47155, rawMaxTokens: 1000000 }));
+		messageStart(session, "claude-fable-5-1");
+		messageStart(session, "claude-fable-5-1");
+		await vi.waitFor(() => expect(session.contextWindowSize).toBe(1000000));
+		expect(session.contextWindowAuthoritative).toBe(true);
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a window the adapter already knows", () => {
+		const { messageStart } = patchedMessageStart();
+		const known = freshSession("claude-fable-5-1", async () => ({ rawMaxTokens: 1 }));
+		known.contextWindowAuthoritative = true;
+		messageStart(known, "claude-fable-5-1");
+		const named = freshSession("opus[1m]", async () => ({ rawMaxTokens: 1 }));
+		messageStart(named, "claude-opus-4-8[1m]");
+		expect(named.contextWindowSize).toBe(1000000);
+		for (const session of [known, named]) expect(session.query.getContextUsage).not.toHaveBeenCalled();
+	});
+
+	it("keeps the window a model switch seeded while the probe ran", async () => {
+		const { messageStart } = patchedMessageStart();
+		const session = freshSession("claude-fable-5-1", async () => {
+			session.models.currentModelId = "claude-haiku-5-5";
+			return { totalTokens: 10, rawMaxTokens: 1000000 };
+		});
+		messageStart(session, "claude-fable-5-1");
+		await settle();
+		expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual([200000, false]);
+	});
+
+	it("keeps the default window when the probe fails or stalls", async () => {
+		const { messageStart, errors } = patchedMessageStart();
+		const failed = freshSession("claude-fable-5-1", async () => { throw new Error("closed"); });
+		messageStart(failed, "claude-fable-5-1");
+		await settle();
+		vi.useFakeTimers();
+		try {
+			const stalled = freshSession("claude-fable-5-1", () => new Promise(() => {}));
+			messageStart(stalled, "claude-fable-5-1");
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(errors.map(([message, error]) => [message, error.message])).toEqual([
+				["Failed to fetch Claude SDK context window:", "closed"],
+				["Failed to fetch Claude SDK context window:", "Claude SDK context window timed out"],
+			]);
+			for (const session of [failed, stalled]) {
+				expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual([200000, false]);
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("fails packaging without modifying a changed adapter", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		const changed = streamedWindowInference.replace("const inferred", "const guessed");
+		writeFileSync(adapterPath, changed);
+		expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
+		expect(readFileSync(adapterPath, "utf8")).toBe(changed);
 	});
 });
 
