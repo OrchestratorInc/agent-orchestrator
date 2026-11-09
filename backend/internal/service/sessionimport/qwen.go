@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -230,22 +229,7 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 
 	chain := nodes // Legacy records without UUIDs retain their linear order.
 	if leaf != "" {
-		chain = nil
-		visited := map[string]bool{}
-		for leaf != "" {
-			if err := ctx.Err(); err != nil {
-				return t, err
-			}
-			idx, found := index[leaf]
-			if !found || visited[leaf] {
-				break // Keep only the reachable branch; missing links and cycles terminate.
-			}
-			visited[leaf] = true
-			node := nodes[idx]
-			chain = append(chain, node)
-			leaf = node.parent
-		}
-		slices.Reverse(chain)
+		chain = activeBranch(nodes, index, leaf, func(n qwenNode) string { return n.parent })
 	}
 	for _, node := range chain {
 		if node.role == "" {

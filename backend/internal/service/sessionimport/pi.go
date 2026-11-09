@@ -20,29 +20,44 @@ import (
 // message) linked into a tree by id/parentId. Only user and assistant message
 // text is a display message; thinking, tool calls, and tool results are noise.
 //
+// OMP and Kimchi are Pi forks with the same layout and tree. OMP adds title
+// records and Kimchi adds session_info names and context_edit records; each
+// fork simply never writes the others' records.
+//
 // The file is a tree, not a list: rewinding or branching appends new records
 // under an earlier parent, so the abandoned turns remain in the file. Only the
 // active branch is a conversation to continue, so this walks parent links back
 // from the last appended record, exactly as the Claude reader does.
 
-// piRecord is the subset of a Pi JSONL record this import reads. The folder
-// name dashes the cwd lossily, so cwd is taken from the header instead.
+// piRecord is the subset of a Pi-family JSONL record this import reads. The
+// folder name dashes the cwd lossily, so cwd is taken from the header instead.
 type piRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
 	ParentID  string    `json:"parentId"`
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
-	Message   struct {
+	// Omitted is set by the oversize-record rewriter when a record was too large
+	// to decode; the dropped parts are reported as shortened history.
+	Omitted bool `json:"aoOmitted"`
+	Message struct {
 		Role    string      `json:"role"`
 		Content contentText `json:"content"`
 	} `json:"message"`
+	Title string `json:"title"`
+	Name  string `json:"name"`
+	// context_edit replaces a message's visible content; null retracts it.
+	TargetID    string `json:"targetId"`
+	Replacement *struct {
+		Content contentText `json:"content"`
+	} `json:"replacement"`
 }
 
 // piNode keeps only display facts and the tree link, so tool payloads are not
 // retained while walking ancestry.
 type piNode struct {
 	id, parent, role, text string
+	name, editTarget       string
 	at                     time.Time
 	dropped                bool
 }
@@ -59,8 +74,14 @@ func piFamilyNativeID(path string) string {
 	return name
 }
 
-func readPiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
-	t := transcript{harness: domain.HarnessPi, root: root}
+func piFamilyReader(harness domain.AgentHarness) func(context.Context, string, ...string) (transcript, error) {
+	return func(ctx context.Context, root string, paths ...string) (transcript, error) {
+		return readPiFamilyTranscript(ctx, harness, root, paths...)
+	}
+}
+
+func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
+	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
@@ -94,7 +115,8 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 		if r.Timestamp.After(t.last) && r.Timestamp.Before(now.Add(time.Hour)) {
 			t.last = r.Timestamp
 		}
-		if r.Type == "session" {
+		switch r.Type {
+		case "session":
 			if sawHeader {
 				return nil // Later segments or forks repeat the header.
 			}
@@ -104,19 +126,32 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 			}
 			t.cwd = r.CWD
 			return nil
+		case "title", "title_change":
+			if title := strings.TrimSpace(r.Title); title != "" {
+				t.title = title
+			}
 		}
 		if r.ID == "" {
 			return nil // Without an id a record cannot take its place in the tree.
 		}
 		node := piNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
-		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
-			node.role = r.Message.Role
-			node.text = string(r.Message.Content)
+		switch r.Type {
+		case "message":
+			if r.Message.Role == "user" || r.Message.Role == "assistant" {
+				node.role, node.text, node.dropped = r.Message.Role, string(r.Message.Content), r.Omitted
+			}
+		case "session_info":
+			node.name = strings.TrimSpace(r.Name)
+		case "context_edit":
+			node.editTarget = r.TargetID
+			if r.Replacement != nil {
+				node.text = string(r.Replacement.Content)
+			}
 		}
 		leaf = r.ID
 		idx, seen := index[r.ID]
 		if seen {
-			// Pi rewrites some records in place; replace and re-account its text.
+			// Records are rewritten in place; replace and re-account the text.
 			held -= len(nodes[idx].text)
 			nodes[idx] = node
 		} else {
@@ -142,22 +177,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 		return t, errNoReadableConversation
 	}
 
-	// Follow the active branch from the last appended record so rewound or
-	// abandoned branches are not shown as history. A dangling parent must not
-	// hide the conversation, so stop at the first unreachable link.
-	var chain []piNode
-	visited := map[string]bool{}
-	for leaf != "" {
-		idx, found := index[leaf]
-		if !found || visited[leaf] {
-			break
-		}
-		visited[leaf] = true
-		node := nodes[idx]
-		chain = append(chain, node)
-		leaf = node.parent
-	}
-	slices.Reverse(chain)
+	chain := activeBranch(nodes, index, leaf, func(n piNode) string { return n.parent })
 
 	var items []tagged
 	add := func(role, text string, at time.Time) {
@@ -172,9 +192,22 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
+	edits := map[string]piNode{}
 	for _, node := range chain {
+		if node.editTarget != "" {
+			edits[node.editTarget] = node
+		}
+	}
+	var name string
+	for _, node := range chain {
+		if edit, ok := edits[node.id]; ok {
+			node.text, node.dropped = edit.text, edit.dropped
+		}
 		t.shortened = t.shortened || node.dropped
 		add(node.role, node.text, node.at)
+		if node.name != "" {
+			name = node.name
+		}
 	}
 	n := len(items)
 	items = trimVisible(items)
@@ -185,6 +218,9 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	// A session with no real prompt, or a non-UUID name, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
+	}
+	if name != "" {
+		t.title = name
 	}
 	return t, finishTranscript(&t)
 }

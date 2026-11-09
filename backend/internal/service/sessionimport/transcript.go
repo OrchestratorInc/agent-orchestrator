@@ -561,26 +561,13 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	}
 	chain := claude
 	if claudeLeaf != "" {
-		// Follow the active branch so rewound prompts are not shown as history.
-		chain = nil
-		visited := map[string]bool{}
-		for claudeLeaf != "" {
-			index, found := claudeIndex[claudeLeaf]
-			if !found || visited[claudeLeaf] {
-				break // Show the reachable branch; a dangling parent must not hide the conversation.
+		chain = activeBranch(claude, claudeIndex, claudeLeaf, func(n claudeNode) string {
+			// Compaction starts a new root; its logical parent continues the visible history.
+			if _, found := claudeIndex[n.logicalParent]; n.parent == "" && found {
+				return n.logicalParent
 			}
-			visited[claudeLeaf] = true
-			node := claude[index]
-			chain = append(chain, node)
-			claudeLeaf = node.parent
-			if claudeLeaf == "" {
-				// Compaction starts a new root; its logical parent continues the visible history.
-				if _, found := claudeIndex[node.logicalParent]; found {
-					claudeLeaf = node.logicalParent
-				}
-			}
-		}
-		slices.Reverse(chain)
+			return n.parent
+		})
 	}
 	for _, node := range chain {
 		if t.cwd == "" {
@@ -650,6 +637,25 @@ func finishTranscript(t *transcript) error {
 	}
 	t.title = importTitle(t.title)
 	return nil
+}
+
+// activeBranch follows parent links back from leaf and returns the branch root
+// first, so rewound or abandoned turns are not shown as history. A missing link
+// or a cycle ends the walk: a dangling parent must not hide the conversation.
+func activeBranch[N any](nodes []N, index map[string]int, leaf string, parent func(N) string) []N {
+	var chain []N
+	visited := map[string]bool{}
+	for leaf != "" && !visited[leaf] {
+		i, found := index[leaf]
+		if !found {
+			break
+		}
+		visited[leaf] = true
+		chain = append(chain, nodes[i])
+		leaf = parent(nodes[i])
+	}
+	slices.Reverse(chain)
+	return chain
 }
 
 // dropOldestHeld clears held text oldest first, as trimVisible would, until at

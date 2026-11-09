@@ -192,15 +192,6 @@ func TestKimchiTranscriptAppliesActiveContextEditsAndRetractions(t *testing.T) {
 	wantTexts(t, got.messages, "user: first question", "assistant: corrected answer", "user: real followup")
 }
 
-func TestKimchiTranscriptRejectsDuplicateSessionRecords(t *testing.T) {
-	root := t.TempDir()
-	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"/work/repo"}`
-	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), header+"\n"+kimchiMsg("u1", "", "user", "hello")+"\n"+header+"\n")
-	if _, err := readTranscript(context.Background(), domain.HarnessKimchi, root, path); err == nil {
-		t.Fatal("expected duplicate native session record to fail")
-	}
-}
-
 func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

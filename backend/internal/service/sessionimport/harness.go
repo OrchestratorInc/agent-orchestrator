@@ -37,10 +37,10 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
 	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
 	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
-	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: readKimchiTranscript},
-	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: readOMPTranscript},
+	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessKimchi)},
+	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessOMP)},
 	domain.HarnessOpenCode: {root: openCodeRoot, discover: discoverOpenCode, read: readOpenCodeTranscript},
-	domain.HarnessPi:       {root: piRoot, discover: walkSources(domain.HarnessPi, "sessions", jsonlKey), read: readPiTranscript},
+	domain.HarnessPi:       {root: piRoot, discover: walkSources(domain.HarnessPi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessPi)},
 	domain.HarnessQwen:     {root: qwenRoot, discover: walkSources(domain.HarnessQwen, "projects", qwenKey), read: readQwenTranscript},
 	domain.HarnessCline:    {root: clineRoot, discover: discoverCline, read: readClineTranscript},
 	domain.HarnessCursor:   {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
