@@ -366,11 +366,13 @@ describe("code selection capture scheduling", () => {
 		expect(hook.result.current.source.get()).not.toBeNull();
 		act(() => {
 			if (action === "dismiss") { hook.result.current.dismiss(); hook.result.current.dismiss(); }
-			else if (action === "click-away") native.removeAllRanges();
+			else if (action === "click-away") {
+				fireEvent(document.body, new MouseEvent("pointerdown", { button: 0, bubbles: true }));
+				native.removeAllRanges();
+			}
 			else expect(hook.result.current.ask()).toBe(action !== "reject");
 		});
-		// A click-away selectionchange processed before a redraw also stays cleared.
-		if (action === "click-away") { act(() => fireEvent(document, new Event("selectionchange"))); flush(); }
+		// Redraw before the click-away selectionchange has been processed too.
 		rebuild(host);
 		act(() => fireEvent(document, new Event("selectionchange")));
 		flush(); flush();
@@ -385,6 +387,31 @@ describe("code selection capture scheduling", () => {
 			expect(hook.result.current.source.get()).toBeNull();
 		}
 		hook.unmount(); container.remove(); frame.mockRestore();
+	});
+
+	it.each(["host", "toolbar", "context-menu"] as const)("retains the selection during a %s pointerdown and immediate redraw", target => {
+		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
+		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 0).firstChild!, 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const flush = () => act(() => { const next = callback; callback = undefined; next?.(0); });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const toolbar = document.createElement("button"); toolbar.setAttribute("data-selection-ask", "");
+		const icon = document.createElement("span"); toolbar.append(icon); document.body.append(toolbar);
+		const ref = { current: container };
+		const hook = renderHook(() => useCodeSelection(ref, vi.fn()));
+		flush();
+		act(() => {
+			const element = target === "host" ? rowAt(host, 0, 0) : target === "toolbar" ? icon : document.body;
+			fireEvent(element, new MouseEvent("pointerdown", { button: target === "context-menu" ? 2 : 0, bubbles: true, composed: true }));
+		});
+		expect(hook.result.current.source.get()).not.toBeNull();
+		rebuild(host); native.removeAllRanges();
+		act(() => fireEvent(document, new Event("selectionchange")));
+		flush(); flush();
+		expect(native.setBaseAndExtent).toHaveBeenCalledOnce();
+		expect(hook.result.current.source.get()?.rows.map(row => row.text)).toEqual(["one"]);
+		hook.unmount(); container.remove(); toolbar.remove(); frame.mockRestore();
 	});
 
 	it("attempts a refused native restore only once", () => {

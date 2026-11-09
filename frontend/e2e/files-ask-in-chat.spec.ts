@@ -513,7 +513,7 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(askButton(page)).toBeHidden();
 	});
 
-	test("Escape stays dismissed when rows redraw in the same frame", { tag: "@P0" }, async ({ page }) => {
+	for (const action of ["Escape", "click-away"] as const) test(`${action} stays dismissed when rows redraw in the same frame`, { tag: "@P0" }, async ({ page }) => {
 		await openChatSession(page);
 		await row(page, REVIEW, 2).evaluate(element => {
 			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -523,18 +523,23 @@ test.describe("Add to chat from highlighted code", () => {
 			document.dispatchEvent(new Event("selectionchange"));
 		});
 		await expect(askButton(page)).toBeVisible();
-		const dismissed = await page.locator(`${REVIEW} diffs-container`).first().evaluate(async host => {
+		const dismissed = await page.locator(`${REVIEW} diffs-container`).first().evaluate(async (host, action) => {
 			const root = host.shadowRoot as ShadowRoot & { getSelection: () => Selection };
 			const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-			document.dispatchEvent(escape);
+			if (action === "Escape") document.dispatchEvent(escape);
+			else {
+				document.body.dispatchEvent(new PointerEvent("pointerdown", { button: 0, bubbles: true }));
+				root.getSelection().removeAllRanges();
+				document.dispatchEvent(new Event("selectionchange"));
+			}
 			const cleared = root.getSelection().anchorNode === null;
 			for (const column of root.querySelectorAll("[data-content]")) {
 				column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
 			}
 			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 			return { handled: escape.defaultPrevented, cleared, restored: root.getSelection().toString() };
-		});
-		expect(dismissed).toEqual({ handled: true, cleared: true, restored: "" });
+		}, action);
+		expect(dismissed).toEqual({ handled: action === "Escape", cleared: true, restored: "" });
 		await expect(askButton(page)).toBeHidden();
 		await page.keyboard.press("ControlOrMeta+L");
 		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);

@@ -376,7 +376,13 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			if (frame === null) frame = requestAnimationFrame(update);
 		};
 		const onPointerDown = (event: PointerEvent) => {
-			if (event.button === 0) pressed = true;
+			if (event.button !== 0) return;
+			pressed = true;
+			const current = selectionRef.current;
+			// Clicking away ends retention before a same-frame redraw can detach
+			// the old rows. The portal toolbar still needs the captured selection.
+			if (current && !event.composedPath().includes(current.host)
+				&& !(event.target instanceof Element && event.target.closest("[data-selection-ask]"))) dismiss();
 		};
 		const onPointerUp = () => {
 			pressed = false;
@@ -396,7 +402,7 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			redraws.disconnect();
 			publish(null);
 		};
-	}, [ask, containerRef, enabled, store]);
+	}, [ask, dismiss, containerRef, enabled, store]);
 	return { source: store, ask, dismiss };
 }
 
