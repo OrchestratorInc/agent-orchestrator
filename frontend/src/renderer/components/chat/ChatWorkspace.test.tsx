@@ -1436,56 +1436,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(task()).toHaveTextContent(/^Thinking$/);
 	});
 
-	it("names the live row by the agent's newest thought, and opens onto it", async () => {
-		const user = userEvent.setup();
-		const turnId = "live-turn-thought";
+	it("does not show provider reasoning summaries in the live or settled turn", () => {
+		const turnId = "turn-with-reasoning";
 		const at = "2026-08-11T10:01:00Z";
-		const thought = (text: string, status: "running" | "completed") => ({
-			kind: "activity" as const, id: "thought", turnId, sequence: 3, revision: 1,
-			activityKind: "reasoning" as const, status, summary: "Reasoning", detail: { text }, createdAt: at,
-		});
-		const snapshot = (text: string, status: "running" | "completed"): ConversationSnapshot => ({
+		const snapshot: ConversationSnapshot = {
 			...chatFixtureEmpty,
 			controller: { state: "busy" },
-			latestSequence: 3,
+			latestSequence: 2,
 			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
 			items: [
-				{
-					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
-					role: "user", origin: "human", text: "Fix the build",
-					streaming: false, createdAt: at,
-				},
-				{
-					kind: "activity", id: "status", turnId, sequence: 2, revision: 1,
-					activityKind: "command", status: "completed", summary: "git status",
-					detail: { command: "git status" }, createdAt: at,
-				},
-				thought(text, status),
+				{ kind: "message", id: "prompt", turnId, sequence: 1, revision: 0, role: "user", origin: "human", text: "Solve the puzzle", streaming: false, createdAt: at },
+				{ kind: "activity", id: "thought", turnId, sequence: 2, revision: 1, activityKind: "reasoning", status: "completed", summary: "Reasoning", detail: { text: "Deriving exact cycle length probability formula" }, createdAt: at },
 			],
-		});
-
-		// Before a sentence of the thought is whole, the row just says Thinking, and
-		// opens onto what the agent has thought so far.
-		const view = render(<ChatWorkspace snapshot={snapshot("The build fails on", "running")} />);
-		const task = () => screen.getByTestId("live-working-task");
-		expect(task()).toHaveTextContent(/^Thinking$/);
-		const row = screen.getByTestId("live-working-row");
-		expect(row).toHaveAttribute("aria-expanded", "false");
-		await user.click(row);
-		expect(row).toHaveAttribute("aria-expanded", "true");
-		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on"));
-
-		// The open thought keeps streaming, though its turn only follows the label.
-		view.rerender(<ChatWorkspace snapshot={snapshot("The build fails on a second React co", "running")} />);
-		await waitFor(() => expect(screen.getByTestId("chat-timeline")).toHaveTextContent("The build fails on a second React co"));
-		expect(task()).toHaveTextContent(/^Thinking$/);
-
-		// Then it says what the agent is about to do, and keeps saying it once the
-		// thought settles, until the agent writes or starts a step.
-		const text = "Only one React copy exists. I'll rebuild with NODE_ENV=production to match CI.";
-		view.rerender(<ChatWorkspace snapshot={snapshot(text, "completed")} />);
-		expect(task()).toHaveTextContent(/^I'll rebuild with NODE_ENV=production to match CI$/);
-		expect(await screen.findByText(/Only one React copy exists/)).toBeInTheDocument();
+		};
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent("Thinking");
+		expect(screen.queryByText("Deriving exact cycle length probability formula")).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace snapshot={{
+			...snapshot,
+			controller: { state: "ready" },
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:01:04Z" }],
+		}} />);
+		expect(screen.queryByText("Deriving exact cycle length probability formula")).not.toBeInTheDocument();
 	});
 
 	it("gives the step back its row once it finishes", () => {

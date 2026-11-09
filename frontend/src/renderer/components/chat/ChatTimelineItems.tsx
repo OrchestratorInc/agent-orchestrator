@@ -142,7 +142,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, thoughtHeadline, type CommandStep, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, type CommandStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1288,7 +1288,7 @@ export function AssistantMessage({
  * finished one stays on the row before it moves up.
  */
 export function liveTaskLabel(activity: ConversationActivity): string {
-	if (activity.activityKind === "reasoning") return thoughtHeadline(reasoningText(activity)) ?? "Thinking";
+	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
 	if (activity.activityKind === "mcp_tool") {
 		const ao = aoToolView(activity);
@@ -1941,40 +1941,16 @@ export function isLiveStepKind(activity: ConversationActivity): boolean {
 	);
 }
 
-/** Whether the step on the live row has details to open: command, output, patch, payload or thought. */
+/** Whether the step on the live row has details to open: command, output, patch, or payload. */
 function liveStepHasDetail(activity: ConversationActivity): boolean {
-	if (activity.activityKind === "reasoning") return Boolean(reasoningText(activity));
 	if (activity.activityKind === "mcp_tool") return mcpToolHasBody(activity);
 	return isLiveStepKind(activity) && genericActivityHasBody(activity);
 }
 
-/**
- * The newest text of each live thought, by id. A turn's group keeps up with its
- * thought only as far as the headline the live row shows, so a streamed token does
- * not re-render the whole turn; the thought opened from the live row reads its
- * full text from here instead.
- */
-export const LiveThoughtTexts = createContext<Readonly<Record<string, string>>>({});
-
-/** The step's details, opened from the live row: what its own row would open onto, or the whole thought. */
+/** The step's details, opened from the live row. */
 const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
-	if (activity.activityKind === "reasoning") return <LiveThoughtBody activity={activity} />;
 	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
 });
-
-function LiveThoughtBody({ activity }: { activity: ConversationActivity }) {
-	const text = useContext(LiveThoughtTexts)[activity.id] ?? reasoningText(activity) ?? "";
-	return (
-		<div className="mb-1 border-l-2 border-border-strong py-0.5 pl-3">
-			<ChatMarkdown text={text} streaming={activity.status === "running"} muted />
-		</div>
-	);
-}
-
-/** A thought's text, streamed or settled; see ReasoningBlock. */
-export function reasoningText(activity: ConversationActivity): string | undefined {
-	return activity.detail?.text?.trim() || activity.detail?.reason?.trim() || undefined;
-}
 
 /**
  * Expanded command / explore body: one soft chat-surface card with the shell

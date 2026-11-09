@@ -5,7 +5,6 @@ import {
 	activityToolStep,
 	describeCommandStep,
 	isExploratoryTool,
-	thoughtHeadline,
 	type CommandStep,
 } from "./activity-step";
 
@@ -336,38 +335,6 @@ function toolActivity(providerToolName: string | undefined, toolKind: string, in
 		detail: { protocol: "acp", providerToolName, toolKind, input } as ConversationActivity["detail"],
 	});
 }
-
-describe("thoughtHeadline", () => {
-	it("takes Codex's newest bold heading", () => {
-		const text = "**Planning the layout**\n\nI will sketch it first.\n\n**Designing a seven-day cadence strip for each card**\n\nEach card gets";
-		expect(thoughtHeadline(text)).toBe("Designing a seven-day cadence strip for each card");
-	});
-
-	it("takes the last whole sentence of Claude's summary, which says what comes next", () => {
-		expect(
-			thoughtHeadline(
-				"Versionlog lists Node.js 26.13.0 as the latest stable release, but it doesn't label 26.x as LTS, so 24.x is still the newest LTS line. I'm creating a fresh to-do list for steps 10 to 17 next.\n\n",
-			),
-		).toBe("I'm creating a fresh to-do list for steps 10 to 17 next");
-		expect(
-			thoughtHeadline("Only one React copy exists. I'm restoring the `package-lock.json` that `npm install` rewrote, then rebuilding."),
-		).toBe("I'm restoring the package-lock.json that npm install rewrote, then rebuilding");
-	});
-
-	it("skips a sentence still being written, and has no gist before one is whole", () => {
-		expect(thoughtHeadline("The build passes. Now I'll verify the bui")).toBe("The build passes");
-		expect(thoughtHeadline("Looking at the")).toBeUndefined();
-		expect(thoughtHeadline("")).toBeUndefined();
-	});
-
-	it("reads past list markers and code fences", () => {
-		// "1." and "2." are markers, not the ends of sentences.
-		expect(thoughtHeadline("I need to:\n1. Read the file\n2. Update the test")).toBeUndefined();
-		expect(thoughtHeadline("Plan:\n1. Read the file.\n2. Update the test.")).toBe("Update the test");
-		expect(thoughtHeadline("I'll check the config first.\n- It may be stale")).toBe("I'll check the config first");
-		expect(thoughtHeadline("The fix is small.\n```ts\nconst a = 1. Then b\n```\n")).toBe("The fix is small");
-	});
-});
 
 describe("activityToolStep", () => {
 	it("names a web search by its query instead of showing the bare query", () => {
