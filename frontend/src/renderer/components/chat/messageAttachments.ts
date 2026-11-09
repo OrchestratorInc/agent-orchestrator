@@ -53,9 +53,13 @@ export function formatAttachmentSize(bytes: number): string {
 
 /**
  * The row of attachments above a user's bubble, capped to the bubble's own width.
- * Outside the bubble so a long message's fold can never clip them.
+ * Outside the bubble so a long message's fold can never clip them. Lists inside
+ * it use `contents`, so every kind of attachment wraps as one row.
  */
-export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-col items-end gap-1";
+export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-wrap items-start justify-end gap-2";
+
+/** One size for anything attached to a sent message, so a mixed row lines up. */
+export const ATTACHMENT_TILE_CLASS = "flex h-16 max-w-56 min-w-0 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs text-muted-foreground";
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
 	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path

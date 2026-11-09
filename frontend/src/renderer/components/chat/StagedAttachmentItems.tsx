@@ -4,18 +4,19 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { ChatImage, ChatImageAttachmentSet, ChatImageDialog } from "./ChatImage";
-import { attachmentName, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { ChatImage, ChatImageAttachmentRow, ChatImageDialog } from "./ChatImage";
+import { ATTACHMENT_TILE_CLASS, attachmentName, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 
 /** A file chip's words: the name, then its type and, when it is known, its size. */
-export function AttachmentFileText({ name, bytes, nameClassName }: { name: string; bytes?: number; nameClassName?: string }) {
+export function AttachmentFileText({ name, bytes, nameClassName, stacked = false }: { name: string; bytes?: number; nameClassName?: string; /** Two lines, for a tile. */ stacked?: boolean }) {
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ");
-	return (
+	const text = (
 		<>
 			<span className={cn("truncate", nameClassName)}>{name}</span>
 			{details ? <span className="shrink-0 tabular-nums opacity-70">{details}</span> : null}
 		</>
 	);
+	return stacked ? <span className="flex min-w-0 flex-col gap-0.5">{text}</span> : text;
 }
 
 /** The composer strip's image: a small square that opens the picture at full size. */
@@ -60,7 +61,7 @@ export function StagedAttachmentItems({
 	if (paths.length === 0) return null;
 	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	return (
-		<ChatImageAttachmentSet count={images.length}>
+		<ChatImageAttachmentRow>
 			<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 				{paths.map((path) => {
 					const name = attachmentName(path);
@@ -78,7 +79,7 @@ export function StagedAttachmentItems({
 						<li
 							key={path}
 							title={path}
-							className="group/attachment flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
+							className={cn("group/attachment", ATTACHMENT_TILE_CLASS)}
 						>
 							<span className="relative flex size-3.5 shrink-0">
 								<FileIcon
@@ -103,11 +104,11 @@ export function StagedAttachmentItems({
 									</span>
 								) : null}
 							</span>
-							<AttachmentFileText name={name} />
+							<AttachmentFileText name={name} stacked />
 						</li>
 					);
 				})}
 			</ul>
-		</ChatImageAttachmentSet>
+		</ChatImageAttachmentRow>
 	);
 }

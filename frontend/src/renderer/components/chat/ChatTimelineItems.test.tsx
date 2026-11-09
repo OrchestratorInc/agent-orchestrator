@@ -775,15 +775,12 @@ describe("HumanMessage", () => {
 			expect(screen.getByLabelText(/^Sent /)).toBeInTheDocument();
 		});
 
-		it("shows one image at its own shape and several at a shared height", () => {
-			const one = render(<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />);
-			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-auto");
-			one.unmount();
+		it("shows every image and file at the one tile height", () => {
 			render(
-				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.pdf"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
 			);
-			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-40");
-			expect(screen.getByRole("img", { name: "Image 2" })).toHaveClass("h-40");
+			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-16");
+			expect(screen.getByText("attachment-b.pdf").closest("li")).toHaveClass("h-16");
 		});
 	});
 });

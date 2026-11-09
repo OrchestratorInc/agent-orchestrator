@@ -27,7 +27,7 @@ export interface HumanMessageEditorProps {
 	className?: string;
 	/** Places Cancel and Send in the row the message's hover actions use. */
 	actionsClassName?: string;
-	/** Drawn first, where the bubble draws it. */
+	/** Drawn first in the row above the box, where the message draws it. */
 	leading?: ReactNode;
 	/** Drawn after the staged files, above the box, where the message draws them. */
 	cloudAttachments?: ReactNode;
@@ -156,14 +156,15 @@ export function HumanMessageEditor({
 	return (
 		<>
 			{/* Above the box and outside its fold, where the bubble draws them. */}
-			{attachments.length > 0 || cloudAttachments || otherContent.length > 0 ? (
+			{leading || attachments.length > 0 || cloudAttachments || otherContent.length > 0 ? (
 				<div className={HUMAN_ATTACHMENTS_CLASS}>
+					{leading}
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}
 						apiBaseUrl={apiBaseUrl}
 						ariaLabel={t("chat.attachment.list")}
-						className="justify-end"
+						className="contents"
 						onRemove={pending || locked ? undefined : removeAttachment}
 					/>
 					{cloudAttachments}
@@ -171,7 +172,7 @@ export function HumanMessageEditor({
 						content={otherContent}
 						ariaLabel={t("chat.edit.preservedContent")}
 						imageLabel={t("chat.edit.image")}
-						className="justify-end"
+						className="contents"
 					/>
 				</div>
 			) : null}
@@ -183,7 +184,6 @@ export function HumanMessageEditor({
 				{/* The bubble's own fold, so a long message keeps its height, folded or open.
 				    Folded, the editor scrolls instead of clipping, so all of it stays reachable. */}
 				<CollapsibleHumanBody stateKey={foldKey} scrollWhenFolded>
-					{leading}
 					{/* A hidden copy of the draft sizes the field (see styles.css), so the box
 					    fits its text exactly as the bubble did and grows only with the text. */}
 					<div className="chat-human-edit-field" data-value={draft}>

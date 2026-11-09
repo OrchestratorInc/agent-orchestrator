@@ -1012,12 +1012,12 @@ export function HumanMessage({
 				revision: excerpt.sourceRevision,
 			}))}
 			onSelect={onSelectAnnotation}
-			className="mb-2"
+			tile
 		/>
 	) : null;
-	const hasAttachments = attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
-	const showBubble = Boolean(body) || Boolean(annotationSummary) || !hasAttachments;
+	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
@@ -1051,7 +1051,7 @@ export function HumanMessage({
 					className={humanBubbleClass()}
 					actionsClassName={editActionRowClass}
 					leading={annotationSummary}
-					cloudAttachments={message.cloudAttachments?.length ? <CloudMessageAttachments attachments={message.cloudAttachments} className="justify-end" /> : undefined}
+					cloudAttachments={message.cloudAttachments?.length ? <CloudMessageAttachments attachments={message.cloudAttachments} className="contents" /> : undefined}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1071,14 +1071,15 @@ export function HumanMessage({
 					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
 					{hasAttachments ? (
 						<div className={cn(HUMAN_ATTACHMENTS_CLASS, animateIn && "chat-human-message-enter")}>
+							{annotationSummary}
 							<StagedAttachmentItems
 								paths={attachments}
 								sessionId={sessionId}
 								apiBaseUrl={apiBaseUrl}
 								ariaLabel="Attached files"
-								className="justify-end"
+								className="contents"
 							/>
-							<CloudMessageAttachments attachments={message.cloudAttachments} className="justify-end" />
+							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
 						</div>
 					) : null}
 					{showBubble ? (
@@ -1089,7 +1090,6 @@ export function HumanMessage({
 							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
-								{annotationSummary}
 								{body ? (
 									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 										<ProseWithInlineImages
@@ -3351,14 +3351,14 @@ export function SteerMessage({
 								sessionId={sessionId}
 								apiBaseUrl={apiBaseUrl}
 								ariaLabel="Steered attachments"
-								className="justify-end"
+								className="contents"
 							/>
 							<ConversationContentItems
 								content={remainingContent}
 								ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
 								imageLabel="Image"
 								imageAlt={(position) => `Steered attachment ${position}`}
-								className="justify-end"
+								className="contents"
 							/>
 						</div>
 					) : null}
