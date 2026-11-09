@@ -7,9 +7,9 @@ import * as WebBrowser from "expo-web-browser";
 // phone signs in to the same AO account as the desktop. The HTTPS callback
 // returns to ao-app://callback; mobile registers that scheme as well.
 const CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
-const REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
+const REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
 const APP_CALLBACK = "ao-app://callback";
-const AUTH_URL = "https://api.workos.com/user_management/authorize";
+const AUTH_URL = "https://orchestrator.inc/app/auth/start/";
 const TOKEN_URL = "https://api.workos.com/user_management/authenticate";
 const STORE_KEY = "ao.account.session";
 const PREVIOUS_KEY = "ao.account.previous";

@@ -616,7 +616,9 @@ in, is not written to disk, settings, or logs, and is not sent again on later
 launches, token refreshes, or a repeated return link. If you did not accept
 website analytics, or desktop analytics are off, nothing is linked. Builds that
 sign in against another WorkOS environment, and development builds, return
-through other pages that never add a website ID.
+through other pages that never add a website ID. The mobile app also returns
+through `https://orchestrator.inc/app/auth/return/`, and it ignores the website
+ID: it reads only the sign-in result.
 
 AO Cloud itself reports a few server-side events for signed-in users, currently
 `invite.sent` (organization role and a hash of the organization ID, never the
