@@ -55,28 +55,38 @@ const MAX_LISTED_FAILURES = 5;
 export function SessionImportDialog() {
 	const dialog = useSessionImportStore((state) => state.dialog);
 	const closeDialog = useSessionImportStore((state) => state.closeDialog);
+	const [importing, setImporting] = useState(false);
 	if (!dialog) return null;
 	return (
-		<Dialog open onOpenChange={(open) => !open && closeDialog()}>
+		<Dialog open onOpenChange={(open) => !open && !importing && closeDialog()}>
 			<DialogContent
 				className={settingsDialogContentClass}
 				data-testid="session-import-dialog"
+				showCloseButton={!importing}
 				{...(dialog.kind === "project" ? { "aria-describedby": undefined } : {})}
 			>
-				{dialog.kind === "project" ? <ProjectChats projectId={dialog.projectId} onClose={closeDialog} /> : <Folders onClose={closeDialog} />}
+				{dialog.kind === "project" ? (
+					<ProjectChats projectId={dialog.projectId} onClose={closeDialog} onImporting={setImporting} />
+				) : (
+					<Folders onClose={closeDialog} onImporting={setImporting} />
+				)}
 			</DialogContent>
 		</Dialog>
 	);
 }
 
-export function useImportRun(source: ImportSource, onDone: (results: ImportResult[]) => void) {
+export function useImportRun(source: ImportSource, onDone: (results: ImportResult[]) => void, onImporting?: (importing: boolean) => void) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [importing, setImporting] = useState(false);
 	const [error, setError] = useState<string>();
 	const [failures, setFailures] = useState<{ id: string; title: string; error?: string }[]>([]);
+	const busy = (value: boolean) => {
+		setImporting(value);
+		onImporting?.(value);
+	};
 	const run = async (ids: string[], folders?: string[]) => {
-		setImporting(true);
+		busy(true);
 		setError(undefined);
 		setFailures([]);
 		try {
@@ -90,7 +100,7 @@ export function useImportRun(source: ImportSource, onDone: (results: ImportResul
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("sessionImport.failed"));
 		} finally {
-			setImporting(false);
+			busy(false);
 		}
 	};
 	return { importing, error, failures, run };
@@ -123,7 +133,7 @@ function useAgentBlocks() {
 	return (harness: string) => agentBlock(readiness.data?.agents?.find((agent) => agent.id === harness));
 }
 
-function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; onClose: () => void; onImporting: (importing: boolean) => void }) {
 	const { t } = useTranslation();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const name = workspaces.data?.find((workspace) => workspace.id === projectId)?.name ?? projectId;
@@ -139,7 +149,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 		if (created) recordImport(projectId, created);
 		showImported(results);
 		if (!results.some((result) => result.status === "failed")) onClose();
-	});
+	}, onImporting);
 	return (
 		<>
 			<div className={settingsDialogHeaderClass}>
@@ -170,7 +180,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
-				<Button variant="secondary" onClick={onClose}>
+				<Button variant="secondary" disabled={importing} onClick={onClose}>
 					{t("sessionImport.cancel")}
 				</Button>
 				<Button variant="primary" disabled={importing || !selected.length} onClick={() => void run(selected.map((chat) => chat.id))}>
@@ -181,7 +191,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	);
 }
 
-function Folders({ onClose }: { onClose: () => void }) {
+function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (importing: boolean) => void }) {
 	const { t } = useTranslation();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
@@ -234,7 +244,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 		if (results.some((result) => result.status === "created")) closeSessionImportOffer();
 		for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
 		if (!results.some((result) => result.status === "failed")) onClose();
-	});
+	}, onImporting);
 	const otherOpen = showOther || !suggested.length;
 	const row = (folder: Folder) => (
 		<FolderRow key={folder.key} folder={folder} checked={isPicked(folder)} disabled={importing} onCheckedChange={(checked) => toggle(folder, checked)} />
@@ -269,7 +279,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
-				<Button variant="secondary" onClick={onClose}>
+				<Button variant="secondary" disabled={importing} onClick={onClose}>
 					{t("sessionImport.cancel")}
 				</Button>
 				<Button

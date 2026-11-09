@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
@@ -106,6 +106,21 @@ it("reviews the project's chats, marks a signed-out agent and imports the checke
 	await waitFor(() => expect(useSessionImportStore.getState().dialog).toBeNull());
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["bb"] } });
 	expect(useSessionImportStore.getState().importedCounts).toEqual({ todo: 1 });
+});
+
+it("stays open while importing, so a failure that lands after Esc is still shown", async () => {
+	renderWith(null, [chat("a", "claude-code", { projectId: "todo" })]);
+	act(() => useSessionImportStore.getState().openProjectImport("todo"));
+	const dialog = await screen.findByRole("dialog", { name: "Import chats into todo-api" });
+	let respond!: (value: unknown) => void;
+	api.POST.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)));
+	fireEvent.click(await within(dialog).findByRole("button", { name: "Import 1 chat" }));
+	expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+	fireEvent.keyDown(dialog, { key: "Escape" });
+	act(() => respond({ data: { results: [{ id: "a", status: "failed", error: "changed" }] } }));
+	expect(await within(dialog).findByRole("alert")).toHaveTextContent("Chat a: changed");
+	fireEvent.keyDown(dialog, { key: "Escape" });
+	await waitFor(() => expect(useSessionImportStore.getState().dialog).toBeNull());
 });
 
 it("preselects busy folders, folds the rest and adds the picked ones as projects", async () => {
