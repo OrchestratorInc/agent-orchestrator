@@ -15,11 +15,6 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: () => "Import failed",
 }));
-const openSession = vi.hoisted(() => vi.fn());
-vi.mock("../lib/navigate-to-session", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../lib/navigate-to-session")>()),
-	useNavigateToSession: () => openSession,
-}));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	workspaceQueryOptions: {
@@ -52,7 +47,6 @@ function renderWith(node: ReactNode, candidates: unknown[], agents = [{ id: "cla
 beforeEach(() => {
 	api.GET.mockReset();
 	api.POST.mockReset();
-	openSession.mockReset();
 	window.localStorage.clear();
 	useSessionImportStore.setState({ dialog: null, dismissedProjects: [], importedCounts: {} });
 	useUiStore.setState({ sessionImportOfferClosed: false, globalToasts: [] });
@@ -147,8 +141,7 @@ it("preselects busy folders, folds the rest and adds the picked ones as projects
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 	const [toast] = useUiStore.getState().globalToasts;
 	expect(toast?.title).toBe("Imported 3 chats");
-	toast?.action?.run();
-	expect(openSession).toHaveBeenCalledWith("alpha", "s-ccc");
+	expect(toast?.action).toBeUndefined();
 	expect(useSessionImportStore.getState().importedCounts).toEqual({ alpha: 3 });
 });
 

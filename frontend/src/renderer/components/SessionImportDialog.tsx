@@ -6,7 +6,6 @@ import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { agentLabel } from "../lib/agent-options";
 import { formatTimeCompact } from "../lib/format-time";
-import { useNavigateToSession } from "../lib/navigate-to-session";
 import {
 	agentBlock,
 	countBy,
@@ -109,22 +108,12 @@ export function useImportRun(source: ImportSource, onDone: (results: ImportResul
 function useImportedToast() {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	return (results: ImportResult[]): ImportCandidate[] => {
 		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
 		if (!created.size) return [];
-		const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
-			.filter((chat) => chat.sessionId && created.has(chat.id))
-			.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
-		const latest = imported[0];
-		const sessionId = latest?.sessionId;
-		showGlobalToast(t("sessionImport.foldersImported", { count: created.size }), undefined, {
-			tone: "success",
-			durationMs: 10_000,
-			action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
-		});
-		return imported;
+		showGlobalToast(t("sessionImport.foldersImported", { count: created.size }), undefined, "success");
+		return (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? []).filter((chat) => chat.sessionId && created.has(chat.id));
 	};
 }
 
