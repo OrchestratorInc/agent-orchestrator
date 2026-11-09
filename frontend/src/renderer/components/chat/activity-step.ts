@@ -63,13 +63,16 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
 	const web = /^Searched the web(?:\s+for\s+([\s\S]+))?$/i.exec(summary);
 	if (web) return webSearchStep(web[1]);
 	// Without a command line the summary is the provider's title for the call. Claude
-	// Code titles a command with the command itself in backticks; any other title may
-	// be prose that starts like one ("make the build pass", "touch up README"), so
-	// only a backticked title is read as a command.
+	// Code titles a command with the command itself in backticks. Any other title may
+	// be prose that starts like one ("make the build pass", "touch up README"), so it
+	// is shown as written rather than read as a command.
 	const backticked = title.length > 2 && title.startsWith("`") && title.endsWith("`");
-	const step = backticked && summary ? describeKnownCommand(summary) : undefined;
-	return step ?? GENERIC_STEP;
+	if (backticked && summary) return describeCommandStep(summary);
+	return title && !NAMELESS_TITLE.test(title) ? { done: title, live: title, icon: "run" } : GENERIC_STEP;
 }
+
+/** A provider's title that names no particular command, so it says nothing a row can use. */
+const NAMELESS_TITLE = /^(?:(?:ran|run|running)(?: a)? command|terminal|bash|shell|sh|exec|execute|command)$/i;
 
 /**
  * The step for one of an agent's built-in tools. Claude Code's Read, Grep,
@@ -193,7 +196,42 @@ export function describeCommandStep(command: string): CommandStep {
 	const step = describeKnownCommand(command);
 	if (step) return step;
 	const binary = mainSegment(command)?.binary;
-	return binary ? { done: "Ran", live: "Running", target: binary, icon: "run" } : GENERIC_STEP;
+	if (binary) return { done: "Ran", live: "Running", target: binary, icon: "run" };
+	return shellSetupStep(command) ?? GENERIC_STEP;
+}
+
+/**
+ * A line with no program to name, only shell setup, names that instead: `cd src`,
+ * `export CI=1`, `source .env`, `test -f a`.
+ */
+function shellSetupStep(command: string): CommandStep | undefined {
+	for (const line of logicalLines(command)) {
+		for (const words of splitSegments(tokenize(line))) {
+			const segment = toSegment(words);
+			const values = segment ? positionals(segment.args) : [];
+			switch (segment?.binary) {
+				case "cd":
+				case "pushd":
+					return { done: "Changed folder", live: "Changing folder", ...(values[0] ? fileTarget(values[0]) : {}), icon: "list" };
+				case "popd":
+					return { done: "Changed folder", live: "Changing folder", icon: "list" };
+				case "export": {
+					const names = values.map((value) => value.split("=")[0]!).filter(Boolean);
+					return { done: "Set", live: "Setting", target: names.join(", ") || "variables", icon: "tool" };
+				}
+				case "set":
+					return { done: "Set shell options", live: "Setting shell options", icon: "tool" };
+				case "source":
+				case ".":
+					return { done: "Loaded", live: "Loading", ...(values[0] ? fileTarget(values[0]) : { target: "script" }), icon: "read" };
+				case "test":
+				case "[":
+				case "[[":
+					return { done: "Checked condition", live: "Checking condition", icon: "check" };
+			}
+		}
+	}
+	return undefined;
 }
 
 type Segment = { binary: string; binaryPath: string; args: string[]; writeTarget?: string; append?: boolean };

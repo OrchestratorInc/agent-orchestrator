@@ -268,6 +268,18 @@ describe("describeCommandStep", () => {
 		expect(describeCommandStep("docker ps").icon).toBe("run");
 		expect(done("")).toBe("Ran command");
 	});
+
+	it("names a line that only sets up the shell", () => {
+		expect(done("cd frontend")).toBe("Changed folder frontend");
+		expect(live("cd /w/app/src")).toBe("Changing folder src");
+		expect(done("export CI=1 FOO=2")).toBe("Set CI, FOO");
+		expect(done("set -euo pipefail")).toBe("Set shell options");
+		expect(done("source .env")).toBe("Loaded .env");
+		expect(done("test -f a.ts")).toBe("Checked condition");
+		expect(done("[ -f a.ts ]")).toBe("Checked condition");
+		// Setup in front of real work does not name it.
+		expect(done("cd frontend && npm test")).toBe("Ran tests");
+	});
 });
 
 describe("program checks", () => {
@@ -294,13 +306,19 @@ describe("activityCommandStep", () => {
 		expect(text(activityCommandStep(commandActivity({ summary: "`git status`" })), "done")).toBe("Checked git status");
 	});
 
-	it("keeps the generic label for a prose summary", () => {
-		expect(text(activityCommandStep(commandActivity({ summary: "Ran a command" })), "done")).toBe("Ran command");
-		expect(text(activityCommandStep(commandActivity({ summary: "List files in the folder" })), "done")).toBe("Ran command");
+	it("shows a provider's title as written when there is no command line", () => {
+		expect(text(activityCommandStep(commandActivity({ summary: "List files in the folder" })), "done")).toBe("List files in the folder");
 		// Prose can start with a program's name; only a backticked title is a command.
-		expect(text(activityCommandStep(commandActivity({ summary: "make the build pass" })), "done")).toBe("Ran command");
-		expect(text(activityCommandStep(commandActivity({ summary: "touch up README" })), "done")).toBe("Ran command");
+		expect(text(activityCommandStep(commandActivity({ summary: "make the build pass" })), "done")).toBe("make the build pass");
+		expect(text(activityCommandStep(commandActivity({ summary: "touch up README" })), "done")).toBe("touch up README");
 		expect(text(activityCommandStep(commandActivity({ summary: "`touch README`" })), "done")).toBe("Created README");
+		expect(text(activityCommandStep(commandActivity({ summary: "`docker ps`" })), "done")).toBe("Ran docker");
+	});
+
+	it("keeps the generic label for a title that names nothing", () => {
+		expect(text(activityCommandStep(commandActivity({ summary: "Ran a command" })), "done")).toBe("Ran command");
+		expect(text(activityCommandStep(commandActivity({ summary: "Terminal" })), "done")).toBe("Ran command");
+		expect(text(activityCommandStep(commandActivity({ summary: "" })), "done")).toBe("Ran command");
 	});
 });
 
