@@ -75,6 +75,7 @@ import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchest
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -199,13 +200,18 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }

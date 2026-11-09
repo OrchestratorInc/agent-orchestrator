@@ -45,10 +45,15 @@ import { SessionOwnerTag } from "./SessionOwnerTag";
 // SessionTabsTopbar (PageTopbar.tsx); this renders only the actions, so it has
 // no frame of its own. Orchestrators open the Kanban board and workers open
 // their orchestrator.
+type SessionTopbarRoute = { hostId?: string; projectId?: string; sessionId?: string };
 type SessionTopbarActionsProps = {
 	sessionAction?: ReactNode;
 	compactActions?: boolean;
 	startingOrchestrator?: boolean;
+	/** The session this cluster belongs to. A session view passes its own so a
+	 *  switch still rendering in the background never pairs the old view with
+	 *  the new route's actions. Defaults to the route. */
+	route?: SessionTopbarRoute;
 };
 
 /** The simplified cluster is a Developer Mode preview; everyone else keeps the previous one. */
@@ -61,11 +66,13 @@ function SimplifiedSessionTopbarActions({
 	sessionAction,
 	compactActions = false,
 	startingOrchestrator = false,
+	route,
 }: SessionTopbarActionsProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const routeParams = useParams({ strict: false }) as SessionTopbarRoute;
+	const params = route ?? routeParams;
 	const hostId = params.hostId;
 	const currentSessionId = startingOrchestrator ? undefined : params.sessionId;
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);
@@ -314,15 +321,13 @@ function LegacySessionTopbarActions({
 	sessionAction,
 	compactActions = false,
 	startingOrchestrator = false,
-}: {
-	sessionAction?: ReactNode;
-	compactActions?: boolean;
-	startingOrchestrator?: boolean;
-} = {}) {
+	route,
+}: SessionTopbarActionsProps = {}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const routeParams = useParams({ strict: false }) as SessionTopbarRoute;
+	const params = route ?? routeParams;
 	const hostId = params.hostId;
 	const currentSessionId = startingOrchestrator ? undefined : params.sessionId;
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);
