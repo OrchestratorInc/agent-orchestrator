@@ -216,9 +216,9 @@ export function UsagePricesDialog({
 				</div>
 				<div className={settingsDialogFooterClass}>
 					<DialogClose asChild>
-						<Button type="button" variant="footer" disabled={busy}>{t("usage.prices.cancel")}</Button>
+						<Button type="button" variant="secondary" disabled={busy}>{t("usage.prices.cancel")}</Button>
 					</DialogClose>
-					<Button type="button" variant="footer-primary" disabled={busy || !loaded} onClick={() => void submit()}>
+					<Button type="button" variant="primary" disabled={busy || !loaded} onClick={() => void submit()}>
 						{t("usage.prices.save")}
 					</Button>
 				</div>
