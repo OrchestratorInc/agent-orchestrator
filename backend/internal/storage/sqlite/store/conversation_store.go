@@ -4229,7 +4229,8 @@ func (s *Store) LoadConversationSnapshotRange(
 		return ConversationSnapshot{}, err
 	}
 
-	batchedDeliveries := s.conversationBatchedDeliveries(ctx, conversationID)
+	// Only the batches this page's messages belong to, not the whole history.
+	batchedDeliveries := s.conversationBatchedDeliveriesInRange(ctx, conversationID, max(oldest, floor+1), beforeSequence)
 
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -5431,11 +5432,33 @@ func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationI
 	}
 	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
 	for _, turn := range turns {
-		out = append(out, domain.ConversationBatchedDelivery{
-			TurnID:              turn.ID,
-			DeliveredWithTurnID: turn.PromotedToTurnID.String,
-			SteerActivityID:     turn.BatchDeliverySteerID,
-		})
+		out = append(out, batchedDelivery(gen.ListConversationBatchedTurnsInRangeRow(turn)))
 	}
 	return out
+}
+
+// conversationBatchedDeliveriesInRange reads the deliveries a page needs: every
+// member of a batch with a message in [from, before), siblings included, so a
+// drain finds its human message. A failed read leaves them out.
+func (s *Store) conversationBatchedDeliveriesInRange(ctx context.Context, conversationID string, from, before int64) []domain.ConversationBatchedDelivery {
+	turns, err := s.qr.ListConversationBatchedTurnsInRange(ctx, gen.ListConversationBatchedTurnsInRangeParams{
+		ConversationID: conversationID, FromSequence: from, BeforeSequence: before,
+	})
+	if err != nil {
+		slog.Warn("list batched turns in range failed", "conversation", conversationID, "error", err)
+		return nil
+	}
+	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, batchedDelivery(turn))
+	}
+	return out
+}
+
+func batchedDelivery(row gen.ListConversationBatchedTurnsInRangeRow) domain.ConversationBatchedDelivery {
+	return domain.ConversationBatchedDelivery{
+		TurnID:              row.ID,
+		DeliveredWithTurnID: row.PromotedToTurnID.String,
+		SteerActivityID:     row.BatchDeliverySteerID,
+	}
 }

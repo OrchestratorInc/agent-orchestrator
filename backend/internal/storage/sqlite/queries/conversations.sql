@@ -2140,3 +2140,24 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND batched_input = 1
   AND promoted_to_turn_id IS NOT NULL
   AND batch_delivery_kind != '';
+
+-- The batched turns a page needs: every member of a batch with a message in
+-- [from_sequence, before_sequence), so a drain can still find its siblings'
+-- human message. Bounded by the page rather than by the whole history.
+-- name: ListConversationBatchedTurnsInRange :many
+SELECT member.id, member.promoted_to_turn_id, member.batch_delivery_kind, member.batch_delivery_steer_id
+FROM conversation_turns AS member
+WHERE member.conversation_id = sqlc.arg(conversation_id)
+  AND member.batched_input = 1
+  AND member.batch_delivery_kind != ''
+  AND member.promoted_to_turn_id IN (
+      SELECT loaded.promoted_to_turn_id
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS loaded ON loaded.id = message.turn_id
+      WHERE message.conversation_id = sqlc.arg(conversation_id)
+        AND message.sequence >= sqlc.arg(from_sequence)
+        AND message.sequence < sqlc.arg(before_sequence)
+        AND loaded.batched_input = 1
+        AND loaded.promoted_to_turn_id IS NOT NULL
+        AND loaded.batch_delivery_kind != ''
+  );

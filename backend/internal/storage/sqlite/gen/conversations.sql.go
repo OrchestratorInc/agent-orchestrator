@@ -1538,6 +1538,69 @@ func (q *Queries) ListConversationBatchedTurns(ctx context.Context, conversation
 	return items, nil
 }
 
+const listConversationBatchedTurnsInRange = `-- name: ListConversationBatchedTurnsInRange :many
+SELECT member.id, member.promoted_to_turn_id, member.batch_delivery_kind, member.batch_delivery_steer_id
+FROM conversation_turns AS member
+WHERE member.conversation_id = ?1
+  AND member.batched_input = 1
+  AND member.batch_delivery_kind != ''
+  AND member.promoted_to_turn_id IN (
+      SELECT loaded.promoted_to_turn_id
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS loaded ON loaded.id = message.turn_id
+      WHERE message.conversation_id = ?1
+        AND message.sequence >= ?2
+        AND message.sequence < ?3
+        AND loaded.batched_input = 1
+        AND loaded.promoted_to_turn_id IS NOT NULL
+        AND loaded.batch_delivery_kind != ''
+  )
+`
+
+type ListConversationBatchedTurnsInRangeParams struct {
+	ConversationID string
+	FromSequence   int64
+	BeforeSequence int64
+}
+
+type ListConversationBatchedTurnsInRangeRow struct {
+	ID                   string
+	PromotedToTurnID     sql.NullString
+	BatchDeliveryKind    string
+	BatchDeliverySteerID string
+}
+
+// The batched turns a page needs: every member of a batch with a message in
+// [from_sequence, before_sequence), so a drain can still find its siblings'
+// human message. Bounded by the page rather than by the whole history.
+func (q *Queries) ListConversationBatchedTurnsInRange(ctx context.Context, arg ListConversationBatchedTurnsInRangeParams) ([]ListConversationBatchedTurnsInRangeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationBatchedTurnsInRange, arg.ConversationID, arg.FromSequence, arg.BeforeSequence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationBatchedTurnsInRangeRow{}
+	for rows.Next() {
+		var i ListConversationBatchedTurnsInRangeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PromotedToTurnID,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInterruptedSessions = `-- name: ListInterruptedSessions :many
 WITH wanted_session AS (
     SELECT CAST(j.value AS TEXT) AS session_id
