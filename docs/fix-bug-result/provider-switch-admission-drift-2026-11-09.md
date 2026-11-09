@@ -138,6 +138,36 @@ cd backend && go test ./internal/storage/sqlite/... ./internal/service/chat/... 
 - 本修复不再让同一 branch 同时被两个 worktree 占用时的恢复成功（既有行为，与本次 bug 无关）。
 - spawn 阶段 500（`ORCHESTRATOR_SPAWN_FAILED`，`error_type=filesystem`，13.6s）是替换失败的直接原因，但无 daemon 日志可复原具体 syscall。建议把桌面拉起的 daemon stderr 也落到 `~/.ao/daemon.log`（当前只在 keep-alive 模式重定向）。
 
+
+## 全局冒烟（Step 6）
+
+触发条件：改动 3 个文件（跨查询/存储层）。
+
+- **Phase A 功能清单**：数据来源为 KB（`docs/project-note/03-核心数据业务流/`，8 条业务流全部被 scenario extractor 解析）。
+- **Phase B API 冒烟**（隔离数据副本 + 改动后 dev daemon，port 3198）：
+
+  | 端点 | 结果 |
+  |---|---|
+  | `GET /api/v1/projects` | 200 |
+  | `GET /api/v1/sessions` | 200 |
+  | `GET /api/v1/orchestrators` | 200 |
+  | `GET /api/v1/agents` | 200 |
+  | `GET /api/v1/sessions/agent-orchestrator-1` | 200 |
+  | `GET /api/v1/sessions/agent-orchestrator-1/conversation` | 200 |
+
+- **Phase C/D**：本次为纯后端存储层修复，无前端可见行为，未跑浏览器链路。
+- **Phase E 业务质量门禁**（`business-quality-gate.py`，run id `bug-provider-switch-admission-drift-20261109a`）：
+  - `--no-sdd`（无 `docs/vX.Y.Z/契约规范.md`），KB 为 `03-核心数据业务流/`；
+  - `scenario_extract`：8/8 业务流覆盖（normal 8 / error 8 / boundary 7），`mock_ceiling_risk=false`；
+  - `pytest`：84 passed / 0 failed，仅本轮生成的 oracle 测试；
+  - `real_verification`：`exit 0`，`evidence_valid=true`（`business-verification.json` 绑定 run id 与 SDD/KB/目标代码 hash，4 条业务断言全 passed）；
+  - **门禁结论：`BLOCK`，原因 `engine_output_invalid`** —— 本仓捆绑的 `ai-quality-check.py` 为 0.7.2（`pyproject.toml` 声明 0.7.4），其 `check` 子命令**不存在 `--strict-gate`**：
+    ```
+    ai-quality: error: unrecognized arguments: --strict-gate
+    ```
+  - 因此严格业务门禁**未能取得 PASS**。按流程记录为阻塞项：需把引擎升级到含 `--strict-gate` 的版本后，用**新 run id** 重跑 Phase E，不得复用本次证据。
+- **Phase F/G**：冒烟未发现与本次改动相关的新 bug；日志中 `reconcile ... scheduler leadership fence is stale` 属沙箱内多实例争用领导权造成的既有现象，未在单实例真实环境下复现。
+
 ## 涉及文件
 
 - `backend/internal/storage/sqlite/queries/execution_permit.sql`（新增 `AcceptStaleSessionRestart`）
