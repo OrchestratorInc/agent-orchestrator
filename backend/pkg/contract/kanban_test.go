@@ -887,6 +887,45 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayWorking,
 		},
 		{
+			name:       "an exited worker outranks a mergeable pr",
+			session:    sessionAt(contract.ActivityExited),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayExited,
+		},
+		{
+			name:    "an exited worker outranks an approved pr",
+			session: sessionAt(contract.ActivityExited),
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				Mergeability:   contract.MergeBlocked,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
+			},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayExited,
+		},
+		{
+			name: "a silent worker outranks a mergeable pr",
+			session: contract.KanbanSessionFacts{
+				SessionFacts: contract.SessionFacts{
+					Activity:       contract.ActivityIdle,
+					SignalExpected: true,
+					LastActivityAt: time.Unix(0, 0),
+				},
+			},
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayNoSignal,
+		},
+		{
+			name:       "a merged pr reports the merge after the worker exits",
+			session:    sessionAt(contract.ActivityExited),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayMerged,
+		},
+		{
 			name:       "a merged pr reports the merge while the worker is still working",
 			session:    sessionAt(contract.ActivityActive),
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},

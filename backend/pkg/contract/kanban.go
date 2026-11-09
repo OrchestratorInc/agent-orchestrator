@@ -318,7 +318,7 @@ func displayStatusInColumn(
 	case KanbanNeedsReview:
 		return inReviewDisplayStatus(session, pr, now, noSignalGrace)
 	case KanbanReady:
-		return readyDisplayStatus(session, pr)
+		return readyDisplayStatus(session, pr, now, noSignalGrace)
 	default:
 		return buildingDisplayStatus(session, now, noSignalGrace)
 	}
@@ -456,18 +456,19 @@ func changesRequestedOn(pr KanbanPRFacts) bool {
 // readyDisplayStatus reports how the PR landed, or what is left between an
 // approval and the merge button. Merged and closed come first: they are what
 // happened to the PR, and nothing the worker does now can override them.
-func readyDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts) DisplayStatus {
+func readyDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
 	switch {
 	case pr.Merged:
 		return DisplayMerged
 	case pr.Closed:
 		return DisplayClosed
+	}
+	if status, ok := workerNeedsAttention(session, now, noSignalGrace); ok {
+		return status
+	}
+	switch {
 	case session.Activity == ActivityActive:
 		return DisplayWorking
-	case session.Activity == ActivityBlocked:
-		return DisplayBlocked
-	case session.Activity == ActivityWaitingInput:
-		return DisplayNeedsInput
 	case pr.Mergeability == MergeMergeable:
 		return DisplayMergeable
 	default:
