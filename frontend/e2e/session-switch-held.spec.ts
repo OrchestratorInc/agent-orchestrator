@@ -17,10 +17,12 @@ const sessions = ["alpha", "bravo", "charlie"].map((name) => ({
 type HeldSession = (typeof sessions)[number];
 
 // isMacPlatform() reads platform, userAgent and userAgentData together; see
-// cross-platform-focus.spec.ts. Windows and Linux share the non-macOS chords.
+// cross-platform-focus.spec.ts. The session-jump chord is ⌘ on macOS and Ctrl
+// elsewhere. (Next/previous session arrive through the Electron menu, which a
+// browser run does not have.)
 const PLATFORMS = [
-	{ name: "macOS", navigator: "MacIntel", userAgentData: "macOS", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", nextSession: "Meta+Shift+BracketRight" },
-	{ name: "Windows", navigator: "Win32", userAgentData: "Windows", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", nextSession: "Control+PageDown" },
+	{ name: "macOS", navigator: "MacIntel", userAgentData: "macOS", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", jump: "Meta" },
+	{ name: "Windows", navigator: "Win32", userAgentData: "Windows", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", jump: "Control" },
 ] as const;
 
 const at = "2026-11-09T10:00:00Z";
@@ -164,8 +166,13 @@ test("renderer: streaming replies keep updating through rapid session switches @
 	await throttle(page, 4);
 	try {
 		for (const session of [sessions[1], sessions[2], sessions[0], sessions[2], sessions[1], sessions[0], sessions[1]]) {
+			const clicked = Date.now();
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
 			await expectShowing(page, session);
+			// A streaming session on screen must not stall the switch: the hold
+			// gives way after a bounded time even if the background render
+			// keeps restarting. Loose for a throttled CI machine.
+			expect(Date.now() - clicked).toBeLessThan(3_000);
 			// The shown session keeps streaming after the switch.
 			const seen = harness.chunks(session);
 			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });
@@ -185,7 +192,11 @@ for (const platform of PLATFORMS) {
 		await expect(composer).toHaveText("kept");
 		await throttle(page, 6);
 
-		await page.keyboard.press(platform.nextSession);
+		// ⌘/Ctrl+1–9 opens the nth session in sidebar order; aim at one that is not this one.
+		const order = await page.getByRole("button", { name: /^Open Held / }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+		const target = order.findIndex((label) => label !== `Open ${sessions[0].title}`);
+		expect(target).toBeGreaterThanOrEqual(0);
+		await page.keyboard.press(`${platform.jump}+${target + 1}`);
 		// Straight away, while the destination may still be rendering.
 		await page.keyboard.type("zz");
 		await expect(page).not.toHaveURL(new RegExp(`/sessions/${sessions[0].id}$`));
