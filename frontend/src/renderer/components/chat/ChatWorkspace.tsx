@@ -194,6 +194,7 @@ import {
 	hiddenTimelineTurnIds,
 	isUserQueuePrompt,
 	queuedTurnIds,
+	turnsThatDidWork,
 	type ConversationPlan,
 	type ConversationSnapshot,
 	type ControllerState,
@@ -203,7 +204,6 @@ import {
 	type ChatSkill,
 	type ChatSteerOutcome,
 	type ChatEditOutcome,
-	type ActivityKind,
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationItem,
@@ -5612,8 +5612,6 @@ type SettleAnchor = {
 	offset: number;
 };
 
-/** Activities that act on the workspace: a turn with any of them may not be run twice unasked. */
-const TURN_WORK_ACTIVITY_KINDS: ReadonlySet<ActivityKind> = new Set(["command", "file_change", "mcp_tool", "ao_action"]);
 /** How long after a login a waiting turn still runs again by itself. */
 const LOGIN_RETRY_WINDOW_MS = 60_000;
 
@@ -5715,16 +5713,6 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 	);
 }
 
-/** The turns that ran a tool or changed a file, so sending one again could repeat that. */
-function turnsThatDidWork(snapshot: ConversationSnapshot): Set<string> {
-	const turnIds = new Set<string>();
-	for (const turn of snapshot.turns) if (turn.diff?.files.length) turnIds.add(turn.id);
-	for (const item of snapshot.items) {
-		if (item.turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)) turnIds.add(item.turnId);
-	}
-	return turnIds;
-}
-
 /**
  * A refused login, for the whole chat: the band on the chat box, the line under
  * each refused message, and sending the latest one again once the login takes.
@@ -5777,11 +5765,10 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
-	// Sending it again was refused (the daemon or the network) while the band offered
-	// it: the band says what failed and offers it once more.
-	const sendError = refusedId && (loginReturn || loginConfirmed) && forRefused(retryControl?.turnId)
-		? retryControl?.error
-		: undefined;
+	// Sending it again was refused (the daemon or the network), also from the
+	// signed-out band before any login: the band says what failed and offers it once more.
+	const sendError = refusedId && forRefused(retryControl?.turnId) ? retryControl?.error : undefined;
+	const loggedIn = loginReturn?.loggedInAt !== undefined || loginConfirmed;
 	// The message this chat sends again on its own, from the moment it starts until
 	// that send settles: the retry's own pending state shows a render later, and the
 	// band must not offer Send again for a message already on its way.
@@ -5870,7 +5857,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 		// Only when the message can be sent again: the waiting band offers that, so a
 		// login finished where this chat does not look always has a way on. A cloud
 		// login is not watched from here, so a cloud chat stays open.
-		locked: Boolean(refused) && !cloud && resendable && (state === "signedOut" || state === "waiting"),
+		locked: Boolean(refused) && !cloud && resendable &&
+			(state === "signedOut" || state === "waiting" || (state === "failed" && !loggedIn)),
 		...(refused ? {
 			band: {
 				harness: snapshot.harness,
@@ -5882,7 +5870,7 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				// Offered from signed out on, also for a message that did work: sending it
 				// again is the user's click, never automatic.
 				...(resendable ? { onSendAgain: sendAgain } : {}),
-				...(sendError ? { error: sendError } : {}),
+				...(sendError ? { error: sendError, signedOut: !loggedIn } : {}),
 			},
 		} : {}),
 	};

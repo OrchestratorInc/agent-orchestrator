@@ -6,7 +6,7 @@ import { Button } from "../ui/button";
 /**
  * Where a refused login stands: still signed out, the Harness page left open
  * without a login, logged in and sending the message again, logged in with
- * nothing sent again, or logged in with the send refused.
+ * nothing sent again, or the send refused, before or after the login.
  */
 export type ChatLoginState = "signedOut" | "waiting" | "sending" | "loggedIn" | "failed";
 
@@ -25,6 +25,8 @@ export interface ChatLoginBandProps {
 	onSendAgain?: () => void;
 	/** Why sending it again failed. */
 	error?: string;
+	/** Sending it again failed before the login took, so Log in stays on offer. */
+	signedOut?: boolean;
 }
 
 /**
@@ -32,7 +34,7 @@ export interface ChatLoginBandProps {
  * and what to do about it, then how the login is going. It sits where the user was
  * about to write, so the timeline keeps only a quiet line under the message.
  */
-export function ChatLoginBand({ harness, agent, host, state, queued, onLogin, onSendAgain, error }: ChatLoginBandProps) {
+export function ChatLoginBand({ harness, agent, host, state, queued, onLogin, onSendAgain, error, signedOut }: ChatLoginBandProps) {
 	const { t } = useTranslation();
 	let mark;
 	let title: string;
@@ -55,7 +57,16 @@ export function ChatLoginBand({ harness, agent, host, state, queued, onLogin, on
 		mark = <CircleAlert aria-hidden="true" className="size-4 shrink-0 text-destructive" />;
 		title = t("chat.login.sendFailed");
 		detail = error;
-		action = onSendAgain ? <Button type="button" variant="primary" size="sm" onClick={onSendAgain} className="px-3">{t("chat.login.sendAgainAction")}</Button> : undefined;
+		// Still signed out, the band keeps the signed-out band's actions: the login
+		// is what the user most likely needs.
+		action = signedOut
+			? (
+				<>
+					{onSendAgain ? <Button type="button" variant="ghost" size="sm" onClick={onSendAgain} className="px-3">{t("chat.login.sendAgainAction")}</Button> : null}
+					<Button type="button" variant="primary" size="sm" onClick={onLogin} className="px-3">{t("chat.login.action")}</Button>
+				</>
+			)
+			: onSendAgain ? <Button type="button" variant="primary" size="sm" onClick={onSendAgain} className="px-3">{t("chat.login.sendAgainAction")}</Button> : undefined;
 	} else if (state === "sending" || state === "loggedIn") {
 		mark = <Check aria-hidden="true" className="size-4 shrink-0 text-status-ready" />;
 		title = t("chat.login.loggedIn", { agent });

@@ -150,6 +150,23 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().settingsModal).toBeFalsy();
 	});
 
+	it("says when Send again failed while signed out, and keeps the login on offer", async () => {
+		const retry = vi.fn();
+		const { rerender } = render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+
+		// Refused before a retry turn existed: no login took, so nothing else would say so.
+		rerender(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry, error: "The daemon is not reachable", turnId: "turn-1" }} />);
+		expect(band()).toHaveAttribute("data-login-state", "failed");
+		expect(band()).toHaveTextContent("Couldn’t send your message · The daemon is not reachable");
+		// Still signed out: the login stays the way on, and typing stays locked.
+		expect(within(band()).getByRole("button", { name: "Log in" })).toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-readonly", "true");
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledTimes(2);
+		expect(retry).toHaveBeenLastCalledWith("turn-1");
+	});
+
 	it("opens the chat box once the daemon finds the login working again, however it came back", async () => {
 		const retry = vi.fn();
 		const snapshot = signedOutSnapshot({ didWork: false });
@@ -384,6 +401,22 @@ describe("ChatWorkspace refused login", () => {
 		expect(document.querySelectorAll("[data-chat-message-role=user]")).toHaveLength(1);
 		expect(document.querySelector('[data-chat-message-id="user-retry"]')).toBeInTheDocument();
 		expect(screen.queryByTestId("login-status")).toBeNull();
+	});
+
+	it("keeps a refused message that did work in the chat once it is sent again", () => {
+		const snapshot = signedOutSnapshot({ didWork: true });
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items.find((item) => item.kind === "message" && item.role === "user")!;
+		const last = Math.max(...snapshot.items.map((item) => item.sequence));
+		// Sent again from the signed-out band, and refused straight away.
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", diff: undefined, retryOfTurnId: "turn-1" }];
+		snapshot.items = [...snapshot.items, { ...prompt, id: "user-retry", turnId: "turn-2", sequence: last + 1 } as typeof prompt];
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+
+		// The command and the edit happened, so they stay, with the message that ran them.
+		expect(document.querySelector(`[data-chat-message-id="${prompt.id}"]`)).toBeInTheDocument();
+		expect(document.querySelector("[data-turn-worked]")).toBeInTheDocument();
+		expect(document.querySelector('[data-chat-message-id="user-retry"]')).toBeInTheDocument();
 	});
 
 	it("keeps the banner when the latest turn did not fail on the login", () => {
