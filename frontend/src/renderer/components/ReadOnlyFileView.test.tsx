@@ -220,9 +220,26 @@ describe("ReadOnlyFileView", () => {
 		expect(screen.getByRole("img")).not.toHaveAttribute("src");
 	});
 
-	it("shows a binary placeholder for a non-image binary file", () => {
-		render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "" })} sessionId="sess-1" />);
+	it("names the file type in a binary file's no-preview message", () => {
+		render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "", path: "suite.zip" })} sessionId="sess-1" />);
+		expect(screen.getByText("Preview isn't available for .zip files.")).toBeInTheDocument();
+	});
+
+	it("keeps the generic binary message for an extensionless file", () => {
+		render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail({ binary: true, content: "", path: "payload" })} sessionId="sess-1" />);
 		expect(screen.getByText("Binary file preview is not available.")).toBeInTheDocument();
+	});
+
+	it("shows a binary file's action under the no-preview message", () => {
+		render(
+			<ReadOnlyFileView
+				annotation={annotation()}
+				binaryAction={<button type="button">Download</button>}
+				detail={baseDetail({ binary: true, content: "" })}
+				sessionId="sess-1"
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
 	});
 
 	it("shows a too-large fallback instead of attempting to render truncated content", () => {

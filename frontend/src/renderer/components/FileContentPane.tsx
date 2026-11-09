@@ -26,6 +26,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { fileMediaKind, type FileMediaKind } from "../lib/file-media";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { isAbsoluteFileReference } from "../lib/workspace-file-path";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
@@ -706,7 +707,12 @@ function CompleteFileView({ annotationReady = true, annotationRange, annotation,
 		);
 	}
 	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
-	return <ReadOnlyFileView annotationRange={annotationRange} annotationReady={annotationReady} source={source} commitSha={commitSha} annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	// A binary artifact has no preview; keep it reachable with a download action
+	// through the same content URL its preview would have streamed from.
+	const binaryDownloadUrl = source.kind === "artifact" && detail.binary && !detail.imageMediaType
+		? artifactContentUrl(sessionId, detail.path, source.rawUrl)
+		: undefined;
+	return <ReadOnlyFileView annotationRange={annotationRange} annotationReady={annotationReady} binaryAction={binaryDownloadUrl ? <DownloadArtifactButton path={detail.path} url={binaryDownloadUrl} /> : undefined} source={source} commitSha={commitSha} annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
 
 // An artifact image loads from its raw URL. The load time joins the URL so a
@@ -720,4 +726,32 @@ function artifactImageUrl(source: FilesSource, version: number | string): string
 	} catch {
 		return undefined;
 	}
+}
+
+// Saves a binary artifact through the browser's download flow. The content URL
+// is fetched to a blob first because a cross-origin link's download attribute
+// is ignored and would navigate the viewer away instead of saving.
+function DownloadArtifactButton({ path, url }: { path: string; url: string }) {
+	const { t } = useTranslation();
+	const [downloading, setDownloading] = useState(false);
+	const download = useCallback(async () => {
+		setDownloading(true);
+		try {
+			const response = await fetch(url);
+			if (!response.ok) throw new Error(String(response.status));
+			const objectUrl = URL.createObjectURL(await response.blob());
+			const anchor = document.createElement("a");
+			anchor.href = objectUrl;
+			anchor.download = path.split("/").pop() || path;
+			anchor.click();
+			URL.revokeObjectURL(objectUrl);
+		} catch {
+			useUiStore.getState().showGlobalToast(t("files.downloadFailed"), undefined, "error");
+		} finally {
+			setDownloading(false);
+		}
+	}, [path, t, url]);
+	return (
+		<Button disabled={downloading} onClick={() => void download()} size="sm" type="button" variant="outline">{t("files.download")}</Button>
+	);
 }

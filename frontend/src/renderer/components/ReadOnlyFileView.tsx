@@ -2,7 +2,7 @@ import { useLatestCallback } from "../hooks/useStable";
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import { mediaCrossOrigin } from "../lib/file-media";
 import { fileReferenceSource } from "../lib/file-reference-source";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
 import { useFileAnnotationReveal } from "./diffs/useFileAnnotationReveal";
 import { useTranslation } from "react-i18next";
@@ -29,6 +29,11 @@ export function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** The trailing ".zip"-style extension of a path, for messages that name the file type. */
+function fileExtension(path: string): string | undefined {
+	return /\.[^./\\]+$/.exec(path)?.[0];
+}
+
 function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | "after", hostId?: string, remoteBaseUrl?: string): string | undefined {
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	if (base === undefined) return undefined;
@@ -41,6 +46,7 @@ function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | 
 // oversized files short-circuit before any tokenization is attempted.
 export function ReadOnlyFileView({
 	annotation,
+	binaryAction,
 	annotationRange,
  annotationReady = true,
 	detail: incomingDetail,
@@ -58,6 +64,8 @@ export function ReadOnlyFileView({
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
+	/** An action shown under a binary file's no-preview message, e.g. a download button. */
+	binaryAction?: ReactNode;
 	annotationRange?: FileAnnotationRange;
  annotationReady?: boolean;
 	detail: WorkspaceFileDetail;
@@ -142,7 +150,12 @@ export function ReadOnlyFileView({
 				</div>
 			);
 		}
-		return <PanelMessage>{t("files.binaryUnavailable")}</PanelMessage>;
+		const extension = fileExtension(detail.path);
+		return (
+			<PanelMessage action={binaryAction}>
+				{extension ? t("files.previewUnavailableType", { extension }) : t("files.binaryUnavailable")}
+			</PanelMessage>
+		);
 	}
 	if (detail.contentTruncated) {
 		return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(detail.size) })}</PanelMessage>;

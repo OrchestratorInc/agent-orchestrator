@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
+import { useUiStore } from "../stores/ui-store";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -25,10 +26,11 @@ vi.mock("./MarkdownEditor", () => ({
 }));
 vi.mock("../hooks/usePierreFileHighlight", () => ({ usePierreFileHighlightReady: () => true }));
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail }: { detail: { binary: boolean; content: string; contentTruncated: boolean; size: number } }) => (
+	ReadOnlyFileView: ({ binaryAction, detail }: { binaryAction?: ReactNode; detail: { binary: boolean; content: string; contentTruncated: boolean; size: number } }) => (
 		<div>
 			<code>{detail.content}</code>
 			<span data-testid="artifact-binary">{String(detail.binary)}</span>
+			<span data-testid="artifact-binary-action">{binaryAction}</span>
 			<span data-testid="artifact-truncated">{String(detail.contentTruncated)}</span>
 			<span data-testid="artifact-size">{detail.size}</span>
 		</div>
@@ -227,6 +229,71 @@ describe("ArtifactFileView", () => {
 		await waitFor(() => expect(screen.getByTestId("artifact-binary")).toHaveTextContent("true"));
 		expect(screen.getByTestId("artifact-truncated")).toHaveTextContent("false");
 		expect(document.querySelector("code")).toHaveTextContent("");
+	});
+
+	const ZIP_URL = "http://ao-preview-artifact.abc123.localhost:3001/classroom_persona_suite.zip?raw=true";
+	const zipBytes = () => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]);
+
+	it("offers a download for a binary artifact no viewer can preview", async () => {
+		fetchMock.mockResolvedValue(new Response(zipBytes(), { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="classroom_persona_suite.zip" path="classroom_persona_suite.zip" rawUrl={ZIP_URL} sessionId="sess-1" />);
+
+		await waitFor(() => expect(screen.getByTestId("artifact-binary")).toHaveTextContent("true"));
+		expect(screen.getByTestId("artifact-binary-action")).toHaveTextContent("Download");
+	});
+
+	it("keeps the download action for a read-only binary artifact", async () => {
+		fetchMock.mockResolvedValue(new Response(zipBytes(), { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="classroom_persona_suite.zip" path="classroom_persona_suite.zip" rawUrl={ZIP_URL} readOnly sessionId="sess-1" />);
+
+		await waitFor(() => expect(screen.getByTestId("artifact-binary")).toHaveTextContent("true"));
+		expect(screen.getByTestId("artifact-binary-action")).toHaveTextContent("Download");
+	});
+
+	it("saves a binary artifact through the browser download flow with its file name", async () => {
+		// A fresh response per call: the body is consumed once by the load and once by the download.
+		fetchMock.mockImplementation(() => Promise.resolve(new Response(zipBytes(), { status: 200 })));
+		const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock-zip");
+		const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockReturnValue(undefined);
+		let anchor: HTMLAnchorElement | undefined;
+		const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+			anchor = this;
+		});
+
+		renderWithQuery(<ArtifactFileView artifactName="classroom_persona_suite.zip" path="classroom_persona_suite.zip" rawUrl={ZIP_URL} sessionId="sess-1" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Download" }, { timeout: 10_000 }));
+
+		await waitFor(() => expect(anchor).toBeDefined(), { timeout: 10_000 });
+		expect(anchor?.download).toBe("classroom_persona_suite.zip");
+		expect(anchor?.href).toBe("blob:mock-zip");
+		expect(createObjectURL).toHaveBeenCalledOnce();
+		expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock-zip");
+		expect(anchorClick).toHaveBeenCalledOnce();
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/classroom_persona_suite.zip?source=artifact&raw=true");
+	});
+
+	it("toasts when a binary artifact's download fails", async () => {
+		let resolveFetch: ((response: Response) => void) | undefined;
+		let calls = 0;
+		fetchMock.mockImplementation(() => {
+			calls += 1;
+			// The first fetch is the artifact load; the deferred one is the download.
+			if (calls === 1) return Promise.resolve(new Response(zipBytes(), { status: 200 }));
+			return new Promise<Response>((resolve) => { resolveFetch = resolve; });
+		});
+
+		renderWithQuery(<ArtifactFileView artifactName="classroom_persona_suite.zip" path="classroom_persona_suite.zip" rawUrl={ZIP_URL} sessionId="sess-1" />);
+		const downloadButton = await screen.findByRole("button", { name: "Download" }, { timeout: 10_000 });
+		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast").mockReturnValue(undefined);
+		expect(downloadButton).toBeEnabled();
+		await userEvent.click(downloadButton);
+		expect(downloadButton).toBeDisabled();
+		resolveFetch?.(new Response("gone", { status: 404 }));
+
+		await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't download the file.", undefined, "error"), { timeout: 10_000 });
+		expect(downloadButton).toBeEnabled();
 	});
 
 	it("bounds oversized artifact reads and marks the content truncated", async () => {
