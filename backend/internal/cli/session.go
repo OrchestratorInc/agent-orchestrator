@@ -56,24 +56,31 @@ type sessionRenameRequest struct {
 }
 
 type sessionDTO struct {
-	ID           string          `json:"id"`
-	ProjectID    string          `json:"projectId"`
-	IssueID      string          `json:"issueId,omitempty"`
-	Kind         string          `json:"kind"`
-	Harness      string          `json:"harness,omitempty"`
-	DisplayName  string          `json:"displayName,omitempty"`
-	Activity     sessionActivity `json:"activity"`
-	IsTerminated bool            `json:"isTerminated"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
-	Status       string          `json:"status"`
-	Branch       string          `json:"branch,omitempty"`
-	BranchState  *branchStateDTO `json:"branchState,omitempty"`
-	PRs          []sessionPRDTO  `json:"prs"`
-	Mode         string          `json:"mode,omitempty"`
+	ID            string               `json:"id"`
+	ProjectID     string               `json:"projectId"`
+	IssueID       string               `json:"issueId,omitempty"`
+	Kind          string               `json:"kind"`
+	Harness       string               `json:"harness,omitempty"`
+	DisplayName   string               `json:"displayName,omitempty"`
+	Activity      sessionActivity      `json:"activity"`
+	IsTerminated  bool                 `json:"isTerminated"`
+	CreatedAt     time.Time            `json:"createdAt"`
+	UpdatedAt     time.Time            `json:"updatedAt"`
+	Status        string               `json:"status"`
+	Branch        string               `json:"branch,omitempty"`
+	BranchState   *branchStateDTO      `json:"branchState,omitempty"`
+	PRs           []sessionPRDTO       `json:"prs"`
+	Mode          string               `json:"mode,omitempty"`
+	ArtifactFiles []sessionArtifactDTO `json:"artifactFiles,omitempty"`
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+}
+
+type sessionArtifactDTO struct {
+	Path     string `json:"path"`
+	Kind     string `json:"kind,omitempty"`
+	ShareURL string `json:"shareUrl,omitempty"`
 }
 
 type branchStateDTO struct {
@@ -1178,6 +1185,20 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	}
 	if !sess.UpdatedAt.IsZero() {
 		if _, err := fmt.Fprintf(out, "updated: %s\n", sess.UpdatedAt.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if len(sess.ArtifactFiles) > 0 {
+		if _, err := fmt.Fprintln(out, "artifacts:"); err != nil {
+			return err
+		}
+	}
+	for _, artifact := range sess.ArtifactFiles {
+		line := "  " + artifact.Path
+		if artifact.ShareURL != "" {
+			line += " (public link: " + artifact.ShareURL + ")"
+		}
+		if _, err := fmt.Fprintln(out, line); err != nil {
 			return err
 		}
 	}

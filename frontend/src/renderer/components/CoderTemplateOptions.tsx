@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, TriangleAlert } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudOffering } from "../hooks/useCloudOffering";

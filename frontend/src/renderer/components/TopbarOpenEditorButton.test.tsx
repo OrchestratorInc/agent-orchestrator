@@ -173,7 +173,7 @@ describe("TopbarOpenEditorButton", () => {
 		const finder = await screen.findByRole("menuitem", { name: "Finder" });
 		const terminal = screen.getByRole("menuitem", { name: "Terminal" });
 		expect(finder.querySelector("image")).toHaveAttribute("href", iconDataUrl);
-		expect(terminal.querySelector("svg.lucide-square-terminal")).toBeInTheDocument();
+		expect(terminal.querySelector("svg.icon-square-terminal")).toBeInTheDocument();
 		expect(terminal.querySelector("image")).not.toBeInTheDocument();
 		for (const name of ["Cursor", "VS Code"]) {
 			const item = screen.getByRole("menuitem", { name });
@@ -241,7 +241,7 @@ describe("TopbarOpenEditorButton", () => {
 		renderButton();
 		const main = await screen.findByRole("button", { name: "Open in Finder" });
 		expect(main).toBeEnabled();
-		expect(main.querySelector("svg.lucide-code-xml, svg.lucide-code")).not.toBeInTheDocument();
+		expect(main.querySelector("svg.icon-code-xml, svg.icon-code")).not.toBeInTheDocument();
 		await userEvent.click(main);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();

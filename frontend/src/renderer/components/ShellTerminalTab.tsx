@@ -1,5 +1,5 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "lucide-react";
+import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";

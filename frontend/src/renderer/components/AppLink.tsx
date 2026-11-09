@@ -1,6 +1,6 @@
 import { BrowserIcon } from "./icons";
 import { createContext, useContext, useEffect, useImperativeHandle, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { Copy, ExternalLink, FileText, } from "lucide-react";
+import { Copy, ExternalLink, FileText, } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";

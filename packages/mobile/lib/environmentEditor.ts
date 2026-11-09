@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import { isValidPort } from "./connectionFields";
+import { resolveManualAddress } from "./connectionFields";
 import type { Host } from "./hosts";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 
@@ -56,7 +56,7 @@ export function isDraftDirty(initial: EnvironmentMachineDraft, draft: Environmen
 }
 
 export function canSaveDraft(draft: EnvironmentMachineDraft): boolean {
-	return Boolean(draft.machineName.trim() && draft.config.host.trim() && isValidPort(draft.config.httpPort));
+	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort, draft.config.secure).ok;
 }
 
 /** A save the machine refused, said against the field it is about. */

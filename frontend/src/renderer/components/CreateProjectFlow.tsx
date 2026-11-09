@@ -21,7 +21,7 @@ import {
 	Lock,
 	MessageSquarePlus,
 	XCircle,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
@@ -2194,19 +2194,19 @@ function ImportSourcePicker({
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
 		{
 			source: "clone",
-			icon: <GitFork className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <GitFork className="size-6" aria-hidden="true" />,
 			label: t("createProject.cloneFromGit"),
 			description: t("createProject.cloneFromGitDesc"),
 		},
 		{
 			source: "local",
-			icon: <FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <FolderClosed className="size-6" aria-hidden="true" />,
 			label: t("createProject.openLocal"),
 			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",
-			icon: <Folders className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <Folders className="size-6" aria-hidden="true" />,
 			label: t("createProject.addWorkspace"),
 			description: t("createProject.workspaceDesc"),
 		},
@@ -2249,13 +2249,13 @@ function ImportSourcePicker({
 				<motion.div key="placement" data-step="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
 					{tile(
 						"local",
-						<Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+						<Laptop className="size-6" aria-hidden="true" />,
 						// With remote machines connected, the machine picker lives behind this tile.
 						hasRemoteHosts ? t("createProject.placementMachines") : t("createProject.placementLocal"),
 						hasRemoteHosts ? t("createProject.placementMachinesDesc") : t("createProject.placementLocalDesc"),
 						() => onLocalChosenChange(true),
 					)}
-					{tile("cloud", <Cloud className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
+					{tile("cloud", <Cloud className="size-6" aria-hidden="true" />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
 				<motion.div key="sources" data-step="sources" {...fade}>
@@ -2272,7 +2272,7 @@ function ImportSourcePicker({
 					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
 						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
 						{onCreateStandaloneAgent
-							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
 							: null}
 					</div>
 				</motion.div>

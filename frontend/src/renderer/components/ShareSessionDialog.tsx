@@ -1,5 +1,5 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, Info, Settings2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Info, Settings2 } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";

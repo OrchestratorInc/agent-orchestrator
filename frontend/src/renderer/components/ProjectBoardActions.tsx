@@ -1,6 +1,6 @@
 import { type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Plus } from "@/components/app-icons";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { getAgentActivityView } from "../lib/session-presentation";
