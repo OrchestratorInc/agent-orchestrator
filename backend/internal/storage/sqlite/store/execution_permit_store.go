@@ -166,7 +166,13 @@ func (s *Store) ReleaseExecutionAdmission(ctx context.Context, ad domain.Schedul
 		}
 		rec := rowToRecord(session)
 		generation := domain.SessionExecutionGeneration(rec)
-		if !rec.IsTerminated || ad.ControllerGeneration != "" && ad.ControllerGeneration != generation || observation.ControllerGeneration != "" && generation != observation.ControllerGeneration {
+		// 与 AdmitSessionRestart 同一条不变量：已终止的普通 Session 槽里残留的旧代际
+		// 必然过期。恢复必须能释放它，否则该记录每轮都让 RecoverAdmissions 报错，
+		// 恢复永不完成，整个调度器停在 "leadership fence is stale or unrecovered"。
+		stale := staleDriftedSessionSlot(rec, ad, generation)
+		if !rec.IsTerminated ||
+			ad.ControllerGeneration != "" && ad.ControllerGeneration != generation && !stale ||
+			observation.ControllerGeneration != "" && generation != observation.ControllerGeneration {
 			return domain.ErrSchedulerAdmissionConflict
 		}
 		if observation.ControllerGeneration == "" && (ad.AttemptID != "" || observation.SessionUpdatedAt.IsZero() || !observation.SessionUpdatedAt.Equal(rec.UpdatedAt)) {

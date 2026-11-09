@@ -39,12 +39,8 @@ func (s *Store) AdmitSessionRestart(ctx context.Context, expected domain.Session
 				return err
 			}
 			// 接受后 Session 尚未发布新代际代表在途或 UNKNOWN，不能再启动。
-			// 例外：已终止的普通 Session 没有在途控制器，槽里残留的旧代际（Provider 切换
-			// 曾漏同步，或恢复把槽放成 uncertain）必然过期，允许本次重启接管；否则该
-			// 会话会永远以 "step: execution admission" 拒绝恢复。工作流槽仍走 Attempt 栅栏。
-			staleAfterTermination := rec.IsTerminated && ad.AttemptID == "" &&
-				(ad.State == domain.AdmissionActive || ad.State == domain.AdmissionUncertain) &&
-				ad.ControllerGeneration != "" && ad.ControllerGeneration != oldGeneration
+			// 例外：已终止的普通 Session 没有在途控制器，槽里残留的旧代际必然过期。
+			staleAfterTermination := staleDriftedSessionSlot(rec, ad, oldGeneration)
 			if !staleAfterTermination &&
 				(ad.State != domain.AdmissionActive || ad.ControllerGeneration != "" && ad.ControllerGeneration != oldGeneration || oldGeneration == "" && !transitionGap) {
 				return domain.ErrSchedulerAdmissionConflict
@@ -92,6 +88,15 @@ func (s *Store) AdmitSessionRestart(ctx context.Context, expected domain.Session
 		}
 		return persistAdmission(ctx, q, ad, reservations, evidence)
 	})
+}
+
+// staleDriftedSessionSlot 是"已终止的普通 Session 槽必然过期"的唯一判定：
+// 没有在途控制器可以发布新代际，所以残留的旧代际不可能是未完成的启动。
+// 准入（接管）与恢复（释放）共用它，两条路径才不会各自放宽或各自闭锁。
+func staleDriftedSessionSlot(rec domain.SessionRecord, ad domain.SchedulerAdmission, generation string) bool {
+	return rec.IsTerminated && ad.AttemptID == "" &&
+		(ad.State == domain.AdmissionActive || ad.State == domain.AdmissionUncertain) &&
+		ad.ControllerGeneration != "" && ad.ControllerGeneration != generation
 }
 
 // admittedTransitionGap 仅认可 Lifecycle 已清空执行归属且持久切换仍拥有该 Session 的间隙。
