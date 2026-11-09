@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCloudCp } from "./useCloudCp";
 import {
 	createCue,
 	deleteCue,
@@ -6,13 +7,21 @@ import {
 	invokeCue,
 	projectCuesQueryKey,
 	updateCue,
+	type CueHost,
 	type CueInput,
 } from "../lib/cues";
 
-export function useProjectCuesQuery(projectId: string, enabled = true) {
+/** Where a project's cues live: the control plane for a Cloud project (its org), else the local daemon. */
+export function useCueHost(cloudOrgId?: string): CueHost | undefined {
+	const { client } = useCloudCp();
+	return cloudOrgId ? { client, orgId: cloudOrgId } : undefined;
+}
+
+export function useProjectCuesQuery(projectId: string, enabled = true, cloudOrgId?: string) {
+	const cloud = useCueHost(cloudOrgId);
 	return useQuery({
 		queryKey: projectCuesQueryKey(projectId),
-		queryFn: () => fetchProjectCues(projectId),
+		queryFn: () => cloud ? fetchProjectCues(projectId, cloud) : fetchProjectCues(projectId),
 		enabled: enabled && Boolean(projectId),
 		refetchOnMount: "always",
 		retry: false,
@@ -26,26 +35,29 @@ function useInvalidateCues(projectId: string) {
 	};
 }
 
-export function useCreateCueMutation(projectId: string) {
+export function useCreateCueMutation(projectId: string, cloudOrgId?: string) {
 	const invalidate = useInvalidateCues(projectId);
+	const cloud = useCueHost(cloudOrgId);
 	return useMutation({
-		mutationFn: (input: CueInput) => createCue(projectId, input),
+		mutationFn: (input: CueInput) => cloud ? createCue(projectId, input, cloud) : createCue(projectId, input),
 		onSuccess: invalidate,
 	});
 }
 
-export function useUpdateCueMutation(projectId: string) {
+export function useUpdateCueMutation(projectId: string, cloudOrgId?: string) {
 	const invalidate = useInvalidateCues(projectId);
+	const cloud = useCueHost(cloudOrgId);
 	return useMutation({
-		mutationFn: ({ cueId, input }: { cueId: string; input: CueInput }) => updateCue(cueId, input),
+		mutationFn: ({ cueId, input }: { cueId: string; input: CueInput }) => cloud ? updateCue(cueId, input, cloud) : updateCue(cueId, input),
 		onSuccess: invalidate,
 	});
 }
 
-export function useDeleteCueMutation(projectId: string) {
+export function useDeleteCueMutation(projectId: string, cloudOrgId?: string) {
 	const invalidate = useInvalidateCues(projectId);
+	const cloud = useCueHost(cloudOrgId);
 	return useMutation({
-		mutationFn: (cueId: string) => deleteCue(cueId),
+		mutationFn: (cueId: string) => cloud ? deleteCue(cueId, cloud) : deleteCue(cueId),
 		onSuccess: invalidate,
 	});
 }

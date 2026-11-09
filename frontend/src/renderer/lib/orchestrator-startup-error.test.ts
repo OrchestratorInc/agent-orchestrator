@@ -17,7 +17,7 @@ describe("formatOrchestratorStartupError", () => {
 	});
 
 	it.each([
-		['resolve workspace repo "__root__" base: repository has no remote or AO-recorded default', "workspace root repository"],
+		['resolve workspace repo "__root__" base: repository has no remote or Orchestrator-recorded default', "workspace root repository"],
 		['resolve workspace repo "api" base: remote did not advertise a symbolic HEAD', 'child repository "api"'],
 		['repository has multiple remotes and no primary remote', "project repository"],
 	])("preserves the actual default-branch failure: %s", (detail, label) => {

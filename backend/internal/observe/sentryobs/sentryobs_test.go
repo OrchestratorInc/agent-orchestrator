@@ -41,6 +41,65 @@ func TestShouldCaptureStatus(t *testing.T) {
 	}
 }
 
+func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
+	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	fingerprint := "9999999999999999"
+	for i := 0; i < 5; i++ {
+		if !allowErrorFingerprintFor(fingerprint, "", when) {
+			t.Fatalf("event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprintFor(fingerprint, "", when) {
+		t.Fatal("sixth event in a minute was accepted")
+	}
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(time.Minute)) {
+		t.Fatal("new minute did not admit a new event")
+	}
+	for minute := 2; minute < 42; minute++ {
+		for i := 0; i < 5; i++ {
+			allowErrorFingerprintFor(fingerprint, "", when.Add(time.Duration(minute)*time.Minute))
+		}
+	}
+	if allowErrorFingerprintFor(fingerprint, "", when.Add(42*time.Minute)) {
+		t.Fatal("daily budget exceeded")
+	}
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(24*time.Hour)) {
+		t.Fatal("new day did not reset the budget")
+	}
+}
+
+func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
+	when := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	errorBudget.Lock()
+	previousDay, previousGroups := errorBudget.day, errorBudget.groups
+	errorBudget.day = when.YearDay() + when.Year()*366
+	errorBudget.groups = make(map[string]errorBudgetGroup, maxErrorFingerprintsPerDay+1)
+	for i := range maxErrorFingerprintsPerDay {
+		errorBudget.groups[fmt.Sprintf("%016x", i)] = errorBudgetGroup{}
+	}
+	errorBudget.Unlock()
+	t.Cleanup(func() {
+		errorBudget.Lock()
+		errorBudget.day, errorBudget.groups = previousDay, previousGroups
+		errorBudget.Unlock()
+	})
+	for i := range maxErrorsPerFingerprintMinute {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "", when) {
+			t.Fatalf("overflow event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprintFor("ffffffffffffffff", "", when) {
+		t.Fatal("overflow bucket admitted a sixth event in the minute")
+	}
+	errorBudget.Lock()
+	count := len(errorBudget.groups)
+	group := errorBudget.groups["unknown"]
+	errorBudget.Unlock()
+	if count != maxErrorFingerprintsPerDay+1 || group.minuteCount != maxErrorsPerFingerprintMinute {
+		t.Fatalf("overflow bucket = (%d groups, %d events), want (%d groups, %d events)", count, group.minuteCount, maxErrorFingerprintsPerDay+1, maxErrorsPerFingerprintMinute)
+	}
+}
+
 func TestInitNoDSNIsNoOp(t *testing.T) {
 	if err := Init(Config{}); err != nil {
 		t.Fatalf("Init with empty DSN: %v", err)
@@ -233,7 +292,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
 		}
-		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || event.Exception[0].Stacktrace != nil {
 			t.Fatalf("diagnostics lost: %+v", event)
 		}
 		if event.Fingerprint[0] != "0123456789abcdef" {
@@ -367,9 +426,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
 		t.Fatalf("route and code fingerprint = %v, want %q", event.Fingerprint, wantGroup)
 	}
-	frames := event.Exception[0].Stacktrace.Frames
-	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureError") {
-		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	if event.Exception[0].Stacktrace != nil {
+		t.Fatalf("ordinary Go error acquired a synthetic stack: %+v", event.Exception[0].Stacktrace)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {
@@ -430,7 +488,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 
 func TestSentryTagRules(t *testing.T) {
 	t.Parallel()
-	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
+	for value, want := range map[string]bool{"500": true, "502": true, "503": true, "409": true, "400": true, "399": false, "600": false, "500x": false} {
 		if got := safeSentryTag("status", value); got != want {
 			t.Fatalf("status %q allowed = %v, want %v", value, got, want)
 		}

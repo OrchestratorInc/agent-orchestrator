@@ -55,6 +55,7 @@ type Store interface {
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
+	ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
@@ -259,9 +260,19 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	shareLinks      *sessionartifacts.ShareLinks
 	// runsOnComputerLogin reports whether a new session would launch on the
 	// computer's own CLI login rather than a saved account. Nil means always.
 	runsOnComputerLogin func(context.Context, domain.AgentHarness, string) bool
+	// githubRepos lets ClaimPR accept a PR on the repository a github.com
+	// origin was renamed or transferred to. Nil keeps exact origin matching.
+	githubRepos ports.GitHubRepositoryResolver
+}
+
+// SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
+// a github.com origin's rename or transfer.
+func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
+	s.githubRepos = r
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
@@ -321,6 +332,7 @@ type Deps struct {
 	// ArtifactDeleter deletes a session's artifacts; daemon wiring passes the
 	// shared *artifactversions.Capturer so a delete cannot race a capture.
 	ArtifactDeleter artifactDeleter
+	ShareLinks      *sessionartifacts.ShareLinks
 }
 
 // NewWithDeps wires a session service with optional PR-claim dependencies.
@@ -329,7 +341,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, shareLinks: d.ShareLinks}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -1690,6 +1702,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		}
 		artifactFiles = nil
 	}
+	s.shareLinks.Apply(rec.ID, artifactFiles)
 	if backfilledArtifactDir || (len(artifactFiles) > 0) != rec.OutputType.HasArtifact() {
 		// Reflect the repair in this response's OutputType too, not just
 		// future ones: the persisted write below lands asynchronously
@@ -1764,7 +1777,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1815,13 +1828,13 @@ func mapSessionError(err error) error {
 			"The session's workspace was never set up; retry its start before switching interfaces", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNotCancellable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOT_CANCELLABLE",
-			"The source controller has already stopped; AO must finish or recover the switch", nil)
+			"The source controller has already stopped; Orchestrator must finish or recover the switch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE",
 			"This interface switch has no failure or recovery notice to acknowledge", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return apierr.Conflict("PROVIDER_HISTORY_RECOVERY_UNAVAILABLE",
-			"Provider history can be used only after AO identifies a legacy text-only mismatch", nil)
+			"Provider history can be used only after Orchestrator identifies a legacy text-only mismatch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceAlreadySelected):
 		return apierr.Conflict("INTERFACE_ALREADY_SELECTED",
 			"The session is already using the requested interface", nil)
@@ -1878,6 +1891,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrRuntimeCommandLineTooLong):
 		return apierr.Invalid("WINDOWS_COMMAND_LINE_TOO_LONG",
 			"The agent launch command exceeds the Windows size limit. Shorten the task or project instructions.", nil)
+	case errors.Is(err, ports.ErrChatPermissionModeUnsupported):
+		return apierr.Invalid("CHAT_PERMISSION_MODE_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatUnsupported):
 		var capabilityErr *ports.ChatCapabilityError
 		if errors.As(err, &capabilityErr) {
@@ -1901,7 +1916,7 @@ func mapSessionError(err error) error {
 		// retry, often with a deadline in the chain, so it is not "momentarily
 		// unavailable".
 		return apierr.Conflict("CHAT_RECOVERY_INCONCLUSIVE",
-			"AO could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
+			"Orchestrator could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverUnavailable):
 		return apierr.Conflict("CHAT_DRIVER_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverIncompatible):
@@ -1910,7 +1925,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
-			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
+			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
@@ -1929,7 +1944,7 @@ func mapSessionError(err error) error {
 		return err
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
-			"AO could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
+			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
 			map[string]any{"step": relaunchErr.Step})
 	default:
 		return err

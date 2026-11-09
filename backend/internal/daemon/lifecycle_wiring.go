@@ -35,6 +35,7 @@ import (
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -56,6 +57,8 @@ type lifecycleStack struct {
 	// service deletes artifacts through it so a delete holds the capture lock.
 	ArtifactVersions *artifactversions.Capturer
 	runtimeReaper    *reaper.Reaper
+	reaperStart      chan struct{}
+	reaperStartOnce  sync.Once
 	reaperDone       <-chan struct{}
 	activityDone     <-chan struct{}
 	turnFailureDone  <-chan struct{}
@@ -84,7 +87,8 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithUrgentNudgeGate(urgentNudgeWaitingInputSafe(agents)),
 		lifecycle.WithDataDir(dataDir),
 	)
-	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
+	reaperStart := make(chan struct{})
+	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger, StartAfter: reaperStart})
 	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
@@ -99,6 +103,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		LCM:              lcm,
 		ArtifactVersions: artifactVersions,
 		runtimeReaper:    rp,
+		reaperStart:      reaperStart,
 		reaperDone:       rp.Start(ctx),
 		activityDone:     activityPoller.Start(ctx),
 		turnFailureDone:  turnFailurePoller.Start(ctx),
@@ -147,9 +152,17 @@ func urgentNudgeWaitingInputSafe(agents ports.AgentResolver) func(domain.AgentHa
 
 // ReconcileRuntime runs the same conservative runtime/workload observation as
 // the periodic reaper. The daemon calls it after session-manager reconciliation
-// so exits missed while AO was stopped are folded before the API starts serving.
+// so exits missed while AO was stopped are folded after the startup check has
+// kept those sessions stopped and resumable. The periodic loop starts after it.
 func (l *lifecycleStack) ReconcileRuntime(ctx context.Context) error {
 	return l.runtimeReaper.Tick(ctx)
+}
+
+// StartReaperLoop lets the periodic reaper run. The boot goroutine defers it,
+// so it runs after ReconcileRuntime, and a panic before that pass cannot leave
+// the reaper off for good.
+func (l *lifecycleStack) StartReaperLoop() {
+	l.reaperStartOnce.Do(func() { close(l.reaperStart) })
 }
 
 // activeTurnSteering resolves the per-harness active-turn steering capability
@@ -206,9 +219,8 @@ func (l *lifecycleStack) Stop() {
 // depending on the concrete manager type.
 //
 // SaveAndTeardownAll is deliberately ABSENT from this interface so the daemon
-// cannot tear down live sessions on shutdown. Sessions survive the daemon exit
-// and Reconcile on the next boot adopts them, preserving session IDs. Re-adding
-// the method here is a visible, reviewable interface change.
+// cannot remove worktrees on shutdown. Explicit desktop quit may stop agent
+// processes; ordinary daemon replacement still preserves them for adoption.
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
@@ -234,6 +246,7 @@ type sessionLifecycle interface {
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
+	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
@@ -370,6 +383,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		SignalCapable:        activitydispatch.FullySupportsHarness,
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
+		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
 	})
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
@@ -482,7 +496,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					// Admission resets only on a new runtime handle or launch, so name the
 					// recovery instead of looking like a transient failure.
-					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume Orchestrator input", id)
 				}
 				admission.pending = ""
 			}
@@ -734,6 +748,10 @@ func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
+}
+
 func (c chatLauncher) PreflightChat(
 	ctx context.Context,
 	harness domain.AgentHarness,
@@ -934,7 +952,7 @@ func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.Sessio
 	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
 		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
 	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
-		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+		return fmt.Errorf("%w: Orchestrator could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
 	default:
 		return err
 	}

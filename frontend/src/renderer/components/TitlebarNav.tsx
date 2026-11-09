@@ -1,13 +1,15 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useCanGoBack, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, PanelLeft } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
+import type { AppShortcutId } from "../../shared/shortcuts";
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -44,10 +46,12 @@ export function useCanGoForward(): boolean {
 }
 
 export function TitlebarNav({
+  onBack,
   historyLocked = false,
   isFullScreen = false,
   zoomFactor = 1,
 }: {
+  onBack?: () => void;
   historyLocked?: boolean;
   isFullScreen?: boolean;
   zoomFactor?: number;
@@ -127,11 +131,7 @@ export function TitlebarNav({
           isSidebarOpen ? t("shell.collapseSidebar") : t("shell.expandSidebar")
         }
         onClick={toggleSidebar}
-        title={
-          isSidebarOpen
-            ? t("titlebar.collapseSidebarShortcut")
-            : t("titlebar.expandSidebarShortcut")
-        }
+        shortcut="toggle-sidebar"
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
@@ -152,7 +152,7 @@ export function TitlebarNav({
           {/* Not a button on purpose. Only the label opts out of window drag (for
               the build-info tooltip); the rest of the row stays draggable. */}
           <span
-            className="inline-flex select-none items-center gap-1.5 translate-y-0.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
+            className="flex w-max select-none items-center gap-1.5 whitespace-nowrap text-base font-semibold leading-tight tracking-tight-lg text-foreground"
             data-sidebar-brand=""
             ref={brandRef}
             style={{ maxWidth: brandMaxWidth }}
@@ -176,10 +176,10 @@ export function TitlebarNav({
         >
           <div className="flex items-center gap-1">
             <TitlebarButton
-              disabled={historyLocked || !canGoBack}
+              disabled={!onBack && (historyLocked || !canGoBack)}
               label={t("titlebar.goBack")}
-              onClick={() => router.history.back()}
-              title={t("titlebar.goBack")}
+              onClick={onBack ?? (() => router.history.back())}
+              shortcut="history-back"
             >
               <ArrowLeft className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -187,7 +187,7 @@ export function TitlebarNav({
               disabled={historyLocked || !canGoForward}
               label={t("titlebar.goForward")}
               onClick={() => router.history.forward()}
-              title={t("titlebar.goForward")}
+              shortcut="history-forward"
             >
               <ArrowRight className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -200,14 +200,14 @@ export function TitlebarNav({
 
 function TitlebarButton({
   label,
-  title,
+  shortcut,
   disabled,
   tabIndex,
   onClick,
   children,
 }: {
   label: string;
-  title: string;
+  shortcut: AppShortcutId;
   disabled?: boolean;
   tabIndex?: number;
   onClick: () => void;
@@ -217,21 +217,23 @@ function TitlebarButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex">
-          <button
+          <Button
             aria-label={label}
             aria-disabled={disabled || undefined}
-            className="grid size-control-md place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent disabled:hover:text-passive"
+            className="disabled:opacity-55"
             disabled={disabled}
             onClick={onClick}
+            size="icon-sm"
             style={noDragStyle}
             tabIndex={tabIndex}
             type="button"
+            variant="quiet"
           >
             {children}
-          </button>
+          </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{title}</TooltipContent>
+      <TooltipContent shortcut={shortcut} side="bottom">{label}</TooltipContent>
     </Tooltip>
   );
 }

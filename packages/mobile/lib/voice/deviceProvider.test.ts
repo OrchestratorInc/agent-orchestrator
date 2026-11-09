@@ -65,7 +65,7 @@ vi.mock("expo-speech-recognition", () => ({
 	},
 }));
 
-const { createDeviceVoiceProvider } = await import("./deviceProvider");
+const { createDeviceVoiceProvider, voiceLevel } = await import("./deviceProvider");
 
 function harness() {
 	const onReady = vi.fn();
@@ -114,6 +114,29 @@ describe("availability and permission", () => {
 		// native round-trip on every press delays recording enough to swallow the
 		// first words of a short phrase.
 		expect(permissionChecks).toBe(1);
+	});
+});
+
+describe("input level", () => {
+	it("meters the input for the waveform as 0 to 1, from the recogniser's -2 to 10", async () => {
+		const p = createDeviceVoiceProvider();
+		const onLevel = vi.fn();
+		await p.start({ ...harness().cb, onLevel });
+		expect(started[0]).toMatchObject({ volumeChangeEventOptions: { enabled: true } });
+		emit("volumechange", { value: 5 });
+		emit("volumechange", { value: -2 });
+		emit("volumechange", { value: 14 });
+		expect(onLevel.mock.calls.map(([level]) => level)).toEqual([0.5, 0, 1]);
+		expect(voiceLevel(2.5)).toBe(0.25);
+	});
+
+	it("stops metering once the session is abandoned", async () => {
+		const p = createDeviceVoiceProvider();
+		const onLevel = vi.fn();
+		await p.start({ ...harness().cb, onLevel });
+		p.abort();
+		emit("volumechange", { value: 5 });
+		expect(onLevel).not.toHaveBeenCalled();
 	});
 });
 

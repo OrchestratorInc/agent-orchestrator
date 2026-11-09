@@ -669,7 +669,8 @@ func insertAndActivateConversationBranchTx(ctx context.Context, q *gen.Queries, 
 	if rows != 1 {
 		return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
 	}
-	return nil
+	// An edited branch's path drops the copies written after its fork.
+	return reconcileSpanningPlans(ctx, q, branch.ConversationID, now)
 }
 
 // CommitChatSpawn publishes a reserved fresh-provider boundary and the complete
@@ -1015,6 +1016,10 @@ func (s *Store) RepairIncompleteConversationEdit(
 		if conversationRows != 1 {
 			return fmt.Errorf("restore source conversation head: conversation %s not found", conversationID)
 		}
+		// The source path holds the copies written after the abandoned fork again.
+		if reconcileErr := reconcileSpanningPlans(ctx, q, conversationID, now); reconcileErr != nil {
+			return reconcileErr
+		}
 		parent.Active = true
 		repaired = parent
 		if active.SessionID != sessionID {
@@ -1106,7 +1111,8 @@ func (s *Store) ActivateConversationBranch(
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
-		return nil
+		// The new path holds its own copies of a list that spans turns.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 }
 
@@ -1668,7 +1674,7 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
-	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", time.Time{}, now)
 }
 
 // SettleTurnWithFailureCode retains a provider-classified cause beside the raw
@@ -1679,6 +1685,7 @@ func (s *Store) SettleTurnWithFailureCode(
 	state domain.TurnState,
 	errMessage string,
 	failureCode domain.ConversationFailureCode,
+	usageLimitResetsAt time.Time,
 	now time.Time,
 ) error {
 	q, unlock := s.conversationWriter(ctx)
@@ -1699,16 +1706,23 @@ func (s *Store) SettleTurnWithFailureCode(
 	}
 	// A history replay re-settles a turn without its error, which is not
 	// portable. Keep the live reason: a usage limit is classified from it.
+	// A resumed Codex thread also replays a turn AO already failed as interrupted.
+	// The stored failure is what happened; nobody interrupted that turn.
+	if errMessage == "" && state == domain.TurnStateInterrupted &&
+		turn.State == domain.TurnStateFailed && turn.ErrorMessage != "" {
+		state = domain.TurnStateFailed
+	}
 	if errMessage == "" && turn.State == state {
 		errMessage = turn.ErrorMessage
 	}
 
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
-		State:        state,
-		ErrorMessage: errMessage,
-		FailureCode:  string(failureCode),
-		CompletedAt:  sql.NullTime{Time: now, Valid: true},
-		ID:           turn.ID,
+		State:              state,
+		ErrorMessage:       errMessage,
+		FailureCode:        string(failureCode),
+		CompletedAt:        sql.NullTime{Time: now, Valid: true},
+		UsageLimitResetsAt: timeToNullTime(usageLimitResetsAt),
+		ID:                 turn.ID,
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
@@ -2261,18 +2275,70 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 	if account.AuthVerifiedAt != nil && !turn.CompletedAt.Time.After(*account.AuthVerifiedAt) && account.ReauthRequiredAt == nil {
 		return account, nil
 	}
+	markAuthenticated(account, turn.CompletedAt.Time)
+	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
+// ConversationAwaitingLogin is a session conversation whose provider asked for
+// credentials, and the harness its session runs.
+type ConversationAwaitingLogin struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+}
+
+// ConversationsAwaitingLogin lists session conversations with an unanswered
+// credential demand.
+func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationAwaitingLogin, error) {
+	rows, err := s.qr.SelectConversationsAwaitingLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ConversationAwaitingLogin, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ConversationAwaitingLogin(row))
+	}
+	return out, nil
+}
+
+// ConfirmConversationLogin clears a credential demand that a later check of the
+// session's account answered: at is when a check began that found the account
+// signed in and read its limits from the provider with that login. A demand
+// recorded at or after at stays, since that check cannot speak for it.
+func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	cleared := false
+	err := s.inTx(ctx, "confirm conversation login", func(q *gen.Queries) error {
+		row, err := q.SelectConversationByID(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		account := conversationToDomain(row).Account
+		if account == nil || account.ReauthRequiredAt == nil || !account.ReauthRequiredAt.Before(at) {
+			return nil
+		}
+		markAuthenticated(account, at)
+		cleared = true
+		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now)
+	})
+	return cleared && err == nil, err
+}
+
+// markAuthenticated records provider success at verifiedAt. A demand it
+// answers is kept as the last failure.
+func markAuthenticated(account *domain.ConversationAccount, verifiedAt time.Time) {
 	if account.ReauthRequiredAt != nil && account.LastAuthFailureAt == nil {
 		account.LastAuthFailureAt = account.ReauthRequiredAt
 		account.LastAuthFailureReason = account.ReauthReason
 	}
 	account.AuthenticationState = "authenticated"
-	account.AuthVerifiedAt = &turn.CompletedAt.Time
+	account.AuthVerifiedAt = &verifiedAt
 	account.ReauthRequiredAt = nil
 	account.ReauthReason = ""
-	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
-		return nil, err
-	}
-	return account, nil
 }
 
 // RecordThreadState stores the provider's lifecycle view of the thread.
@@ -2363,6 +2429,70 @@ func (s *Store) SetTurnPlan(
 		return false, fmt.Errorf("set turn plan for %s: %w", providerTurnID, err)
 	}
 	return rows > 0, nil
+}
+
+// ReconcileSpanningPlans marks which copy of a list that spans turns is current
+// on the conversation's active path: the copy written last. Every other copy on
+// the path is superseded. Copies on other branches keep their marks until their
+// branch is active again, when this runs for that path.
+func (s *Store) ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return reconcileSpanningPlans(ctx, q, conversationID, now)
+}
+
+func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID string, now time.Time) error {
+	copies, err := q.SelectSpanningPlanCopiesOnActivePath(ctx, conversationID)
+	if err != nil {
+		return fmt.Errorf("select spanning plan copies in %s: %w", conversationID, err)
+	}
+	current := -1
+	var currentAt time.Time
+	for index, planCopy := range copies {
+		at := spanningPlanWrittenAt(planCopy)
+		// Rows come in sequence order, so a tie goes to the later row.
+		if current < 0 || !at.Before(currentAt) {
+			current, currentAt = index, at
+		}
+	}
+	for index, planCopy := range copies {
+		superseded := index != current
+		if err := q.SetConversationPlanActivitySuperseded(ctx, gen.SetConversationPlanActivitySupersededParams{
+			Superseded: superseded,
+			UpdatedAt:  now,
+			ID:         planCopy.ID,
+		}); err != nil {
+			return fmt.Errorf("mark plan row %s: %w", planCopy.ID, err)
+		}
+		// A turn's plan and its plan row are one planCopy, written from one event.
+		if planCopy.TurnID.Valid {
+			if err := q.SetConversationTurnPlanSuperseded(ctx, gen.SetConversationTurnPlanSupersededParams{
+				Superseded: superseded,
+				ID:         planCopy.TurnID.String,
+			}); err != nil {
+				return fmt.Errorf("mark turn plan %s: %w", planCopy.TurnID.String, err)
+			}
+		}
+	}
+	return nil
+}
+
+// spanningPlanWrittenAt is when a planCopy's content was last written. The daemon
+// records it on each write. A planCopy from before that is dated as the upgrade
+// migration dates it: a turnless row was one revision, written when created,
+// and a turn's planCopy could change only until its turn ended. The row's updated_at
+// is no guide, since settling and recovery touch rows they do not rewrite.
+func spanningPlanWrittenAt(planCopy gen.SelectSpanningPlanCopiesOnActivePathRow) time.Time {
+	var detail struct {
+		WrittenAt time.Time `json:"writtenAt"`
+	}
+	if json.Unmarshal([]byte(planCopy.DetailJson), &detail) == nil && !detail.WrittenAt.IsZero() {
+		return detail.WrittenAt
+	}
+	if planCopy.TurnID.Valid && planCopy.TurnCompletedAt.Valid {
+		return planCopy.TurnCompletedAt.Time
+	}
+	return planCopy.CreatedAt
 }
 
 // MaxStreamedTextChars caps the provider prose stored for one activity.
@@ -3625,7 +3755,8 @@ func (s *Store) RollbackTurns(
 			}); err != nil {
 			return fmt.Errorf("fail rolled back approvals: %w", err)
 		}
-		return nil
+		// A rolled-back turn's copy of a list that spans turns is no longer current.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 	if err != nil {
 		return 0, err
@@ -3724,6 +3855,8 @@ type ConversationSnapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	// AfterSequence is the floor a range read applied, or zero.
+	AfterSequence int64
 }
 
 // DefaultConversationPageSize is the standard number of messages in a conversation page.
@@ -3768,7 +3901,8 @@ func (r *conversationPageRows[T]) at(index int, before, visibleAfter int64) (*T,
 		if err != nil {
 			return nil, err
 		}
-		r.done = int64(len(chunk)) < r.chunk
+		// A byte-bounded fetch can be shorter than the row limit without reaching EOF.
+		r.done = len(chunk) == 0
 		for _, row := range chunk {
 			if r.sequence(row) <= visibleAfter {
 				r.done = true
@@ -3875,7 +4009,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationMessage) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationMessage, error) {
 				rows, err := s.qr.SelectConversationMessagesPage(ctx, gen.SelectConversationMessagesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select message page: %w", err)
@@ -3888,7 +4022,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationActivity) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationActivity, error) {
 				rows, err := s.qr.SelectConversationActivitiesPage(ctx, gen.SelectConversationActivitiesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select activity page: %w", err)
@@ -3996,6 +4130,21 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	return s.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit)
+}
+
+// LoadConversationSnapshotRange is LoadConversationSnapshotPage with a floor:
+// rows at or below afterSequence are left out, so a client that holds them reads
+// only the tail. AfterSequence echoes the floor when it applied. A floor below
+// the visible history is not applied, because the client then holds rows the
+// conversation no longer shows and needs the whole page. HasMoreBefore with an
+// applied floor means rows between the floor and OldestSequence were left out.
+func (s *Store) LoadConversationSnapshotRange(
+	ctx context.Context,
+	conversationID string,
+	beforeSequence, afterSequence int64,
+	limit int64,
+) (ConversationSnapshot, error) {
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4031,8 +4180,16 @@ func (s *Store) LoadConversationSnapshotPage(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	// The floor bounds the rows; visibleAfterSequence alone still decides which
+	// turns are visible, because a positive value there means a context reset.
+	floor := visibleAfterSequence
+	if afterSequence <= 0 || afterSequence < visibleAfterSequence {
+		afterSequence = 0
+	} else {
+		floor = afterSequence
+	}
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
-	if beforeSequence <= visibleAfterSequence {
+	if beforeSequence <= floor {
 		snapshot := ConversationSnapshot{
 			Conversation:                     conversationToDomain(conv),
 			ActiveBranch:                     presentation.activeBranch,
@@ -4040,12 +4197,13 @@ func (s *Store) LoadConversationSnapshotPage(
 			NativeForkAvailableAfterSequence: presentation.nativeForkAvailableAfterSequence,
 			BranchPoints:                     presentation.branchPoints,
 			BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
-			OldestSequence:                   visibleAfterSequence,
+			OldestSequence:                   floor,
 			HasMoreBefore:                    false,
+			AfterSequence:                    afterSequence,
 		}
 		return snapshot, nil
 	}
-	messageRows, activityRows, oldest, hasMore, err := s.conversationPage(ctx, conversationID, beforeSequence, visibleAfterSequence, limit)
+	messageRows, activityRows, oldest, hasMore, err := s.conversationPage(ctx, conversationID, beforeSequence, floor, limit)
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
@@ -4076,6 +4234,7 @@ func (s *Store) LoadConversationSnapshotPage(
 		BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
 		OldestSequence:                   oldest,
 		HasMoreBefore:                    hasMore,
+		AfterSequence:                    afterSequence,
 	}
 	for _, row := range turnRows {
 		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfterSequence) {
@@ -4090,12 +4249,12 @@ func (s *Store) LoadConversationSnapshotPage(
 	// SQL returns newest-first so LIMIT is useful; the API contract remains
 	// oldest-first inside each page.
 	for i := len(messageRows) - 1; i >= 0; i-- {
-		if messageRows[i].Sequence >= oldest && messageRows[i].Sequence > visibleAfterSequence {
+		if messageRows[i].Sequence >= oldest && messageRows[i].Sequence > floor {
 			snapshot.Messages = append(snapshot.Messages, messageToDomain(messageRows[i]))
 		}
 	}
 	for i := len(activityRows) - 1; i >= 0; i-- {
-		if activityRows[i].Sequence >= oldest && activityRows[i].Sequence > visibleAfterSequence {
+		if activityRows[i].Sequence >= oldest && activityRows[i].Sequence > floor {
 			snapshot.Activities = append(snapshot.Activities, activityToDomain(activityRows[i]))
 		}
 	}
@@ -4809,7 +4968,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		if err != nil {
 			return domain.RetryPrompt{}, fmt.Errorf("encode provider inputs %s: %w", turnID, err)
 		}
-		prompt.ProviderInputText = "AO prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
+		prompt.ProviderInputText = "Orchestrator prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
 	}
 	prompt.DeliveryContentJSON = ""
 	if len(content) > 0 {

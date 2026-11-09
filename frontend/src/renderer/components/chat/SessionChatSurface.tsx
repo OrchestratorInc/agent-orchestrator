@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -14,11 +15,11 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  * preview and live data here.
  */
 
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
-import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
+import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
@@ -41,7 +42,6 @@ import { useConversationPromptSuggestion } from "../../hooks/useConversationProm
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
-import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
@@ -51,7 +51,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -63,37 +63,6 @@ export interface ConversationWorkState {
 	controllerBusy: boolean;
 	hasRunningTurn: boolean;
 	queuedTurnCount: number;
-}
-
-const HTTP_LINK_PATTERN = /https?:\/\/[^\s<>()\[\]{}"']+/i;
-const autoOpenedLinkSessions = new Set<string>();
-
-interface AssistantLinkState {
-	revision: number;
-	sequence: number;
-	streaming: boolean;
-}
-
-interface ConversationLinkBaseline {
-	latestSequence: number;
-	messages: Map<string, AssistantLinkState>;
-	pendingCompleted: Map<string, number>;
-}
-
-function cleanExtractedLink(value: string): string {
-	return value.replace(/[.,!?;:`\\]+$/, "");
-}
-
-function firstBrowserLink(text: string, workspacePaths: string[]): string | undefined {
-	const candidates: Array<{ index: number; value: string }> = [];
-	const webMatch = HTTP_LINK_PATTERN.exec(text);
-	if (webMatch) candidates.push({ index: webMatch.index, value: cleanExtractedLink(webMatch[0]) });
-	const markdownLink = /\[[^\]]+\]\(([^)\s]+)\)/.exec(text);
-	if (markdownLink?.[1]) candidates.push({ index: markdownLink.index, value: cleanExtractedLink(markdownLink[1]) });
-	for (const candidate of candidates.sort((a, b) => a.index - b.index)) {
-		if (isWebLink(candidate.value) || isWorkspaceHtmlLink(candidate.value, workspacePaths)) return candidate.value;
-	}
-	return undefined;
 }
 
 export const SessionChatSurface = memo(function SessionChatSurface({
@@ -204,6 +173,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
+	// The host is connecting or unreachable: the chat is its last saved copy, to read only.
+	const hostUnreachable = Boolean(hostId) && !daemonReady;
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -218,7 +189,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId);
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -230,7 +201,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data?.status === "ok" ? data.project : undefined;
 		},
 	});
@@ -431,8 +402,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
-	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
+	// Applied once: the chat below unmounts while the conversation reloads, and
+	// a request still held would scroll it back to the same message on return.
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string; revision?: number }>(uiSessionId);
+	const navigateToAnnotation = annotationNavigation.navigate;
+	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -444,7 +418,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		session.id, models, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")), sideEnabled,
 		(annotation) => {
 			onSelectChat?.();
-			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
+			navigateToAnnotation({ ...annotation, id: crypto.randomUUID() });
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
 		sideCreationEnabled,
@@ -514,66 +488,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	};
 
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
-	// Links opened on the user's behalf stay quiet about a file the session does
-	// not own; only a click earns the explanation in the file pane.
-	const autoOpenLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
-	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
-	useEffect(() => {
-		if (!snapshot || isLoading) return;
-		const previous = conversationLinkBaselines.current.get(uiSessionId);
-		const isInitialSnapshot = !previous;
-		const latestUserMessage = snapshot.items
-			.filter((item) => item.kind === "message" && item.role === "user")
-			.at(-1);
-		const messages = new Map<string, AssistantLinkState>();
-		const pendingCompleted = new Map(previous?.pendingCompleted);
-		let latestSequence = Math.max(previous?.latestSequence ?? -1, snapshot.latestSequence);
-		for (const item of snapshot.items) {
-			latestSequence = Math.max(latestSequence, item.sequence);
-			if (item.kind !== "message" || item.role !== "assistant") continue;
-			const prior = previous?.messages.get(item.id);
-			messages.set(item.id, {
-				revision: item.revision,
-				sequence: item.sequence,
-				streaming: item.streaming,
-			});
-			if (item.streaming) {
-				pendingCompleted.delete(item.id);
-				continue;
-			}
-			const completedCurrentTurnOnMount =
-				isInitialSnapshot && latestUserMessage && item.sequence > latestUserMessage.sequence;
-			const newlyCompleted = previous
-				? prior
-					? prior.streaming && item.revision >= prior.revision
-					: item.sequence > previous.latestSequence
-				: completedCurrentTurnOnMount;
-			if (newlyCompleted) pendingCompleted.set(item.id, item.revision);
-			else if (pendingCompleted.get(item.id) !== item.revision) pendingCompleted.delete(item.id);
-		}
-		conversationLinkBaselines.current.set(uiSessionId, { latestSequence, messages, pendingCompleted });
-		if (autoOpenedLinkSessions.has(uiSessionId)) return;
-		// Do not surprise users by opening links from history when a session is first
-		// mounted. The exception is the current turn: a fast agent can finish before
-		// the first conversation request resolves, so its response is already present
-		// in the initial snapshot and must not be mistaken for old history.
-		for (const item of snapshot.items) {
-			if (
-				item.kind !== "message" ||
-				item.role !== "assistant" ||
-				item.streaming ||
-				pendingCompleted.get(item.id) !== item.revision
-			) continue;
-			const url = firstBrowserLink(item.text, paths);
-			if (url) {
-				autoOpenedLinkSessions.add(uiSessionId);
-				pendingCompleted.delete(item.id);
-				autoOpenLinkInBrowser(url);
-				break;
-			}
-		}
-	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
@@ -679,7 +594,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
-					{error ?? "Could not load this conversation."}
+					{hostUnreachable && error ? t("remote.hostOffline") : error ?? "Could not load this conversation."}
 				</p>
 				{/* The terminal can still carry on from here. */}
 				{interfaceSwitch?.control}
@@ -689,20 +604,23 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	return (
 		<div className="relative h-full min-h-0">
-			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
+			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
-				annotationNavigationRequest={annotationNavigationRequest}
+				annotationNavigationRequest={annotationNavigation.request}
+				onAnnotationNavigationHandled={annotationNavigation.handled}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				newWorkDisabled={newWorkDisabled}
+				newWorkDisabled={newWorkDisabled || hostUnreachable}
+				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
+				savedCopy={hostUnreachable}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
@@ -796,7 +714,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					const switchFailed = (error: unknown) => {
 						if (error instanceof ProviderSwitchFailed) setChosenSwitch(undefined);
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
-						return Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+						return Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
 					};
 					const switched = () => {
 						setChosenSwitch(undefined);

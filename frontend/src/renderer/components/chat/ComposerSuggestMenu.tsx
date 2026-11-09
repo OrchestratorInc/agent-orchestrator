@@ -13,8 +13,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
 
@@ -109,8 +110,7 @@ export function ComposerSuggestMenu({
 				>
 					{items.map((item, index) => (
 						<li key={item.value} data-index={index}>
-							<button
-								type="button"
+							<Pressable
 								tabIndex={-1}
 								role="option"
 								id={`${id}-option-${index}`}
@@ -164,7 +164,7 @@ export function ComposerSuggestMenu({
 										<CornerDownLeft aria-hidden="true" className="size-3" />
 									</span>
 								) : null}
-							</button>
+							</Pressable>
 						</li>
 					))}
 				</ul>
@@ -196,5 +196,5 @@ export function ComposerSuggestMenu({
 
 function displayBadge(badge?: string): string | undefined {
 	if (!badge || badge.toLowerCase() === "agent") return undefined;
-	return badge.toLowerCase() === "ao" ? "AO" : badge;
+	return badge.toLowerCase() === "ao" ? "Orchestrator" : badge;
 }

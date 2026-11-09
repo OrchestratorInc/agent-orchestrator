@@ -18,7 +18,7 @@ const supervisedExitReportTimeout = 5 * time.Second
 func newAgentProcessCommand(ctx *commandContext) *cobra.Command {
 	root := &cobra.Command{
 		Use:    "agent-process",
-		Short:  "Run an AO-managed agent process (internal)",
+		Short:  "Run an Orchestrator-managed agent process (internal)",
 		Hidden: true,
 	}
 	root.AddCommand(newAgentProcessSuperviseCommand(ctx))
@@ -71,10 +71,10 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&sessionID, "session", "", "AO session id")
-	cmd.Flags().StringVar(&reviewID, "review", "", "AO review id")
-	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "AO review id to receive process activity")
-	cmd.Flags().StringVar(&launchID, "launch", "", "AO process launch id")
+	cmd.Flags().StringVar(&sessionID, "session", "", "Orchestrator-managed session id")
+	cmd.Flags().StringVar(&reviewID, "review", "", "Orchestrator review id")
+	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "Orchestrator review id to receive process activity")
+	cmd.Flags().StringVar(&launchID, "launch", "", "Orchestrator process launch id")
 	return cmd
 }
 

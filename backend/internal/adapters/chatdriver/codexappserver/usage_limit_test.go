@@ -95,11 +95,8 @@ func TestCodexUsageLimitResetWindows(t *testing.T) {
 			if tracker.turnID != "" || !tracker.resetAt.IsZero() {
 				t.Fatalf("completed turn retained quota metadata: %#v", tracker)
 			}
-			if tc.name == "primary saturated" {
-				want := "Usage limit exceeded; resets 2026-08-02T10:01:00Z\n\n" + codexQuotaCopy
-				if ev.Err.Error() != want {
-					t.Fatalf("durable copy = %q, want %q", ev.Err, want)
-				}
+			if ev.Err.Error() != codexQuotaCopy {
+				t.Fatalf("durable copy = %q, want %q", ev.Err, codexQuotaCopy)
 			}
 		})
 	}
@@ -241,9 +238,10 @@ func assertCodexQuotaReset(t *testing.T, ev ports.ChatEvent, reset int64) {
 	if ev.Err == nil || !strings.Contains(ev.Err.Error(), codexQuotaCopy) {
 		t.Fatalf("quota failure lost provider explanation: %#v", ev)
 	}
-	limit := domain.ParseConversationUsageLimit(ev.Err.Error(), nil)
-	if limit == nil || (reset == 0 && limit.ResetsAt != nil) ||
-		(reset != 0 && (limit.ResetsAt == nil || limit.ResetsAt.Unix() != reset)) {
-		t.Fatalf("quota reset = %#v, want Unix %d; error = %v", limit, reset, ev.Err)
+	if limit := domain.ParseConversationUsageLimit(ev.Err.Error(), nil); limit == nil || limit.ResetsAt != nil {
+		t.Fatalf("quota failure = %#v; error = %v", limit, ev.Err)
+	}
+	if ev.UsageLimitResetsAt.IsZero() != (reset == 0) || (reset != 0 && ev.UsageLimitResetsAt.Unix() != reset) {
+		t.Fatalf("quota reset = %v, want Unix %d", ev.UsageLimitResetsAt, reset)
 	}
 }

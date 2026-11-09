@@ -119,7 +119,7 @@ func TestConversationFailureCodeSurvivesSnapshotReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.SettleTurnWithFailureCode(ctx, conversation, "provider-key-turn", domain.TurnStateFailed,
-		"ACP internal detail", domain.ConversationFailureProviderKeyMissing, histClock); err != nil {
+		"ACP internal detail", domain.ConversationFailureProviderKeyMissing, time.Time{}, histClock); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
