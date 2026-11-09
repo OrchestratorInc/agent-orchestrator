@@ -3833,6 +3833,21 @@ describe("Sidebar", () => {
 		expect(downloadUpdateMock).not.toHaveBeenCalled();
 	});
 
+	it("checks for updates again when a failed install left nothing staged", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Couldn't prepare the update.",
+			errorInfo: { kind: "generic", phase: "install" },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		expect(checkUpdateMock).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
+		expect(downloadUpdateMock).not.toHaveBeenCalled();
+	});
+
 	it("keeps a ready install action when a later check fails", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "error",

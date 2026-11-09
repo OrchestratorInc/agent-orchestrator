@@ -1,14 +1,21 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../main/update-settings";
 import { SidebarUpdateRow, sidebarUpdateAction, updateFailurePhase } from "./SidebarUpdate";
 import { TooltipProvider } from "./ui/tooltip";
 
-function renderRow(status: UpdateStatus) {
+const { checkMock, downloadMock } = vi.hoisted(() => ({ checkMock: vi.fn(), downloadMock: vi.fn() }));
+vi.mock("../lib/bridge", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/bridge")>();
+	return { aoBridge: { ...actual.aoBridge, updates: { ...actual.aoBridge.updates, check: checkMock, download: downloadMock } } };
+});
+
+function renderRow(status: UpdateStatus, onRequestInstall = vi.fn()) {
 	const row = (next: UpdateStatus) => (
 		<TooltipProvider>
 			<SidebarUpdateRow
-				onRequestInstall={vi.fn()}
+				onRequestInstall={onRequestInstall}
 				status={next}
 				tabIndex={0}
 			/>
@@ -26,8 +33,13 @@ describe("sidebarUpdateAction", () => {
 
 	it("shows a failed download or install ahead of a staged build", () => {
 		const status: UpdateStatus = { state: "error", staged: { version: "1.0.0", stagedAt: 1, escalated: false } };
-		expect(sidebarUpdateAction(status, "install")).toEqual({ kind: "failed", phase: "install" });
+		expect(sidebarUpdateAction(status, "install")).toEqual({ kind: "failed", phase: "install", recovery: "install" });
 		expect(sidebarUpdateAction(status, null)).toEqual({ kind: "install", version: "1.0.0" });
+	});
+
+	it("recovers a failed install by checking again once the staged build is gone", () => {
+		expect(sidebarUpdateAction({ state: "error" }, "install")).toEqual({ kind: "failed", phase: "install", recovery: "check" });
+		expect(sidebarUpdateAction({ state: "error" }, "download")).toEqual({ kind: "failed", phase: "download", recovery: "download" });
 	});
 
 	it("offers a newer build over a staged one", () => {
@@ -81,5 +93,35 @@ describe("SidebarUpdateRow", () => {
 		const view = renderRow({ state: "idle" });
 		view.rerender({ state: "error", message: "Download stopped responding. Try again." });
 		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+	});
+});
+
+describe("SidebarUpdateRow retry", () => {
+	it("checks again instead of opening the restart dialog after a failed macOS stage discards the build", async () => {
+		checkMock.mockReset().mockResolvedValue(undefined);
+		const onRequestInstall = vi.fn();
+		const view = renderRow(
+			{ state: "preparing", version: "9.9.9", staged: { version: "9.9.9", stagedAt: 1, escalated: false, ready: false } },
+			onRequestInstall,
+		);
+		// handleMacStagingFailure() discards the staged build and sends an
+		// unlabelled error with neither `version` nor `staged`.
+		view.rerender({ state: "error", message: "Couldn't prepare the update." });
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
+		expect(checkMock).toHaveBeenCalledTimes(1);
+		expect(onRequestInstall).not.toHaveBeenCalled();
+	});
+
+	it("still offers the restart dialog when the staged build survived the failed install", async () => {
+		checkMock.mockReset();
+		const onRequestInstall = vi.fn();
+		const staged = { version: "9.9.9", stagedAt: 1, escalated: false };
+		const view = renderRow({ state: "preparing", version: "9.9.9", staged }, onRequestInstall);
+		view.rerender({ state: "error", message: "Install failed.", staged });
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
+		expect(onRequestInstall).toHaveBeenCalledTimes(1);
+		expect(checkMock).not.toHaveBeenCalled();
 	});
 });

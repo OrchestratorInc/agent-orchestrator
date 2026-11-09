@@ -5,6 +5,7 @@ import type { TFunction } from "i18next";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
 import { requestUpdateDownload } from "../hooks/useUpdateStatus";
+import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -20,6 +21,14 @@ export const FOOTER_RAIL_BUTTON_CLASS = cn(
 );
 
 type FailedPhase = "download" | "install";
+
+/**
+ * How Retry recovers. A failed install only reopens the restart confirmation
+ * while a staged build is still there to install: a failed macOS stage
+ * discards it, and the dialog would then have nothing to confirm. Without one,
+ * a fresh check finds the build again.
+ */
+export type UpdateRecovery = "install" | "check" | "download";
 
 /**
  * What the sidebar should act on, derived from the live update status.
@@ -38,7 +47,7 @@ export type SidebarUpdateAction =
 	| { kind: "downloading"; percent?: number }
 	| { kind: "download"; version?: string; releaseNotes?: string }
 	| { kind: "install"; version?: string }
-	| { kind: "failed"; phase: FailedPhase }
+	| { kind: "failed"; phase: FailedPhase; recovery: UpdateRecovery }
 	| null;
 
 export function sidebarUpdateAction(status: UpdateStatus, failedPhase: FailedPhase | null = null): SidebarUpdateAction {
@@ -47,13 +56,16 @@ export function sidebarUpdateAction(status: UpdateStatus, failedPhase: FailedPha
 		const percent = status.percent === undefined ? undefined : Math.min(100, Math.max(0, status.percent));
 		return { kind: "downloading", percent };
 	}
-	if (status.state === "error" && failedPhase) return { kind: "failed", phase: failedPhase };
 	// `staged` is the stamp the main process puts on every status; the
 	// `downloaded` fallback keeps this correct for any status that predates it
 	// or arrives from a source that does not stamp.
 	const staged =
 		status.staged ??
 		(status.state === "downloaded" ? { version: status.version } : undefined);
+	if (status.state === "error" && failedPhase) {
+		const recovery = failedPhase === "download" ? "download" : staged ? "install" : "check";
+		return { kind: "failed", phase: failedPhase, recovery };
+	}
 	// Something newer than what is already staged still deserves the download
 	// action; the main process reports a re-discovered staged build as
 	// "downloaded", so an "available" here is genuinely a different version.
@@ -137,6 +149,12 @@ function ProgressRing({ percent, className }: { percent?: number; className?: st
 			/>
 		</svg>
 	);
+}
+
+function recover(recovery: UpdateRecovery, onRequestInstall: () => void): void {
+	if (recovery === "install") onRequestInstall();
+	else if (recovery === "check") void aoBridge.updates.check();
+	else void requestUpdateDownload();
 }
 
 function UpdatePill({ children, ...props }: React.ComponentProps<typeof Button>) {
@@ -299,7 +317,7 @@ export function SidebarUpdateRow({
 		pill = (
 			<UpdatePill
 				aria-label={t("shell.retryUpdate")}
-				onClick={action.phase === "install" ? onRequestInstall : () => void requestUpdateDownload()}
+				onClick={() => recover(action.recovery, onRequestInstall)}
 				tabIndex={tabIndex}
 			>
 				{t("shell.updateRetry")}
@@ -390,7 +408,8 @@ export function SidebarUpdateRail({
 		failed = true;
 		label = t("shell.retryUpdate");
 		tooltip = `${t("shell.updateFailed")} · ${t("shell.updateRetry")}`;
-		onClick = action.phase === "install" ? onRequestInstall : () => void requestUpdateDownload();
+		const { recovery } = action;
+		onClick = () => recover(recovery, onRequestInstall);
 	}
 
 	return (
