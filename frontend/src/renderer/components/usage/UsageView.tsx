@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimits } from "./UsageLimits";
+import { UsageSkeleton } from "./UsageSkeleton";
 import { UsageSpend } from "./UsageSpend";
 import { UsageWindows } from "./UsageWindows";
 
@@ -88,7 +89,7 @@ export function UsageView() {
 		}
 	};
 	const refreshing = isWindows ? limitWindows.isFetching : isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
-	const loading = <p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>;
+	const loading = <UsageSkeleton view={tab} />;
 	const failed = (error: Error) => <p role="alert" className="py-16 text-center text-sm text-destructive">{error.message}</p>;
 	const staleError = (error: Error | null) => (error ? <p role="alert" className="mb-4 text-xs text-destructive">{error.message}</p> : null);
 	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
