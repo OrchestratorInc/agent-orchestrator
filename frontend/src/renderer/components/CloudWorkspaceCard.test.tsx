@@ -188,7 +188,7 @@ describe("CloudWorkspaceCard", () => {
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ws-1"));
-		expect(mocks.createGitHubRepository).toHaveBeenCalledWith("org-1", { name: "My-Notes", owner: "acme", description: "Uploaded from AO" });
+		expect(mocks.createGitHubRepository).toHaveBeenCalledWith("org-1", { name: "My-Notes", owner: "acme", description: "Uploaded from Orchestrator" });
 		expect(mocks.pushFolderToRepository).toHaveBeenCalledWith({
 			folder: "/Users/me/My Notes",
 			pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/My-Notes.git",
@@ -253,9 +253,9 @@ describe("CloudWorkspaceCard", () => {
 	it.each([
 		["shallow_repository", "notes is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", false],
 		["lfs_unsupported", "notes uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", false],
-		["branch_exists", "The repository for notes already has commits, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove notes and add its repository from GitHub instead.", false],
+		["branch_exists", "The repository for notes already has commits, and Orchestrator only uploads a folder into an empty repository. If an earlier upload finished, remove notes and add its repository from GitHub instead.", false],
 		// GitHub's own refusal may name the files, so it stays as detail.
-		["workflows_refused", "GitHub refused notes because it contains .github/workflows files and the AO GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", true],
+		["workflows_refused", "GitHub refused notes because it contains .github/workflows files and the Orchestrator GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", true],
 		["file_too_large", "notes has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", true],
 	])("explains a %s upload refusal in the app's language", async (code, text, keepsDetail) => {
 		const user = userEvent.setup();

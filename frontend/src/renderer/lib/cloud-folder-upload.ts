@@ -94,7 +94,7 @@ export async function createFolderRepository(
 	const { repository, pushPath } = await client.createGitHubRepository(orgId, {
 		name: input.name,
 		...(input.owner ? { owner: input.owner } : {}),
-		description: "Uploaded from AO",
+		description: "Uploaded from Orchestrator",
 	});
 	return { repository, pushPath };
 }
@@ -126,20 +126,20 @@ export function createdRepositoryUrl(created: CreatedFolderRepository): string {
  * upload with. A code it adds later falls back to push_failed's.
  */
 const PUSH_ERROR_TEXT: Record<string, (t: TFunction, folder: string) => string> = {
-	invalid_request: (t, folder) => t("cloudWorkspace.pushError.invalidRequest", { defaultValue: "AO could not upload {{folder}}.", folder }),
-	signed_out: (t) => t("cloudWorkspace.pushError.signedOut", { defaultValue: "Your AO Cloud session expired. Sign in again, then try again." }),
+	invalid_request: (t, folder) => t("cloudWorkspace.pushError.invalidRequest", { defaultValue: "Orchestrator could not upload {{folder}}.", folder }),
+	signed_out: (t) => t("cloudWorkspace.pushError.signedOut", { defaultValue: "Your Orchestrator Cloud session expired. Sign in again, then try again." }),
 	folder_unavailable: (t, folder) => t("cloudWorkspace.pushError.folderUnavailable", { defaultValue: "{{folder}} cannot be uploaded.", folder }),
 	folder_too_large: (t, folder) => t("cloudWorkspace.pushError.folderTooLarge", { defaultValue: "{{folder}} is too large to upload. Add its large files to its .gitignore, or make it a git repository and add it from GitHub.", folder }),
 	folder_has_repositories: (t, folder) => t("cloudWorkspace.pushError.folderHasRepositories", { defaultValue: "{{folder}} contains other git repositories or submodules, whose files would not be uploaded. Add each of them to the workspace on its own.", folder }),
 	git_unavailable: (t) => t("cloudWorkspace.pushError.gitUnavailable", { defaultValue: "Uploading a folder needs git 2.31 or newer on this computer." }),
-	import_failed: (t, folder) => t("cloudWorkspace.pushError.importFailed", { defaultValue: "AO could not prepare {{folder}} for upload.", folder }),
+	import_failed: (t, folder) => t("cloudWorkspace.pushError.importFailed", { defaultValue: "Orchestrator could not prepare {{folder}} for upload.", folder }),
 	push_failed: (t, folder) => t("cloudWorkspace.pushError.pushFailed", { defaultValue: "Could not upload {{folder}}.", folder }),
-	push_forbidden: (t, folder) => t("cloudWorkspace.pushError.pushForbidden", { defaultValue: "AO Cloud did not let you upload {{folder}} to its repository. Check that the AO GitHub App still has access to it, then try again.", folder }),
-	branch_exists: (t, folder) => t("cloudWorkspace.pushError.branchExists", { defaultValue: "The repository for {{folder}} already has commits, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove {{folder}} and add its repository from GitHub instead.", folder }),
+	push_forbidden: (t, folder) => t("cloudWorkspace.pushError.pushForbidden", { defaultValue: "Orchestrator Cloud did not let you upload {{folder}} to its repository. Check that the Orchestrator GitHub App still has access to it, then try again.", folder }),
+	branch_exists: (t, folder) => t("cloudWorkspace.pushError.branchExists", { defaultValue: "The repository for {{folder}} already has commits, and Orchestrator only uploads a folder into an empty repository. If an earlier upload finished, remove {{folder}} and add its repository from GitHub instead.", folder }),
 	shallow_repository: (t, folder) => t("cloudWorkspace.pushError.shallowRepository", { defaultValue: "{{folder}} is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", folder }),
 	lfs_unsupported: (t, folder) => t("cloudWorkspace.pushError.lfsUnsupported", { defaultValue: "{{folder}} uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", folder }),
 	file_too_large: (t, folder) => t("cloudWorkspace.pushError.fileTooLarge", { defaultValue: "{{folder}} has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", folder }),
-	workflows_refused: (t, folder) => t("cloudWorkspace.pushError.workflowsRefused", { defaultValue: "GitHub refused {{folder}} because it contains .github/workflows files and the AO GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", folder }),
+	workflows_refused: (t, folder) => t("cloudWorkspace.pushError.workflowsRefused", { defaultValue: "GitHub refused {{folder}} because it contains .github/workflows files and the Orchestrator GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", folder }),
 };
 
 /**

@@ -249,7 +249,7 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 
 	await waitFor(() => expect(push).toHaveBeenCalledWith({ folder: "/Users/me/notes", pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git", branch: "main" }));
 	// The new repository goes in the workspace's own GitHub account.
-	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from AO" });
+	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from Orchestrator" });
 	// Saved without Save, so leaving Settings never strands the new repository;
 	// a stored branch is kept.
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
@@ -288,7 +288,7 @@ it("names a folder's repository before uploading it, and retries without making 
 
 	expect(await screen.findByText("Could not upload notes.")).toBeInTheDocument();
 	expect(screen.getByText("Could not upload notes: remote hung up")).toBeInTheDocument();
-	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes-app", owner: "acme", description: "Uploaded from AO" });
+	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes-app", owner: "acme", description: "Uploaded from Orchestrator" });
 	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
 
 	expect(await screen.findByText("../notes-app")).toBeInTheDocument();
@@ -316,7 +316,7 @@ it("checks a folder's repository against the workspace before making it", async 
 	expect(await screen.findByText("acme/alice is already the main repository.")).toBeInTheDocument();
 	await userEvent.clear(name);
 	await userEvent.type(name, "repository");
-	expect(await screen.findByText(/which AO uses itself/)).toBeInTheDocument();
+	expect(await screen.findByText(/which Orchestrator uses itself/)).toBeInTheDocument();
 	await userEvent.clear(name);
 	await userEvent.type(name, "site.git");
 	expect(await screen.findByText(/is not a valid repository name/)).toBeInTheDocument();
@@ -370,7 +370,7 @@ it("asks to sign in again when an upload finds the session expired", async () =>
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
 
-	expect(await screen.findByText("Your AO Cloud session expired. Sign in again, then try again.")).toBeInTheDocument();
+	expect(await screen.findByText("Your Orchestrator Cloud session expired. Sign in again, then try again.")).toBeInTheDocument();
 	expect(signIn).toHaveBeenCalledOnce();
 	expect(mocks.patch).not.toHaveBeenCalled();
 	push.mockRestore();

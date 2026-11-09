@@ -445,7 +445,7 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 					aria-invalid={nameInvalid || problem !== undefined || undefined}
 					onChange={(event) => { setPending({ ...pending, name: event.target.value }); setError(null); }}
 				/>
-				<Button type="button" variant="outline" size="sm" disabled={disabled || busy || nameInvalid || problem !== undefined} onClick={() => void upload()}>
+				<Button type="button" variant="secondary" size="sm" disabled={disabled || busy || nameInvalid || problem !== undefined} onClick={() => void upload()}>
 					{busy ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
 					{phase === "creating"
 						? t("cloudWorkspace.creatingRepository", { defaultValue: "Creating repository" })
@@ -464,7 +464,7 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 					? committedUploadHint(t, pending.committed)
 					: t("cloudWorkspace.newPrivateRepository", { defaultValue: "Uploaded to a new private repository" })}
 			</p>
-		</div> : <Button type="button" variant="outline" size="sm" disabled={disabled || atLimit} onClick={() => void choose()}>
+		</div> : <Button type="button" variant="secondary" size="sm" disabled={disabled || atLimit} onClick={() => void choose()}>
 			<FolderPlus aria-hidden="true" className="size-icon-sm" />
 			{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}
 		</Button>}

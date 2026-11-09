@@ -136,7 +136,7 @@ export function CloudAgentSetupStep({
 					</p>
 					<Button
 						type="button"
-						variant="outline"
+						variant="secondary"
 						size="sm"
 						className="shrink-0"
 						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
@@ -151,7 +151,7 @@ export function CloudAgentSetupStep({
 				</p>
 			) : null}
 			<div className={onboardingFooterActionsClass}>
-				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+				<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
 				</Button>
 				<Button
@@ -369,7 +369,7 @@ export function CloudGitHubConnectCard({ connection, disabled }: { connection: C
 				<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
 					{connection.busy
 						? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
-						: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories AO can work on" })}
+						: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories Orchestrator can work on" })}
 				</span>
 			</span>
 			{connection.busy && (

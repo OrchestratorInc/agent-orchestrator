@@ -33,7 +33,7 @@ describe("cloud folder upload", () => {
 	it("creates the repository in the chosen account and pushes to its default branch", async () => {
 		const createGitHubRepository = vi.fn().mockResolvedValue({ repository: repository("acme/notes", "trunk"), created: true, pushPath: "/p.git" });
 		const created = await createFolderRepository({ createGitHubRepository }, "org-1", { name: "notes", owner: "acme" });
-		expect(createGitHubRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from AO" });
+		expect(createGitHubRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from Orchestrator" });
 
 		const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "trunk", commit: "c", source: "head" });
 		await pushFolderToCreatedRepository("/work/notes", created);
@@ -69,8 +69,8 @@ describe("cloud folder upload", () => {
 
 	it("translates an upload refusal by its code, keeping the main process's message where it adds to it", () => {
 		const t = appI18n.t.bind(appI18n);
-		expect(folderPushErrorText(t, new FolderPushError("signed_out", "Your AO Cloud session expired. Sign in again, then try again."), "/w/notes"))
-			.toEqual({ message: "Your AO Cloud session expired. Sign in again, then try again." });
+		expect(folderPushErrorText(t, new FolderPushError("signed_out", "Your Orchestrator Cloud session expired. Sign in again, then try again."), "/w/notes"))
+			.toEqual({ message: "Your Orchestrator Cloud session expired. Sign in again, then try again." });
 		expect(folderPushErrorText(t, new FolderPushError("push_failed", "Could not upload notes: remote hung up"), "/w/notes/"))
 			.toEqual({ message: "Could not upload notes.", detail: "Could not upload notes: remote hung up" });
 		// A code this build does not know reads as a failed upload.

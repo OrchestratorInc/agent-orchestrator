@@ -36,7 +36,7 @@ export const MAX_GITHUB_FILE_BYTES = 100 * 1024 * 1024;
 export const MAX_PUSH_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** The commit identity of an import when git has none configured. */
-export const FALLBACK_COMMIT_NAME = "AO";
+export const FALLBACK_COMMIT_NAME = "Orchestrator";
 export const FALLBACK_COMMIT_EMAIL = "noreply@aoagents.dev";
 
 const GIT_STEP_TIMEOUT_MS = 10 * 60_000;
@@ -134,13 +134,13 @@ const PUSH_PATH = /^\/api\/cloud\/v1\/orgs\/[A-Za-z0-9_-]+\/github\/git\/[A-Za-z
  */
 export function resolvePushUrl(pushPath: string, controlPlane: string): URL {
 	if (!PUSH_PATH.test(pushPath) || pushPath.split("/").some((segment) => segment === "." || segment === "..")) {
-		throw new PushFolderError("invalid_request", "The repository's push address is not an AO Cloud repository.");
+		throw new PushFolderError("invalid_request", "The repository's push address is not an Orchestrator Cloud repository.");
 	}
 	const base = parseCloudBaseUrl(controlPlane);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const url = new URL(base.origin + basePath + pushPath);
 	if (url.origin !== base.origin || url.pathname !== basePath + pushPath) {
-		throw new PushFolderError("invalid_request", "The repository's push address is not on the AO Cloud control plane.");
+		throw new PushFolderError("invalid_request", "The repository's push address is not on the Orchestrator Cloud control plane.");
 	}
 	return url;
 }
@@ -167,14 +167,14 @@ function pushRefusal(error: unknown, folderName: string, branch: string): PushFo
 	// git answers a 401 by asking for credentials, which it may not here, so it
 	// never says "returned error: 401" for one.
 	if (status === "401" || /could not read (Username|Password)|Authentication failed/i.test(stderr)) {
-		return new PushFolderError("signed_out", "Your AO Cloud session expired. Sign in again, then try again.");
+		return new PushFolderError("signed_out", "Your Orchestrator Cloud session expired. Sign in again, then try again.");
 	}
 	// git reports a 404 on its first request as "repository '…' not found".
 	if (status === "403" || status === "404" || /repository '[^']*' not found/i.test(stderr)) {
-		return new PushFolderError("push_forbidden", `AO Cloud did not let you upload ${folderName} to its repository. Check that the AO GitHub App still has access to it, then try again.`);
+		return new PushFolderError("push_forbidden", `Orchestrator Cloud did not let you upload ${folderName} to its repository. Check that the Orchestrator GitHub App still has access to it, then try again.`);
 	}
 	if (/refusing to allow a GitHub App to create or update workflow/i.test(stderr)) {
-		return new PushFolderError("workflows_refused", `GitHub refused ${folderName} because it holds GitHub Actions workflows (.github/workflows), which the AO GitHub App may not add. Remove them from what you upload, or add the repository from GitHub instead.`);
+		return new PushFolderError("workflows_refused", `GitHub refused ${folderName} because it holds GitHub Actions workflows (.github/workflows), which the Orchestrator GitHub App may not add. Remove them from what you upload, or add the repository from GitHub instead.`);
 	}
 	if (/GH001|exceeds GitHub's file size limit/i.test(stderr)) {
 		return new PushFolderError("file_too_large", `GitHub refused ${folderName} because it holds a file larger than 100 MB. Remove it from what you upload (or its history), then try again.`);
@@ -183,7 +183,7 @@ function pushRefusal(error: unknown, folderName: string, branch: string): PushFo
 	// exists"); git refuses on its own first when the branch holds a commit it
 	// doesn't have ("fetch first").
 	if (/already exists|\[rejected\].*\((fetch first|non-fast-forward)\)/i.test(stderr)) {
-		return new PushFolderError("branch_exists", `The repository for ${folderName} already has a ${branch} branch, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove ${folderName} and add its repository from GitHub instead.`);
+		return new PushFolderError("branch_exists", `The repository for ${folderName} already has a ${branch} branch, and Orchestrator only uploads a folder into an empty repository. If an earlier upload finished, remove ${folderName} and add its repository from GitHub instead.`);
 	}
 	return new PushFolderError("push_failed", `Could not upload ${folderName}: ${message}`);
 }
@@ -247,7 +247,7 @@ async function resolveFolder(folder: string, homeDir: string | undefined): Promi
 		if (samePath(real, home)) throw new PushFolderError("folder_unavailable", "Your home folder cannot be uploaded. Choose a project folder.");
 		const aoState = path.join(home, ".ao");
 		if (samePath(real, aoState) || real.toLowerCase().startsWith(`${aoState.toLowerCase()}${path.sep}`)) {
-			throw new PushFolderError("folder_unavailable", "A folder inside AO's own data cannot be uploaded.");
+			throw new PushFolderError("folder_unavailable", "A folder inside Orchestrator's own data cannot be uploaded.");
 		}
 	}
 	return real;
@@ -276,7 +276,7 @@ function largeFileError(folderName: string, file: string): PushFolderError {
 }
 
 function lfsError(folderName: string): PushFolderError {
-	return new PushFolderError("lfs_unsupported", `${folderName} stores files in Git LFS, which AO cannot upload yet. Push it to GitHub yourself, then add its repository from GitHub.`);
+	return new PushFolderError("lfs_unsupported", `${folderName} stores files in Git LFS, which Orchestrator cannot upload yet. Push it to GitHub yourself, then add its repository from GitHub.`);
 }
 
 /**
@@ -315,7 +315,7 @@ async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.P
 		// git 2.38+; older git just skips this check.
 		const usage = Number((await git(["-C", folder, "rev-list", "--objects", "--disk-usage", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS })).stdout.trim());
 		if (usage > MAX_PUSH_BYTES) {
-			throw new PushFolderError("folder_too_large", `${name}'s history is larger than the 2 GB AO Cloud uploads. Add its repository from GitHub instead.`);
+			throw new PushFolderError("folder_too_large", `${name}'s history is larger than the 2 GB Orchestrator Cloud uploads. Add its repository from GitHub instead.`);
 		}
 	} catch (error) {
 		if (error instanceof PushFolderError) throw error;
@@ -410,7 +410,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			throw new PushFolderError("invalid_request", "Not a folder to upload.");
 		}
 		const controlPlane = await deps.controlPlaneUrl();
-		if (!controlPlane) throw new PushFolderError("invalid_request", "No AO Cloud control plane is configured.");
+		if (!controlPlane) throw new PushFolderError("invalid_request", "No Orchestrator Cloud control plane is configured.");
 		const remoteUrl = resolvePushUrl(pushPath, controlPlane).toString();
 		const realFolder = await resolveFolder(folder, deps.homeDir ?? os.homedir());
 		let version: string;
@@ -449,7 +449,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 		}
 
 		token = await deps.getToken();
-		if (token === null || token === "") throw new PushFolderError("signed_out", "No AO Cloud session is available. Sign in and try again.");
+		if (token === null || token === "") throw new PushFolderError("signed_out", "No Orchestrator Cloud session is available. Sign in and try again.");
 		const remote = deps.remoteFor?.(remoteUrl) ?? remoteUrl;
 		const pushEnv = withGitConfig(env, [
 			// Sent only to this repository's URL, and never on to a redirect. The

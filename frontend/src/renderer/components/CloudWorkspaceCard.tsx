@@ -376,11 +376,11 @@ export function CloudWorkspaceCard({
 						/>
 					) : null}
 					<div className="flex flex-wrap items-center gap-2">
-						<Button type="button" variant="outline" size="sm" disabled={isCreating || atLimit || !github.appConnected || pickingRepository} onClick={() => setPickingRepository(true)}>
+						<Button type="button" variant="secondary" size="sm" disabled={isCreating || atLimit || !github.appConnected || pickingRepository} onClick={() => setPickingRepository(true)}>
 							<Plus aria-hidden="true" className="size-icon-sm" />
 							{t("cloudWorkspace.addRepository", { defaultValue: "Add a repository" })}
 						</Button>
-						<Button type="button" variant="outline" size="sm" disabled={isCreating || atLimit || !github.appConnected} onClick={() => void addFolder()}>
+						<Button type="button" variant="secondary" size="sm" disabled={isCreating || atLimit || !github.appConnected} onClick={() => void addFolder()}>
 							<FolderPlus aria-hidden="true" className="size-icon-sm" />
 							{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}
 						</Button>
@@ -435,7 +435,7 @@ export function CloudWorkspaceCard({
 					/>
 				) : (
 					<div className={onboardingFooterActionsClass}>
-						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+						<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
 						</Button>
 					</div>
