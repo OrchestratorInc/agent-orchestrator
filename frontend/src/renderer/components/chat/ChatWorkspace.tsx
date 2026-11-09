@@ -132,6 +132,7 @@ import {
 	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
+	humanBubbleClass,
 	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
@@ -4692,10 +4693,16 @@ export function Timeline({
 						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
-						<div className="flex justify-end" data-chat-scroll-anchor="">
+						// No bubble to stand in for here, so the editor draws one, with Cancel
+						// and Send on their own row below it.
+						<div className="flex flex-col items-end gap-1" data-chat-scroll-anchor="">
 							<HumanMessageEditor
 								text={messageEdit.text}
 								content={messageEdit.content}
+								sessionId={snapshot.sessionId}
+								apiBaseUrl={apiBaseUrl}
+								className={humanBubbleClass()}
+								actionsClassName="flex h-7 items-center gap-1"
 								pending={inlineEditPending}
 								locked={Boolean(inlineEditRecoveryLabel)}
 								recoveryLabel={translateDraft(inlineEditRecoveryLabel)}

@@ -118,7 +118,7 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
@@ -199,17 +199,6 @@ function ComposerBand({ band }: { band?: ReactNode }) {
 			) : null}
 		</AnimatePresence>
 	);
-}
-
-/**
- * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
- * brief, so the same instruction reaches the agent whether a file was attached at
- * spawn or mid-conversation.
- */
-function withAttachmentReferences(text: string, paths: string[]): string {
-	if (paths.length === 0) return text;
-	const lead = text.trim() === "" ? "" : `${text}\n\n`;
-	return `${lead}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
 }
 
 /** How long a discarded unsent message can be brought back. */

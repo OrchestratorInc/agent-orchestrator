@@ -3252,6 +3252,28 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Editing a sent message keeps its bubble. A hidden copy of the draft shares the
+   textarea's grid cell and sizes it, so the box fits its text the way the bubble
+   did and grows only as the text does. A long message folds as its bubble does
+   (see .chat-human-fold[data-scroll-folded]). */
+.chat-human-edit-field {
+	display: grid;
+}
+
+.chat-human-edit-field::after {
+	/* The zero-width space gives a trailing newline its line without widening the box. */
+	content: attr(data-value) "\200b";
+	visibility: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	text-wrap: pretty;
+}
+
+.chat-human-edit-field::after,
+.chat-human-edit-field > textarea {
+	grid-area: 1 / 1;
+}
+
 /* Opacity only, so the fade stays on the compositor. */
 .chat-welcome-leaving {
 	animation: chat-welcome-out 150ms ease-out both;
@@ -3308,6 +3330,15 @@ html.sidebar-reordering * {
 	transition:
 		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
 		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The message editor keeps the fold's height and scrolls inside it, so the
+   person can reach and type in every line. No fade: once scrolled to the end it
+   would hide the line being typed. */
+.chat-human-fold[data-folded][data-scroll-folded]:not([data-animating]) {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	mask-image: none;
 }
 
 /* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
