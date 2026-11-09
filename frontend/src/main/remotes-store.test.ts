@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addRemote, readRemotes, removeRemote, RemotesFilePermissionError, updateRemote } from "./remotes-store";
+import { addRemote, readRemotes, removeRemote, RemotesFilePermissionError, sealSavedPasswords, setPasswordCipher, updateRemote } from "./remotes-store";
 
 async function tempFile(contents?: string, mode = 0o600): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "ao-remotes-"));
@@ -192,5 +192,42 @@ describe("removeRemote", () => {
 		const path = await tempFile(TWO_HOSTS, 0o644);
 		await expect(removeRemote(path, "http://192.0.2.1:1")).rejects.toBeInstanceOf(RemotesFilePermissionError);
 		expect(await readFile(path, "utf8")).toBe(TWO_HOSTS);
+	});
+});
+
+describe("password encryption", () => {
+	const cipher = { encrypt: (text: string) => `sealed:${text}`, decrypt: (sealed: string) => { if (!sealed.startsWith("sealed:")) throw new Error("bad"); return sealed.slice(7); } };
+	afterEach(() => setPasswordCipher(() => null));
+
+	it("writes passwords encrypted and reads them back", async () => {
+		setPasswordCipher(() => cipher);
+		const path = await tempFile();
+		await addRemote(path, { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" });
+		expect(await readFile(path, "utf8")).not.toContain('"password"');
+		expect(JSON.parse(await readFile(path, "utf8")).remotes[0].sealedPassword).toBe("sealed:pw");
+		await expect(readRemotes(path)).resolves.toEqual([{ label: "workbox", url: "http://192.0.2.1:3011", password: "pw" }]);
+	});
+
+	it("encrypts an existing plaintext file", async () => {
+		const path = await tempFile('{"remotes":[{"label":"workbox","url":"http://192.0.2.1:3011","password":"pw"}]}');
+		setPasswordCipher(() => cipher);
+		await sealSavedPasswords(path);
+		expect(JSON.parse(await readFile(path, "utf8")).remotes).toEqual([{ label: "workbox", url: "http://192.0.2.1:3011", sealedPassword: "sealed:pw" }]);
+	});
+
+	it("keeps a password it cannot decrypt through a rename", async () => {
+		const path = await tempFile('{"remotes":[{"label":"workbox","url":"http://192.0.2.1:3011","sealedPassword":"other-keychain"}]}');
+		setPasswordCipher(() => cipher);
+		await expect(readRemotes(path)).resolves.toEqual([{ label: "workbox", url: "http://192.0.2.1:3011", password: "", sealedPassword: "other-keychain" }]);
+		await updateRemote(path, "http://192.0.2.1:3011", { label: "renamed" });
+		expect(JSON.parse(await readFile(path, "utf8")).remotes[0]).toEqual({ label: "renamed", url: "http://192.0.2.1:3011", sealedPassword: "other-keychain" });
+		await updateRemote(path, "http://192.0.2.1:3011", { password: "new" });
+		expect(JSON.parse(await readFile(path, "utf8")).remotes[0].sealedPassword).toBe("sealed:new");
+	});
+
+	it("keeps plaintext when no cipher is available", async () => {
+		const path = await tempFile();
+		await addRemote(path, { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" });
+		expect(JSON.parse(await readFile(path, "utf8")).remotes[0].password).toBe("pw");
 	});
 });

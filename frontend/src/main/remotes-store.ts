@@ -10,7 +10,39 @@ export type RemoteEntry = {
 	password: string;
 	hostId?: string;
 	accountUserId?: string;
+	/** An encrypted password this launch could not decrypt, kept so a write does not lose it. */
+	sealedPassword?: string;
 };
+
+export type PasswordCipher = { encrypt(plain: string): string; decrypt(sealed: string): string };
+
+// Resolved on every read and write: the OS keychain may only be usable once the app is ready.
+let currentCipher: () => PasswordCipher | null = () => null;
+
+/** Saved passwords are encrypted with the cipher this returns; null keeps them in plaintext. */
+export function setPasswordCipher(resolve: () => PasswordCipher | null): void {
+	currentCipher = resolve;
+}
+
+type StoredRemote = Omit<RemoteEntry, "password"> & { password?: string };
+
+function unseal({ password, sealedPassword, ...rest }: StoredRemote, cipher: PasswordCipher | null): RemoteEntry {
+	if (sealedPassword === undefined) return { ...rest, password: password ?? "" };
+	if (cipher) {
+		try {
+			return { ...rest, password: cipher.decrypt(sealedPassword) };
+		} catch {
+			// Encrypted by another keychain; keep it and let the host ask for a new pairing.
+		}
+	}
+	return { ...rest, password: "", sealedPassword };
+}
+
+function seal({ password, sealedPassword, ...rest }: RemoteEntry, cipher: PasswordCipher | null): StoredRemote {
+	if (cipher && password) return { ...rest, sealedPassword: cipher.encrypt(password) };
+	if (!password && sealedPassword) return { ...rest, sealedPassword };
+	return { ...rest, password };
+}
 
 export class RemotesFilePermissionError extends Error {
 	constructor(
@@ -28,6 +60,11 @@ function isMissing(error: unknown): boolean {
 }
 
 export async function readRemotes(path: string): Promise<RemoteEntry[]> {
+	const cipher = currentCipher();
+	return (await readStoredRemotes(path)).map((stored) => unseal(stored, cipher));
+}
+
+async function readStoredRemotes(path: string): Promise<StoredRemote[]> {
 	let mode: number;
 	try {
 		mode = (await stat(path)).mode & 0o777;
@@ -41,8 +78,16 @@ export async function readRemotes(path: string): Promise<RemoteEntry[]> {
 	// every remotes.json on that platform and take saved hosts down with it.
 	if (process.platform !== "win32" && mode & 0o077) throw new RemotesFilePermissionError(path, mode);
 
-	const parsed = JSON.parse(await readFile(path, "utf8")) as { remotes?: RemoteEntry[] };
+	const parsed = JSON.parse(await readFile(path, "utf8")) as { remotes?: StoredRemote[] };
 	return parsed.remotes ?? [];
+}
+
+/** Rewrites plaintext passwords encrypted, when a cipher is available. */
+export async function sealSavedPasswords(path: string): Promise<void> {
+	return serializeMutation(async () => {
+		if (!currentCipher() || !(await readStoredRemotes(path)).some((stored) => stored.password)) return;
+		await writeRemotes(path, await readRemotes(path));
+	});
 }
 
 // Write beside the existing file so interruption never truncates the only
@@ -52,7 +97,9 @@ async function writeRemotes(path: string, remotes: RemoteEntry[]): Promise<void>
 	const temporary = `${path}.${randomUUID()}.tmp`;
 	let renamed = false;
 	try {
-		await writeFile(temporary, `${JSON.stringify({ remotes }, null, 2)}\n`, {
+		const cipher = currentCipher();
+		const stored = remotes.map((entry) => seal(entry, cipher));
+		await writeFile(temporary, `${JSON.stringify({ remotes: stored }, null, 2)}\n`, {
 			encoding: "utf8",
 			mode: 0o600,
 			flag: "wx",
@@ -99,6 +146,7 @@ export function applyRemoteChanges(entry: RemoteEntry, changes: RemoteChanges): 
 		password: changes.password ?? entry.password,
 		hostId: entry.hostId,
 		accountUserId: changes.accountUserId ?? entry.accountUserId,
+		sealedPassword: changes.password === undefined ? entry.sealedPassword : undefined,
 	};
 }
 
