@@ -109,6 +109,22 @@ export class TelemetryIdentityController {
 	}
 
 	/**
+	 * An explicit sign-out: records the signed-out state at once (so a later
+	 * sign-in still orders after it), durably retires the binding before
+	 * returning, then hands the sign-out to the daemon in the background. Used
+	 * by cloud:signOut so the sign-out holds even if the app quits before the
+	 * renderer reports it or the daemon is reachable.
+	 */
+	async signOut(): Promise<void> {
+		this.known = true;
+		this.cloudUserId = null;
+		this.pushed = false;
+		this.generation++;
+		await this.retireSignedOutBinding();
+		void this.flush();
+	}
+
+	/**
 	 * Retires the Cloud binding of a signed-out desktop, serialized with the
 	 * hand-offs and skipped if a later sign-in already replaced the sign-out, so
 	 * it cannot remove that account's binding. Never rejects.
