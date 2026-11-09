@@ -30,12 +30,33 @@ export function useAgentInventoryTelemetry(): void {
 
 const SETUP_CHECK_STORAGE_KEY = "ao.telemetry.setupCheck";
 
+type SetupCheckRecord = Record<string, unknown>;
+
+function readSetupCheckRecord(storage: ReturnType<typeof telemetryStorage>): SetupCheckRecord | null {
+  try {
+    const parsed: unknown = JSON.parse(storage?.getItem(SETUP_CHECK_STORAGE_KEY) ?? "null");
+    return parsed && typeof parsed === "object" ? (parsed as SetupCheckRecord) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a check differs from the last one sent. Only the fields this check
+ * knows are compared: the GitHub probe often has not answered at launch, and an
+ * unanswered probe is not a change.
+ */
+export function setupCheckChanged(check: SetupCheckRecord, sent: SetupCheckRecord | null): boolean {
+  if (!sent) return true;
+  return Object.entries(check).some(([key, value]) => sent[key] !== value);
+}
+
 /**
  * Sends ao.setup.checked the first time the startup system check and agent
- * readiness have both answered, then again whenever the result changes (a
- * tool or agent installed or signed in, or GitHub sign-in becoming known).
- * Reuses the startup checks' cached results: it never runs a probe of its own,
- * so the GitHub credential probe is reported only once the app already ran it.
+ * readiness have both settled, then again when a known value changes (a tool
+ * or agent installed or signed in, or GitHub sign-in becoming known). Reuses
+ * the startup checks' cached results and never runs a probe of its own, so the
+ * GitHub credential probe is reported only once the app already ran it.
  */
 export function useSetupCheckedTelemetry(): void {
   const { query } = useSystemRequirementsGate();
@@ -44,18 +65,16 @@ export function useSetupCheckedTelemetry(): void {
   const requirements = query.data?.requirements;
   useEffect(() => {
     if (!requirements || !catalog) return;
-    const check = buildSetupCheck(requirements, catalog, githubAuth?.satisfied);
-    const signature = JSON.stringify(check);
+    // Agent probes still running would report a count that is about to change.
+    if (catalog.agents.some((agent) => agent.installation.freshness === "checking" || agent.authentication.freshness === "checking")) return;
+    const check: SetupCheckRecord = buildSetupCheck(requirements, catalog, githubAuth?.satisfied);
     const storage = telemetryStorage();
-    try {
-      if (storage?.getItem(SETUP_CHECK_STORAGE_KEY) === signature) return;
-    } catch {
-      // Unreadable storage: send, and let the per-name rate limit bound it.
-    }
-    void captureRendererEvent("ao.setup.checked", check).then((sent) => {
-      if (!sent) return;
+    const sent = readSetupCheckRecord(storage);
+    if (!setupCheckChanged(check, sent)) return;
+    void captureRendererEvent("ao.setup.checked", check).then((captured) => {
+      if (!captured) return;
       try {
-        storage?.setItem(SETUP_CHECK_STORAGE_KEY, signature);
+        storage?.setItem(SETUP_CHECK_STORAGE_KEY, JSON.stringify({ ...sent, ...check }));
       } catch {
         // Best effort: a lost record re-sends the same state once.
       }

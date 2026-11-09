@@ -54,6 +54,33 @@ describe("useSetupCheckedTelemetry", () => {
 		expect(capture).toHaveBeenLastCalledWith("ao.setup.checked", expect.objectContaining({ gh: true, gh_signed_in: true }));
 	});
 
+	it("does not resend on a relaunch where the GitHub probe has not answered yet", async () => {
+		const answered = new QueryClient();
+		answered.setQueryData(["github-auth-requirement"], { id: "github-auth", satisfied: true });
+		const first = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(answered) });
+		await waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+		first.unmount();
+		// Relaunch: same machine, GitHub probe not answered yet, then answered.
+		const relaunch = new QueryClient();
+		const second = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(relaunch) });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		relaunch.setQueryData(["github-auth-requirement"], { id: "github-auth", satisfied: true });
+		second.rerender();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(capture).toHaveBeenCalledTimes(1);
+	});
+
+	it("waits for agent probes to settle before the first send", async () => {
+		state.agents = [agentReadiness("codex", "Codex", { installation: "installed", authentication: "authorized", freshness: "checking" })];
+		const client = new QueryClient();
+		const view = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(client) });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(capture).not.toHaveBeenCalled();
+		state.agents = [agentReadiness("codex", "Codex", { installation: "installed", authentication: "authorized" })];
+		view.rerender();
+		await waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+	});
+
 	it("retries on a later launch when the capture was not sent", async () => {
 		capture.mockResolvedValueOnce(false);
 		const once = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(new QueryClient()) });

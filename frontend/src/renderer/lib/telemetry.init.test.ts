@@ -249,12 +249,12 @@ describe("initTelemetry recovery", () => {
 describe("PostHog identity and opt-out", () => {
 	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
 
-	function mockBridge(getBootstrap: () => Promise<unknown>) {
+	function mockBridge(getBootstrap: () => Promise<unknown>, claimFirstOpen: () => Promise<string> = async () => "ineligible") {
 		mockPosthog();
 		const capture = vi.fn(async () => true);
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture },
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen, capture },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
@@ -266,34 +266,61 @@ describe("PostHog identity and opt-out", () => {
 		vi.clearAllMocks();
 	});
 
-	it("sends app open only for the bootstrap that claimed it and never a next-day event", async () => {
+	it("claims app open only when about to send it, retrying while the session count is unknown", async () => {
 		localStorage.clear();
 		vi.useFakeTimers();
 		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0, firstOpen: true }));
-			const first = await import("./telemetry");
-			await first.initTelemetry();
-			const names = posthogStub.capture.mock.calls.map(([name]) => name);
-			expect(names.filter((name) => name === "ao.app.first_opened")).toHaveLength(1);
-			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 0, days_since_install: 0 }));
-			vi.resetModules();
-			posthogStub.capture.mockClear();
-			// Main hands out the durable claim once; later bootstraps omit it.
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0 }));
-			const restarted = await import("./telemetry");
-			await restarted.initTelemetry();
-			vi.resetModules();
-			vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
-			const nextDay = await import("./telemetry");
-			await nextDay.initTelemetry();
+			const claim = vi.fn().mockResolvedValueOnce("unknown").mockResolvedValue("claimed");
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0 }), claim);
+			const { initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened")).toBe(false);
+			await vi.advanceTimersByTimeAsync(2_000);
+			const sent = posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.first_opened");
+			expect(sent).toHaveLength(1);
+			expect(sent[0][1]).toEqual(expect.objectContaining({ days_since_install: 0 }));
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(claim).toHaveBeenCalledTimes(2);
 			// Next-day return is computed in PostHog retention, not sent.
-			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened" || /next_day/.test(String(name)))).toBe(false);
+			expect(posthogStub.capture.mock.calls.some(([name]) => /next_day/.test(String(name)))).toBe(false);
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("never spends the first-open claim when the event is on the kill switch, or after install day", async () => {
+		localStorage.clear();
+		const claim = vi.fn(async () => "claimed");
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, disabledEvents: ["ao.app.first_opened"] }), claim);
+		const { initTelemetry } = await import("./telemetry");
+		await initTelemetry();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		vi.resetModules();
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 3 }), claim);
+		const later = await import("./telemetry");
+		await later.initTelemetry();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(claim).not.toHaveBeenCalled();
+	});
+
+	it("refreshes lifetime_sessions after the desktop creates a session", async () => {
+		localStorage.clear();
+		mockPosthog();
+		const getLifetimeSessions = vi.fn(async () => 1);
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => ({ ...bootstrap, lifetimeSessions: 0 })), getGithubLogin: vi.fn(async () => null), getLifetimeSessions, claimFirstOpen: vi.fn(async () => "ineligible") },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { initTelemetry, captureRendererEvent, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 0);
+		await captureRendererEvent("ao.tasks.created", {});
+		await vi.waitFor(() => expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 1));
 	});
 
 	it("refreshes install age on captures from a long-lived renderer", async () => {

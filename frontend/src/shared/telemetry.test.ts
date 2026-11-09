@@ -263,11 +263,13 @@ test("buildTelemetryBootstrap carries the experiment cohort", async () => {
 test("claimFirstOpen claims once, for a fresh install only", async () => {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-first-open-"));
 	tempDirs.push(dir);
-	expect(await claimFirstOpen(dir, { daysSinceInstall: 1 })).toBe(false);
-	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 3 })).toBe(false);
-	expect(await claimFirstOpen(dir, {})).toBe(false);
-	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe(true);
-	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe(false);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 1, lifetimeSessions: 0 })).toBe("ineligible");
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 3 })).toBe("ineligible");
+	// An unreadable count is not "no sessions": the CLI may already have started one.
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe("unknown");
+	expect(await claimFirstOpen(dir, {})).toBe("ineligible");
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe("claimed");
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe("ineligible");
 });
 
 test("claimFirstOpen never claims on an upgrade that already recorded the old install event", async () => {
@@ -275,7 +277,7 @@ test("claimFirstOpen never claims on an upgrade that already recorded the old in
 	tempDirs.push(dir);
 	// Builds that sent ao.install.created wrote the install ID here.
 	await writeFile(path.join(dir, "telemetry_first_open_emitted"), "ins_existing\n");
-	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe(false);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe("ineligible");
 });
 
 test("boundCloudUserId reads only a plain, well-formed binding file", async () => {

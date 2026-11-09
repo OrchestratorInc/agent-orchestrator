@@ -46,8 +46,10 @@ var legacyEventNames = map[string][]string{
 	"ao.usage.cli_usage_errors":      {"ao.cli.usage_errors"},
 	"ao.harnesses.updated":           {"ao.harness.update"},
 	"ao.harnesses.version_switched":  {"ao.harness.version_switch"},
-	"ao.cli.active":                  {"ao.app.active", "ao.v2.app.active"},
-	"ao.cli.invoked":                 {"ao.v2.cli.invoked"},
+	// ao.app.active is the desktop heartbeat's current name, so it does not
+	// silence the CLI one; the shared pre-rename ao.v2.app.active does.
+	"ao.cli.active":  {"ao.v2.app.active"},
+	"ao.cli.invoked": {"ao.v2.cli.invoked"},
 }
 
 var remoteCommandTokens = map[string]struct{}{

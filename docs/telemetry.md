@@ -235,9 +235,13 @@ deleted before this counter was introduced cannot be reconstructed.
 `is_signed_in` is on every desktop and daemon event. It is true while the
 emitting surface knows an AO Cloud sign-in and false otherwise. The daemon
 keeps the sign-in it last recorded across restarts (the
-`telemetry_bound_user` file), and a sign-out removes it. A paired phone omits
-the value until its desktop answers. The desktop reads `lifetime_sessions`
-again once the daemon is ready if it was not available at launch.
+`telemetry_bound_user` file). Signing out on the desktop removes that file and
+rotates the anonymous identifier itself, so the sign-out holds even when the
+daemon was not running to hear it. A paired phone omits the value until its
+desktop answers. The desktop reads `lifetime_sessions` at launch, again once
+the daemon is ready if it was not available then, and again after the desktop
+creates a session; a session started from the CLI is reflected on the desktop's
+next refresh.
 `lifetime_sessions` counts sessions the daemon accepted, including an
 asynchronous start that later failed. These properties contain no local
 project or session ID.
@@ -255,13 +259,19 @@ no error message, project name, or request ID.
 
 The onboarding milestones use durable local reservations. A first app open is
 recorded only on the install day, before any session exists, and only once
-per installation (an exclusive marker in the data directory).
+per installation (an exclusive marker in the data directory). The marker is
+taken only when the event is about to be sent, never while the session count
+is still unknown, and not while analytics are off or the event is on the kill
+switch.
 The first eligible user CLI invocation reserves a local marker before export. None of
 these milestones treats an idle session as a successful session.
 The first project and first session are identified by `first_for_install` on
 the committed project and session events; the first-session claim is taken only
 by a session that became usable. The renamed `ao.sessions.first_spawned` and
-`ao.projects.first_added` events remain deprecated.
+`ao.projects.first_added` events remain deprecated. `ao.sessions.first_spawned`
+is sent only for a start that succeeded on its first attempt, so when an
+installation's first start failed and a retry succeeded, `ao.sessions.spawned`
+carries `first_for_install: true` without a matching `ao.sessions.first_spawned`.
 `lifetime_sessions: 2` on `ao.sessions.spawned` identifies the second accepted
 session; an earlier start that failed also counts.
 

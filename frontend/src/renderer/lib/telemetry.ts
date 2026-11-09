@@ -539,13 +539,39 @@ async function syncLifetimeSessions(): Promise<void> {
 	for (const delay of GITHUB_LOGIN_RETRY_MS.slice(0, 3)) {
 		await new Promise((resolve) => setTimeout(resolve, delay));
 		if (analyticsOptedOut) return;
-		const count = await Promise.resolve()
-			.then(() => aoBridge.telemetry.getLifetimeSessions())
-			.catch(() => null);
-		if (typeof count !== "number") continue;
-		telemetryContext = { ...telemetryContext, lifetime_sessions: count };
-		registerBaseProperties();
-		return;
+		if (await refreshLifetimeSessions()) return;
+	}
+}
+
+/** Reads the daemon's lifetime session count into the event context. */
+async function refreshLifetimeSessions(): Promise<boolean> {
+	const count = await Promise.resolve()
+		.then(() => aoBridge.telemetry.getLifetimeSessions())
+		.catch(() => null);
+	if (typeof count !== "number" || analyticsOptedOut) return false;
+	telemetryContext = { ...telemetryContext, lifetime_sessions: count };
+	if (posthogReady) registerBaseProperties();
+	return true;
+}
+
+// The desktop just created a session: the count it reports has moved.
+const LIFETIME_SESSION_REFRESH_EVENTS = new Set(["ao.tasks.created", "ao.orchestrators.spawned"]);
+
+// ao.app.first_opened is claimed from main only when it is about to be sent,
+// so an opt-out or a kill-switch entry never spends the one-time marker. Main
+// answers "unknown" until the daemon can say whether a session already exists.
+async function sendFirstOpen(): Promise<void> {
+	for (const delay of [0, ...GITHUB_LOGIN_RETRY_MS.slice(0, 3)]) {
+		if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+		if (analyticsOptedOut || isDeniedEvent("ao.app.first_opened")) return;
+		const claim = await Promise.resolve()
+			.then(() => aoBridge.telemetry.claimFirstOpen())
+			.catch(() => "unknown" as const);
+		if (claim === "claimed") {
+			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
+			return;
+		}
+		if (claim !== "unknown") return;
 	}
 }
 
@@ -1397,10 +1423,7 @@ export async function initTelemetry(): Promise<boolean> {
 		});
 		bindRendererErrorHandlers();
 		const storage = telemetryStorage();
-		// Main claimed this durably for a fresh install (claimFirstOpen).
-		if (bootstrap.firstOpen && !isDeniedEvent("ao.app.first_opened")) {
-			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
-		}
+		if (bootstrap.daysSinceInstall === 0) void sendFirstOpen();
 		startDailyActiveHeartbeat({
 			storage,
 			window,
@@ -1510,6 +1533,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	let captured = false;
 	try {
 		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		if (captured && LIFETIME_SESSION_REFRESH_EVENTS.has(event)) void refreshLifetimeSessions();
 		return captured;
 	} finally {
 		if (!captured && releaseUpdateFailureClaim) releaseUpdateFailureClaim();

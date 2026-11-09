@@ -56,7 +56,7 @@ func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
 // A kill switch configured before the event rename names the old stream. It
 // must still silence the renamed one, or the upgrade quietly re-enables it.
 func TestDenylistSinkMatchesCurrentAndLegacyNames(t *testing.T) {
-	for _, denied := range []string{"ao.cli.active", "ao.app.active", "ao.v2.app.active", "ao.session.*"} {
+	for _, denied := range []string{"ao.cli.active", "ao.v2.app.active", "ao.session.*"} {
 		next := &recordingSink{}
 		sink := NewDenylistSink(next, []string{denied})
 		event := "ao.cli.active"
@@ -81,6 +81,14 @@ func TestDenylistSinkSupportsPrefixWildcardAndIsCaseInsensitive(t *testing.T) {
 
 // A denylist of only blank or bare "*" entries must not silence everything by
 // accident, and must not add a pointless wrapper either.
+// ao.app.active is still a current name (the desktop heartbeat); silencing
+// it must not also silence CLI activity.
+func TestDesktopActiveDenyDoesNotSilenceCLIActive(t *testing.T) {
+	if EventDenied([]string{"ao.app.active"}, "ao.cli.active") {
+		t.Fatal("ao.app.active entry silenced ao.cli.active")
+	}
+}
+
 func TestEventDeniedHonorsLegacyNames(t *testing.T) {
 	if !EventDenied([]string{"ao.session.spawned"}, "ao.sessions.spawned") {
 		t.Fatal("legacy ao.session.spawned entry must deny ao.sessions.spawned")

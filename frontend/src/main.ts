@@ -3305,7 +3305,6 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!bootstrap) return bootstrap;
 	const lifetimeSessions = await daemonLifetimeSessions();
 	if (lifetimeSessions !== null) bootstrap.lifetimeSessions = lifetimeSessions;
-	if (await claimFirstOpen(desktopDataDir, bootstrap)) bootstrap.firstOpen = true;
 	// Start the renderer identified when this desktop is signed in to the same
 	// AO Cloud account the daemon durably recorded, so launch events (active,
 	// loaded, first open) are not sent under a throwaway anonymous ID. Only the
@@ -3339,6 +3338,20 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+// The renderer claims ao.app.first_opened only when it is about to send it,
+// so an opt-out or a kill-switch entry never spends the one-time marker.
+ipcMain.handle("telemetry:claimFirstOpen", async () => {
+	if (telemetryIdentity.isOptedOut()) return "ineligible";
+	let daysSinceInstall: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(desktopDataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+	} catch {
+		return "ineligible";
+	}
+	const lifetimeSessions = await daemonLifetimeSessions();
+	return claimFirstOpen(desktopDataDir, { daysSinceInstall, lifetimeSessions: lifetimeSessions ?? undefined });
+});
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");

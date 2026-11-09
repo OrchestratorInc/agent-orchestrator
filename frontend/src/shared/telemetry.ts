@@ -33,8 +33,6 @@ export type TelemetryBootstrap = {
 	 * renderer then starts identified as that ID instead of an anonymous one.
 	 */
 	cloudUserId?: string;
-	/** This launch owns ao.app.first_opened; see claimFirstOpen. */
-	firstOpen?: boolean;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -185,13 +183,19 @@ export async function boundCloudUserId(dataDir: string): Promise<string | null> 
  * sent ao.install.created already hold this file, so an upgrade never claims
  * it. A marker that cannot be created is not claimed.
  */
-export async function claimFirstOpen(dataDir: string, bootstrap: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<boolean> {
-	if (bootstrap.daysSinceInstall !== 0 || (bootstrap.lifetimeSessions ?? 0) > 0) return false;
+export type FirstOpenClaim = "claimed" | "ineligible" | "unknown";
+
+export async function claimFirstOpen(dataDir: string, facts: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<FirstOpenClaim> {
+	if (facts.daysSinceInstall !== 0) return "ineligible";
+	// An unreadable session count is not "no sessions": the CLI may already
+	// have started one. The caller asks again once the daemon answers.
+	if (facts.lifetimeSessions === undefined) return "unknown";
+	if (facts.lifetimeSessions > 0) return "ineligible";
 	try {
 		await writeFile(path.join(dataDir, "telemetry_first_open_emitted"), "", { mode: 0o600, flag: "wx" });
-		return true;
+		return "claimed";
 	} catch {
-		return false;
+		return "ineligible";
 	}
 }
 
