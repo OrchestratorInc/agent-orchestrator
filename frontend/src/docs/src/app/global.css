@@ -91,3 +91,56 @@
     overscroll-behavior: contain;
   }
 }
+
+/*
+ * The marketing site's look (orchestrator.inc): quiet panels on its frame
+ * color with hairline edges, light headings set tight, and sky blue as the one
+ * accent. Kept here so tokens.css and prose.css stay copies of the site's, and
+ * unlayered so it wins over prose.css and fumadocs' own utilities.
+ */
+.docs-matrix {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+}
+
+.docs-title {
+  font-size: 2.25rem;
+  font-weight: 400;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+@media (min-width: 40rem) {
+  .docs-title {
+    font-size: 2.75rem;
+  }
+}
+
+#nd-sidebar,
+#nd-sidebar-mobile {
+  background-color: oklch(0.175 0.006 257);
+  border-color: rgb(255 255 255 / 0.08);
+}
+
+.prose {
+  --tw-prose-links: var(--foreground);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+.prose a:not(.no-underline) {
+  text-decoration-color: rgb(125 211 252 / 0.45);
+}
+
+.prose a:not(.no-underline):hover {
+  color: rgb(186 230 253);
+  text-decoration-color: rgb(125 211 252);
+}
