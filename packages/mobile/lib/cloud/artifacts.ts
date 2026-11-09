@@ -5,6 +5,7 @@ import { isSafeArtifactPath, parseArtifacts, sortArtifacts } from "../artifacts"
 import type { ArtifactsBackend, ArtifactSource } from "../artifactsBackend";
 import { parseVersion, parseVersionSummaries } from "../artifactVersions";
 import type { CloudClient } from "./client";
+import type { CloudArtifact, CloudArtifactShare } from "./types";
 import { cloudErrorMessage } from "./errors";
 
 // A cloud session's artifacts, as the desktop shows them (useCloudArtifacts,
@@ -116,6 +117,40 @@ async function inCloudWords<T>(run: () => Promise<T>): Promise<T> {
 	}
 }
 
+/**
+ * The session's files with the public link of each one its creator published,
+ * as the gallery and the viewer's menus show a machine file's (shareUrl).
+ * Cloud keeps no record of which file a link came from (the desktop keeps
+ * its own), so a link is a file's when it names the file's name and the
+ * sha256 of the version on screen, as the desktop publishes it (the file's
+ * last path segment). A file committed again since keeps no link here: the
+ * link still serves the version it was published at.
+ */
+export function withCloudShareLinks(artifacts: readonly CloudArtifact[], shares: readonly CloudArtifactShare[]): Array<CloudArtifact & { shareUrl?: string }> {
+	const links = new Map<string, string>();
+	for (const share of shares) {
+		if (share.revokedAt) continue;
+		const url = share.viewerUrl ?? share.contentUrl;
+		if (url) links.set(`${share.sha256}\n${share.name}`, url);
+	}
+	if (!links.size) return [...artifacts];
+	return artifacts.map((artifact) => {
+		const name = artifact.path.split("/").pop() || artifact.name;
+		const url = artifact.sha256 ? links.get(`${artifact.sha256}\n${name}`) ?? links.get(`${artifact.sha256}\n${artifact.name}`) : undefined;
+		return url ? { ...artifact, shareUrl: url } : artifact;
+	});
+}
+
+/** The person's links, or none where they can't be read: the files list all the same. */
+async function readShareLinks(client: CloudClient, signal?: AbortSignal): Promise<CloudArtifactShare[]> {
+	try {
+		return (await client.listArtifactShares(signal)).shares ?? [];
+	} catch (cause) {
+		if (cause instanceof Error && cause.name === "AbortError") throw cause;
+		return [];
+	}
+}
+
 export function cloudArtifactsBackend({ client, orgId, sessionId, root, canChange, renew }: {
 	client: CloudClient;
 	orgId: string;
@@ -173,7 +208,14 @@ export function cloudArtifactsBackend({ client, orgId, sessionId, root, canChang
 		key: JSON.stringify(["cloud", client.baseUrl, orgId]),
 		cloud: true,
 		canChange,
-		list: (_sessionId, signal) => inCloudWords(async () => sortArtifacts(parseArtifacts((await client.listSessionArtifacts(orgId, sessionId, signal)).artifacts))),
+		// Only the session's creator publishes its files, so only their list looks for links.
+		list: (_sessionId, signal) => inCloudWords(async () => {
+			const [{ artifacts }, shares] = await Promise.all([
+				client.listSessionArtifacts(orgId, sessionId, signal),
+				canChange ? readShareLinks(client, signal) : Promise.resolve([]),
+			]);
+			return sortArtifacts(parseArtifacts(withCloudShareLinks(artifacts, shares)));
+		}),
 		text: async (_sessionId, path, signal) => (await fetchFile(path, signal)).text(),
 		// As written: Cloud writes no theme into a page.
 		page: async (_sessionId, path, signal) => (await fetchFile(path, signal)).text(),

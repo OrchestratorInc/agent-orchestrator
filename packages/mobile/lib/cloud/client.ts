@@ -3,6 +3,7 @@ import { CloudAuthError, CloudError } from "./errors";
 import type {
 	CloudArtifact,
 	CloudArtifactAccess,
+	CloudArtifactShareList,
 	CloudArtifactVersionSummary,
 	CloudAttachment,
 	CloudChatEventsPage,
@@ -371,6 +372,9 @@ export function createCloudClient(options: CloudClientOptions) {
 		// ---- Artifacts (present where the organization's offering has them)
 		listSessionArtifacts: (orgId: string, sessionId: string, signal?: AbortSignal) =>
 			json<{ artifacts: CloudArtifact[] }>("GET", `${session(orgId, sessionId)}/artifacts`, { signal }),
+		/** The person's public links to files; 404 where the control plane serves none. */
+		listArtifactShares: (signal?: AbortSignal) =>
+			json<CloudArtifactShareList>("GET", "/me/artifact-shares", { signal }),
 		/** The signed prefix the session's artifact files load from, with no header. */
 		createArtifactAccess: (orgId: string, sessionId: string) =>
 			json<CloudArtifactAccess>("POST", `${session(orgId, sessionId)}/artifacts/access`),

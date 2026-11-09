@@ -59,6 +59,12 @@ describe("cloud client", () => {
 		expect((calls[1].init.headers as Record<string, string>)["Idempotency-Key"]).toBe("key-1");
 	});
 
+	it("reads the person's artifact share links", async () => {
+		const { client, calls } = harness(() => ok({ shares: [], limit: 5, used: 0 }));
+		await expect(client.listArtifactShares()).resolves.toEqual({ shares: [], limit: 5, used: 0 });
+		expect([calls[0].init.method, calls[0].url]).toEqual(["GET", "https://api.example.test/api/cloud/v1/me/artifact-shares"]);
+	});
+
 	it("reuses a caller's idempotency key so a retried send is not duplicated", async () => {
 		const { client, calls } = harness(() => ok({ event: {} }, 202));
 		await client.sendMessage("o", "s", { text: "hi" }, "msg-1");

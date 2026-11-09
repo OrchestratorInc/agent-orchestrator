@@ -321,6 +321,26 @@ export type CloudWorkspaceRevision = {
 
 export type CloudArtifact = { path: string; name: string; kind: "html" | "markdown" | "file"; contentType?: string; size: number; sha256?: string; updatedAt: string };
 
+/**
+ * One of the person's public links to a file (contract: ArtifactShare). It
+ * names the file only by its name and the sha256 it was published at: Cloud
+ * keeps no record of which session's file a link came from.
+ */
+export type CloudArtifactShare = {
+	id: string;
+	name: string;
+	sha256: string;
+	/** Where the file is served. */
+	contentUrl: string;
+	/** The public page that shows it; absent where Cloud has no viewer (share contentUrl). */
+	viewerUrl?: string;
+	/** A revoked link serves nothing. */
+	revokedAt?: string;
+};
+
+/** The person's links, and how many their plan allows. */
+export type CloudArtifactShareList = { shares: CloudArtifactShare[]; limit: number; used: number; unlimited?: boolean };
+
 /** A signed prefix the session's artifact files load from with no header, for ten minutes. */
 export type CloudArtifactAccess = { filesPrefix: string; expiresAt: string };
 

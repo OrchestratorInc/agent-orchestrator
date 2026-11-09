@@ -84,6 +84,45 @@ describe("a cloud session's artifacts backend", () => {
 		expect(files.syncVersions).toBeUndefined();
 	});
 
+	// Cloud keeps no record of which file a link came from: a link names the
+	// file's name and the committed version's sha256, as the desktop publishes it.
+	it("shows the public link of a file its creator published, for the version on the link", async () => {
+		const sha = (digit: string) => digit.repeat(64);
+		const listArtifactShares = vi.fn(async () => ({ limit: 5, used: 3, shares: [
+			{ id: "l1", name: "report.html", sha256: sha("a"), contentUrl: "https://l1.orchestratorusercontent.com/", viewerUrl: "https://orchestrator.inc/artifact/l1" },
+			{ id: "l2", name: "notes.md", sha256: sha("b"), contentUrl: "https://l2.orchestratorusercontent.com/" },
+			{ id: "l3", name: "old.md", sha256: sha("c"), contentUrl: "https://l3.orchestratorusercontent.com/", revokedAt: "2026-11-09T10:00:00Z" },
+			{ id: "l4", name: "changed.md", sha256: sha("d"), contentUrl: "https://l4.orchestratorusercontent.com/" },
+		] }));
+		const listSessionArtifacts = vi.fn(async () => ({ artifacts: [
+			{ path: "out/report.html", name: "report.html", kind: "html", size: 9, sha256: sha("a"), updatedAt: "2026-11-08T10:00:00Z" },
+			{ path: "notes.md", name: "notes.md", kind: "markdown", size: 3, sha256: sha("b"), updatedAt: "2026-11-08T09:00:00Z" },
+			{ path: "old.md", name: "old.md", kind: "markdown", size: 3, sha256: sha("c"), updatedAt: "2026-11-08T08:00:00Z" },
+			// Committed again since it was published: the link still serves the older version.
+			{ path: "changed.md", name: "changed.md", kind: "markdown", size: 3, sha256: sha("e"), updatedAt: "2026-11-08T07:00:00Z" },
+		] }));
+		const links = Object.fromEntries((await backend(client({ listSessionArtifacts, listArtifactShares })).list("s1")).map((file) => [file.path, file.shareUrl]));
+		expect(links).toEqual({
+			"out/report.html": "https://orchestrator.inc/artifact/l1",
+			"notes.md": "https://l2.orchestratorusercontent.com/",
+			"old.md": undefined,
+			"changed.md": undefined,
+		});
+		// Only the session's creator publishes its files, so nobody else's list asks.
+		listArtifactShares.mockClear();
+		expect((await backend(client({ listSessionArtifacts, listArtifactShares }), false).list("s1")).every((file) => !file.shareUrl)).toBe(true);
+		expect(listArtifactShares).not.toHaveBeenCalled();
+	});
+
+	it("still lists the files when the links can't be read (a control plane without share links answers 404)", async () => {
+		const files = backend(client({
+			listSessionArtifacts: vi.fn(async () => ({ artifacts: [{ path: "a.md", name: "a.md", kind: "markdown", size: 3, sha256: "a".repeat(64), updatedAt: "2026-11-08T09:00:00Z" }] })),
+			listArtifactShares: vi.fn(async () => { throw new CloudError("Not found.", { status: 404, code: "not_found" }); }),
+		}));
+		expect(await files.list("s1")).toMatchObject([{ path: "a.md" }]);
+		expect((await files.list("s1"))[0].shareUrl).toBeUndefined();
+	});
+
 	it("deletes and restores through the control plane, and says a refusal in its words", async () => {
 		const deleteSessionArtifact = vi.fn(async () => undefined);
 		const restoreArtifactVersion = vi.fn(async () => { throw new CloudError("Only the session's creator can change its artifacts.", { status: 403, code: "artifact_not_owner" }); });
