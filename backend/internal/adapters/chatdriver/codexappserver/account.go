@@ -174,7 +174,7 @@ func (f *AccountFactory) detectCapabilities(ctx context.Context, bin string) dom
 
 func probeCodexCLISurface(ctx context.Context, bin string, args []string, supportedReason string) domain.CodexCapabilityObservation {
 	cmd := aoprocess.CommandContext(ctx, bin, args...)
-	cmd.Env = codexProcessEnv(ctx, bin, nil)
+	cmd.Env = codexProcessEnv(ctx, bin, nil, "")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {

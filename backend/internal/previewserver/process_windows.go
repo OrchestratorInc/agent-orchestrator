@@ -4,6 +4,7 @@ package previewserver
 
 import (
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,7 +73,8 @@ var errStalePreviewPID = errors.New("preview pid is stale or recycled; refusing 
 // recycles PIDs the same way, so `taskkill /T` on a recycled number would
 // kill an unrelated process tree (issue #3475).
 func previewProcessStartTime(pid int) string {
-	if pid <= 0 {
+	// 外部 PID 超出 DWORD 时拒绝，防止截断后查询其他进程。
+	if pid <= 0 || uint64(pid) > math.MaxUint32 {
 		return ""
 	}
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))

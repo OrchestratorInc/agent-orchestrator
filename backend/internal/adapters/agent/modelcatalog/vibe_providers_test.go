@@ -11,6 +11,7 @@ func TestVibeConfiguredProvidersReadKeyVariables(t *testing.T) {
 	home := t.TempDir()
 	vibeHome := filepath.Join(home, ".vibe")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("VIBE_HOME", "")
 	t.Setenv("MISTRAL_API_KEY", "")
 	t.Setenv("ZAI_API_KEY", "")
@@ -58,6 +59,7 @@ api_key_env_var = "OPENROUTER_API_KEY"
 func TestVibeDoesNotMarkEmptyDotenvCredentialsConfigured(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("VIBE_HOME", "")
 	t.Setenv("MISTRAL_API_KEY", "")
 	vibeHome := filepath.Join(home, ".vibe")

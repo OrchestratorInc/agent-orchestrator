@@ -2,18 +2,9 @@
 
 package ptyregistry
 
-import (
-	"golang.org/x/sys/windows"
-)
+import "github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 
-// defaultPidAlive probes PID liveness via OpenProcess. SUCCESS means alive
-// (CloseHandle and return true). ERROR_ACCESS_DENIED mirrors EPERM: the
-// process exists but cannot be queried, so treat as alive.
-func defaultPidAlive(pid int) bool {
-	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
-	if err == nil {
-		_ = windows.CloseHandle(h)
-		return true
-	}
-	return err == windows.ERROR_ACCESS_DENIED
+// defaultPidAlive 复用共享进程观察，注册记录只在确认死亡后才允许清理。
+func defaultPidAlive(pid int) (bool, error) {
+	return processalive.Probe(pid)
 }

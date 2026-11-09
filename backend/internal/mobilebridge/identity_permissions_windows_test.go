@@ -17,12 +17,8 @@ import (
 // 只允许当前用户、SYSTEM 和 Administrators，不用 POSIX mode 推断 Windows 权限。
 func assertIdentityFilePrivate(t *testing.T, path string) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +75,8 @@ func assertIdentityFilePrivate(t *testing.T, path string) {
 // identityTestSID 读取当前测试进程 SID，所有 ACL 修改只作用于 t.TempDir。
 func identityTestSID(t *testing.T) string {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}

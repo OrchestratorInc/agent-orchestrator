@@ -164,6 +164,8 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersWorkflowProviderProfilesResponse":          "WorkflowProviderProfilesResponse",
+	"PortsProviderProfileChoice":                           "ProviderProfileChoice",
 	"WorkflowReplanInput":                                  "WorkflowReplanInput",
 	"ControllersStartWorkflowPlanRequest":                  "StartWorkflowPlanRequest",
 	"ControllersConfirmWorkflowPlanRequest":                "ConfirmWorkflowPlanRequest",
@@ -1222,7 +1224,8 @@ func workflowOperations() []operation {
 // schedulerOperations 声明 M3 控制面及独立物化审批，预算作用域由具体路由固定。
 func schedulerOperations() []operation {
 	errors := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusForbidden, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
-	ops := []operation{
+	ops := make([]operation, 0, 13)
+	ops = append(ops, []operation{
 		{method: http.MethodGet, path: "/api/v1/scheduler/status", id: "getSchedulerStatus", tag: "workflows", summary: "Read scheduler recovery, resource and occupancy facts", resps: append([]respUnit{{http.StatusOK, controllers.SchedulerStatusResponse{}}}, errors...)},
 		{method: http.MethodPut, path: "/api/v1/scheduler/policy", id: "putSchedulerPolicy", tag: "workflows", summary: "Change global or adapter resource policy after one operator approval", reqBody: controllers.PutSchedulerPolicyRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.SchedulerPolicyEnvelope{}}}, errors...)},
 		{method: http.MethodGet, path: "/api/v1/scheduler/decisions", id: "listSchedulerDecisions", tag: "workflows", summary: "Read bounded scheduler decision history", pathParams: []any{controllers.SchedulerDecisionsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.SchedulerDecisionsResponse{}}}, errors...)},
@@ -1230,7 +1233,7 @@ func schedulerOperations() []operation {
 		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/pause", id: "pauseWorkflowScheduling", tag: "workflows", summary: "Pause new admissions after one operator approval", pathParams: []any{controllers.WorkflowIDParam{}}, reqBody: controllers.OperatorChangeRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowSchedulerResponse{}}}, errors...)},
 		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/resume-scheduling", id: "resumeWorkflowScheduling", tag: "workflows", summary: "Resume scheduling without bypassing recovery or budget fences", pathParams: []any{controllers.WorkflowIDParam{}}, reqBody: controllers.OperatorChangeRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowSchedulerResponse{}}}, errors...)},
 		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}/materialize", id: "materializeWorkflowTaskRequest", tag: "workflows", summary: "Materialize an approved request using a separate exact operator approval", pathParams: []any{controllers.WorkflowTaskRequestIDParam{}}, reqBody: controllers.MaterializeTaskRequestRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.MaterializeTaskRequestResponse{}}, {http.StatusOK, controllers.MaterializeTaskRequestResponse{}}}, errors...)},
-	}
+	}...)
 	for _, scope := range []struct {
 		name, path string
 		params     []any

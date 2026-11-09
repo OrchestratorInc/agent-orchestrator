@@ -988,16 +988,6 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	return true, nil
 }
 
-// sessionNumFloor is the highest number a deleted session under prefix held.
-func (s *Store) sessionNumFloor(ctx context.Context, prefix string) (int64, error) {
-	var floor int64
-	err := s.writeDB.QueryRowContext(ctx, `SELECT max_num FROM session_num_floors WHERE id_prefix = ?`, prefix).Scan(&floor)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	return floor, err
-}
-
 // GetSession returns the full record for a session, or ok=false if absent.
 func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSession(ctx, id)

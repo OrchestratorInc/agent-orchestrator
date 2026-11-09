@@ -6,12 +6,14 @@ import (
 	"time"
 )
 
+// SchedulerDefaultGlobalCap 是未配置全局策略时的并发上限。
 const (
 	SchedulerDefaultGlobalCap  int64 = 3
 	SchedulerHardCap           int64 = 10
 	SchedulerDefaultAdapterCap int64 = 2
 )
 
+// ErrAdmissionRequired 表示缺少启动所需的有效准入凭据。
 var (
 	ErrAdmissionRequired          = errors.New("trusted admission evidence is required")
 	ErrSchedulerFence             = errors.New("scheduler leadership fence is stale or unrecovered")
@@ -125,6 +127,7 @@ type SchedulerAdmission struct {
 	CreatedAt, UpdatedAt                time.Time
 }
 
+// AdmissionReserved 表示资源已预留，尚不能推定执行已开始。
 const (
 	AdmissionReserved  = "reserved"
 	AdmissionActive    = "active"
@@ -184,8 +187,8 @@ type SchedulerRetryDue struct {
 
 // ValidSchedulerReason 限制审计为机器原因码，避免任意秘密文本进入 CDC。
 func ValidSchedulerReason(reason string) bool {
-	if len(reason) == 0 || len(reason) > 80 {
+	if reason == "" || len(reason) > 80 {
 		return false
 	}
-	return strings.IndexFunc(reason, func(r rune) bool { return !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') }) < 0
+	return strings.IndexFunc(reason, func(r rune) bool { return (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' }) < 0
 }

@@ -42,7 +42,7 @@ func m4CheckLocalPush(t *testing.T, f *m2ffFixture, svc *integrationservice.Serv
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval := m4Approve(t, svc.Approvals, integrationservice.IntegrationPath(plan.WorkflowID, plan.ID, "push"), raw)
+	approval := m4Approve(t, svc.Approvals, integrationservice.Path(plan.WorkflowID, plan.ID, "push"), raw)
 	if _, err := svc.Push(ctx, plan.WorkflowID, plan.ID, raw, approval, fence); err == nil {
 		t.Fatal("default-disabled push executed")
 	}
@@ -60,11 +60,11 @@ func m4CheckLocalPush(t *testing.T, f *m2ffFixture, svc *integrationservice.Serv
 		t.Fatalf("concurrent remote update overwritten: %s %v", sha, err)
 	}
 	m2smGit(t, root, "-c", "core.hooksPath="+os.DevNull, "update-ref", first.TargetRef, first.ExpectedRemoteSHA, entries[0].TaskCommitSHA)
-	mergeApproval := m4Approve(t, svc.Approvals, integrationservice.IntegrationPath(plan.WorkflowID, plan.ID, "apply"), raw)
+	mergeApproval := m4Approve(t, svc.Approvals, integrationservice.Path(plan.WorkflowID, plan.ID, "apply"), raw)
 	if _, err := svc.Push(ctx, plan.WorkflowID, plan.ID, raw, mergeApproval, fence); err == nil {
 		t.Fatal("merge approval consumed for push")
 	}
-	response := f.do(http.MethodPost, strings.TrimPrefix(integrationservice.IntegrationPath(plan.WorkflowID, plan.ID, "push"), "/api/v1"), string(raw), map[string]string{principal.HeaderOperatorApproval: approval})
+	response := f.do(http.MethodPost, strings.TrimPrefix(integrationservice.Path(plan.WorkflowID, plan.ID, "push"), "/api/v1"), string(raw), map[string]string{principal.HeaderOperatorApproval: approval})
 	var out controllers.IntegrationOperationResponse
 	if response.Status != http.StatusOK || json.Unmarshal([]byte(response.Raw), &out) != nil || out.Operation.State != "applied" {
 		t.Fatalf("local HTTP push=%d %s", response.Status, response.Raw)

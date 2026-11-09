@@ -45,7 +45,7 @@ func m4CheckIntegrationApply(t *testing.T, f *m2ffFixture, svc *integrationservi
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := integrationservice.IntegrationPath(plan.WorkflowID, plan.ID, "apply")
+	path := integrationservice.Path(plan.WorkflowID, plan.ID, "apply")
 	if _, err := svc.Apply(ctx, plan.WorkflowID, plan.ID, raw, "", fence); err == nil {
 		t.Fatal("checked-out target accepted")
 	}
@@ -61,7 +61,7 @@ func m4CheckIntegrationApply(t *testing.T, f *m2ffFixture, svc *integrationservi
 	}
 	approval := m4Approve(t, svc.Approvals, path, raw)
 	// apply 批准不能消费于 push，即使正文完全相同。
-	if _, err := svc.Approvals.Consume(approval, "POST", integrationservice.IntegrationPath(plan.WorkflowID, plan.ID, "push"), principal.PayloadDigest(raw)); err == nil {
+	if _, err := svc.Approvals.Consume(approval, "POST", integrationservice.Path(plan.WorkflowID, plan.ID, "push"), principal.PayloadDigest(raw)); err == nil {
 		t.Fatal("merge approval authorized push")
 	}
 	if partial {
@@ -90,13 +90,14 @@ func m4CheckIntegrationApply(t *testing.T, f *m2ffFixture, svc *integrationservi
 			go func() {
 				defer wg.Done()
 				r := f.do(http.MethodPost, strings.TrimPrefix(path, "/api/v1"), string(raw), map[string]string{principal.HeaderOperatorApproval: approval})
-				if r.Status == http.StatusOK {
+				switch r.Status {
+				case http.StatusOK:
 					var out controllers.IntegrationOperationResponse
 					errs[i] = json.Unmarshal([]byte(r.Raw), &out)
 					results[i] = out.Operation
-				} else if r.Status == http.StatusConflict {
+				case http.StatusConflict:
 					errs[i] = domain.ErrDeliveryBlocked
-				} else {
+				default:
 					errs[i] = errors.New(r.Raw)
 				}
 			}()

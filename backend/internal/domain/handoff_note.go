@@ -97,6 +97,9 @@ type HandoffHistoryFile struct {
 // a note passed as an argument shares it with the agent's own arguments.
 var handoffNoteMaxChars = handoffNoteCharLimit(runtime.GOOS)
 
+// handoffNoteCharLimit 按目标 OS 限制命令行，不能由 Windows 单平台分析折叠分支。
+//
+//nolint:unparam // runtime.GOOS 在其他构建目标不是 windows；保留跨平台参数。
 func handoffNoteCharLimit(goos string) int {
 	if goos == "windows" {
 		return 16_000
@@ -114,11 +117,11 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	older := in.Turns[max(0, len(in.Turns)-len(recent)-handoffOlderTurnLimit) : len(in.Turns)-len(recent)]
 
 	artifacts := min(len(in.Artifacts), handoffArtifactLimit)
+	changedFiles := min(len(in.ChangedFiles), handoffChangedFileLimit)
 
-	// Drop material until the whole note fits: older turns, then the last
-	// listed artifacts, then previous turns. The latest turn is never dropped.
+	// 依次缩减旧轮次、工件、前序轮次和文件清单，避免整段裁剪丢失最新交接内容。
 	for {
-		note := renderHandoffNote(in, older, recent, artifacts)
+		note := renderHandoffNote(in, older, recent, artifacts, changedFiles)
 		if handoffNoteFits(note) {
 			return note
 		}
@@ -129,6 +132,8 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 			artifacts--
 		case len(recent) > 1:
 			recent = recent[1:]
+		case changedFiles > 0:
+			changedFiles--
 		default:
 			return clipHandoffNote(note)
 		}
@@ -152,9 +157,8 @@ func clipHandoffNote(note string) string {
 	}
 }
 
-// renderHandoffNote renders the note with the given turns and the first
-// artifacts entries of in.Artifacts.
-func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifacts int) string {
+// renderHandoffNote 按平台预算保留指定轮次、工件和文件清单，并统计未展示的条目。
+func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifacts, changedFiles int) string {
 	var b strings.Builder
 	if in.SwitchID != "" {
 		fmt.Fprintf(&b, "%s switch-id=%q>\n", HandoffNotePrefix, in.SwitchID)
@@ -185,12 +189,11 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 
 	if len(in.ChangedFiles) > 0 {
 		fmt.Fprintf(&b, "\n## Workspace state\nFiles changed since the session started (%d):\n", len(in.ChangedFiles))
-		for index, name := range in.ChangedFiles {
-			if index == handoffChangedFileLimit {
-				fmt.Fprintf(&b, "(and %d more)\n", len(in.ChangedFiles)-handoffChangedFileLimit)
-				break
-			}
+		for _, name := range in.ChangedFiles[:changedFiles] {
 			fmt.Fprintf(&b, "- %s\n", quoteHandoffLine(name, handoffChangedFileCap))
+		}
+		if hidden := len(in.ChangedFiles) - changedFiles; hidden > 0 {
+			fmt.Fprintf(&b, "(and %d more)\n", hidden)
 		}
 	}
 

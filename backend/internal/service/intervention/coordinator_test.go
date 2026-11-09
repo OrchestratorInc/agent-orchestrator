@@ -268,11 +268,11 @@ func (s *seededBinding) snapshot() domain.WorkflowAttemptBinding {
 
 // recordingGateway counts calls and returns scripted results.
 type recordingGateway struct {
-	mu               sync.Mutex
-	sendCalls        int
-	steerCalls       int
-	interruptCalls   int
-	sendReceipt      ports.MessageReceipt
+	mu             sync.Mutex
+	sendCalls      int
+	steerCalls     int
+	interruptCalls int
+	sendReceipt    ports.MessageReceipt
 	// sendReceiptExact returns sendReceipt verbatim instead of filling in the request's
 	// identity. It exists so a test can script a receipt that genuinely belongs to a
 	// different session, client message id, or generation — the shapes the coordinator

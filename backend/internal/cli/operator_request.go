@@ -50,10 +50,13 @@ func readOperatorBody(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read operator payload: %w", err)
 	}
-	defer file.Close()
 	body, err := io.ReadAll(io.LimitReader(file, principal.MaxApprovalPayloadBytes+1))
+	closeErr := file.Close()
 	if err != nil {
 		return nil, fmt.Errorf("read operator payload: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close operator payload: %w", closeErr)
 	}
 	if len(body) > principal.MaxApprovalPayloadBytes {
 		return nil, usageError{errors.New("operator payload exceeds 64 KiB")}

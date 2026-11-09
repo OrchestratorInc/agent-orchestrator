@@ -19,6 +19,7 @@ type ConsentVerifier interface {
 	Verify(ctx context.Context, approval Approval) error
 }
 
+// ErrConsentUnavailable 表示操作系统原生人工验证不可用。
 var (
 	ErrConsentUnavailable = errors.New("native operator verification is unavailable")
 	ErrConsentDenied      = errors.New("native operator verification was not approved")

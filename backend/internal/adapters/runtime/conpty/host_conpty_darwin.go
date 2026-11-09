@@ -40,7 +40,7 @@ func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (pty
 	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
-	cmd.Env = processenv.StripWorkflowLease(os.Environ())
+	cmd.Env = processenv.StripWorkflowSecrets(os.Environ())
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Cols: cols,

@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// ErrArtifactInvalid 表示工件身份或内容不符合交付契约。
 var (
 	ErrArtifactInvalid         = errors.New("invalid delivery artifact")
 	ErrArtifactStale           = errors.New("delivery artifact changed")

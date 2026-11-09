@@ -84,7 +84,7 @@ func isHexObjectName(value string) bool {
 // only while it still sits on the pinned commit. A branch that moved (an agent
 // committed on top, or a different spawn created it from somewhere else) is not
 // silently reused.
-func (w *Workspace) branchTipAt(ctx context.Context, repo, branch, sha string) (exists bool, atSHA bool, err error) {
+func (w *Workspace) branchTipAt(ctx context.Context, repo, branch, sha string) (exists, atSHA bool, err error) {
 	exists, err = w.refExists(ctx, repo, "refs/heads/"+branch)
 	if err != nil || !exists {
 		return exists, false, err

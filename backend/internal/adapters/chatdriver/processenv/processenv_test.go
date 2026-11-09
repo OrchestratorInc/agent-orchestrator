@@ -61,17 +61,21 @@ func TestMergeWindowsExactPATHWinsConflictingOverlaySpelling(t *testing.T) {
 	}
 }
 
-// TestMergeDropsLegacyWorkflowLease 删除最终过滤会使 daemon 或 overlay 的旧租约进入 Agent。
-func TestMergeDropsLegacyWorkflowLease(t *testing.T) {
+// TestMergeDropsWorkflowSecrets 删除最终过滤会使 daemon 或 overlay 的宿主秘密进入 Agent。
+func TestMergeDropsWorkflowSecrets(t *testing.T) {
 	t.Setenv("AO_WORKFLOW_LEASE", "fake-daemon-lease")
+	t.Setenv("AO_WORKFLOW_CREDENTIAL_A", "fake-daemon-key")
+	t.Setenv("AO_WORKFLOW_PROVIDER_KEY", "fake-forwarded-key")
 	got := Merge(map[string]string{
-		"aO_wOrKfLoW_lEaSe": "fake-overlay-lease",
-		"AO_SESSION_ID":     "session-1", "AO_BROWSER_CAPABILITY": "session-capability",
+		"ao_workflow_credential_b": "fake-overlay-key",
+		"ao_workflow_provider_key": "fake-overlay-forward",
+		"aO_wOrKfLoW_lEaSe":        "fake-overlay-lease",
+		"AO_SESSION_ID":            "session-1", "AO_BROWSER_CAPABILITY": "session-capability",
 	})
 	for _, entry := range got {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.EqualFold(key, "AO_WORKFLOW_LEASE") {
-			t.Fatal("child environment retained the legacy lease")
+		if strings.EqualFold(key, "AO_WORKFLOW_LEASE") || strings.HasPrefix(strings.ToUpper(key), "AO_WORKFLOW_CREDENTIAL_") || strings.EqualFold(key, "AO_WORKFLOW_PROVIDER_KEY") {
+			t.Fatal("child environment retained a host secret")
 		}
 	}
 	if !slices.Contains(got, "AO_SESSION_ID=session-1") || !slices.Contains(got, "AO_BROWSER_CAPABILITY=session-capability") {

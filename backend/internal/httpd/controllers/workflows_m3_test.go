@@ -2,13 +2,14 @@ package controllers_test
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // TestM1WritesRequireOperator 删除 M1 共用 Operator 门禁会让裸回环请求创建图。

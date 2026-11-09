@@ -25,8 +25,6 @@ import (
 // and no user data directory is touched. That is the whole point of this file: it is the
 // evidence that the M2 stack works end to end while remaining provably offline.
 
-const e2eSHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func e2eNow() time.Time { return time.Date(2026, time.November, 4, 12, 0, 0, 0, time.UTC) }
 
 // e2eHarness bundles one harness's coordinators over the shared store and its own gateway.
@@ -290,7 +288,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 	}
 
 	// codex is PROVEN and may steer.
-	steerOutcome, err := codex.interventions.Steer(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), intervention.SteerRequest{
+	steerOutcome, err := codex.interventions.Steer(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), intervention.SteerRequest{
 		WorkflowID: codex.workflowID, TaskID: codex.taskID, AttemptID: codex.attempt.ID,
 		ClientMessageID: "e2e-steer-codex", Text: "use the streaming parser",
 		TargetProviderTurnID: "prov-turn-codex", Harness: domain.HarnessCodex,
@@ -309,7 +307,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 	}
 
 	// claude-code is UNPROVEN and must be denied WITH queueAvailable.
-	denied, err := claude.interventions.Steer(sqlitetest.ExecutionContext(t, ctx, s, claude.attempt.ID, e2eNow()), intervention.SteerRequest{
+	denied, err := claude.interventions.Steer(sqlitetest.ExecutionContext(ctx, t, s, claude.attempt.ID, e2eNow()), intervention.SteerRequest{
 		WorkflowID: claude.workflowID, TaskID: claude.taskID, AttemptID: claude.attempt.ID,
 		ClientMessageID: "e2e-steer-claude", Text: "use the streaming parser",
 		TargetProviderTurnID: "prov-turn-claude", Harness: domain.HarnessClaudeCode,
@@ -337,7 +335,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 	}
 
 	// The denied harness can still QUEUE, which is the honest alternative.
-	queued, err := claude.interventions.Queue(sqlitetest.ExecutionContext(t, ctx, s, claude.attempt.ID, e2eNow()), intervention.QueueRequest{
+	queued, err := claude.interventions.Queue(sqlitetest.ExecutionContext(ctx, t, s, claude.attempt.ID, e2eNow()), intervention.QueueRequest{
 		WorkflowID: claude.workflowID, TaskID: claude.taskID, AttemptID: claude.attempt.ID,
 		ClientMessageID: "e2e-queue-claude", Text: "do it on the next turn",
 	})
@@ -355,7 +353,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 
 	// --- one stop, on codex only -------------------------------------------------------
 	codex.gateway.InterruptResult(ports.InterruptReceipt{Confirmed: true})
-	stopOutcome, replan, err := codex.interventions.Stop(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), intervention.StopRequest{
+	stopOutcome, replan, err := codex.interventions.Stop(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), intervention.StopRequest{
 		WorkflowID: codex.workflowID, TaskID: codex.taskID, AttemptID: codex.attempt.ID,
 		ClientMessageID: "e2e-stop-codex",
 	})
@@ -373,7 +371,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 	collab := collaboration.New(collaboration.Deps{Store: s, Bindings: s, Graph: s, Clock: e2eNow})
 
 	// A message inside codex's own workflow succeeds.
-	own, err := collab.CreateMessage(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
+	own, err := collab.CreateMessage(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
 		WorkflowID: codex.workflowID, AttemptID: codex.attempt.ID,
 		Kind: domain.WorkflowMessageKindProgress, Body: "halfway through the parser",
 		ClientMessageID: "e2e-msg-codex",
@@ -394,7 +392,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 
 	// codex's attempt speaking into claude's workflow is refused BEFORE any write.
 	beforeCount := countMessages(t, s, claude.workflowID)
-	if _, err := collab.CreateMessage(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
+	if _, err := collab.CreateMessage(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
 		WorkflowID: claude.workflowID, AttemptID: codex.attempt.ID,
 		Kind: domain.WorkflowMessageKindQuestion, Body: "cross-workflow",
 		ClientMessageID: "e2e-msg-cross",
@@ -406,7 +404,7 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 	}
 
 	// --- a task request stays pending --------------------------------------------------
-	request, err := collab.CreateTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), collaboration.CreateTaskRequestInput{
+	request, err := collab.CreateTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), collaboration.CreateTaskRequestInput{
 		WorkflowID: codex.workflowID, AttemptID: codex.attempt.ID,
 		RequestID: "e2e-request-1", RequestKind: domain.WorkflowTaskRequestKindCreateTask,
 		Payload: json.RawMessage(`{"title":"add parser tests"}`),
@@ -433,14 +431,14 @@ func TestM2OfflineEndToEndTwoHarnesses(t *testing.T) {
 		t.Fatalf("claude saw %d interrupts, want 0", claude.gateway.InterruptCount())
 	}
 	// No operation retried: replays of the same client message ids stay free.
-	if _, err := collab.CreateMessage(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
+	if _, err := collab.CreateMessage(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
 		WorkflowID: codex.workflowID, AttemptID: codex.attempt.ID,
 		Kind: domain.WorkflowMessageKindProgress, Body: "halfway through the parser",
 		ClientMessageID: "e2e-msg-codex",
 	}); err != nil {
 		t.Fatalf("message replay: %v", err)
 	}
-	if _, _, err := codex.interventions.Stop(sqlitetest.ExecutionContext(t, ctx, s, codex.attempt.ID, e2eNow()), intervention.StopRequest{
+	if _, _, err := codex.interventions.Stop(sqlitetest.ExecutionContext(ctx, t, s, codex.attempt.ID, e2eNow()), intervention.StopRequest{
 		WorkflowID: codex.workflowID, TaskID: codex.taskID, AttemptID: codex.attempt.ID,
 		ClientMessageID: "e2e-stop-codex",
 	}); err != nil {

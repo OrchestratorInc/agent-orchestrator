@@ -101,7 +101,6 @@ func TestOperatorConsentFailuresFailClosedWithDistinctReasons(t *testing.T) {
 		{"denied", principal.ErrConsentDenied, "consent_denied"},
 		{"unavailable", principal.ErrConsentUnavailable, "consent_unavailable"},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newApprovalFixture(t)

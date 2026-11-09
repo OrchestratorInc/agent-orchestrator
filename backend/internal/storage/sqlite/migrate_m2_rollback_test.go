@@ -7,24 +7,9 @@ import (
 	"time"
 )
 
-// M2 migration versions, oldest first.
-//
-// The split between the two groups is load-bearing for what this file is allowed to assert:
-//
-//   - m2CommittedChain is already in the M1 baseline commit a6c284a. Its Down path is NOT M2's
-//     to change (AGENTS.md: do not modify already-merged migrations). Its defects are recorded
-//     as limitations by TestM1DownPathLeavesChangeLogInvalid below, not patched.
-//   - m2LocalChain is uncommitted work from this M2 cycle. M2 owns those Down sections, so it
-//     may and does clear its own change_log rows there.
-var m2CommittedChain = []struct {
-	version int64
-	name    string
-}{
-	{20261103044048260, "workflow_core"},
-	{20261103050931629, "workflow_idempotency"},
-	{20261103073516664, "workflow_cdc"},
-}
-
+// m2LocalChain 是本地 M2 回滚测试的版本集合。
+// 已合并 M1 迁移的缺陷仍由 TestM1DownPathLeavesChangeLogInvalid 记录，
+// 正式登记继续由 shippedMigrations 维护；此处不复制未使用的 M1 列表。
 var m2LocalChain = []struct {
 	version int64
 	name    string
@@ -283,28 +268,6 @@ func tableExists(t *testing.T, db *sql.DB, name string) bool {
 		t.Fatalf("check table %q: %v", name, err)
 	}
 	return n > 0
-}
-
-// tablesWithPrefix lists every table whose name starts with prefix.
-func tablesWithPrefix(t *testing.T, db *sql.DB, prefix string) ([]string, error) {
-	t.Helper()
-	rows, err := db.Query(
-		`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ORDER BY name`,
-		prefix+"%",
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		names = append(names, name)
-	}
-	return names, rows.Err()
 }
 
 // listTriggers returns every trigger name in the schema.

@@ -184,7 +184,7 @@ func (e *recoveryEnv) seedUnknownBinding(t *testing.T, hasRow bool) {
 	if err != nil {
 		t.Fatalf("SpawnHash: %v", err)
 	}
-	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), domain.WorkflowAttemptBinding{
+	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(ctx, t, e.store, e.attemptID, recoveryTestNow), domain.WorkflowAttemptBinding{
 		AttemptID: e.attemptID, WorkflowID: e.workflow, TaskID: e.task,
 		SpawnRequestID: e.spawnKey, SpawnHash: hash,
 	}, []domain.WorkflowAttemptRepoBinding{{
@@ -195,7 +195,7 @@ func (e *recoveryEnv) seedUnknownBinding(t *testing.T, hasRow bool) {
 		t.Fatalf("create binding: created=%v err=%v", created, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, recoveryTestNow,
+		sqlitetest.ExecutionContext(ctx, t, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("claim spawn: applied=%v err=%v", applied, err)
 	}
@@ -207,7 +207,7 @@ func (e *recoveryEnv) seedUnknownBinding(t *testing.T, hasRow bool) {
 		t.Fatalf("read binding: found=%v err=%v", found, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnUnknown,
+		sqlitetest.ExecutionContext(ctx, t, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnUnknown,
 		"spawn_unclassified", current.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("record unknown: applied=%v err=%v", applied, err)
@@ -222,7 +222,7 @@ func (e *recoveryEnv) spawnThroughGateway(t *testing.T) {
 		WorkflowID: e.workflow, TaskID: e.task, AttemptID: e.attemptID,
 		SpawnKey: e.spawnKey, ProjectID: "recover-proj", Harness: domain.HarnessCodex,
 	}
-	if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(t, context.Background(), e.store, e.attemptID, recoveryTestNow), resource); err != nil {
+	if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(context.Background(), t, e.store, e.attemptID, recoveryTestNow), resource); err != nil {
 		t.Fatalf("gateway spawn: %v", err)
 	}
 	// The counter is captured here, so "recovery spawned" can be asserted by comparing
@@ -404,7 +404,7 @@ func TestM2RecoverySkipsRecoveryUncertain(t *testing.T) {
 		t.Fatalf("state = %q, want bound_ready before the uncertain move", current.State)
 	}
 	if _, applied, err := env.store.TransitionWorkflowAttemptBinding(
-		sqlitetest.ExecutionContext(t, ctx, env.store, env.attemptID, recoveryTestNow), env.attemptID, domain.WorkflowBindingStateRecoveryUncertain,
+		sqlitetest.ExecutionContext(ctx, t, env.store, env.attemptID, recoveryTestNow), env.attemptID, domain.WorkflowBindingStateRecoveryUncertain,
 		"evidence_insufficient", current.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("to recovery_uncertain: applied=%v err=%v", applied, err)
@@ -630,7 +630,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 	if err != nil {
 		t.Fatalf("SpawnHash: %v", err)
 	}
-	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), domain.WorkflowAttemptBinding{
+	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(ctx, t, e.store, attemptID, now), domain.WorkflowAttemptBinding{
 		AttemptID: attemptID, WorkflowID: workflowID, TaskID: taskID,
 		SpawnRequestID: spawnKey, SpawnHash: hash,
 	}, []domain.WorkflowAttemptRepoBinding{{
@@ -641,7 +641,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 		t.Fatalf("create binding %s: created=%v err=%v", name, created, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, now,
+		sqlitetest.ExecutionContext(ctx, t, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, now,
 	); err != nil || !applied {
 		t.Fatalf("claim spawn %s: applied=%v err=%v", name, applied, err)
 	}
@@ -650,7 +650,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 		// created THROUGH the gateway, because FindSpawn answers from the gateway's own
 		// record — a row written straight into the store would be invisible to reconcile
 		// and the test would be proving nothing about adoption.
-		if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), ports.SpawnRequest{
+		if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(ctx, t, e.store, attemptID, now), ports.SpawnRequest{
 			WorkflowID: workflowID, TaskID: taskID, AttemptID: attemptID,
 			SpawnKey: spawnKey, SpawnHash: hash,
 			ProjectID: "multi-proj", Harness: domain.HarnessCodex,
@@ -663,7 +663,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 		t.Fatalf("read binding %s: %v", name, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnUnknown,
+		sqlitetest.ExecutionContext(ctx, t, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnUnknown,
 		"spawn_unclassified", current.Revision, now,
 	); err != nil || !applied {
 		t.Fatalf("record unknown %s: applied=%v err=%v", name, applied, err)

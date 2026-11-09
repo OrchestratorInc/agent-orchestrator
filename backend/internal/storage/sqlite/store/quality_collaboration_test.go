@@ -17,7 +17,7 @@ func TestM4CollaborationReplayAtFullQueue(t *testing.T) {
 	now := workflowStoreTime().Add(3 * time.Second)
 	wid := domain.WorkflowID("m4-message-replay")
 	attempts := collaborationFixture(t, s, wid, "m4-collab", "a", "b")
-	ctx := sqlitetest.ExecutionContext(t, context.Background(), s, attempts["a"].ID, now)
+	ctx := sqlitetest.ExecutionContext(context.Background(), t, s, attempts["a"].ID, now)
 	first := collaborationMessage(wid, attempts["a"], nil, "original")
 	if _, _, err := s.CreateWorkflowMessage(ctx, first, now); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestM4CollaborationReplayAtFullQueue(t *testing.T) {
 		t.Fatalf("full queue replay: %+v %v %v", r, made, err)
 	}
 	other := collaborationMessage(wid, attempts["b"], nil, "original")
-	ctx = sqlitetest.ExecutionContext(t, context.Background(), s, attempts["b"].ID, now)
+	ctx = sqlitetest.ExecutionContext(context.Background(), t, s, attempts["b"].ID, now)
 	if _, _, err := s.CreateWorkflowMessage(ctx, other, now); !errors.Is(err, domain.ErrWorkflowMessageConflict) {
 		t.Fatalf("cross sender replay: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestM4TaskRequestReplayBindsRequesterAndKind(t *testing.T) {
 	now := workflowStoreTime().Add(3 * time.Second)
 	wid := domain.WorkflowID("m4-request-replay")
 	attempts := collaborationFixture(t, s, wid, "m4-request", "a", "b")
-	ctx := sqlitetest.ExecutionContext(t, context.Background(), s, attempts["a"].ID, now)
+	ctx := sqlitetest.ExecutionContext(context.Background(), t, s, attempts["a"].ID, now)
 	r := domain.WorkflowTaskRequest{ID: "fix", WorkflowID: wid, RequesterTaskID: "a", RequestKind: domain.WorkflowTaskRequestKindCreateTask, RequestJSON: `{"title":"fix"}`, RequestSHA: collabSHA, WorkflowRevision: 2}
 	if _, _, err := s.CreateWorkflowTaskRequest(ctx, r, now); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestM4TaskRequestReplayBindsRequesterAndKind(t *testing.T) {
 	}
 	r.RequestKind = domain.WorkflowTaskRequestKindCreateTask
 	r.RequesterTaskID = "b"
-	ctx = sqlitetest.ExecutionContext(t, context.Background(), s, attempts["b"].ID, now)
+	ctx = sqlitetest.ExecutionContext(context.Background(), t, s, attempts["b"].ID, now)
 	if _, _, err := s.CreateWorkflowTaskRequest(ctx, r, now); !errors.Is(err, domain.ErrWorkflowTaskRequestConflict) {
 		t.Fatalf("requester replay: %v", err)
 	}

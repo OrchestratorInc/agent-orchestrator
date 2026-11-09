@@ -7,6 +7,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // StartAccountTransition moves the session's agent to accountID through the
@@ -29,6 +30,9 @@ func (m *Manager) StartAccountTransition(
 	accountID string,
 	policy domain.SessionInterfaceTransitionPolicy,
 ) (domain.SessionInterfaceTransition, error) {
+	if err := providerprofile.RefuseNativeTransition(ctx, m.store, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if !policy.Valid() {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("transition policy %q is invalid", policy)
 	}

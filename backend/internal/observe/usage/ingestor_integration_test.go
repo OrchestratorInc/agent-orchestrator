@@ -323,12 +323,19 @@ func TestIngestorReadsIdentityAndContentFromSingleDescriptorAcrossAtomicReplacem
 	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
 	replacedPath := false
 	ingestor.openTranscript = func(name string) (*os.File, error) {
-		file, err := os.Open(name) //nolint:gosec // test-controlled path.
+		file, err := openReplaceableTranscript(name)
+		if err != nil {
+			t.Errorf("open replacement fixture: %v", err)
+		}
 		if err == nil && !replacedPath {
 			replacedPath = true
-			if renameErr := os.Rename(replacementPath, path); renameErr != nil {
+			if renameErr := replaceTranscript(replacementPath, path); renameErr != nil {
+				t.Errorf("replace opened transcript: %v", renameErr)
 				_ = file.Close()
 				return nil, renameErr
+			}
+			if _, statErr := file.Stat(); statErr != nil {
+				t.Errorf("stat opened transcript after replacement: %v", statErr)
 			}
 		}
 		return file, err

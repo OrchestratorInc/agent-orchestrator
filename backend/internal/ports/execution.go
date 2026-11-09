@@ -418,7 +418,7 @@ func (r MessageReceipt) MatchesSend(request MessageRequest) bool {
 	return r.TurnID != "" || r.Queued || r.Duplicate
 }
 
-// SessionObservation.ValidateFence checks that an observation describes exactly the
+// ValidateFence checks that an observation describes exactly the
 // session and controller generation the caller named.
 //
 // A mismatch is not a transient failure: it means the evidence in hand describes a

@@ -296,6 +296,7 @@ func TestReviewRestoreCommandEmitsResumeWithPolicySystemPromptAndTask(t *testing
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("PATH", binDir)
 

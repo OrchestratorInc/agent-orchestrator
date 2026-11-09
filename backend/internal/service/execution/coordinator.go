@@ -260,7 +260,10 @@ func SpawnKey(attemptID domain.WorkflowAttemptID, action Action) string {
 func SpawnHash(request ports.SpawnRequest) (string, error) {
 	var builder strings.Builder
 	if request.Profile != "" {
-		return "", fmt.Errorf("%w: profile selection is unsupported", ports.ErrExecutionRefused)
+		if len(request.Profile) > 129 || strings.ContainsAny(request.Profile, "\r\n\x00") {
+			return "", ports.ErrExecutionRefused
+		}
+		builder.WriteString("profile=" + request.Profile + "\n")
 	}
 	if request.Model != "" || request.Effort != "" {
 		for _, selection := range []string{request.Model, request.Effort} {
@@ -353,6 +356,7 @@ func (c *Coordinator) BindAttempt(
 	// yet.
 	if decision := c.resolver.Gate(ctx, ports.CapabilityProbeRequest{
 		Harness: request.Harness,
+		Profile: request.Profile, Model: request.Model, Effort: request.Effort,
 	}, domain.CapabilityFeatureStreaming); !decision.Allowed {
 		return BindOutcome{
 			ReasonCode: decision.ReasonCode,
@@ -1251,8 +1255,8 @@ func (c *Coordinator) LiveTarget(
 	}
 	observation, err := c.gateway.InspectSession(ctx, *binding.SessionID)
 	if err != nil {
-		// An unreadable session is not a live one.
-		return binding, ports.SessionObservation{}, false, "observation_failed", nil
+		// 观察失败只禁止本次操作，不证明进程死亡；保留绑定并通过 reason 返回闭锁原因。
+		return binding, ports.SessionObservation{}, false, "observation_failed", nil //nolint:nilerr // LiveTarget 的拒绝结果由 live/reason 表示，不能把未知观察改成终止事实。
 	}
 	if err := observation.ValidateFence(*binding.SessionID, fencedGeneration(binding.ControllerGeneration)); err != nil {
 		// The evidence describes a different session, a replaced controller, or an

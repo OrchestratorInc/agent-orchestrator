@@ -25,7 +25,6 @@ func TestM2OperatorConsentRefusalsAreDistinct(t *testing.T) {
 		{"denied", principal.ErrConsentDenied, "consent_denied"},
 		{"unavailable", principal.ErrConsentUnavailable, "consent_unavailable"},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			env := newApprovalEnv(t)
@@ -176,21 +175,6 @@ func TestM2OperatorApprovalRestartDropsTheTable(t *testing.T) {
 	if env.gateway.SpawnCalls() != 1 || env.gateway.ResumeCalls() != 0 {
 		t.Fatalf("restart changed durable effects: spawns=%d resumes=%d",
 			env.gateway.SpawnCalls(), env.gateway.ResumeCalls())
-	}
-}
-
-// assertNoOperatorCredentialIn is the sweep helper: no operator response may carry token material.
-func assertNoOperatorCredentialIn(t *testing.T, bodies []string, forbidden ...string) {
-	t.Helper()
-	for _, body := range bodies {
-		for _, value := range forbidden {
-			if value == "" {
-				continue
-			}
-			if strings.Contains(body, value) {
-				t.Fatalf("an operator response body carries %q: %s", value, body)
-			}
-		}
 	}
 }
 

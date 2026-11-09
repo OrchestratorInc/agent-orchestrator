@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,14 +24,20 @@ func TestManifestIDIsKilocode(t *testing.T) {
 	}
 }
 
+// TestResolveKilocodeBinaryFindsOfficialKiloCommand 使用平台可识别的假程序名，仅验证定位，不执行程序。
 func TestResolveKilocodeBinaryFindsOfficialKiloCommand(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kilo")
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+	}
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	got, err := ResolveKilocodeBinary(context.Background())
 	if err != nil {

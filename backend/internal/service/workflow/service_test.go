@@ -238,11 +238,11 @@ func TestLifecycleStartsSettlesAndRetriesThroughService(t *testing.T) {
 		WorkflowID: created.ID, AttemptID: claim.Attempt.ID,
 		LeaseToken: claim.LeaseToken, IdempotencyKey: "service-start-1",
 	}
-	started, applied, err := service.Start(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), startInput)
+	started, applied, err := service.Start(sqlitetest.ExecutionContext(ctx, t, store, claim.Attempt.ID, workflowServiceTime()), startInput)
 	if err != nil || !applied || started.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("Start = %+v applied=%v err=%v", started, applied, err)
 	}
-	startReplay, applied, err := service.Start(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), startInput)
+	startReplay, applied, err := service.Start(sqlitetest.ExecutionContext(ctx, t, store, claim.Attempt.ID, workflowServiceTime()), startInput)
 	if err != nil || applied || startReplay.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("Start replay = %+v applied=%v err=%v", startReplay, applied, err)
 	}
@@ -252,11 +252,11 @@ func TestLifecycleStartsSettlesAndRetriesThroughService(t *testing.T) {
 		Result: domain.WorkflowAttemptStateFailed, ErrorCode: "test_failure",
 		IdempotencyKey: "service-settle-1",
 	}
-	failed, applied, err := service.Settle(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
+	failed, applied, err := service.Settle(sqlitetest.ExecutionContext(ctx, t, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
 	if err != nil || !applied || failed.State != domain.WorkflowAttemptStateFailed {
 		t.Fatalf("Settle failed = %+v applied=%v err=%v", failed, applied, err)
 	}
-	settleReplay, applied, err := service.Settle(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
+	settleReplay, applied, err := service.Settle(sqlitetest.ExecutionContext(ctx, t, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
 	if err != nil || applied || settleReplay.State != domain.WorkflowAttemptStateFailed {
 		t.Fatalf("Settle replay = %+v applied=%v err=%v", settleReplay, applied, err)
 	}
@@ -422,7 +422,7 @@ func TestRecoveredAttemptRejectsStartAndSettle(t *testing.T) {
 	}
 
 	// 保留恢复前的执行快照，证明旧执行者不能在租约撤销后继续写入。
-	ctx = sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, *clock)
+	ctx = sqlitetest.ExecutionContext(ctx, t, store, claim.Attempt.ID, *clock)
 	*clock = clock.Add(2 * time.Minute)
 	recovered, err := service.RecoverExpired(ctx)
 	if err != nil || recovered != 1 {

@@ -184,6 +184,7 @@ func TestValidateProjectImportRejectsFilePath(t *testing.T) {
 func TestValidateProjectImportRejectsAOStatePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	statePath := filepath.Join(home, ".ao", "data")
 	if err := os.MkdirAll(statePath, 0o750); err != nil {
 		t.Fatal(err)

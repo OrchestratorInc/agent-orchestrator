@@ -64,18 +64,12 @@ func TestWorkspaceLocationRejectsFileInPlaceOfDirectory(t *testing.T) {
 }
 
 func TestWorkspaceLocationReportsUnreadableWorkspace(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses directory permissions")
+	workspace := unreadableWorkspace(t)
+	if _, err := os.ReadDir(workspace); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("fixture does not deny real directory reads: %v", err)
+	} else {
+		t.Logf("scratch directory read denied: %v", err)
 	}
-	parent := t.TempDir()
-	workspace := filepath.Join(parent, "workspace")
-	if err := os.Mkdir(workspace, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(parent, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
 	store := newFakeStore()
 	store.sessions["ao-1"] = domain.SessionRecord{
 		ID:       "ao-1",

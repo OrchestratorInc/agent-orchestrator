@@ -107,27 +107,26 @@ func (d *Driver) Probe(context.Context) (ports.ChatCapabilities, error) {
 
 // Start implements ports.ChatDriver.
 func (d *Driver) Start(context.Context, ports.ChatStartConfig) (ports.ChatConversation, error) {
-	return d.open(), nil
+	return d.open(""), nil
 }
 
 // Resume implements ports.ChatDriver. It returns a conversation carrying the
 // requested handle, because a scripted driver has no provider-side state to lose.
 func (d *Driver) Resume(_ context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	conv := d.open()
-	if cfg.ProviderConversationID != "" {
-		d.base(conv).setProviderConversationID(cfg.ProviderConversationID)
-	}
-	return conv, nil
+	return d.open(cfg.ProviderConversationID), nil
 }
 
 // open records a new conversation and returns it in the shape Config asked for.
-func (d *Driver) open() ports.ChatConversation {
+func (d *Driver) open(providerConversationID string) ports.ChatConversation {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if providerConversationID == "" {
+		providerConversationID = fmt.Sprintf("%s-thread-%d", d.cfg.Harness, len(d.conversations)+1)
+	}
 	conv := &Conversation{
 		driver:                 d,
 		events:                 make(chan ports.ChatEvent, 64),
-		providerConversationID: fmt.Sprintf("%s-thread-%d", d.cfg.Harness, len(d.conversations)+1),
+		providerConversationID: providerConversationID,
 	}
 	d.conversations = append(d.conversations, conv)
 	if d.cfg.Steerable {
@@ -165,14 +164,6 @@ func (d *Driver) Conversations() []*Conversation {
 	return append([]*Conversation(nil), d.conversations...)
 }
 
-// base unwraps a conversation to the concrete type whether or not it is steerable.
-func (d *Driver) base(conv ports.ChatConversation) *Conversation {
-	if steerable, ok := conv.(*SteerableConversation); ok {
-		return steerable.Conversation
-	}
-	return conv.(*Conversation)
-}
-
 // Conversation is one scripted provider conversation.
 //
 // It emits exactly one event per accepted turn: turn.started. It deliberately does
@@ -197,12 +188,6 @@ func (c *Conversation) ProviderConversationID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.providerConversationID
-}
-
-func (c *Conversation) setProviderConversationID(id string) {
-	c.mu.Lock()
-	c.providerConversationID = id
-	c.mu.Unlock()
 }
 
 // Capabilities implements ports.ChatConversation. A conversation reports what it
@@ -302,7 +287,6 @@ func (c *SteerableConversation) Steer(
 	return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
 }
 
-// CompleteTurn publishes turn.completed for one turn, settling it.
 // ReplyAndComplete 通过正常 Driver 事件产生结构化输出，不直接写入 Chat 或 Workflow 数据库。
 func (c *Conversation) ReplyAndComplete(providerTurnID, text string) {
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: providerTurnID,
@@ -310,6 +294,7 @@ func (c *Conversation) ReplyAndComplete(providerTurnID, text string) {
 	c.CompleteTurn(providerTurnID)
 }
 
+// CompleteTurn 发布当前回合完成事件，用于模拟 Provider 的明确完成回执。
 func (c *Conversation) CompleteTurn(providerTurnID string) {
 	c.emit(ports.ChatEvent{
 		Kind:                   ports.ChatEventTurnCompleted,

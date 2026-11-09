@@ -33,7 +33,7 @@ func TestResumeNamespacesRepeatedNativeHistoryByOwnershipScope(t *testing.T) {
 		threadID := []string{"thread-A", "thread-B", "thread-A"}[i]
 		d, srv := newTestDriver(t)
 		srv.reply("thread/fork", `{"thread":{"id":"child"}}`)
-		provider, err := d.Resume(ctx, ports.ChatResumeConfig{WorkspacePath: "/tmp/ws", ProviderConversationID: threadID, ProviderScopeID: scope, ProviderIDsScoped: true})
+		provider, err := d.Resume(ctx, ports.ChatResumeConfig{WorkspacePath: t.TempDir(), ProviderConversationID: threadID, ProviderScopeID: scope, ProviderIDsScoped: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +96,7 @@ func TestResumeNamespacesRepeatedNativeHistoryByOwnershipScope(t *testing.T) {
 func TestScopedLiveTurnKeepsNativeIDsOnProviderWire(t *testing.T) {
 	d, srv := newTestDriver(t)
 	ctx := context.Background()
-	provider, err := d.Start(ctx, ports.ChatStartConfig{WorkspacePath: "/tmp/ws", ProviderScopeID: "scope", ProviderIDsScoped: true})
+	provider, err := d.Start(ctx, ports.ChatStartConfig{WorkspacePath: t.TempDir(), ProviderScopeID: "scope", ProviderIDsScoped: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestResumeScopesRequestsBeforeHandshakeCompletes(t *testing.T) {
 	}
 	opened := make(chan result, 1)
 	go func() {
-		provider, err := d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: "/tmp/ws", ProviderConversationID: "thread-1", ProviderScopeID: "scope", ProviderIDsScoped: true})
+		provider, err := d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", ProviderScopeID: "scope", ProviderIDsScoped: true})
 		opened <- result{provider, err}
 	}()
 	resume := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/resume" })
@@ -179,7 +179,7 @@ func TestResumeScopesRequestsBeforeHandshakeCompletes(t *testing.T) {
 
 func TestResumePreservesLegacyProjectionIDs(t *testing.T) {
 	d, srv := newTestDriver(t)
-	provider, err := d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: "/tmp/ws", ProviderConversationID: "thread-1", ProviderScopeID: "old-root", ProviderIDsScoped: false})
+	provider, err := d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", ProviderScopeID: "old-root", ProviderIDsScoped: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestResumePreservesLegacyProjectionIDs(t *testing.T) {
 
 func TestStartInEmptyLegacyScopeKeepsResumeIDFormat(t *testing.T) {
 	d, _ := newTestDriver(t)
-	provider, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws", ProviderScopeID: "old-empty-root", ProviderIDsScoped: false})
+	provider, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), ProviderScopeID: "old-empty-root", ProviderIDsScoped: false})
 	if err != nil {
 		t.Fatal(err)
 	}

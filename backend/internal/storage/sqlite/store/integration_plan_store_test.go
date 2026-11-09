@@ -21,7 +21,7 @@ func TestM4IntegrationPlanAtomicReplay(t *testing.T) {
 	for _, e := range entries {
 		ids = append(ids, e.ArtifactID)
 	}
-	checkIntegrationPlanAtomicReplay(t, x, plan, entries, ids, ctx)
+	checkIntegrationPlanAtomicReplay(ctx, t, x, plan, entries, ids)
 }
 
 // newIntegrationPlanFixture 复用真实准入、质量和任务提交链，提供尚未保存的完整计划。
@@ -35,7 +35,6 @@ func newIntegrationPlanFixture(t *testing.T) (*qualityFixture, domain.Integratio
 	}
 	plan := domain.IntegrationPlan{ID: "plan", WorkflowID: x.artifacts[0].WorkflowID, Status: "clean", Revision: 1, CreatedAt: x.now}
 	var entries []domain.IntegrationRepoPreview
-	var ids []string
 	for i, a := range x.artifacts {
 		if _, _, err := x.s.SaveArtifact(x.context(t), a, x.ad.Fence, x.now); err != nil {
 			t.Fatal(err)
@@ -65,14 +64,13 @@ func newIntegrationPlanFixture(t *testing.T) (*qualityFixture, domain.Integratio
 		e := domain.IntegrationRepoPreview{PlanID: plan.ID, RepoKey: a.Repo.RepoKey, ArtifactID: a.ID, TaskCommitID: c.ID, ArtifactFingerprint: a.Fingerprint, PolicyDigest: p.Digest(), TargetRef: a.Repo.TargetRef, ExpectedTargetSHA: c.TargetSHA, TaskCommitSHA: c.CommitSHA, MergeMethod: "merge", Status: "clean", TreeSHA: a.Git.TreeSHA, MergeCommitSHA: strings.Repeat("f", 40), DiffDigest: strings.Repeat("a", 64), Revision: 1}
 		e.PreviewDigest = e.Digest()
 		entries = append(entries, e)
-		ids = append(ids, a.ID)
 	}
 	plan.PlanDigest = plan.Digest(entries)
 	return x, plan, entries
 }
 
 // checkIntegrationPlanAtomicReplay 在两个独立连接间验证完整集合、失败回滚及单次 CDC。
-func checkIntegrationPlanAtomicReplay(t *testing.T, x *qualityFixture, plan domain.IntegrationPlan, entries []domain.IntegrationRepoPreview, ids []string, ctx context.Context) {
+func checkIntegrationPlanAtomicReplay(ctx context.Context, t *testing.T, x *qualityFixture, plan domain.IntegrationPlan, entries []domain.IntegrationRepoPreview, ids []string) {
 	t.Helper()
 	if err := x.s.ValidateIntegrationArtifacts(ctx, plan.WorkflowID, ids[:1], x.ad.Fence, x.now); !errors.Is(err, domain.ErrDeliveryBlocked) {
 		t.Fatalf("missing repo=%v", err)

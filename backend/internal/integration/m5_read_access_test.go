@@ -36,9 +36,9 @@ func m5VerifyReadAccess(t *testing.T, f *m2ffFixture, a domain.WorkflowAttempt) 
 				if len(caps.Capabilities) != 1 {
 					t.Fatalf("能力不是当前 Attempt: %+v", caps)
 				}
-				cap := caps.Capabilities[0]
-				if cap.ObservedSessionID != string(*a.SessionID) || cap.Generation != binding.ControllerGeneration || cap.Queue != "supported" || cap.Interrupt != "supported" || cap.Expired {
-					t.Fatalf("能力未来自当前 Controller: %+v", cap)
+				observed := caps.Capabilities[0]
+				if observed.ObservedSessionID != string(*a.SessionID) || observed.Generation != binding.ControllerGeneration || observed.Queue != "supported" || observed.Interrupt != "supported" || observed.Expired {
+					t.Fatalf("能力未来自当前 Controller: %+v", observed)
 				}
 			}
 		}

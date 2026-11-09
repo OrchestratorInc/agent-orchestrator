@@ -277,9 +277,10 @@ func (s *Store) ReconcileIntegrationOperation(ctx context.Context, id string, ex
 									}
 								}
 							}
-							if sha == e.MergeCommitSha {
+							switch sha {
+							case e.MergeCommitSha:
 								state = "applied"
-							} else if sha == expected {
+							case expected:
 								state = "rejected"
 							}
 						}

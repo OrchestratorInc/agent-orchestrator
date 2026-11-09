@@ -62,7 +62,12 @@ func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecor
 		m.runInBackground(func() {
 			defer func() { <-slots }()
 			started := time.Now()
-			raw, err := m.runRecordBackgroundTask(namingCtx, rec, taskNamingSystemPrompt, cfg.Prompt, runner.RunBackgroundTask)
+			// 首次命名沿用可信启动身份；此时恢复绑定可能尚未进入 ready 状态。
+			profile, err := m.workflowProfile(namingCtx, cfg.WorkflowSpawn, rec.Harness, config.Model, config.Effort)
+			var raw string
+			if err == nil {
+				raw, err = m.runRecordBackgroundTask(namingCtx, rec, profile, taskNamingSystemPrompt, cfg.Prompt, runner.RunBackgroundTask)
+			}
 			name := fallback
 			if err == nil {
 				name = parseTaskName(raw, fallback)

@@ -51,12 +51,13 @@ func quoteWindowsBatchArg(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
+// refreshExecutablePath 按当前进程、系统、用户顺序合并 Path，仅更新本进程环境。
 func refreshExecutablePath() {
-	paths := []string{os.Getenv("Path")}
-	paths = append(paths,
+	paths := []string{
+		os.Getenv("Path"),
 		registryPath(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`),
 		registryPath(registry.CURRENT_USER, `Environment`),
-	)
+	}
 	if merged := mergeWindowsPath(paths...); merged != "" {
 		_ = os.Setenv("Path", merged)
 	}

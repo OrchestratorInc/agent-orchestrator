@@ -10,6 +10,7 @@ import (
 func TestAutohandConfiguredProvidersReadKeyedSections(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("AZURE_OPENAI_KEY", "")
 	dir := filepath.Join(home, ".autohand")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -160,7 +160,7 @@ func interactiveTerminalEnv(base []string, configured map[string]string, assignm
 		appendEntry(entry, true)
 	}
 	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
-	return processenv.StripWorkflowLease(env)
+	return processenv.StripWorkflowSecrets(env)
 }
 
 // hostStartGrid decides how the pty-host starts its process: at an explicit

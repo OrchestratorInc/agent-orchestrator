@@ -489,8 +489,17 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	identity, err := m.workflowSpawnContext(ctx, rec)
+	if err != nil {
+		return RestoreResult{}, false, err
+	}
+	config.Profile, err = m.workflowProfile(ctx, identity, rec.Harness, config.Model, config.Effort)
+	if err != nil {
+		return RestoreResult{}, false, err
+	}
 	cfg := ports.SpawnConfig{
-		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
+		WorkflowSpawn: identity,
+		ProjectID:     rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}

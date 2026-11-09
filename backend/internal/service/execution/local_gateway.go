@@ -142,6 +142,7 @@ type pinnedSteerer interface {
 // production: the Session Manager spawns and resumes, the store reads rows. A test
 // fake may satisfy both with one value.
 type LocalGatewayDeps struct {
+	Profiles ports.ProviderProfiles
 	// Sessions spawns and resumes sessions. Nil makes Spawn and Resume report
 	// ErrExecutionUnsupported; nothing else in the gateway depends on it.
 	Sessions SessionSpawner
@@ -188,7 +189,9 @@ type SteerPinnedFunc func(
 ) (chatsvc.SteerResult, error)
 
 // LocalGateway implements ports.ExecutionGateway over AO's own owners.
+// 只包装本层权威错误分类；底层原因转为文本，避免混合错误让 Coordinator 将 UNKNOWN 误判为拒绝。
 type LocalGateway struct {
+	profiles    ports.ProviderProfiles
 	sessions    SessionSpawner
 	resumer     SessionResumer
 	records     SessionReader
@@ -213,6 +216,7 @@ var _ ports.ExecutionGateway = (*LocalGateway)(nil)
 // panic, and the tests use the same constructor the daemon does.
 func NewLocalGateway(deps LocalGatewayDeps) *LocalGateway {
 	g := &LocalGateway{
+		profiles:     deps.Profiles,
 		sessions:     deps.Sessions,
 		resumer:      deps.Resumer,
 		records:      deps.Records,
@@ -346,7 +350,12 @@ func (g *LocalGateway) Spawn(
 	request ports.SpawnRequest,
 ) (ports.SessionObservation, error) {
 	if request.Profile != "" {
-		return ports.SessionObservation{}, fmt.Errorf("workflow profile is unsupported")
+		if g.profiles == nil || request.Mode != domain.SessionModeChat {
+			return ports.SessionObservation{}, fmt.Errorf("workflow profile is unsupported")
+		}
+		if _, err := g.profiles.Environment(ctx, request.Profile, request.Harness, request.Model, request.Effort); err != nil {
+			return ports.SessionObservation{}, err
+		}
 	}
 	if err := request.Validate(); err != nil {
 		return ports.SessionObservation{}, err
@@ -368,7 +377,7 @@ func (g *LocalGateway) Spawn(
 	// flight is answered as unknown rather than duplicated.
 	if existing, found, err := g.records.GetSessionByClientRequestID(ctx, request.SpawnKey); err != nil {
 		return ports.SessionObservation{}, fmt.Errorf(
-			"%w: read spawn request: %v", ports.ErrSpawnOutcomeUnknown, err)
+			"%w: read spawn request: %s", ports.ErrSpawnOutcomeUnknown, err.Error())
 	} else if found {
 		if !existing.ClientRequestCommitted {
 			return ports.SessionObservation{}, fmt.Errorf(
@@ -381,7 +390,7 @@ func (g *LocalGateway) Spawn(
 		ProjectID:         request.ProjectID,
 		Kind:              domain.KindWorker,
 		Harness:           request.Harness,
-		AgentConfig:       ports.AgentConfig{Model: request.Model, Effort: request.Effort},
+		AgentConfig:       ports.AgentConfig{Model: request.Model, Effort: request.Effort, Profile: request.Profile},
 		EffortOverride:    request.Effort != "",
 		RequestedMode:     request.Mode,
 		Prompt:            request.Prompt,
@@ -424,7 +433,7 @@ func (g *LocalGateway) spawnFailure(
 	cause error,
 ) (ports.SessionObservation, error) {
 	if g.isRefusal(cause) {
-		return ports.SessionObservation{}, fmt.Errorf("%w: %v", ports.ErrExecutionRefused, cause)
+		return ports.SessionObservation{}, fmt.Errorf("%w: %s", ports.ErrExecutionRefused, cause.Error())
 	}
 	lookupCtx := context.WithoutCancel(ctx)
 	if observation, found, err := g.lookupCommitted(lookupCtx, request.SpawnKey); err == nil && found {
@@ -432,7 +441,7 @@ func (g *LocalGateway) spawnFailure(
 			"reason", "spawn_outcome_recovered")
 		return observation, nil
 	}
-	return ports.SessionObservation{}, fmt.Errorf("%w: %v", ports.ErrSpawnOutcomeUnknown, cause)
+	return ports.SessionObservation{}, fmt.Errorf("%w: %s", ports.ErrSpawnOutcomeUnknown, cause.Error())
 }
 
 // isRefusal reports whether err proves the spawn produced no durable state.
@@ -722,7 +731,7 @@ func (g *LocalGateway) Interrupt(
 	}
 	// Stop 仍以当前 generation 为栅栏，但失去工作区证据时不得操作该 Controller。
 	if _, err := g.observeWorktrees(ctx, rec); err != nil {
-		return ports.InterruptReceipt{}, fmt.Errorf("%w: workspace verification: %v", ports.ErrExecutionRefused, err)
+		return ports.InterruptReceipt{}, fmt.Errorf("%w: workspace verification: %s", ports.ErrExecutionRefused, err.Error())
 	}
 
 	generation := request.ControllerGeneration
@@ -819,7 +828,7 @@ func (g *LocalGateway) Resume(
 	}
 	// 恢复会启动控制器，必须在副作用前核验工作区；不能先启动再报告 unknown。
 	if _, err := g.observeWorktrees(ctx, rec); err != nil {
-		return ports.SessionObservation{}, fmt.Errorf("%w: workspace verification: %v", ports.ErrExecutionRefused, err)
+		return ports.SessionObservation{}, fmt.Errorf("%w: workspace verification: %s", ports.ErrExecutionRefused, err.Error())
 	}
 
 	readiness := ProjectReadiness(rec, g.hasLiveController(rec.ID))
@@ -858,9 +867,9 @@ func (g *LocalGateway) resumeFailure(cause error) error {
 		errors.Is(cause, sessionmanager.ErrInterfaceWorkspaceUnavailable),
 		errors.Is(cause, sessionmanager.ErrInterfaceAlreadySelected),
 		errors.Is(cause, sessionmanager.ErrInterfaceTransitionInProgress):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, cause)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, cause.Error())
 	default:
-		return fmt.Errorf("%w: %v", ports.ErrSpawnOutcomeUnknown, cause)
+		return fmt.Errorf("%w: %s", ports.ErrSpawnOutcomeUnknown, cause.Error())
 	}
 }
 
@@ -1037,29 +1046,29 @@ func mapChatError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, ports.ErrChatUnsupported):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionUnsupported, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionUnsupported, err.Error())
 	case errors.Is(err, chatsvc.ErrNotChatMode):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionUnsupported, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionUnsupported, err.Error())
 	case errors.Is(err, chatsvc.ErrNoController):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, err.Error())
 	case errors.Is(err, chatsvc.ErrWorkspaceInvalid):
 		// 已在 Provider 调用前拒绝，不能把明确未发送报告为不确定副作用。
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, err.Error())
 	case errors.Is(err, chatsvc.ErrStaleControllerGeneration):
 		// A pinned send or stop refused because the controller is not the one the
 		// caller observed. Nothing was dispatched, so this is a fence, not an
 		// uncertain outcome the caller should freeze on.
-		return fmt.Errorf("%w: %v", ports.ErrExecutionStaleGeneration, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionStaleGeneration, err.Error())
 	case errors.Is(err, domain.ErrClientMessageConflict):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, err.Error())
 	case errors.Is(err, ports.ErrSessionNotFound):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionSessionNotFound, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionSessionNotFound, err.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, chatsvc.ErrSteerDeliveryUncertain),
 		errors.Is(err, chatsvc.ErrControllerHandoff):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionOutcomeUnknown, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionOutcomeUnknown, err.Error())
 	default:
-		return fmt.Errorf("%w: %v", ports.ErrExecutionOutcomeUnknown, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionOutcomeUnknown, err.Error())
 	}
 }
 
@@ -1078,23 +1087,23 @@ func mapSteerError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, chatsvc.ErrWorkspaceInvalid):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, err.Error())
 	case errors.Is(err, chatsvc.ErrSteerUnsupported):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionUnsupported, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionUnsupported, err.Error())
 	case errors.Is(err, chatsvc.ErrNoActiveTurn),
 		errors.Is(err, chatsvc.ErrTurnNotSteerable),
 		errors.Is(err, chatsvc.ErrSteerTargetRequired),
 		errors.Is(err, chatsvc.ErrStaleControllerGeneration):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionTargetMismatch, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionTargetMismatch, err.Error())
 	case errors.Is(err, chatsvc.ErrNoController),
 		errors.Is(err, domain.ErrClientMessageConflict):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionRefused, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionRefused, err.Error())
 	case errors.Is(err, chatsvc.ErrSteerDeliveryUncertain),
 		errors.Is(err, context.Canceled),
 		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, chatsvc.ErrControllerHandoff):
-		return fmt.Errorf("%w: %v", ports.ErrExecutionOutcomeUnknown, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionOutcomeUnknown, err.Error())
 	default:
-		return fmt.Errorf("%w: %v", ports.ErrExecutionOutcomeUnknown, err)
+		return fmt.Errorf("%w: %s", ports.ErrExecutionOutcomeUnknown, err.Error())
 	}
 }

@@ -235,12 +235,6 @@ func (s *interventionStore) createdCount() int {
 	return len(s.created)
 }
 
-func (s *interventionStore) appliedStates() []domain.WorkflowInterventionState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]domain.WorkflowInterventionState(nil), s.applied...)
-}
-
 // liveBinding is a bound_ready binding with a session and generation, which is what
 // resolveTarget requires before it will consider an intervention at all.
 func liveBinding(workflowID domain.WorkflowID) domain.WorkflowAttemptBinding {

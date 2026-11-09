@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"golang.org/x/sys/windows"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // TestCommandTreeCancellationRejectsReleasedRoot 用真实已回收对象和可控 PID 复用验证身份失效后不得杀旁路。

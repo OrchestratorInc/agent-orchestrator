@@ -59,10 +59,13 @@ func readGitPathPointer(file string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 4097))
+	closeErr := f.Close()
 	if err != nil {
 		return "", err
+	}
+	if closeErr != nil {
+		return "", closeErr
 	}
 	value := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
 	if len(data) > 4096 || value == "" || strings.ContainsAny(value, "\x00\r\n") {

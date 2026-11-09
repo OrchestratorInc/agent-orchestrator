@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -618,6 +617,7 @@ func (s *Service) runtimeCredentialEnv(agentID string) map[string]string {
 	return source.RuntimeCredentialEnv(s.dataDir)
 }
 
+// globalModelDiscoveryRequest 仅在 AO 私有目录通过平台权限与路径校验后启动全局发现。
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {
 	if s.modelDiscoveryDir == "" {
 		return request, nil
@@ -625,7 +625,7 @@ func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryR
 	if !filepath.IsAbs(s.modelDiscoveryDir) {
 		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("model discovery directory must be absolute: %s", s.modelDiscoveryDir)
 	}
-	if err := os.MkdirAll(s.modelDiscoveryDir, 0o700); err != nil {
+	if err := ensurePrivateDirectory(s.modelDiscoveryDir); err != nil {
 		return ports.AgentModelDiscoveryRequest{}, fmt.Errorf("create model discovery directory: %w", err)
 	}
 	request.WorkingDir = s.modelDiscoveryDir

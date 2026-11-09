@@ -29,6 +29,7 @@ export function WorkflowTaskPanel({ definition, taskId, coordination, collaborat
 	return <section className="space-y-4 rounded-lg border border-border p-4" aria-label={task.title}>
 		<div className="flex items-start justify-between gap-3"><div><h3 className="font-medium">{task.title}</h3><p className="text-sm text-muted-foreground">{task.state} · {task.agentHarness} · {task.model} · {task.effort}</p></div>{attempt?.sessionId && <Button variant="outline" size="sm" onClick={() => { useWorkflowUi.getState().setOpen(false); navigate(definition.repositories.find(r => definition.taskRepositories.some(s => s.taskId === taskId && s.repoKey === r.repoKey))?.projectId, attempt.sessionId!); }}>{t("workflow.openSession", "打开现有会话")}</Button>}</div>
 		<p className="whitespace-pre-wrap text-sm">{task.brief}</p>
+		<p className="text-xs" title={task.profile}>{t("workflow.provider")}: {task.profile?.split("@")[0] || t("workflow.nativeProvider")}</p>
 		{query.error && <p role="alert">{query.error.message}</p>}
 		{!attempt?.sessionId && <p className="text-sm">{t("workflow.noSession", "尚未创建会话")}</p>}
 		{facts && <dl className="grid grid-cols-2 gap-2 text-xs"><dt>{t("workflow.blockedReason", "调度原因")}</dt><dd>{facts.blockedReason || "—"}</dd><dt>{t("workflow.readiness", "会话就绪状态")}</dt><dd>{facts.sessionReadiness || "UNKNOWN"} / {facts.bindingState || "UNKNOWN"}</dd><dt>{t("workflow.lease", "租约")}</dt><dd>{facts.leaseValid ? t("workflow.valid", "有效") : t("workflow.unverified", "未验证")}</dd></dl>}

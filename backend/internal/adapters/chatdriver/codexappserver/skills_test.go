@@ -18,7 +18,7 @@ func TestListSkillsDropsDisabledAndDeduplicates(t *testing.T) {
 	// parse as a frame and the request would simply never return.
 	srv.reply("skills/list", `{"data":[{"cwd":"/tmp/ws","errors":[],"skills":[{"name":"review","description":"Long trigger text for the model","enabled":true,"scope":"repo","path":"/tmp/ws/.codex/skills/review/SKILL.md"},{"name":"switched-off","description":"never offered","enabled":false,"scope":"user","path":"/u/SKILL.md"},{"name":"","description":"nameless","enabled":true,"scope":"user","path":"/u/SKILL.md"}]},{"cwd":"/tmp/other","errors":[],"skills":[{"name":"review","description":"same skill from another root","enabled":true,"scope":"user","path":"/u/review/SKILL.md"},{"name":"ship","description":"legacy long text","shortDescription":"Ship it","enabled":true,"scope":"user","path":"/u/ship/SKILL.md"}]}]}`)
 
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestListSkillsPrefersTheInterfaceBlock(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("skills/list", `{"data":[{"cwd":"/tmp/ws","errors":[],"skills":[{"name":"deploy","description":"legacy long text","shortDescription":"legacy short","enabled":true,"scope":"repo","path":"/tmp/ws/SKILL.md","interface":{"displayName":"Deploy to prod","shortDescription":"Ships the current branch"}}]}]}`)
 
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestListSkillsReportsAnEmptyListRatherThanNil(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("skills/list", `{"data":[]}`)
 
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

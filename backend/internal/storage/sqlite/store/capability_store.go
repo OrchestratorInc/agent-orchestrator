@@ -56,11 +56,7 @@ func (s *Store) GetHarnessCapabilitySnapshot(
 		return domain.HarnessCapabilitySnapshot{}, false,
 			fmt.Errorf("load capability snapshot for %s: %w", harness, err)
 	}
-	snapshot, err := decodeHarnessCapability(row)
-	if err != nil {
-		return domain.HarnessCapabilitySnapshot{}, false, err
-	}
-	return snapshot, true, nil
+	return decodeHarnessCapability(row), true, nil
 }
 
 // UpsertSessionCapabilitySnapshot stores one session-scoped observation,
@@ -98,11 +94,7 @@ func (s *Store) GetSessionCapabilitySnapshot(
 		return domain.HarnessCapabilitySnapshot{}, false,
 			fmt.Errorf("load session capability snapshot for %s: %w", sessionID, err)
 	}
-	snapshot, err := decodeSessionCapability(row)
-	if err != nil {
-		return domain.HarnessCapabilitySnapshot{}, false, err
-	}
-	return snapshot, true, nil
+	return decodeSessionCapability(row), true, nil
 }
 
 func harnessCapabilityParams(
@@ -183,7 +175,7 @@ func encodeCapabilityModels(snapshot domain.HarnessCapabilitySnapshot) (sql.Null
 	return sql.NullString{String: string(encoded), Valid: true}, nil
 }
 
-func decodeHarnessCapability(row gen.HarnessCapabilitySnapshot) (domain.HarnessCapabilitySnapshot, error) {
+func decodeHarnessCapability(row gen.HarnessCapabilitySnapshot) domain.HarnessCapabilitySnapshot {
 	snapshot := domain.HarnessCapabilitySnapshot{Models: decodeCapabilityModels(row.ModelsJson)}
 	snapshot.Harness = domain.AgentHarness(row.Harness)
 	snapshot.Source = domain.CapabilitySource(row.Source)
@@ -204,10 +196,10 @@ func decodeHarnessCapability(row gen.HarnessCapabilitySnapshot) (domain.HarnessC
 	snapshot.ReasonCode = row.ReasonCode
 	snapshot.ObservedAt = row.ObservedAt.UTC()
 	snapshot.ExpiresAt = row.ExpiresAt.UTC()
-	return snapshot, nil
+	return snapshot
 }
 
-func decodeSessionCapability(row gen.SessionCapabilitySnapshot) (domain.HarnessCapabilitySnapshot, error) {
+func decodeSessionCapability(row gen.SessionCapabilitySnapshot) domain.HarnessCapabilitySnapshot {
 	snapshot := domain.HarnessCapabilitySnapshot{Models: decodeCapabilityModels(row.ModelsJson)}
 	snapshot.Harness = domain.AgentHarness(row.Harness)
 	snapshot.Source = domain.CapabilitySource(row.Source)
@@ -230,7 +222,7 @@ func decodeSessionCapability(row gen.SessionCapabilitySnapshot) (domain.HarnessC
 	snapshot.Generation = row.Generation
 	snapshot.ObservedAt = row.ObservedAt.UTC()
 	snapshot.ExpiresAt = row.ExpiresAt.UTC()
-	return snapshot, nil
+	return snapshot
 }
 
 // decodeCapabilityModels reads the display catalog. Undecodable metadata must not

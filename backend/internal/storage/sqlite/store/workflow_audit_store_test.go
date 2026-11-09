@@ -81,7 +81,6 @@ func TestWorkflowAuditRefusesAnUnreadableRecord(t *testing.T) {
 			r.RequestID = ""
 		},
 	} {
-		mutate := mutate
 		t.Run(name, func(t *testing.T) {
 			record := auditFixture(time.Now().UTC())
 			mutate(&record)

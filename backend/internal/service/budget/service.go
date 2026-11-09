@@ -25,6 +25,7 @@ type Service struct {
 	now   func() time.Time
 }
 
+// New 使用持久化账本创建预算投影服务。
 func New(store Store, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now

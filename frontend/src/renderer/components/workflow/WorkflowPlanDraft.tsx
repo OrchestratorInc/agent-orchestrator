@@ -4,6 +4,7 @@ import type { WorkflowDefinition } from "../../hooks/useWorkflows";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { WorkflowProviderSelect } from "./WorkflowProviderSelect";
 
 type Plan = components["schemas"]["WorkflowPlanDefinition"];
 type Task = components["schemas"]["PlanTaskInput"];
@@ -17,9 +18,10 @@ export function WorkflowPlanDraft({ definition, value, onChange }: { definition:
 	return <div className="space-y-4">
 		{value.tasks.map(task => <fieldset className="space-y-3 rounded border border-border p-3" key={task.id}>
 			<legend className="text-xs">{task.id}</legend>
+			<WorkflowProviderSelect value={task.profile || ""} harness={task.agentHarness || ""} onChange={selection => update(task.id, selection)} />
 			<label className="block text-sm">{t("workflow.name", "标题")}<Input value={task.title} onChange={e => update(task.id, { title: e.target.value })} /></label>
 			<label className="block text-sm">{t("workflow.brief", "说明")}<textarea className="min-h-20 w-full rounded border border-border bg-background p-2" value={task.brief} onChange={e => update(task.id, { brief: e.target.value })} /></label>
-			<div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">{t("workflow.taskKind", "任务类型")}<Select value={task.kind} onValueChange={kind => update(task.id, { kind })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["analysis", "development", "testing", "review", "integration", "approval"].map(kind => <SelectItem key={kind} value={kind}>{kind}</SelectItem>)}</SelectContent></Select></label><label className="text-sm">Agent<Input value={task.agentHarness} onChange={e => update(task.id, { agentHarness: e.target.value })} /></label><label className="text-sm">{t("workflow.model", "模型")}<Input value={task.model} onChange={e => update(task.id, { model: e.target.value })} /></label><label className="text-sm">effort<Input value={task.effort} onChange={e => update(task.id, { effort: e.target.value })} /></label></div>
+			<div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">{t("workflow.taskKind", "任务类型")}<Select value={task.kind} onValueChange={kind => update(task.id, { kind })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["analysis", "development", "testing", "review", "integration", "approval"].map(kind => <SelectItem key={kind} value={kind}>{kind}</SelectItem>)}</SelectContent></Select></label><label className="text-sm">{t("workflow.harness", "Agent")}<Input value={task.agentHarness} onChange={e => update(task.id, { agentHarness: e.target.value })} /></label><label className="text-sm">{t("workflow.model", "模型")}<Input disabled={!!task.profile} value={task.model} onChange={e => update(task.id, { model: e.target.value })} /></label><label className="text-sm">{t("workflow.effort", "effort")}<Input disabled={!!task.profile} value={task.effort} onChange={e => update(task.id, { effort: e.target.value })} /></label></div>
 			<fieldset className="space-y-1"><legend className="text-sm">{t("workflow.dependencies", "依赖")}</legend>{[...previous, ...value.tasks].filter(parent => parent.id !== task.id).map(parent => <label className="flex gap-2 text-xs" key={parent.id}><input type="checkbox" checked={value.dependencies.some(edge => edge.fromTaskId === parent.id && edge.toTaskId === task.id)} onChange={e => onChange({ ...value, dependencies: e.target.checked ? [...value.dependencies, { fromTaskId: parent.id, toTaskId: task.id }] : value.dependencies.filter(edge => edge.fromTaskId !== parent.id || edge.toTaskId !== task.id) })} />{parent.title}</label>)}</fieldset>
 			<fieldset className="space-y-2"><legend className="text-sm">{t("workflow.repositories", "选定仓库与基线")}</legend>{definition.repositories.map(repo => {
 				const selected = value.taskRepositories.find(scope => scope.taskId === task.id && scope.repoKey === repo.repoKey);

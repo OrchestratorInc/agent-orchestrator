@@ -44,6 +44,7 @@ func TestAiderLocalAuthStatusAuthorizedWithDocumentedAPIKeyList(t *testing.T) {
 	clearAiderAuthEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	if err := os.WriteFile(filepath.Join(home, ".aider.conf.yml"), []byte("api-key:\n  - openrouter=sk-test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

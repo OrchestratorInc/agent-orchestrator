@@ -57,5 +57,14 @@ func (m *Manager) validateReattachedController(ctx context.Context, started Chat
 	if !started.LiveReconnect || started.ProviderConversationID != p.Owner.ProviderConversationID || started.ControllerGeneration == "" {
 		return domain.ErrSchedulerAdmissionConflict
 	}
-	return m.store.(sessionReattachStore).ValidateSessionReattach(ctx, p, started.ControllerGeneration, m.clock().UTC())
+	return m.validateSessionReattach(ctx, p, started.ControllerGeneration)
+}
+
+// validateSessionReattach 在成功发布和失败回执两个边界复验许可；缺少事务能力时闭锁。
+func (m *Manager) validateSessionReattach(ctx context.Context, permit domain.SessionReattachPermit, generation string) error {
+	store, ok := m.store.(sessionReattachStore)
+	if !ok {
+		return domain.ErrAdmissionRequired
+	}
+	return store.ValidateSessionReattach(ctx, permit, generation, m.clock().UTC())
 }

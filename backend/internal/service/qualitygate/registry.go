@@ -20,10 +20,13 @@ func LoadRegistry(path string) (map[string]domain.GatePolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 65537))
+	closeErr := f.Close()
 	if err != nil {
 		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	if len(data) > 65536 {
 		return nil, domain.ErrDeliveryBlocked

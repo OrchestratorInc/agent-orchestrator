@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	integrationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/integration"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
-	"github.com/go-chi/chi/v5"
 )
 
 // preview 不授予目标分支写权，只生成完整持久预演。
@@ -76,7 +77,7 @@ func (c *WorkflowQualityController) integrationWrite(w http.ResponseWriter, r *h
 	}
 	workflowID := domain.WorkflowID(chi.URLParam(r, "workflowId"))
 	planID := chi.URLParam(r, "planId")
-	if r.URL.RequestURI() != integrationsvc.IntegrationPath(workflowID, planID, action) {
+	if r.URL.RequestURI() != integrationsvc.Path(workflowID, planID, action) {
 		envelope.WriteError(w, r, apierr.Forbidden("OPERATOR_APPROVAL_INVALID", "The exact approved request URI is required"))
 		return
 	}

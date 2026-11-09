@@ -8,12 +8,14 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
+// 首次库复用迁移模板，仍经真实关闭重开验证报告、截止时间和CDC持久化。
 func TestReportStorePersistsOutputsAndDeadlinesAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	s, err := sqlite.Open(dir)
+	s, err := sqlitetest.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,10 +116,11 @@ func TestReportStoreClaimAcknowledgeAndTokenFence(t *testing.T) {
 	}
 }
 
+// 从模板建库后保留真实重开，验证中断恢复不会放行旧认领token。
 func TestReportStoreRequeuesInterruptedClaimOnRestartAndFencesOldToken(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	s, err := sqlite.Open(dir)
+	s, err := sqlitetest.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +208,11 @@ func TestReportStoreDurableBatchIdentityExcludesLaterReportsOnRetry(t *testing.T
 	}
 }
 
+// 模板只替代首次迁移；限流状态仍须跨真实关闭重开保持。
 func TestReportStoreInterruptLimitSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	s, err := sqlite.Open(dir)
+	s, err := sqlitetest.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

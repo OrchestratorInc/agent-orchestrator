@@ -44,9 +44,10 @@ var approvalMethods = map[string]domain.ActivityKind{
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
-	conn *conn
-	proc *process
-	log  *slog.Logger
+	profile string
+	conn    *conn
+	proc    *process
+	log     *slog.Logger
 
 	threadID        string
 	historyParentID string
@@ -354,6 +355,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	if c.profile != "" && (msg.Settings.Model != "" && msg.Settings.Model != c.threadModel || msg.Settings.Effort != "" && msg.Settings.Effort != c.threadEffort || msg.Settings.Fast) {
+		return ports.ChatTurnRef{}, errors.New("provider profile model, effort and tier are fixed")
+	}
 
 	params := map[string]any{
 		"threadId": c.threadID,

@@ -37,9 +37,8 @@ type Installer struct {
 	// Browsers lists the Chrome channels to register with. Defaults to the
 	// platform's channels under the user's home directory.
 	Browsers []Browser
-	// registry abstracts the Windows registry for tests; nil uses the
-	// platform implementation.
-	registry hostRegistry
+	// registry 未提供时使用平台默认实现；测试可显式返回 nil，选择目录型注册。
+	registry func() hostRegistry
 }
 
 // ChannelStatus reports registration for one Chrome channel.
@@ -89,9 +88,10 @@ func (i Installer) browsers() []Browser {
 	return defaultBrowsers(home)
 }
 
+// reg 区分未注入与显式选择目录型注册，避免测试回落到真实注册表。
 func (i Installer) reg() hostRegistry {
 	if i.registry != nil {
-		return i.registry
+		return i.registry()
 	}
 	return platformRegistry()
 }
@@ -384,6 +384,9 @@ type hostRegistry interface {
 	Lookup(name string) (string, error)
 }
 
+// browsersUnder 为各浏览器通道生成平台数据目录，不创建目录或写入注册信息。
+//
+//nolint:unused // browsers_darwin.go 和 browsers_linux.go 使用；Windows 通过注册表识别宿主。
 func browsersUnder(base string, channels ...[2]string) []Browser {
 	out := make([]Browser, 0, len(channels))
 	for _, channel := range channels {

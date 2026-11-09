@@ -202,6 +202,7 @@ func (g *blockingExclusiveCodexGate) AcquireExclusive(ctx context.Context) (port
 }
 func (*blockingExclusiveCodexGate) ExclusivePendingOrHeld() bool { return false }
 
+// fakeCodexLoginTerminal 分别模拟凭据写入、子进程退出和宿主关闭，状态由互斥锁保护。
 type fakeCodexLoginTerminal struct {
 	mu              sync.Mutex
 	opened          []shellterm.OpenCommandTerminalInput
@@ -229,11 +230,17 @@ func (f *fakeCodexLoginTerminal) OpenCommandTerminal(_ context.Context, in shell
 	return f.result, nil
 }
 
+// CloseShellTerminal 对重复关闭返回真实服务的 NotFound；closed 仅记录实际关闭的句柄。
 func (f *fakeCodexLoginTerminal) CloseShellTerminal(_ context.Context, handle string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closeErr != nil {
 		return f.closeErr
+	}
+	for _, closed := range f.closed {
+		if closed == handle {
+			return apierr.NotFound("SHELL_TERMINAL_NOT_FOUND", "No such shell terminal: "+handle)
+		}
 	}
 	f.closed = append(f.closed, handle)
 	return nil
@@ -439,7 +446,7 @@ func TestNativeLoginCreatesAndActivatesFirstAccountWithoutProviderCheck(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,14 +492,14 @@ func TestNativeLoginVerificationDoesNotReplaceExistingDeviceAccount(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if completed.Status != domain.CodexAccountLoginCompleted || completed.Account == nil || completed.Account.Active {
 		t.Fatalf("completed login = %#v", completed)
 	}
-	current, err := readOpaqueCredential(manager.globalCredentialPath())
+	current, err := readDeviceOpaqueCredential(manager.globalCredentialPath())
 	if err != nil || !bytes.Equal(current, original) {
 		t.Fatalf("existing device credential changed: %q, %v", current, err)
 	}
@@ -531,7 +538,7 @@ func TestNativeLoginVerificationSavesAccountWhileDeviceReconciliationRetries(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,7 +551,7 @@ func TestNativeLoginVerificationSavesAccountWhileDeviceReconciliationRetries(t *
 	if _, err := readOpaqueCredential(filepath.Join(manager.catalog.root, testAccountID, codexCredentialHomeDirectory, codexCredentialFilename)); err != nil {
 		t.Fatalf("saved account credential: %v", err)
 	}
-	if credential, err := readOpaqueCredential(manager.globalCredentialPath()); err != nil || !bytes.Equal(credential, testOAuthCredential("", "opaque-login-credential")) {
+	if credential, err := readDeviceOpaqueCredential(manager.globalCredentialPath()); err != nil || !bytes.Equal(credential, testOAuthCredential("", "opaque-login-credential")) {
 		t.Fatalf("first saved account was not installed on the device: %q, %v", credential, err)
 	}
 }
@@ -582,7 +589,7 @@ func TestNativeReauthenticationReplacesTheExistingAccountSlot(t *testing.T) {
 	if started.Operation.AccountID != record.Snapshot.ID {
 		t.Fatalf("reauthentication target = %q", started.Operation.AccountID)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,14 +655,14 @@ func TestActiveReauthenticationRevalidatesAndReplacesTheDeviceCredential(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if completed.Status != domain.CodexAccountLoginCompleted || completed.Account == nil || !completed.Account.Active {
 		t.Fatalf("completed reauthentication = %#v", completed)
 	}
-	globalCredential, err := readOpaqueCredential(manager.globalCredentialPath())
+	globalCredential, err := readDeviceOpaqueCredential(manager.globalCredentialPath())
 	if err != nil || !bytes.Equal(globalCredential, testOAuthCredential("provider-account", "new-access")) {
 		t.Fatalf("device credential = %q, err=%v", globalCredential, err)
 	}
@@ -731,14 +738,14 @@ func TestActiveReauthenticationPreservesCredentialsWhenDeviceChangesAfterTermina
 		t.Fatal(err)
 	}
 
-	result, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	result, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Status != domain.CodexAccountLoginRetryable {
 		t.Fatalf("reauthentication result = %#v", result)
 	}
-	globalCredential, err := readOpaqueCredential(manager.globalCredentialPath())
+	globalCredential, err := readDeviceOpaqueCredential(manager.globalCredentialPath())
 	if err != nil || !bytes.Equal(globalCredential, externalCredential) {
 		t.Fatalf("external device credential changed: credential=%q err=%v", globalCredential, err)
 	}
@@ -795,7 +802,7 @@ func TestActiveReauthenticationCommitsWhenProviderIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1068,7 @@ func TestLogoutActiveAPIKeyRejectsExternalCredentialReplacement(t *testing.T) {
 	if err := manager.logout(context.Background(), record.Snapshot.ID); err == nil {
 		t.Fatal("logout accepted an externally replaced API-key credential")
 	}
-	global, err := readOpaqueCredential(manager.globalCredentialPath())
+	global, err := readDeviceOpaqueCredential(manager.globalCredentialPath())
 	if err != nil || !bytes.Equal(global, testAPIKeyCredential("external-api-key")) {
 		t.Fatalf("external global credential = %q, %v", global, err)
 	}
@@ -2289,7 +2296,7 @@ func TestLoginDeduplicatesExistingAccountByProviderID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := manager.verifyLogin(context.Background(), started.Operation.OperationID)
+	completed, err := verifyExitedTestLogin(t, manager, started.Operation.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}

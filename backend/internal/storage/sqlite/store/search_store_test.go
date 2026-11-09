@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func searchMessageIDs(t *testing.T, s *sqlite.Store, query string) []string {
@@ -111,7 +112,7 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 func TestConversationMessagesSearchIndexStaysInSync(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
-	s, err := sqlite.Open(dataDir)
+	s, err := sqlitetest.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

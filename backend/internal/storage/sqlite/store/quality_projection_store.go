@@ -30,9 +30,9 @@ func (s *Store) RecentCoordinationMessages(ctx context.Context, w domain.Workflo
 	}
 	out := make([]domain.CoordinationMessageView, 0, len(rows))
 	for _, r := range rows {
-		v := domain.CoordinationMessageView{ID: r.ID, Kind: domain.WorkflowMessageKind(r.Kind), DeliveryState: domain.WorkflowMessageDeliveryState(r.DeliveryState), Revision: r.Revision, CreatedAt: r.CreatedAt}
+		v := domain.CoordinationMessageView{ID: r.ID, Kind: r.Kind, DeliveryState: r.DeliveryState, Revision: r.Revision, CreatedAt: r.CreatedAt}
 		if r.FromTask != "" {
-			id := domain.WorkflowTaskID(r.FromTask)
+			id := r.FromTask
 			v.TaskID = &id
 		}
 		if r.ToTask != nil && *r.ToTask != "" {

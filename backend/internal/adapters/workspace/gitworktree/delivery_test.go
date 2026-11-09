@@ -27,9 +27,13 @@ func TestM4SnapshotPreservesIndexAndBindsOutsideChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := deliveryTestGit(t, repo.WorktreePath, "ls-files", "--stage", "-z")
-	bound, artifact, err := InspectDelivery(context.Background(), repo, t.TempDir())
+	scratch := t.TempDir()
+	bound, artifact, err := InspectDelivery(context.Background(), repo, scratch)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+		t.Fatalf("private index cleanup: entries=%v err=%v", entries, err)
 	}
 	if len(artifact.Files) != 2 || bound.GitCommonDir == "" || artifact.HeadSHA != repo.BaseSHA {
 		t.Fatalf("unexpected snapshot: %+v", artifact)

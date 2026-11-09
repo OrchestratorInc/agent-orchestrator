@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // Store is the narrow persistence surface required by Workflow use cases.
@@ -44,6 +45,7 @@ type Store interface {
 
 // Deps contains injectable clock, identity, graph-bound, and lease settings.
 type Deps struct {
+	Profiles      ports.ProviderProfiles
 	Store         Store
 	Admission     ports.WorkflowAdmissionProvider
 	Clock         func() time.Time
@@ -56,6 +58,7 @@ type Deps struct {
 // Service owns Workflow validation and lifecycle orchestration. It never
 // launches an Agent, invokes a provider, or runs Git commands.
 type Service struct {
+	profiles      ports.ProviderProfiles
 	store         Store
 	admission     ports.WorkflowAdmissionProvider
 	clock         func() time.Time
@@ -78,7 +81,8 @@ func New(deps Deps) *Service {
 		deps.NewLeaseToken = randomLeaseToken
 	}
 	return &Service{
-		store: deps.Store, admission: deps.Admission, clock: deps.Clock, newID: deps.NewID,
+		profiles: deps.Profiles,
+		store:    deps.Store, admission: deps.Admission, clock: deps.Clock, newID: deps.NewID,
 		newLeaseToken: deps.NewLeaseToken, graphLimits: deps.GraphLimits,
 		leaseDuration: deps.LeaseDuration,
 	}
@@ -248,8 +252,8 @@ func (s *Service) Create(ctx context.Context, idempotencyKey string, input Creat
 		if task.AgentHarness != "" && !task.AgentHarness.IsKnown() {
 			return domain.Workflow{}, false, apierr.Invalid("INVALID_WORKFLOW_HARNESS", "A task references an unknown Agent harness", nil)
 		}
-		if task.Profile != "" {
-			return domain.Workflow{}, false, apierr.Invalid("WORKFLOW_PROFILE_UNSUPPORTED", "当前 Adapter 没有可验证的 profile 引用，不能静默忽略", map[string]any{"taskId": task.ID, "field": "profile"})
+		if err := providerprofile.Validate(ctx, s.profiles, task.Profile, task.AgentHarness, task.Model, task.Effort); err != nil {
+			return domain.Workflow{}, false, err
 		}
 		if len(task.Model) > 256 || len(task.Effort) > 32 || strings.ContainsAny(task.Model+task.Effort, "\r\n\x00") || (task.Effort != "" && task.Model == "") {
 			return domain.Workflow{}, false, apierr.Invalid("INVALID_WORKFLOW_MODEL", "模型或 effort 无效", map[string]any{"taskId": task.ID, "field": "model"})
@@ -576,6 +580,9 @@ func (s *Service) Claim(ctx context.Context, input ClaimInput) (ClaimResult, boo
 	rec, _, replay, err := s.store.FindWorkflowClaimAdmission(ctx, input.WorkflowID, input.IdempotencyKey, fingerprint)
 	created := false
 	if err == nil && !replay {
+		if err := providerprofile.Validate(ctx, s.profiles, task.Profile, task.AgentHarness, task.Model, task.Effort); err != nil {
+			return ClaimResult{}, false, err
+		}
 		if s.admission == nil {
 			return ClaimResult{}, false, apierr.Conflict("WORKFLOW_ADMISSION_REQUIRED", "Trusted admission evidence is required", nil)
 		}

@@ -1958,6 +1958,11 @@ type AgentModelsRefreshQuery struct {
 // AgentModelsResponse is the normalized model picker for one agent.
 type AgentModelsResponse = ports.AgentModelCatalog
 
+// WorkflowProviderProfilesResponse 只包含宿主允许选择的非敏感供应商引用。
+type WorkflowProviderProfilesResponse struct {
+	Profiles []ports.ProviderProfileChoice `json:"profiles"`
+}
+
 // AgentModelInfo is one selectable model or agent-owned mode.
 type AgentModelInfo = ports.AgentModelInfo
 
@@ -4656,11 +4661,13 @@ type OperatorChangeRequest struct {
 	Reason           string `json:"reason" minLength:"1" maxLength:"80"`
 }
 
+// RecoverExpiredWorkflowsRequest 绑定人工恢复扫描的幂等键和原因。
 type RecoverExpiredWorkflowsRequest struct {
 	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
 	Reason         string `json:"reason,omitempty" maxLength:"80"`
 }
 
+// SchedulerPolicyResponse 返回资源策略及其 CAS 版本。
 type SchedulerPolicyResponse struct {
 	ID                string `json:"id"`
 	Scope             string `json:"scope" enum:"global,adapter"`
@@ -4675,6 +4682,7 @@ type SchedulerPolicyResponse struct {
 	Revision          int64  `json:"revision"`
 }
 
+// PutSchedulerPolicyRequest 提交资源限额和预期版本，供服务端校验。
 type PutSchedulerPolicyRequest struct {
 	OperatorChangeRequest
 	Harness           string `json:"harness,omitempty" description:"Empty selects the global policy; otherwise the exact adapter harness."`
@@ -4687,6 +4695,7 @@ type PutSchedulerPolicyRequest struct {
 	RAMFloorBytes     int64  `json:"ramFloorBytes"`
 }
 
+// SchedulerPolicyEnvelope 包装已保存的资源策略。
 type SchedulerPolicyEnvelope struct {
 	Policy  SchedulerPolicyResponse `json:"policy"`
 	Applied bool                    `json:"applied"`
@@ -4708,6 +4717,7 @@ type SchedulerStatusResponse struct {
 	Policies         []SchedulerPolicyResponse `json:"policies"`
 }
 
+// WorkflowSchedulerResponse 返回工作流调度开关及版本。
 type WorkflowSchedulerResponse struct {
 	WorkflowID      string `json:"workflowId"`
 	Paused          bool   `json:"paused"`
@@ -4717,6 +4727,7 @@ type WorkflowSchedulerResponse struct {
 	Weight          int64  `json:"weight"`
 }
 
+// SchedulerDecisionResponse 描述一次准入决定及机器原因码。
 type SchedulerDecisionResponse struct {
 	ID              int64            `json:"id"`
 	AdmissionID     string           `json:"admissionId"`
@@ -4728,9 +4739,12 @@ type SchedulerDecisionResponse struct {
 	CreatedAt       time.Time        `json:"createdAt"`
 }
 
+// SchedulerDecisionsResponse 返回有界的调度决定列表。
 type SchedulerDecisionsResponse struct {
 	Decisions []SchedulerDecisionResponse `json:"decisions"`
 }
+
+// SchedulerDecisionsQuery 限定调度审计查询范围。
 type SchedulerDecisionsQuery struct {
 	After int64 `query:"after" minimum:"0"`
 	Limit int64 `query:"limit" minimum:"1" maximum:"500"`
@@ -4749,6 +4763,7 @@ type PutBudgetPolicyRequest struct {
 	ReservationRef   string `json:"reservationRef,omitempty"`
 }
 
+// BudgetPolicyResponse 返回以 nano-USD 表示的预算及预留依据。
 type BudgetPolicyResponse struct {
 	ID               string `json:"id"`
 	Scope            string `json:"scope" enum:"global,workflow,task"`
@@ -4763,11 +4778,13 @@ type BudgetPolicyResponse struct {
 	Revision         int64  `json:"revision"`
 }
 
+// BudgetPolicyEnvelope 包装预算策略。
 type BudgetPolicyEnvelope struct {
 	Policy  BudgetPolicyResponse `json:"policy"`
 	Applied bool                 `json:"applied"`
 }
 
+// BudgetTokenMetricsResponse 保留各类 Token 的可空计量，未知不填零。
 type BudgetTokenMetricsResponse struct {
 	InputTokens         *int64 `json:"inputTokens"`
 	CachedInputTokens   *int64 `json:"cachedInputTokens"`
@@ -4790,11 +4807,13 @@ type BudgetSnapshotResponse struct {
 	ReconcilePending bool                       `json:"reconcilePending"`
 }
 
+// BudgetSnapshotsResponse 返回各预算作用域的账本投影。
 type BudgetSnapshotsResponse struct {
 	Policies  []BudgetPolicyResponse   `json:"policies"`
 	Snapshots []BudgetSnapshotResponse `json:"snapshots"`
 }
 
+// MaterializeTaskRequestRequest 绑定物化请求的预期版本和幂等键。
 type MaterializeTaskRequestRequest struct {
 	RequestSHA               string `json:"requestSha" minLength:"64" maxLength:"64"`
 	ExpectedRequestRevision  int64  `json:"expectedRequestRevision" minimum:"1"`
@@ -4803,6 +4822,7 @@ type MaterializeTaskRequestRequest struct {
 	Reason                   string `json:"reason" minLength:"1" maxLength:"80"`
 }
 
+// TaskRequestMaterializationResponse 返回资源请求与已创建任务的持久化关联。
 type TaskRequestMaterializationResponse struct {
 	RequestID        string    `json:"requestId"`
 	WorkflowID       string    `json:"workflowId"`
@@ -4811,47 +4831,66 @@ type TaskRequestMaterializationResponse struct {
 	CreatedAt        time.Time `json:"createdAt"`
 }
 
+// MaterializeTaskRequestResponse 区分首次物化与幂等重放。
 type MaterializeTaskRequestResponse struct {
 	Materialization TaskRequestMaterializationResponse `json:"materialization"`
 	Created         bool                               `json:"created"`
 }
 
-// 质量 API 仅选择服务端策略/工件 ID，绝不接受自报工具、环境、仓库路径或执行任期。
+// QualityPolicyRequest 仅选择服务端策略 ID，不接受工具、环境、仓库路径或执行任期。
 type QualityPolicyRequest struct {
 	PolicyID         string `json:"policyId"`
 	ExpectedRevision int64  `json:"expectedRevision"`
 }
+
+// QualitySnapshotRequest 绑定待快照的工件版本。
 type QualitySnapshotRequest struct {
 	ArtifactRevision int64 `json:"artifactRevision"`
 }
+
+// QualityActionRequest 绑定质量操作的幂等键和工件版本。
 type QualityActionRequest struct {
 	IdempotencyKey   string `json:"idempotencyKey"`
 	ArtifactRevision int64  `json:"artifactRevision,omitempty"`
 }
+
+// QualityReviewFinishRequest 以预期版本提交评审结论和发现。
 type QualityReviewFinishRequest struct {
 	ExpectedRevision int64                   `json:"expectedRevision"`
 	Verdict          domain.ReviewVerdict    `json:"verdict"`
 	Findings         []domain.QualityFinding `json:"findings"`
 }
+
+// QualityPreviewRequest 指定参与集成预览的服务端工件 ID。
 type QualityPreviewRequest struct {
 	IdempotencyKey string   `json:"idempotencyKey"`
 	ArtifactIDs    []string `json:"artifactIds"`
 }
+
+// QualityReconcileRequest 限定对账所依据的版本。
 type QualityReconcileRequest struct {
 	ExpectedRevision int64 `json:"expectedRevision"`
 }
+
+// QualityArtifactIDParam 将工件 ID 限定在所属工作流。
 type QualityArtifactIDParam struct {
 	WorkflowID string `path:"workflowId"`
 	ArtifactID string `path:"artifactId"`
 }
+
+// QualityReviewIDParam 将评审 ID 限定在所属工作流。
 type QualityReviewIDParam struct {
 	WorkflowID string `path:"workflowId"`
 	ReviewID   string `path:"reviewId"`
 }
+
+// IntegrationPlanIDParam 将集成计划 ID 限定在所属工作流。
 type IntegrationPlanIDParam struct {
 	WorkflowID string `path:"workflowId"`
 	PlanID     string `path:"planId"`
 }
+
+// IntegrationOperationIDParam 将集成操作 ID 限定在所属工作流。
 type IntegrationOperationIDParam struct {
 	WorkflowID  string `path:"workflowId"`
 	OperationID string `path:"operationId"`
@@ -4864,9 +4903,13 @@ type QualityPolicyResponse struct {
 	Revision       int64  `json:"revision"`
 	Digest         string `json:"digest"`
 }
+
+// QualityPoliciesResponse 返回可选择的服务端质量策略。
 type QualityPoliciesResponse struct {
 	Policies []QualityPolicyResponse `json:"policies"`
 }
+
+// QualityArtifactsResponse 返回工作流工件快照。
 type QualityArtifactsResponse struct {
 	Artifacts []domain.ArtifactSnapshot `json:"artifacts"`
 }
@@ -4882,6 +4925,8 @@ type QualityGateResultResponse struct {
 	StartedAt  time.Time `json:"startedAt"`
 	FinishedAt time.Time `json:"finishedAt"`
 }
+
+// QualityGateResponse 返回门禁证据、有效期及逐规则结果。
 type QualityGateResponse struct {
 	ID                  string                      `json:"id"`
 	ArtifactID          string                      `json:"artifactId"`
@@ -4894,16 +4939,24 @@ type QualityGateResponse struct {
 	ExpiresAt           time.Time                   `json:"expiresAt"`
 	Results             []QualityGateResultResponse `json:"results"`
 }
+
+// QualityReviewResponse 包装持久化评审。
 type QualityReviewResponse struct {
 	Review domain.QualityReview `json:"review"`
 }
+
+// QualityCommitResponse 包装已记录的任务提交。
 type QualityCommitResponse struct {
 	Commit domain.TaskCommit `json:"commit"`
 }
+
+// IntegrationPlanResponse 返回集成计划及逐仓库预览。
 type IntegrationPlanResponse struct {
 	Plan         domain.IntegrationPlan          `json:"plan"`
 	Repositories []domain.IntegrationRepoPreview `json:"repositories"`
 }
+
+// IntegrationOperationResponse 返回集成操作及逐仓库执行事实。
 type IntegrationOperationResponse struct {
 	Operation    domain.IntegrationOperation       `json:"operation"`
 	Repositories []domain.IntegrationRepoOperation `json:"repositories"`
@@ -4920,6 +4973,8 @@ type WorkflowQualitySummaryResponse struct {
 	Integrations  []domain.IntegrationPlan      `json:"integrations"`
 	Operations    []domain.IntegrationOperation `json:"operations"`
 }
+
+// WorkflowCoordinationResponse 汇集协作、质量、调度和预算的只读投影。
 type WorkflowCoordinationResponse struct {
 	Coordination domain.CoordinationSummaryView `json:"coordination"`
 	Quality      WorkflowQualitySummaryResponse `json:"quality"`

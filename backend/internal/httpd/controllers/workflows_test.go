@@ -385,7 +385,7 @@ func TestWorkflowsListPagination(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("full page status = %d", status)
 	}
-	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
+	body, _, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
 	mustJSON(t, body, &page)
 	if page.NextCursor != "MQ" {
 		t.Fatalf("nextCursor = %q, want %q (base64 of 1)", page.NextCursor, "MQ")

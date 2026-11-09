@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -20,7 +21,8 @@ func TestACPPromptJournalReplaysResetsAndEnforcesQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows Chmod 只控制只读位；Unix mode 断言不代表 Windows ACL 验证。
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal permissions = %v", info.Mode().Perm())
 	}
 	var spans []acpJournalSpan

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -1178,14 +1179,14 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	// Stage all tracked and non-ignored untracked files into the temp index.
 	// GIT_INDEX_FILE overrides the index so the real index is never touched.
 	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
-	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+	addCmd.Env = processenv.Merge(map[string]string{"GIT_INDEX_FILE": tmpIdxPath})
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
 	}
 
 	// Write the staged tree to get a tree SHA.
 	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, writeTreeArgs(path)...)
-	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
+	writeTreeCmd.Env = processenv.Merge(map[string]string{"GIT_INDEX_FILE": tmpIdxPath})
 	treeOut, err := writeTreeCmd.CombinedOutput()
 	if err != nil {
 		return "", commandError{args: append([]string{w.binary}, writeTreeArgs(path)...), output: string(treeOut), err: err}
@@ -1457,6 +1458,7 @@ func parseObservedWorkspaceCommits(output string) []ports.WorkspaceCommit {
 func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitSHA string) error {
 	args := cherryPickNoCommitArgs(worktree, commitSHA)
 	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	cmd.Env = processenv.Merge(nil)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return commandError{args: append([]string{w.binary}, args...), output: string(out), err: err}
@@ -2316,6 +2318,7 @@ func (w *Workspace) enableWorktreeConfig(ctx context.Context, repo string) error
 	}
 	args := []string{"-C", repo, "config", "extensions.worktreeConfig", "true"}
 	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
+	cmd.Env = processenv.Merge(nil)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gitworktree: enable per-worktree config: %w", commandError{
 			args: append([]string{w.binary}, args...), output: string(out), err: err,
@@ -2568,9 +2571,10 @@ func movePathAside(path, suffix string) (string, error) {
 	return "", fmt.Errorf("gitworktree: move path %q aside: no available destination", path)
 }
 
+// runCommand 在 Git 和仓库可影响的子进程启动前清除宿主平台凭据，保留原生认证与语言环境。
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = processenv.Merge(nil)
 	if readsGitMessages(args) {
 		cmd.Env = untranslatedGitEnv(cmd.Env)
 	}

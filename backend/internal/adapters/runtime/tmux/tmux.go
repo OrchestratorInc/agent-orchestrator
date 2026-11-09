@@ -229,7 +229,7 @@ type execRunner struct{}
 // Run 在稳定目录执行 tmux，并在最终环境合并后清除内部租约。
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
-	cmd.Env = processenv.StripWorkflowLease(append(os.Environ(), env...))
+	cmd.Env = processenv.StripWorkflowSecrets(append(os.Environ(), env...))
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which
 	// inherits ITS launching process's cwd and keeps it for the server's entire
@@ -1119,7 +1119,7 @@ func attachEnv(base []string) []string {
 	if !hasColorTerm {
 		env = append(env, "COLORTERM=truecolor")
 	}
-	return processenv.StripWorkflowLease(env)
+	return processenv.StripWorkflowSecrets(env)
 }
 
 // run wraps runner.Run with a per-call timeout context.
@@ -1680,7 +1680,7 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	for _, key := range sortedKeys(cfg.Env) {
 		configured = append(configured, key+"="+cfg.Env[key])
 	}
-	for _, entry := range processenv.StripWorkflowLease(configured) {
+	for _, entry := range processenv.StripWorkflowSecrets(configured) {
 		key, value, _ := strings.Cut(entry, "=")
 		if key == "PATH" || key == "COLORTERM" {
 			continue

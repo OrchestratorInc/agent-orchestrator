@@ -145,7 +145,7 @@ func TestM3AdmissionFenceRecoveryAndUnknownResources(t *testing.T) {
 	if _, _, _, err := s.ReserveAndClaim(ctx, in); !errors.Is(err, domain.ErrSchedulerFence) {
 		t.Fatalf("unrecovered: %v", err)
 	}
-	l, _, err = s.CompleteSchedulerRecovery(ctx, l.Fence, l.Revision, in.Evidence.Now)
+	_, _, err = s.CompleteSchedulerRecovery(ctx, l.Fence, l.Revision, in.Evidence.Now)
 	if err != nil {
 		t.Fatal(err)
 	}

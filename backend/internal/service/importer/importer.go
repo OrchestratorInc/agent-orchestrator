@@ -146,12 +146,15 @@ type Deps struct {
 	Store Store
 	// Root overrides the legacy AO root to read. Empty -> the default.
 	Root string
+	// DataDir 是 daemon 已解析的绝对状态目录，不能在 chdir 后重新解释环境变量。
+	DataDir string
 }
 
 // Manager implements Service over the daemon's store.
 type Manager struct {
-	store Store
-	root  string
+	store   Store
+	root    string
+	dataDir string
 }
 
 var _ Service = (*Manager)(nil)
@@ -162,7 +165,7 @@ func New(deps Deps) *Manager {
 	if root == "" {
 		root = legacyimport.DefaultLegacyRootDir()
 	}
-	return &Manager{store: deps.Store, root: root}
+	return &Manager{store: deps.Store, root: root, dataDir: deps.DataDir}
 }
 
 // Status reports availability only: legacy data present at the root. It never
@@ -188,7 +191,7 @@ func (m *Manager) Validate(ctx context.Context, in ImportValidationInput) (Impor
 	if normalizeErr != nil {
 		return invalidImportResult(importKind, strings.TrimSpace(in.Path), "INVALID_PATH"), nil //nolint:nilerr // validation failures are reported in-band so the UI can show blocking errors
 	}
-	if unsafeImportPath(path) {
+	if m.unsafeImportPath(path) {
 		return invalidImportResult(importKind, path, "IMPORT_PATH_UNSAFE"), nil
 	}
 	result := ImportValidationResult{
@@ -306,7 +309,7 @@ func (m *Manager) PrepareGit(ctx context.Context, in GitPreparationInput) (GitPr
 	}
 	if in.Stepwise {
 		for _, target := range targets {
-			if err := validatePreparationTarget(target); err != nil {
+			if err := m.validatePreparationTarget(target); err != nil {
 				return GitPreparationResult{}, err
 			}
 		}
@@ -315,7 +318,7 @@ func (m *Manager) PrepareGit(ctx context.Context, in GitPreparationInput) (GitPr
 preparation:
 	for _, target := range targets {
 		if !in.Stepwise {
-			if err := validatePreparationTarget(target); err != nil {
+			if err := m.validatePreparationTarget(target); err != nil {
 				return GitPreparationResult{}, err
 			}
 		}
@@ -350,8 +353,9 @@ preparation:
 	return GitPreparationResult{Events: events, Validation: latest}, nil
 }
 
-func validatePreparationTarget(target gitPreparationTarget) error {
-	if unsafeImportPath(target.Status.RepoPath) {
+// validatePreparationTarget 在每个 Git 副作用前复核 AO 状态边界与明确批准的操作。
+func (m *Manager) validatePreparationTarget(target gitPreparationTarget) error {
+	if m.unsafeImportPath(target.Status.RepoPath) {
 		return apierr.Invalid("IMPORT_PATH_UNSAFE", "Selected folder is too broad for automatic Git setup.", map[string]any{"path": target.Status.RepoPath})
 	}
 	required := actionSet(target.Status.RequiredActions)
@@ -659,10 +663,20 @@ func normalizeImportPath(raw string) (string, error) {
 // unsafeImportPath protects broad user and AO-owned directories from the Git
 // preparation actions below. Import preparation is deliberately separate from
 // project setup, so it cannot rely on the latter's path-safety guard.
-func unsafeImportPath(path string) bool {
+func (m *Manager) unsafeImportPath(path string) bool {
 	clean := comparableImportPath(path)
 	if filepath.Dir(clean) == clean {
 		return true
+	}
+	if m.dataDir != "" {
+		if !filepath.IsAbs(m.dataDir) {
+			return true
+		}
+		state := comparableImportPath(m.dataDir)
+		// 导入父目录也会让 git add 遍历状态文件，因此同样拒绝。
+		if sameImportPath(clean, state) || isImportDescendant(clean, state) || isImportDescendant(state, clean) {
+			return true
+		}
 	}
 
 	home, err := os.UserHomeDir()

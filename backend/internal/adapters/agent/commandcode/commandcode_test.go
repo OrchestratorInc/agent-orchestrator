@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -334,9 +335,13 @@ func TestUninstallHooksRemovesOnlyAOHooks(t *testing.T) {
 	}
 }
 
+// TestResolveBinaryFindsCommandCodeOnPath 使用平台可识别的假程序名，仅验证定位，不执行程序。
 func TestResolveBinaryFindsCommandCodeOnPath(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "command-code")
+	if runtime.GOOS == "windows" {
+		binPath += ".cmd"
+	}
 	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}

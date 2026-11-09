@@ -82,8 +82,9 @@ type Options struct {
 
 // Runtime is the conpty runtime adapter.
 type Runtime struct {
-	spawner        hostSpawner
-	killHost       func(string) error
+	spawner  hostSpawner
+	killHost func(string) error
+	// pidIsAlive 在 Windows 查询失败时保守保留占位；不能据此报告已确认存活。
 	pidIsAlive     func(int) bool
 	processFinder  func(int) (processKiller, error)
 	registerHost   func(context.Context, ptyregistry.Entry) error
@@ -301,7 +302,7 @@ func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error
 		}
 	}
 	if !exited {
-		return errors.Join(gracefulErr, forceErr, fmt.Errorf("conpty: pty-host pid %d is still alive after teardown", sess.pid))
+		return errors.Join(gracefulErr, forceErr, fmt.Errorf("conpty: pty-host pid %d exit was not confirmed after teardown", sess.pid))
 	}
 
 	if err := r.unregisterHost(ctx, handle.ID); err != nil {

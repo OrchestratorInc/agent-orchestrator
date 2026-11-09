@@ -177,13 +177,7 @@ func TestCodexAccountCatalogCommitsStrictPrivateOpaqueSlot(t *testing.T) {
 		filepath.Join(accountDir, codexAccountDescriptorFilename):                        0o600,
 		filepath.Join(accountDir, codexCredentialHomeDirectory, codexCredentialFilename): 0o600,
 	} {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != want {
-			t.Errorf("%s mode = %o, want %o", path, got, want)
-		}
+		assertPrivatePath(t, path, want == 0o700)
 	}
 	data, err := os.ReadFile(filepath.Join(accountDir, codexAccountDescriptorFilename))
 	if err != nil {

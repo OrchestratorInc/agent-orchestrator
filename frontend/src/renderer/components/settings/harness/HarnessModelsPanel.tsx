@@ -12,6 +12,7 @@ import { collapseModelVariants, listsModelVariants } from "../../../lib/model-va
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { Switch } from "../../ui/switch";
+import { shouldShowModelID } from "../AgentModelCombobox";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS, HarnessStatusDot } from "./harness-ui";
 
@@ -25,7 +26,7 @@ export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
 ]);
 
-/** The harness catalog, browsed by provider. */
+/** 按供应商浏览模型目录，重名模型显示 ID，开关仍按原始 ID 保存。 */
 export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
 	hostId?: string;
@@ -194,6 +195,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 							{agentModelDisplayLabel(agentId, model.label)}
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-caption text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
+						{shouldShowModelID(model, providerModels, "") ? <span className="mt-1 block break-all text-xs text-settings-muted">{model.id}</span> : null}
 						{/* Only facts the harness reports; nothing is shown in place of a missing value. */}
 						{model.contextWindow ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
@@ -203,7 +205,9 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
 					</span> : null}
 					{isConcreteModelID(model.id) ? <Switch
-						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}
+						aria-label={t("settings.harness.models.toggleModel", { model: shouldShowModelID(model, providerModels, "")
+							? `${agentModelDisplayLabel(agentId, model.label)} (${model.id})`
+							: agentModelDisplayLabel(agentId, model.label) })}
 						checked={idsOf(model.id).some(isModelEnabled)}
 						disabled={idsOf(model.id).some(isModelEnabled) && enabledCount <= idsOf(model.id).filter(isModelEnabled).length}
 						onCheckedChange={(on) => setModelsEnabled(idsOf(model.id), on)}

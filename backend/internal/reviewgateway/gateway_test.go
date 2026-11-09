@@ -28,29 +28,23 @@ func testManifest(t *testing.T) Manifest {
 }
 
 func TestPrepareEnvironmentUsesPrivateAOOwnedDirectoriesAndImmutableManifest(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := privatePathTestRoot(t)
 	manifest := testManifest(t)
 	env, err := PrepareEnvironment(dataDir, manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
+	for _, path := range []string{filepath.Dir(env.Root), env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
 		rel, err := filepath.Rel(dataDir, path)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			t.Fatalf("path %q is outside data dir %q", path, dataDir)
 		}
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0o700 {
-			t.Fatalf("directory %q mode = %v, err = %v", path, info.Mode().Perm(), err)
-		}
+		assertPrivatePath(t, path, true)
 	}
 	if got := env.TUIEnvironment(); got["HOME"] != env.ConfigRoot || got["TMPDIR"] != env.TempRoot || got["XDG_CACHE_HOME"] != env.CacheRoot {
 		t.Fatalf("TUI environment = %#v", got)
 	}
-	info, err := os.Stat(env.ManifestPath)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("manifest mode = %v, err = %v", info.Mode().Perm(), err)
-	}
+	assertPrivatePath(t, env.ManifestPath, false)
 
 	again, err := PrepareEnvironment(dataDir, manifest)
 	if err != nil || again.ManifestPath != env.ManifestPath {
@@ -64,20 +58,18 @@ func TestPrepareEnvironmentUsesPrivateAOOwnedDirectoriesAndImmutableManifest(t *
 }
 
 func TestPrepareHostTrustedEnvironmentUsesPrivateAOOwnedDirectories(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := privatePathTestRoot(t)
 	env, err := PrepareHostTrustedEnvironment(dataDir, "review-worker-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
+	for _, path := range []string{filepath.Dir(env.Root), env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
 		rel, relErr := filepath.Rel(dataDir, path)
-		info, statErr := os.Stat(path)
+		_, statErr := os.Stat(path)
 		if relErr != nil || strings.HasPrefix(rel, "..") || statErr != nil {
 			t.Fatalf("private AO-owned directory %q: rel=%q relErr=%v statErr=%v", path, rel, relErr, statErr)
 		}
-		if info.Mode().Perm() != 0o700 {
-			t.Fatalf("private AO-owned directory %q mode = %v", path, info.Mode().Perm())
-		}
+		assertPrivatePath(t, path, true)
 	}
 	got := env.TUIEnvironment()
 	if got["HOME"] != env.ConfigRoot || got["XDG_STATE_HOME"] != env.StateRoot || got["TMPDIR"] != env.TempRoot {

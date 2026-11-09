@@ -28,8 +28,8 @@ func TestM3SchedulerMigrationRoundTrip(t *testing.T) {
 	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
 		t.Fatalf("integrity=%s err=%v", integrity, err)
 	}
-	var cap int
-	if err := db.QueryRow(`SELECT max_concurrent FROM scheduler_policies WHERE id='global'`).Scan(&cap); err != nil || cap != 3 {
-		t.Fatalf("usable default after reapply=%d err=%v", cap, err)
+	var limit int
+	if err := db.QueryRow(`SELECT max_concurrent FROM scheduler_policies WHERE id='global'`).Scan(&limit); err != nil || limit != 3 {
+		t.Fatalf("usable default after reapply=%d err=%v", limit, err)
 	}
 }

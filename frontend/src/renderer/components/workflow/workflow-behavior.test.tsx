@@ -9,7 +9,11 @@ import { registerOperatorIpc } from "../../../main/operator-ipc";
 const transport = vi.hoisted(() => ({ base: "http://127.0.0.1:5100", run: vi.fn(), read: vi.fn(), authorize: vi.fn() }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { operator: { runVerb: transport.run, readWorkflow: transport.read, authorizeWorkflow: transport.authorize } } }));
 vi.mock("../../lib/api-client", () => ({ apiClient: {}, getApiBaseUrl: () => transport.base, subscribeApiBaseUrl: () => () => undefined, apiErrorMessage: (e: { message?: string }) => e.message || "失败", apiErrorRequestId: () => undefined }));
-vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string, fallback?: string) => fallback || key }) }));
+vi.mock("react-i18next", async () => {
+	const { createFullAppI18n } = await import("../../i18n/all-messages");
+	const i18n = createFullAppI18n("zh-CN");
+	return { useTranslation: () => ({ t: i18n.t.bind(i18n) }) };
+});
 
 import { WorkflowAction } from "./WorkflowAction";
 import { currentArtifactGate } from "./WorkflowQualityPanel";
@@ -36,10 +40,10 @@ afterEach(cleanup);
 // 删除 Task 选择值的范围隔离后，同名任务会回显其他策略并送往错误的审批目标。
 it("同名 Task 与全局、Workflow 预算独立回显并经真实 IPC 审批正确目标", async () => {
 	const targets = [
-		{ label: "task: global", scope: "task", scopeId: "global", path: "/api/v1/workflows/wf/tasks/global/budget", limit: 3, mode: "hard_admission", revision: 7 },
-		{ label: "task: workflow", scope: "task", scopeId: "workflow", path: "/api/v1/workflows/wf/tasks/workflow/budget", limit: 4, mode: "soft", revision: 8 },
-		{ label: "global", scope: "global", scopeId: "", path: "/api/v1/scheduler/budget", limit: 1, mode: "observe", revision: 5 },
-		{ label: "workflow", scope: "workflow", scopeId: "wf", path: "/api/v1/workflows/wf/budget", limit: 2, mode: "soft", revision: 6 },
+		{ label: "任务：global", scope: "task", scopeId: "global", path: "/api/v1/workflows/wf/tasks/global/budget", limit: 3, mode: "hard_admission", revision: 7 },
+		{ label: "任务：workflow", scope: "task", scopeId: "workflow", path: "/api/v1/workflows/wf/tasks/workflow/budget", limit: 4, mode: "soft", revision: 8 },
+		{ label: "全局", scope: "global", scopeId: "", path: "/api/v1/scheduler/budget", limit: 1, mode: "observe", revision: 5 },
+		{ label: "工作流", scope: "workflow", scopeId: "wf", path: "/api/v1/workflows/wf/budget", limit: 2, mode: "soft", revision: 6 },
 	] as const;
 	const data: components["schemas"]["WorkflowCoordinationResponse"] = { budget: { snapshots: [], policies: targets.map(target => ({
 		id: `policy-${target.limit}`, scope: target.scope, scopeId: target.scopeId, period: "lifetime", currency: "USD",

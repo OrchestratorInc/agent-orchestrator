@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// ErrBudgetPolicy 表示预算策略字段或版本不能用于准入。
 var (
 	ErrBudgetPolicy   = errors.New("invalid or stale budget policy")
 	ErrBudgetUnknown  = errors.New("budget cost or reservation is unknown")
@@ -13,6 +14,7 @@ var (
 	ErrBudgetOverflow = errors.New("budget arithmetic overflow")
 )
 
+// BudgetObserve 只记录预算；同组常量定义强制级别、窗口和预留来源。
 const (
 	BudgetObserve               = "observe"
 	BudgetSoft                  = "soft"
@@ -49,7 +51,7 @@ func (p BudgetPolicy) Validate() error {
 	if (p.Scope == "global") != (p.ScopeID == "") {
 		return ErrBudgetPolicy
 	}
-	if p.Period != BudgetLifetime && !(p.Scope == "global" && p.Period == BudgetMonthlyUTC) {
+	if p.Period != BudgetLifetime && (p.Scope != "global" || p.Period != BudgetMonthlyUTC) {
 		return ErrBudgetPolicy
 	}
 	if p.ReservationNanos != nil && (*p.ReservationNanos < 0 || !ValidReservationBasis(p.ReservationBasis, p.ReservationRef)) {

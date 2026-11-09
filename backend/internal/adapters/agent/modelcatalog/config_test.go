@@ -49,6 +49,7 @@ func TestParseAutoHandModelsUsesConfiguredProviderModel(t *testing.T) {
 func TestAutoHandDiscoveryReadsConfigurationWithoutRunningBinary(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	path := filepath.Join(home, ".autohand", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -70,6 +71,7 @@ func TestQwenConfigDiscoveryUsesQwenHome(t *testing.T) {
 	home := t.TempDir()
 	qwenHome := filepath.Join(home, "custom-qwen")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("QWEN_HOME", qwenHome)
 	if err := os.MkdirAll(qwenHome, 0o755); err != nil {
 		t.Fatal(err)
@@ -93,6 +95,7 @@ func TestQwenSharedCatalogMarksConfiguredProviders(t *testing.T) {
 	home := t.TempDir()
 	qwenHome := filepath.Join(home, ".qwen")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("QWEN_HOME", "")
 	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "ZAI_API_KEY"} {
 		t.Setenv(name, "")
@@ -303,6 +306,7 @@ func TestParseClineModelsUsesConfiguredProviderSelections(t *testing.T) {
 func TestConfigCatalogDiscoveryAndFingerprint(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	path := filepath.Join(home, ".continue", "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

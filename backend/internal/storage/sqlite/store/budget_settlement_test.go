@@ -31,7 +31,7 @@ func TestM3BudgetDescendantSettlementWaitsForFinalizedUsage(t *testing.T) {
 	mustNoError(t, err)
 	claimed, _, err := svc.Claim(ctx, workflow.ClaimInput{WorkflowID: child.WorkflowID, TaskID: child.TaskID, ExpectedRevision: task.Revision, WorkerID: "test-worker", IdempotencyKey: "claim-ledger-child"})
 	mustNoError(t, err)
-	permit := func() context.Context { return sqlitetest.ExecutionContext(t, ctx, s, claimed.Attempt.ID, now) }
+	permit := func() context.Context { return sqlitetest.ExecutionContext(ctx, t, s, claimed.Attempt.ID, now) }
 	binding, _, err := s.CreateWorkflowAttemptBinding(permit(), domain.WorkflowAttemptBinding{
 		AttemptID: claimed.Attempt.ID, WorkflowID: child.WorkflowID, TaskID: child.TaskID,
 		SpawnRequestID: "ledger-child-session", SpawnHash: strings.Repeat("e", 64),

@@ -9,12 +9,16 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // SwitchTUIProvider replaces one terminal provider with another in the same AO
 // session and terminal. The target starts a fresh native thread seeded with the
 // handoff note: native histories cannot be merged across harnesses.
 func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+	if err := providerprofile.RefuseNativeTransition(ctx, m.store, id); err != nil {
+		return err
+	}
 	target := request.TargetHarness
 	if err := m.beginAgentOperation(ctx, id, agentOperationProviderSwitch); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {

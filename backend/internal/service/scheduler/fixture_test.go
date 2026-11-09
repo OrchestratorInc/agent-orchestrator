@@ -138,10 +138,10 @@ func (f *fixture) create(count int, harness domain.AgentHarness) domain.Workflow
 }
 
 // policy 用真实策略 CAS 显式调整测试容量。
-func (f *fixture) policy(h domain.AgentHarness, max int64) {
+func (f *fixture) policy(h domain.AgentHarness, limit int64) {
 	f.t.Helper()
 	p := domain.DefaultSchedulerPolicy(h)
-	p.MaxConcurrent = max
+	p.MaxConcurrent = limit
 	if _, ok, err := f.store.PutSchedulerPolicy(context.Background(), p, p.Revision, f.change(p.ID)); err != nil || !ok {
 		f.t.Fatalf("policy: %v %v", ok, err)
 	}

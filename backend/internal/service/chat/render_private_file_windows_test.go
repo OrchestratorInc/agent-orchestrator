@@ -17,12 +17,8 @@ import (
 // 已被替换的文件来验证权限。
 func assertPrivateRenderHandle(t *testing.T, file *os.File) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +76,8 @@ func assertPrivateRenderHandle(t *testing.T, file *os.File) {
 // allowInheritedRenderReads 给临时父目录设置 Everyone 的可继承读取权限。
 func allowInheritedRenderReads(t *testing.T, dir string) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}

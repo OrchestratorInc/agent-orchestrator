@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Merge overlays session-specific values on the daemon environment and returns
@@ -15,20 +17,21 @@ func Merge(overlay map[string]string) []string {
 	return merge(os.Environ(), overlay, runtime.GOOS == "windows")
 }
 
-// StripWorkflowLease 在最终进程边界移除旧内部租约及大小写别名。
+// StripWorkflowSecrets 在最终进程边界移除宿主平台凭据、旧租约及大小写别名。
 // 返回独立切片，避免修改调用方的环境；其他变量保持原值和顺序。
-func StripWorkflowLease(environ []string) []string {
+func StripWorkflowSecrets(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, entry := range environ {
 		key, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(key, "AO_WORKFLOW_LEASE") {
+		upper := strings.ToUpper(key)
+		if upper != "AO_WORKFLOW_LEASE" && upper != ports.ProviderProfileKeyEnv && !strings.HasPrefix(upper, ports.ProviderProfileCredentialPrefix) {
 			out = append(out, entry)
 		}
 	}
 	return out
 }
 
-// merge 按平台合并环境，最后清除禁止外发的旧租约，防止 overlay 再次注入。
+// merge 按平台合并环境，最后清除禁止外发的宿主秘密，防止 overlay 再次注入。
 func merge(environ []string, overlay map[string]string, caseInsensitive bool) []string {
 	merged := make(map[string]string, len(environ)+len(overlay))
 	for _, entry := range environ {
@@ -66,5 +69,5 @@ func merge(environ []string, overlay map[string]string, caseInsensitive bool) []
 		out = append(out, entry)
 	}
 	sort.Strings(out)
-	return StripWorkflowLease(out)
+	return StripWorkflowSecrets(out)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -88,7 +89,7 @@ func TestWorkspaceIntegrationCreateOrchestratorMovesOrphanedWorktreeAside(t *tes
 	if second.Path != first.Path || second.Branch != cfg.Branch {
 		t.Fatalf("second create = %#v, want path %q branch %q", second, first.Path, cfg.Branch)
 	}
-	if list := gitOutput(t, git, repo, "worktree", "list", "--porcelain"); !strings.Contains(list, "worktree "+second.Path+"\n") {
+	if list := gitOutput(t, git, repo, "worktree", "list", "--porcelain"); !strings.Contains(list, "worktree "+filepath.ToSlash(second.Path)+"\n") {
 		t.Fatalf("new orchestrator worktree not registered:\n%s", list)
 	}
 	if _, err := os.Stat(filepath.Join(second.Path, "uncommitted.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -210,7 +211,7 @@ func TestWorkspaceIntegrationCreateRefusesOccupiedPathAndLeavesItUntouched(t *te
 			if errors.Is(err, ports.ErrWorkspaceDirty) {
 				t.Fatalf("create error = %v, must not report a dirty rollback", err)
 			}
-			if !strings.Contains(err.Error(), path) {
+			if !strings.Contains(err.Error(), strconv.Quote(path)) {
 				t.Fatalf("create error = %v, want it to name %q", err, path)
 			}
 			if info != (ports.WorkspaceInfo{}) {
@@ -222,7 +223,7 @@ func TestWorkspaceIntegrationCreateRefusesOccupiedPathAndLeavesItUntouched(t *te
 			if aside := orphanedSiblings(t, path); len(aside) != 0 {
 				t.Fatalf("occupied path was moved aside to %v", aside)
 			}
-			if list := gitOutput(t, git, repo, "worktree", "list", "--porcelain"); strings.Contains(list, path) {
+			if list := gitOutput(t, git, repo, "worktree", "list", "--porcelain"); strings.Contains(list, "worktree "+filepath.ToSlash(path)+"\n") {
 				t.Fatalf("occupied path got registered:\n%s", list)
 			}
 		})

@@ -274,11 +274,6 @@ func newM2Env(t *testing.T, st *store.Store) *m2Env {
 	recorder := capability.NewRecorder(st)
 	resolver := capability.NewResolver(capability.WithRecorder(recorder), capability.WithClock(clock))
 
-	// The REAL probe, over scripted drivers and the real Chat service.
-	probe := capability.NewChatDriverProbe(
-		nil, registry, scriptedReadiness{}, clock, capability.DefaultTTL,
-	)
-
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:              st,
 		Reader:             m2SnapshotReader(st),
@@ -295,7 +290,7 @@ func newM2Env(t *testing.T, st *store.Store) *m2Env {
 
 	// The probe reads the live controller for session-scoped requests.
 	sessionProbe := chatControllerProbe{svc: chatSvc}
-	probe = capability.NewChatDriverProbe(
+	probe := capability.NewChatDriverProbe(
 		sessionProbe, registry, scriptedReadiness{}, clock, capability.DefaultTTL,
 	)
 	resolver.RegisterProbe(m2SteerHarness, probe)
@@ -439,7 +434,7 @@ func openM2Store(t *testing.T) *store.Store {
 	t.Helper()
 	st := sqlitetest.MustOpen(t)
 	if err := st.UpsertProject(context.Background(), domain.ProjectRecord{
-		ID: m2ProjectID, Path: t.TempDir(),
+		ID: m2ProjectID, Path: m2smGitRepo(t),
 		RegisteredAt: time.Now().UTC().Truncate(time.Second),
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
@@ -549,12 +544,12 @@ func (e *m2Env) createWorkflow(t *testing.T, key string) (domain.WorkflowID, map
 			{"id": "%s", "kind": "development", "title": "queue-only work", "agentHarness": "%s"}
 		],
 		"taskRepositories": [
-			{"taskId": "%s", "repoKey": "%s"},
-			{"taskId": "%s", "repoKey": "%s"}
+			{"taskId": "%s", "repoKey": "%s", "allowedPaths": ["%s/"]},
+			{"taskId": "%s", "repoKey": "%s", "allowedPaths": ["%s/"]}
 		]
 	}`, key, m2RepoKey, m2ProjectID,
 		steerTask, m2SteerHarness, queueTask, m2QueueHarness,
-		steerTask, m2RepoKey, queueTask, m2RepoKey)
+		steerTask, m2RepoKey, steerTask, queueTask, m2RepoKey, queueTask)
 
 	created := e.do(t, http.MethodPost, "/workflows", body)
 	if created.Status != http.StatusCreated {
@@ -673,12 +668,6 @@ func m2AwaitTurn(t *testing.T, svc *chatsvc.Service, id domain.SessionID) string
 	}
 	t.Fatalf("no provider turn became visible for %s", id)
 	return ""
-}
-
-// stopAllChat stops every controller the fixture started.
-func (e *m2Env) stopAllChat(t *testing.T) {
-	t.Helper()
-	e.chat.StopAll(context.Background())
 }
 
 // bindState reads one attempt's durable binding state straight from the store.

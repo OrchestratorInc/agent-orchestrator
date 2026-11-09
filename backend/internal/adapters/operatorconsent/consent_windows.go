@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -16,6 +15,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
@@ -41,7 +41,7 @@ func (Verifier) Verify(ctx context.Context, approval principal.Approval) error {
 	for i, code := range encoded {
 		binary.LittleEndian.PutUint16(script[i*2:], code)
 	}
-	command := exec.CommandContext(ctx, filepath.Join(powerShellHome, "powershell.exe"),
+	command := process.CommandContext(ctx, filepath.Join(powerShellHome, "powershell.exe"),
 		"-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", base64.StdEncoding.EncodeToString(script))
 	// 只隐藏控制台；HideWindow 会通过 STARTUPINFO 把第一个 WinForms 审批窗也隐藏。
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}

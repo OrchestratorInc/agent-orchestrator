@@ -8,14 +8,14 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // 删除唯一 Binding 归因或结算 generation 条件，会重复修订同一费用或用新执行的终止事实释放旧预算。
 func TestM3BudgetRestartsKeepOneEventAndFenceOldReservations(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	s, err := sqlite.Open(dir)
+	s, err := sqlitetest.Open(dir)
 	mustNoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	now := workflowStoreTime()

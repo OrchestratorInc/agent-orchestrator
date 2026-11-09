@@ -29,7 +29,7 @@ func TestCanHibernateRequiresAnEmptyBackgroundTerminalInventory(t *testing.T) {
 			} else {
 				srv.reply(method, tc.response)
 			}
-			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}

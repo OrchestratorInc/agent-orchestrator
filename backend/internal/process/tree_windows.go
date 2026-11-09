@@ -109,7 +109,7 @@ func captureTreeRoot(ctx context.Context, process *os.Process) (*windowsTreeProc
 		}
 		if probe == 0 {
 			var err error
-			root, err = openTreeProcess(ctx, uint32(process.Pid), 0)
+			root, err = openTreeProcess(ctx, uint32(process.Pid), 0) // #nosec G115 -- PID 来自 os.Process 的 Windows DWORD；前后 Signal(0) 生命周期检查固定原始进程句柄。
 			if err != nil {
 				return nil, err
 			}
@@ -135,7 +135,7 @@ func openTreeProcess(ctx context.Context, pid, parent uint32) (*windowsTreeProce
 	}
 	if parent != 0 {
 		var info windows.PROCESS_BASIC_INFORMATION
-		err = windows.NtQueryInformationProcess(handle, windows.ProcessBasicInformation, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), nil)
+		err = windows.NtQueryInformationProcess(handle, windows.ProcessBasicInformation, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), nil) // #nosec G103 -- 同步 NtQueryInformationProcess 写入同调用期存活的 PROCESS_BASIC_INFORMATION，长度为该结构的 Sizeof。
 		if err != nil || info.InheritedFromUniqueProcessId != uintptr(parent) {
 			_ = windows.CloseHandle(handle)
 			return nil, err
@@ -203,7 +203,7 @@ func waitTreeProcesses(ctx context.Context, processes []windowsTreeProcess) erro
 		if remaining <= 0 {
 			return context.DeadlineExceeded
 		}
-		state, err := windows.WaitForSingleObject(process.handle, uint32((remaining+time.Millisecond-1)/time.Millisecond))
+		state, err := windows.WaitForSingleObject(process.handle, uint32((remaining+time.Millisecond-1)/time.Millisecond)) // #nosec G115 -- 仅 killProcessTree 调用，context 预算五秒；remaining 已检查为正，毫秒数至多5000，远小于 DWORD 上限。
 		if err != nil {
 			return fmt.Errorf("wait for process %d: %w", process.pid, err)
 		}

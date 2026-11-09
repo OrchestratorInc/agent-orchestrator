@@ -96,7 +96,7 @@ func (s *Service) Apply(ctx context.Context, workflowID domain.WorkflowID, planI
 	}
 	op := domain.IntegrationOperation{ID: request.IdempotencyKey, PlanID: plan.ID, WorkflowID: workflowID, Action: "apply", RequestDigest: digest, Fence: fence}
 	op, created, err := store.BeginIntegrationOperation(ctx, op, request, s.Clock(), func() (string, error) {
-		return s.Approvals.Consume(approvalID, "POST", IntegrationPath(workflowID, planID, "apply"), digest)
+		return s.Approvals.Consume(approvalID, "POST", Path(workflowID, planID, "apply"), digest)
 	})
 	if err != nil || !created {
 		return op, err
@@ -116,8 +116,8 @@ func (s *Service) Apply(ctx context.Context, workflowID domain.WorkflowID, planI
 	return result, errors.Join(err, recoveryErr)
 }
 
-// IntegrationPath 同时用于操作批准和实际请求；不同 action 永远不共享批准。
-func IntegrationPath(workflowID domain.WorkflowID, planID, action string) string {
+// Path 同时用于操作批准和实际请求；不同 action 永远不共享批准。
+func Path(workflowID domain.WorkflowID, planID, action string) string {
 	return "/api/v1/workflows/" + url.PathEscape(string(workflowID)) + "/integrations/" + url.PathEscape(planID) + "/" + action
 }
 

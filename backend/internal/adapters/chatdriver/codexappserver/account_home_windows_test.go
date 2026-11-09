@@ -81,11 +81,8 @@ func TestManagedHomeDACLKeepsKnownDeniesAndInheritOnlyNonGranting(t *testing.T) 
 
 func currentAccountHomeTestUser(t *testing.T) *windows.SID {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = token.Close() }()
+	// 只查询当前进程 SID；TOKEN_QUERY 伪令牌不归调用方关闭。
+	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -168,11 +165,8 @@ func TestManagedHomePrivateOnWindows(t *testing.T) {
 // managed credential home.
 func applyOwnerOnlyDACL(t *testing.T, path string) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatalf("open token: %v", err)
-	}
-	defer token.Close()
+	// 只查询当前进程 SID；TOKEN_QUERY 伪令牌不归调用方关闭。
+	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
 	if err != nil {
 		t.Fatalf("token user: %v", err)

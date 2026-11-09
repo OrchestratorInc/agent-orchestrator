@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/google/uuid"
 )
 
 // AdmitSessionRestart 在外部 Controller 启动前接受一个新代际。现存活跃槽可复用；

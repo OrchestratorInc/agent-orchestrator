@@ -82,6 +82,18 @@ func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, e
 	return s.withReadinessUsage(ctx, items)
 }
 
+// EnsureAgentInstallation 为自定义供应商刷新安装事实，不读取默认账号认证。
+func (s *Service) EnsureAgentInstallation(ctx context.Context, agentID string) (domain.AgentInstallationState, error) {
+	items, err := s.readiness.EnsureInstallation(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		return domain.AgentInstallationUnknown, err
+	}
+	if len(items) != 1 {
+		return domain.AgentInstallationUnknown, domain.ErrInvalidCapabilityHarness
+	}
+	return items[0].Installation.State, nil
+}
+
 // EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)

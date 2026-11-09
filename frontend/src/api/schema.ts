@@ -5375,6 +5375,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/provider-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取宿主供应商引用目录 */
+        get: operations["listWorkflowProviderProfiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/recover-expired": {
         parameters: {
             query?: never;
@@ -8006,6 +8023,15 @@ export interface components {
             providerTurnId: string;
             sourceTurnId: string;
         };
+        ProviderProfileChoice: {
+            /** Format: int64 */
+            contextWindow?: number;
+            effort?: string;
+            harness: string;
+            model: string;
+            name: string;
+            reference: string;
+        };
         ProviderSwitchRequest: {
             /** @enum {string} */
             autoCompactWindow?: "200k" | "1m";
@@ -9798,6 +9824,9 @@ export interface components {
         };
         WorkflowPlansResponse: {
             candidates: components["schemas"]["WorkflowPlanCandidate"][];
+        };
+        WorkflowProviderProfilesResponse: {
+            profiles: components["schemas"]["ProviderProfileChoice"][];
         };
         WorkflowQualitySummaryResponse: {
             artifacts: components["schemas"]["ArtifactSnapshot"][];
@@ -31649,6 +31678,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listWorkflowProviderProfiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowProviderProfilesResponse"];
                 };
             };
             /** @description Bad Request */

@@ -210,7 +210,6 @@ func TestM2TerminatedSessionIsAConflict(t *testing.T) {
 			code:   "SESSION_MISMATCH",
 		},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			// observe routes its binder error through bindError.
@@ -252,7 +251,6 @@ func TestM2UnadvertisedSteerAdvisesTheQueue(t *testing.T) {
 		ports.CapabilityReasonNotObserved,
 		ports.CapabilityReasonNotAdvertised,
 	} {
-		reason := reason
 		t.Run(reason, func(t *testing.T) {
 			t.Parallel()
 			recorder := &recordingInterventions{outcome: interventionsvc.Outcome{

@@ -272,6 +272,26 @@ func TestInstallIDCreationRecoversEmptyFileAndConcurrentReaders(t *testing.T) {
 			}
 		}
 	}
+	// 过期锁无法删除时必须保留错误和内容，不能无限重试或清除他人的文件。
+	blocked := t.TempDir()
+	lock := filepath.Join(blocked, installIDFile+".recovery")
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(lock, "keep")
+	if err := os.WriteFile(keep, []byte("owner"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(lock, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateInstallID(blocked); err == nil {
+		t.Fatal("unremovable stale lock was accepted")
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "owner" {
+		t.Fatalf("stale lock contents changed: %q, %v", data, err)
+	}
 }
 
 func TestInstalledEventIsReservedOnceEvenWithoutAnExport(t *testing.T) {

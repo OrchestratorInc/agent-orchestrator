@@ -67,7 +67,7 @@ func TestM2ZeroProviderGuarantees(t *testing.T) {
 	interventions := env.interventionCoordinator()
 	// A steer must join the turn the caller names, so the fake's default steer receipt is
 	// used as-is: it echoes the requested turn and names an AO turn row.
-	if _, err := interventions.Steer(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.SteerRequest{
+	if _, err := interventions.Steer(sqlitetest.ExecutionContext(ctx, t, env.store, env.attempt.ID, e2eNow()), intervention.SteerRequest{
 		WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 		ClientMessageID: "msg-zero-provider", Text: "steer",
 		TargetProviderTurnID: "prov-turn-1", Harness: domain.HarnessCodex,
@@ -75,7 +75,7 @@ func TestM2ZeroProviderGuarantees(t *testing.T) {
 		t.Fatalf("Steer: %v", err)
 	}
 	env.gateway.InterruptResult(ports.InterruptReceipt{Confirmed: true})
-	if _, _, err := interventions.Stop(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
+	if _, _, err := interventions.Stop(sqlitetest.ExecutionContext(ctx, t, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
 		WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 		ClientMessageID: "msg-zero-provider-stop",
 	}); err != nil {

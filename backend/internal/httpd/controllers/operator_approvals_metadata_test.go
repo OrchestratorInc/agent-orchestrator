@@ -2,10 +2,11 @@ package controllers_test
 
 import (
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // TestM2OperatorApprovalResponsesCarryNoToken sweeps every route this change adds or touches.

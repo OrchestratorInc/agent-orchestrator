@@ -54,7 +54,8 @@ func (s *Service) StartReplan(ctx context.Context, in ReplanInput) (domain.Workf
 	}
 	agent := TaskInput{ID: domain.WorkflowTaskID("replan-" + in.IdempotencyKey), Kind: domain.WorkflowTaskKindAnalysis, Title: "重规划：" + old.Workflow.Title, AgentHarness: in.AgentHarness, Model: in.Model, Effort: in.Effort, Profile: in.Profile, MaxAttempts: 1,
 		Brief: "只读规划。请根据目标和旧图生成替代候选，禁止修改文件或执行命令。仅输出 JSON，字段为 tasks、dependencies、taskRepositories（包含选定 repoKey、baseSha、allowedPaths）、retireTaskIds。只能追加新任务 ID，不得重复已成功任务；明确停用停止任务及无法继续的后继任务。可信停止回执：" + in.StopInterventionID + "\n当前目标与旧图：" + string(graph)}
-	patch, err := s.planPatch(old, PlanDefinition{Tasks: []TaskInput{agent}})
+	agent.Brief += "\n新任务必须保留本次所选 model/effort/profile：" + agent.Model + "/" + agent.Effort + "/" + agent.Profile
+	patch, err := s.planPatch(ctx, old, PlanDefinition{Tasks: []TaskInput{agent}})
 	if err != nil {
 		return domain.WorkflowTask{}, false, err
 	}

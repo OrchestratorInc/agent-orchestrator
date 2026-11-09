@@ -25,7 +25,7 @@ import (
 
 // HeaderOperatorToken carries the operator proof. It is a header, never a body field, so a
 // request body can never assert an identity.
-const HeaderOperatorToken = "X-AO-Operator-Token"
+const HeaderOperatorToken = "X-AO-Operator-Token" // #nosec G101 -- 这是旧兼容协议 Header 名，不是 token 值，正式授权不读取它。
 
 // OperatorTokenFileName is the file, under the daemon's data dir, that holds the operator
 // secret. It is 0600 and never served over HTTP.

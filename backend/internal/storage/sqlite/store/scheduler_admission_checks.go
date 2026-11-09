@@ -80,7 +80,7 @@ func validResourceSample(r domain.ResourceSample, now time.Time, p domain.Schedu
 	if busy > total {
 		return false
 	}
-	return float64(busy)/float64(total)*100 < float64(p.CPUHardPercent) && float64(r.AvailableBytes)/float64(r.TotalBytes)*100 >= float64(p.RAMHardPercent) && r.AvailableBytes >= uint64(p.RAMFloorBytes)
+	return float64(busy)/float64(total)*100 < float64(p.CPUHardPercent) && float64(r.AvailableBytes)/float64(r.TotalBytes)*100 >= float64(p.RAMHardPercent) && r.AvailableBytes >= uint64(p.RAMFloorBytes) // #nosec G115 -- checkAdmission 仅传默认或 schedulerPolicies 已 Validate 的策略，RAMFloorBytes 非负。
 }
 
 // checkAdmissionBudgets 从数据库派生全部适用层及窗口，UNKNOWN 与整数溢出不得作为零。
@@ -95,7 +95,7 @@ func checkAdmissionBudgets(ctx context.Context, q *gen.Queries, a domain.Schedul
 	}
 	out := make([]gen.InsertBudgetReservationParams, 0)
 	for _, p := range policies {
-		if p.Scope != "global" && !(p.Scope == "workflow" && p.ScopeID == string(a.WorkflowID)) && !(p.Scope == "task" && slices.Contains(ancestors, p.ScopeID)) {
+		if p.Scope != "global" && (p.Scope != "workflow" || p.ScopeID != string(a.WorkflowID)) && (p.Scope != "task" || !slices.Contains(ancestors, p.ScopeID)) {
 			continue
 		}
 		if revision, ok := e.ExpectedPolicyRevisions[p.RevisionKey()]; !ok || revision != p.Revision {

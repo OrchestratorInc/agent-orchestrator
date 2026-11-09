@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // The chat-mode controller launch.
@@ -98,6 +100,7 @@ func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	})
 }
 
+// runBackgroundTask 恢复持久供应商选择；短调用不启动工作 Session，因此不使用 Controller 恢复许可。
 func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
@@ -106,12 +109,27 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
-	// Existing background titles and suggestions use the provider's default effort.
-	rec.Metadata.Effort = ""
-	return m.runRecordBackgroundTask(ctx, rec, systemPrompt, prompt, run)
+	selection, err := providerprofile.SessionSelection(ctx, m.store, id)
+	if err != nil {
+		return "", err
+	}
+	profile := selection.Reference
+	if profile == "" {
+		// 原生标题和建议使用供应商默认 effort；任务命名保留调用方已解析的值。
+		rec.Metadata.Effort = ""
+	} else {
+		if m.profiles == nil || selection.Harness != rec.Harness || selection.Model != rec.Metadata.Model || selection.Effort != rec.Metadata.Effort {
+			return "", fmt.Errorf("workflow provider selection mismatch")
+		}
+		if _, err := m.profiles.Environment(ctx, profile, rec.Harness, rec.Metadata.Model, rec.Metadata.Effort); err != nil {
+			return "", err
+		}
+	}
+	return m.runRecordBackgroundTask(ctx, rec, profile, systemPrompt, prompt, run)
 }
 
-func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.SessionRecord, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
+// runRecordBackgroundTask 使用入口已验证的供应商选择，在隔离临时工作区执行短调用。
+func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.SessionRecord, profile, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {
 		return "", err
@@ -136,7 +154,7 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 	config := ports.AgentConfig{
 		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil, profile)
 	if m.agents != nil {
 		if agent, found := m.agents.Agent(rec.Harness); found {
 			m.augmentAgentRuntimeEnv(agent, env)
@@ -148,6 +166,7 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 	pinRuntimePermissionEnv(env, config.Permissions)
 
 	return run(ctx, rec.Harness, ports.ChatStartConfig{
+		Profile:       profile,
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,
@@ -227,7 +246,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 	// Chat Service retains this unprivileged base environment. The bearer is
 	// minted inside its per-session launch gate and is never cached for reuse.
-	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env)
+	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env, agentConfig.Profile)
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 		// Chat launches go through the same workspace preparation as terminal
@@ -258,7 +277,13 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	if readOnly {
 		mcpServers = nil
 	}
+	profile, err := m.workflowProfile(ctx, in.cfg.WorkflowSpawn, in.cfg.Harness, agentConfig.Model, agentConfig.Effort)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		Profile:       profile,
 		SessionID:     id,
 		ProjectID:     in.cfg.ProjectID,
 		Kind:          in.cfg.Kind,
@@ -279,7 +304,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, in.record, in.project.Config.Env, expected,
+				launchCtx, in.record, in.project.Config.Env, expected, profile,
 			)
 			if prepareErr != nil {
 				return nil, fmt.Errorf("%w: %w", ErrSpawnBrowser, prepareErr)
@@ -540,10 +565,6 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
-	if agent, ok := m.agents.Agent(rec.Harness); ok {
-		m.augmentAgentRuntimeEnv(agent, env)
-	}
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
 	if reconnectOnly {
@@ -583,6 +604,14 @@ func (m *Manager) resumeChatController(
 			fmt.Errorf("%s %s: recover workflow identity: %w", operation, rec.ID, workflowErr))
 	}
 	validationSessionID := rec.ID
+	profile, err := m.workflowProfile(ctx, workflowContext, rec.Harness, agentConfig.Model, agentConfig.Effort)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, profile)
+	if agent, ok := m.agents.Agent(rec.Harness); ok {
+		m.augmentAgentRuntimeEnv(agent, env)
+	}
 	resumeMCPServers := m.aoMCPServers(ctx, rec.Harness, env, workflowContext)
 	readOnly, err := m.workflowPlanner(ctx, workflowContext)
 	if err != nil {
@@ -604,6 +633,7 @@ func (m *Manager) resumeChatController(
 		}
 	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		Profile:              profile,
 		AwakeReconnectTarget: awakeTarget,
 		ReconnectOnly:        reconnectOnly,
 		SessionID:            rec.ID,
@@ -626,7 +656,7 @@ func (m *Manager) resumeChatController(
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
-				launchCtx, rec, project.Config.Env, expected,
+				launchCtx, rec, project.Config.Env, expected, profile,
 			)
 			if prepareErr != nil {
 				return nil, prepareErr
@@ -709,7 +739,7 @@ func (m *Manager) resumeChatController(
 		}
 		if p, ok := ports.SessionReattachPermitFromContext(ctx); ok {
 			// 慢失败也必须属于原任期，否则 Host 不存在的回执会把新主人标为退出。
-			if checkErr := m.store.(sessionReattachStore).ValidateSessionReattach(ctx, p, "", m.clock().UTC()); checkErr != nil {
+			if checkErr := m.validateSessionReattach(ctx, p, ""); checkErr != nil {
 				return RestoreResult{}, relaunchFailed("reattach ownership", checkErr)
 			}
 		}

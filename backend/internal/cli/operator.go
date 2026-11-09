@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -375,7 +376,7 @@ func (c *commandContext) createOperatorApproval(
 // approvals is a "this cannot happen here" answer, not a retry, so it is reported plainly.
 func operatorCreateError(err error) error {
 	var apiErr apiResponseError
-	if errors.As(err, &apiErr) && apiErr.StatusCode == 501 {
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotImplemented {
 		return fmt.Errorf("this daemon cannot issue operator approvals; update AO and restart the daemon: %w", err)
 	}
 	return fmt.Errorf("cannot request operator approval: %w", err)

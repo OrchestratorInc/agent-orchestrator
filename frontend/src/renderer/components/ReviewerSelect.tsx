@@ -195,6 +195,7 @@ export function ReviewerSelect({
 	);
 }
 
+/** 审查菜单遵循目标主机的可运行目录，仅为当前审查器保留已存模型。 */
 function ReviewerHarnessOption({
 	agent,
 	currentHarness,
@@ -234,6 +235,7 @@ function ReviewerHarnessOption({
 	const { models: offeredModels } = useOfferedModels(resolvedHarness, catalog?.models, {
 		hostId,
 		keep: isCurrentHarness ? [currentModel, currentMode] : [],
+		runnableModels: catalog?.runnableModels,
 	});
 	const options = modelOptions(catalog, offeredModels);
 	const catalogKnown = catalogQuery.data !== undefined || catalogQuery.isFetched;

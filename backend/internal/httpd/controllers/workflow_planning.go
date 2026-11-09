@@ -4,12 +4,13 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	workflowsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/workflow"
-	"github.com/go-chi/chi/v5"
 )
 
 // WorkflowPlanningService 复用现有服务，只在具备正式规划持久化的装配上启用。
@@ -61,13 +62,19 @@ type ConfirmWorkflowPlanRequest struct {
 	Digest           string `json:"digest"`
 	ExpectedRevision int64  `json:"expectedRevision"`
 }
+
+// WorkflowPlanCandidateIDParam 将计划候选限定在所属工作流。
 type WorkflowPlanCandidateIDParam struct {
 	WorkflowID  string `path:"workflowId"`
 	CandidateID string `path:"candidateId"`
 }
+
+// WorkflowPlanResponse 包装单个计划候选。
 type WorkflowPlanResponse struct {
 	Candidate domain.WorkflowPlanCandidate `json:"candidate"`
 }
+
+// WorkflowPlansResponse 返回计划候选列表。
 type WorkflowPlansResponse struct {
 	Candidates []domain.WorkflowPlanCandidate `json:"candidates"`
 }

@@ -13,6 +13,7 @@ import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
 
+/** 本地角色使用主机可运行目录；云端角色保留独立目录与显式选择。 */
 export function AgentModelField({
 	role,
 	variant = "settings",
@@ -58,7 +59,7 @@ export function AgentModelField({
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
 	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
-	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults, runnableModels: catalog?.runnableModels });
 	const revalidationQuery = useQuery({
 		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
 		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),

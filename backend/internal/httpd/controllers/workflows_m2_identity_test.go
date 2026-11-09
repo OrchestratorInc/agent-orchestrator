@@ -789,7 +789,6 @@ func TestM2RouteWithAnInvalidLeaseIsForbidden(t *testing.T) {
 			principal.HeaderAttemptLease:    "not-a-lease",
 		},
 	} {
-		headers := headers
 		t.Run(name, func(t *testing.T) {
 			status, payload := doJSONWithHeaders(t, srv, http.MethodPost,
 				"/api/v1/workflows/workflow-1/messages",

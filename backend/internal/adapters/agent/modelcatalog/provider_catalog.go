@@ -30,11 +30,10 @@ func hasLocalProviderCatalog(agentID string) bool {
 	return false
 }
 
-// listsRunnableModels reports an agent whose model command lists only the
-// models it can run now, while its provider cache names every model it knows.
+// listsRunnableModels 标识原生命令仅列出当前可用模型的 Harness，避免把全量缓存当成可用列表。
 func listsRunnableModels(agentID string) bool {
 	switch agentID {
-	case "opencode", "kilocode", "mimo-code":
+	case "opencode", "kilocode", "mimo-code", "omp":
 		return true
 	}
 	return false
@@ -211,12 +210,13 @@ func piThinkingLevels(record map[string]any) []string {
 	return efforts
 }
 
+// ompProviderCatalog 以只读文件 URI 打开本地缓存，保留路径转义并避免把 Windows 盘符解释为主机名。
 func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalog {
 	var result ports.AgentModelCatalog
 	if _, err := os.Stat(path); err != nil {
 		return result
 	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro"}).String()
+	dsn := (&url.URL{Scheme: "file", OmitHost: true, Path: filepath.ToSlash(path), RawQuery: "mode=ro"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return result

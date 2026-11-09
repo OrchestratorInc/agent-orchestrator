@@ -96,8 +96,10 @@ func TestKillAndCleanupReachASessionGitWillNotRelease(t *testing.T) {
 	manager := sessionmanager.New(sessionmanager.Deps{
 		Runtime: &stubRuntime{}, Agents: stubAgents{}, Workspace: workspace, Store: store,
 		Messenger: messenger, Lifecycle: lcm,
+		DataDir:  filepath.Join(tmp, "ao"),
 		LookPath: func(string) (string, error) { return "/usr/bin/true", nil },
 	})
+	manager.SetSessionAdmissionProvider(sqlitetest.NewAdmissionFixture(t, store, time.Now))
 	lcm.SetCompletionTerminator(manager)
 
 	sess, _, _, err := manager.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "do it"})

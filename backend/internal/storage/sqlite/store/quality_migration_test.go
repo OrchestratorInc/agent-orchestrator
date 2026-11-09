@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
-	"github.com/pressly/goose/v3"
 )
 
 // 删除迁移 Up/Down 的建表或清理会破坏往返；旧数据更新后再 Up 验证有数据升级不丢 M3 图。

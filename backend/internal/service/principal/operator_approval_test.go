@@ -1,10 +1,11 @@
 package principal_test
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // TestOperatorApprovalLifecycle is the state machine: pending → confirmed → consumed, with each

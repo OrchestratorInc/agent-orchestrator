@@ -33,7 +33,7 @@ import (
 // separate binary boundary and deliberately does not import the daemon's internals.
 const (
 	envMCPSessionID   = "AO_SESSION_ID"
-	envMCPWorkflowID  = "AO_WORKFLOW_ID"
+	envMCPWorkflowID  = "AO_WORKFLOW_ID" // #nosec G101 -- 常量是环境变量名 AO_WORKFLOW_ID，不包含工作流凭据。
 	envMCPTaskID      = "AO_TASK_ID"
 	envMCPAttemptID   = "AO_ATTEMPT_ID"
 	envMCPCapability  = "AO_BROWSER_CAPABILITY" //nolint:gosec // Environment variable name, not a value.
@@ -559,7 +559,7 @@ func workflowCallError(err error) error {
 	}
 	// Anything else is a decode/transport problem; its text names the route and
 	// never a header value.
-	return fmt.Errorf("workflow call failed: %v", err)
+	return fmt.Errorf("workflow call failed: %s", err.Error())
 }
 
 // --- helpers -----------------------------------------------------------------

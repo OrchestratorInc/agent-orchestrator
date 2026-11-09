@@ -21,7 +21,7 @@ func (m *codexAccountManager) prepareLoginTerminalForCommit(ctx context.Context,
 	}
 	alive, probeErr := m.terminal.IsShellTerminalChildAlive(ctx, handleID)
 	if probeErr == nil && alive {
-		return errors.New("Codex login command is still running")
+		return errors.New("codex login command is still running")
 	}
 	closeErr := m.terminal.CloseShellTerminal(context.WithoutCancel(ctx), handleID)
 	if closeErr == nil {

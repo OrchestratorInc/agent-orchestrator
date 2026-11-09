@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	agentagy "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -39,7 +39,7 @@ func New() *Reviewer {
 		resolveBinary: agentagy.ResolveAgyBinary,
 		run: func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
 			cmd := aoprocess.CommandContext(ctx, binary, args...)
-			cmd.Env = appendEnvironment(os.Environ(), env)
+			cmd.Env = processenv.Merge(env)
 			return cmd.CombinedOutput()
 		},
 	}
@@ -117,14 +117,6 @@ func (r *Reviewer) verifyCompatibility(ctx context.Context, binary string, env m
 		return fmt.Errorf("installed Agy %q is incompatible: version %s or newer is required", strings.TrimSpace(string(version)), minimumVersion)
 	}
 	return nil
-}
-
-func appendEnvironment(base []string, overrides map[string]string) []string {
-	result := append([]string(nil), base...)
-	for key, value := range overrides {
-		result = append(result, key+"="+value)
-	}
-	return result
 }
 
 // ReviewMessage returns the short AO-owned task-file reference for a future

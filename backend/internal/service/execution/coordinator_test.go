@@ -1810,18 +1810,6 @@ func TestObserveSessionRejectsFencedObservation(t *testing.T) {
 	}
 }
 
-// TestCoordinatorSatisfiesBindingWriter pins the wiring contract the daemon relies on: the
-// same *Coordinator is handed to the intervention coordinator as its BindingWriter.
-func TestCoordinatorSatisfiesBindingWriter(t *testing.T) {
-	t.Parallel()
-	var writer interface {
-		MarkStopOutcome(context.Context, domain.WorkflowAttemptID, bool, bool) (domain.WorkflowAttemptBinding, error)
-	} = newTestCoordinator(t, newMemoryBindings(), NewFakeGateway().WithClock(fixedClock()))
-	if writer == nil {
-		t.Fatal("the coordinator does not satisfy the BindingWriter shape")
-	}
-}
-
 // TestTerminatedObservationIsNotLive proves a terminated session is never a live target and
 // that every gated action refuses without reaching the gateway.
 //

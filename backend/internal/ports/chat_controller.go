@@ -37,6 +37,7 @@ type ChatControllerStart struct {
 	ValidateWorkspace func(context.Context) error
 	Env               map[string]string
 	Model             string
+	Profile           string
 	Effort            string
 	Permissions       PermissionMode
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.

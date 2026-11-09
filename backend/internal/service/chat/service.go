@@ -434,6 +434,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 // startLocked is the launch implementation shared by ordinary starts and the
 // provider-switch saga. Callers must hold the typed controller gate.
 func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	if cfg.Profile != "" && cfg.Harness != domain.HarnessCodex {
+		return nil, fmt.Errorf("provider profile requires Codex")
+	}
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -849,6 +852,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
+			Profile:                cfg.Profile,
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         freshIfMissing,
@@ -869,6 +873,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		})
 	} else {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
+			Profile:               cfg.Profile,
 			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			SessionID:             hostID,
 			DataDir:               cfg.DataDir,
@@ -1320,7 +1325,7 @@ func cleanupUnpublishedConversation(conv ports.ChatConversation, fresh bool) err
 func (s *Service) RunningProviderTurn(
 	ctx context.Context,
 	id domain.SessionID,
-) (providerTurnID string, generation string, ok bool) {
+) (providerTurnID, generation string, ok bool) {
 	controller, err := s.Controller(id)
 	if err != nil || controller == nil || controller.State() == ports.ChatControllerStopped {
 		return "", "", false
@@ -2958,6 +2963,12 @@ func (s *Service) SetTurnSettingsForOwner(ctx context.Context, owner domain.Conv
 }
 
 func (s *Service) setTurnSettings(ctx context.Context, controller *Controller, owner domain.ConversationOwner, settings domain.ConversationSettings) (domain.ConversationSettings, error) {
+	s.mu.Lock()
+	cfg := s.startConfigs[owner]
+	s.mu.Unlock()
+	if cfg.Profile != "" && (settings.Model != cfg.Model || settings.ReasoningEffort != cfg.Effort) {
+		return domain.ConversationSettings{}, fmt.Errorf("供应商引用固定了模型和 effort，请在工作流候选中重新选择")
+	}
 	controller.configMu.Lock()
 	defer controller.configMu.Unlock()
 	// The turn-settings endpoint does not own provider session mode choices.

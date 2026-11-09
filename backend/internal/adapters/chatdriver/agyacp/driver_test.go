@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -170,10 +171,15 @@ func TestHarnessPathFollowsASymlinkedServer(t *testing.T) {
 	}
 }
 
+// TestLaunchPointsTheServerAtItsHarness 按发布包的平台文件名验证装配，不启动服务或Provider。
 func TestLaunchPointsTheServerAtItsHarness(t *testing.T) {
 	install := t.TempDir()
 	server := writeExecutable(t, filepath.Join(install, "agy_acp_server.par"))
-	harness := writeExecutable(t, filepath.Join(install, "localharness_external"))
+	harnessName := "localharness_external"
+	if runtime.GOOS == "windows" {
+		harnessName += ".exe"
+	}
+	harness := writeExecutable(t, filepath.Join(install, harnessName))
 	cfg := buildConfig(nil, testResolver(t, map[string]string{serverPathEnvVar: server}), nil)
 	launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{"PATH": "/usr/bin"}})
 	if err != nil {

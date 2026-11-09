@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/artifact"
 	integrationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/integration"
@@ -16,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualitygate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualityreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/taskcommit"
-	"github.com/go-chi/chi/v5"
 )
 
 // qualityReplayStore 只有只读重放路径可用；任何额外访问会失败，不能偷偷进入 Git 服务。

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -299,6 +300,7 @@ func workspaceFiles(t *testing.T, root string) []string {
 	return files
 }
 
+// ensureAgentBinary 放置平台假程序；Windows限定PATH，避免优先的.exe别名命中用户Agent。
 func ensureAgentBinary(t *testing.T, name string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -311,10 +313,18 @@ func ensureAgentBinary(t *testing.T, name string) {
 		version = "0.10.0"
 	}
 	script := "#!/usr/bin/env sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"" + name + " " + version + "\"\nfi\nexit 0\n"
+	if runtime.GOOS == "windows" {
+		binPath += ".cmd"
+		script = "@echo off\r\nif \"%~1\"==\"--version\" echo " + name + " " + version + "\r\nexit /b 0\r\n"
+	}
 	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write fake agent binary %q: %v", binPath, err)
 	}
 
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATH", dir)
+		return
+	}
 	old := os.Getenv("PATH")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+old)
 }

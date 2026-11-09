@@ -111,7 +111,7 @@ func newMultiRepoGitRepo(t *testing.T) (string, string) {
 	runManagerGit(t, dir, "init")
 	runManagerGit(t, dir, "config", "user.email", "ao@example.com")
 	runManagerGit(t, dir, "config", "user.name", "AO Tests")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("base "+dir+"\n"), 0o644); err != nil {
 		t.Fatalf("write README: %v", err)
 	}
 	runManagerGit(t, dir, "add", ".")
@@ -129,10 +129,10 @@ func newMultiRepoGitRepo(t *testing.T) (string, string) {
 // spawnCfg is a two-repo worker spawn.
 func (f *multiRepoFixture) spawnCfg(clientRequestID string) ports.SpawnConfig {
 	return ports.SpawnConfig{
-		ProjectID:       f.projectAID,
-		Kind:            domain.KindWorker,
-		Harness:         domain.HarnessClaudeCode,
-		Prompt:          "do the work",
+		ProjectID:         f.projectAID,
+		Kind:              domain.KindWorker,
+		Harness:           domain.HarnessClaudeCode,
+		Prompt:            "do the work",
 		ClientRequestID:   clientRequestID,
 		ClientRequestHash: "v1:" + clientRequestID,
 		Repos: []ports.SpawnRepo{

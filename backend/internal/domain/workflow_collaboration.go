@@ -86,6 +86,7 @@ func (k WorkflowMessageSenderKind) AuthoredByUser() bool {
 // WorkflowMessageKind classifies the content of a collaboration message.
 type WorkflowMessageKind string
 
+// WorkflowMessageKindProgress 标识进度消息；消息类型不代表已消费。
 const (
 	WorkflowMessageKindProgress  WorkflowMessageKind = "progress"
 	WorkflowMessageKindQuestion  WorkflowMessageKind = "question"
@@ -290,6 +291,7 @@ type CreateWorkflowMessageInput struct {
 // WorkflowTaskRequestKind is what a task is asking the owner for.
 type WorkflowTaskRequestKind string
 
+// WorkflowTaskRequestKindCreateTask 请求新增任务，执行仍需独立授权。
 const (
 	WorkflowTaskRequestKindCreateTask          WorkflowTaskRequestKind = "create_task"
 	WorkflowTaskRequestKindAddDependency       WorkflowTaskRequestKind = "add_dependency"
@@ -313,6 +315,7 @@ func (k WorkflowTaskRequestKind) Valid() bool {
 // WorkflowTaskRequestState is the decision status of a request.
 type WorkflowTaskRequestState string
 
+// WorkflowTaskRequestStatePending 表示尚未作出资源请求决定。
 const (
 	WorkflowTaskRequestStatePending  WorkflowTaskRequestState = "pending"
 	WorkflowTaskRequestStateApproved WorkflowTaskRequestState = "approved"
@@ -340,6 +343,7 @@ func (s WorkflowTaskRequestState) Decided() bool {
 // workflow agent must not approve its own resource request.
 type WorkflowTaskRequestDeciderKind string
 
+// WorkflowTaskRequestDeciderHuman 表示人工决策主体；Agent 不能自批。
 const (
 	WorkflowTaskRequestDeciderHuman  WorkflowTaskRequestDeciderKind = "human"
 	WorkflowTaskRequestDeciderDaemon WorkflowTaskRequestDeciderKind = "daemon"

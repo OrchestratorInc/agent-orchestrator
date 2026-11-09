@@ -27,7 +27,7 @@ func steerConversation(t *testing.T) (*conversation, *scriptedServer) {
 	d, srv := newTestDriver(t)
 	srv.respondTo(codexproto.MethodTurnSteer, `{"turnId":"turn-1"}`)
 
-	opened, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	opened, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSteerFallsBackToTheKnownActiveTurn(t *testing.T) {
 // asked to steer the empty string.
 func TestSteerWithoutAnyTurnIsTypedAndNeverReachesTheProvider(t *testing.T) {
 	d, srv := newTestDriver(t)
-	opened, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	opened, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

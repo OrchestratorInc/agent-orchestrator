@@ -62,6 +62,16 @@ test("loadOrCreateTelemetryInstallId heals an empty file and publishes one id to
 		expect(new Set(ids).size).toBe(1);
 		expect((await readFile(path.join(concurrentDir, "telemetry_install_id"), "utf8")).trim()).toBe(ids[0]);
 	}
+	// 不可删除的过期锁必须返回错误并保留内容，不能无限重试。
+	const blocked = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(blocked);
+	const lock = path.join(blocked, "telemetry_install_id.recovery");
+	await fs.mkdir(lock);
+	await writeFile(path.join(lock, "keep"), "owner");
+	const past = new Date(Date.now() - 60_000);
+	await utimes(lock, past, past);
+	await expect(loadOrCreateTelemetryInstallId(blocked)).rejects.toThrow();
+	expect(await readFile(path.join(lock, "keep"), "utf8")).toBe("owner");
 });
 
 test("buildTelemetryBootstrap returns null when no home dir is available", async () => {

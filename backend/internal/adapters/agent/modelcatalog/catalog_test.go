@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,10 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 func TestOpenCodeV2RetriesEmptyFirstRunInNewFolder(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "opencode2")
 	script := "#!/bin/sh\nif [ ! -f seen ]; then : > seen; exit 0; fi\nprintf 'anthropic/claude-opus-5-5\\n'\n"
+	if runtime.GOOS == "windows" {
+		binary += ".cmd"
+		script = "@echo off\r\nif not exist seen (\r\n  type nul > seen\r\n  exit /b 0\r\n)\r\necho anthropic/claude-opus-5-5\r\n"
+	}
 	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

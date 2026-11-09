@@ -155,6 +155,7 @@ await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
 	}
 }
 
+// fakePiBinary 生成当前平台可执行的版本探测fixture，不调用安装的Pi。
 func fakePiBinary(t *testing.T, version string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pi")
@@ -165,6 +166,10 @@ if [ "$1" = "--version" ]; then
 fi
 exit 2
 `
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		source = "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo pi " + version + "\r\n  exit /b 0\r\n)\r\nexit /b 2\r\n"
+	}
 	if err := os.WriteFile(path, []byte(source), 0o755); err != nil {
 		t.Fatal(err)
 	}

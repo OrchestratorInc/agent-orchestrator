@@ -50,8 +50,7 @@ func collaborationFixture(
 		if err != nil || !found {
 			t.Fatalf("GetWorkflowTask(%s): found=%v err=%v", taskID, found, err)
 		}
-		claimed, created, err := claimWithAdmission(t, s,
-			context.Background(),
+		claimed, created, err := claimWithAdmission(context.Background(), t, s,
 			workflowStoreAttempt(domain.WorkflowAttemptID("attempt-"+string(taskID)), workflowID, taskID,
 				"worker-1", "lease-"+string(taskID), now.Add(2*time.Second), now.Add(time.Hour)),
 			ready.Revision, "collab-claim-"+string(taskID), strings.Repeat("c", 64),
@@ -92,7 +91,7 @@ func TestWorkflowMessageCreateIsIdempotentByClientMessage(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-collab-idem")
 	attempt := collaborationFixture(t, s, workflowID, "collab-idem-project", "task-a", "task-b")["task-a"]
 	now := workflowStoreTime()
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 	target := domain.WorkflowTaskID("task-b")
 
 	message := collaborationMessage(workflowID, attempt, &target, "msg-1")
@@ -139,7 +138,7 @@ func TestWorkflowMessageCrossWorkflowRejected(t *testing.T) {
 	workflowA := domain.WorkflowID("workflow-collab-x-a")
 	workflowB := domain.WorkflowID("workflow-collab-x-b")
 	attemptA := collaborationFixture(t, s, workflowA, "collab-x-project", "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attemptA.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attemptA.ID, now.Add(2*time.Second))
 	collaborationFixture(t, s, workflowB, "collab-x-project", "task-foreign")
 
 	// A message in workflow A that names workflow B's task as the target.
@@ -174,7 +173,7 @@ func TestWorkflowMessageNullTargetStillChecksWorkflow(t *testing.T) {
 	now := workflowStoreTime()
 	workflowID := domain.WorkflowID("workflow-collab-null")
 	attempt := collaborationFixture(t, s, workflowID, "collab-null-project", "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 
 	// Broadcast: nil target, real workflow. This must succeed.
 	broadcast := collaborationMessage(workflowID, attempt, nil, "msg-broadcast")
@@ -204,7 +203,7 @@ func TestWorkflowMessageQueueDepthAtCap(t *testing.T) {
 	now := workflowStoreTime()
 	workflowID := domain.WorkflowID("workflow-collab-depth")
 	attempt := collaborationFixture(t, s, workflowID, "collab-depth-project", "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 
 	for i := range domain.MaxOpenWorkflowMessages {
 		message := collaborationMessage(workflowID, attempt, nil,
@@ -246,7 +245,7 @@ func TestWorkflowMessageContentLimits(t *testing.T) {
 	now := workflowStoreTime()
 	workflowID := domain.WorkflowID("workflow-collab-limits")
 	attempt := collaborationFixture(t, s, workflowID, "collab-limits-project", "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 
 	tests := []struct {
 		name    string
@@ -305,7 +304,7 @@ func TestWorkflowMessageSenderCoherence(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-collab-sender")
 	attempts := collaborationFixture(t, s, workflowID, "collab-sender-project", "task-a", "task-b")
 	attemptA := attempts["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attemptA.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attemptA.ID, now.Add(2*time.Second))
 
 	t.Run("agent naming a different task", func(t *testing.T) {
 		message := collaborationMessage(workflowID, attemptA, nil, "msg-sender-1")
@@ -344,7 +343,7 @@ func TestWorkflowMessageSurvivesSessionDeletion(t *testing.T) {
 	projectID := "collab-session-project"
 	workflowID := domain.WorkflowID("workflow-collab-session")
 	attempt := collaborationFixture(t, s, workflowID, projectID, "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 
 	session := *attempt.SessionID
 	rec, found, err := s.GetSession(ctx, session)
@@ -395,7 +394,7 @@ func TestWorkflowTaskRequestCreateStaysPending(t *testing.T) {
 	}
 	// Deliberately try to create it already approved: the store must force pending.
 	request.State = domain.WorkflowTaskRequestStateApproved
-	created, isNew, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(3*time.Second))
+	created, isNew, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(3*time.Second))
 	if err != nil || !isNew {
 		t.Fatalf("create: created=%v err=%v", isNew, err)
 	}
@@ -407,7 +406,7 @@ func TestWorkflowTaskRequestCreateStaysPending(t *testing.T) {
 	}
 
 	// Replay with the same sha returns the original.
-	replayed, isNew, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(4*time.Second))
+	replayed, isNew, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(4*time.Second))
 	if err != nil || isNew {
 		t.Fatalf("replay: created=%v err=%v", isNew, err)
 	}
@@ -418,7 +417,7 @@ func TestWorkflowTaskRequestCreateStaysPending(t *testing.T) {
 	// Different sha under the same id is a conflict.
 	changed := request
 	changed.RequestSHA = strings.Repeat("e", 64)
-	if _, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), changed, now.Add(5*time.Second)); !errors.Is(err, domain.ErrWorkflowTaskRequestConflict) {
+	if _, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), changed, now.Add(5*time.Second)); !errors.Is(err, domain.ErrWorkflowTaskRequestConflict) {
 		t.Fatalf("err = %v, want ErrWorkflowTaskRequestConflict", err)
 	}
 }
@@ -437,7 +436,7 @@ func TestWorkflowTaskRequestDecideIsCASAndPendingOnly(t *testing.T) {
 		RequestKind: domain.WorkflowTaskRequestKindCreateTask,
 		RequestJSON: `{"title":"add tests"}`, RequestSHA: collabSHA, WorkflowRevision: 2,
 	}
-	created, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), request, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -476,7 +475,7 @@ func TestWorkflowTaskRequestDecideIsCASAndPendingOnly(t *testing.T) {
 		RequestKind: domain.WorkflowTaskRequestKindCreateTask,
 		RequestJSON: `{}`, RequestSHA: collabSHA, WorkflowRevision: 2,
 	}
-	otherCreated, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), other, now.Add(6*time.Second))
+	otherCreated, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), other, now.Add(6*time.Second))
 	if err != nil {
 		t.Fatalf("create other: %v", err)
 	}
@@ -537,7 +536,7 @@ func TestWorkflowCollaborationRollbackEmitsNoEvents(t *testing.T) {
 	now := workflowStoreTime()
 	workflowID := domain.WorkflowID("workflow-collab-rollback")
 	attempt := collaborationFixture(t, s, workflowID, "collab-rollback-project", "task-a")["task-a"]
-	ctx = sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second))
+	ctx = sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second))
 
 	baseline := latestSeq(t, s)
 
@@ -556,7 +555,7 @@ func TestWorkflowCollaborationRollbackEmitsNoEvents(t *testing.T) {
 		RequestKind:     domain.WorkflowTaskRequestKindCreateTask,
 		RequestJSON:     `{"a":1}`, RequestSHA: collabSHA, WorkflowRevision: 2,
 	}
-	if _, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(2*time.Second)), badRequest, now.Add(2*time.Second)); err == nil {
+	if _, _, err := s.CreateWorkflowTaskRequest(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now.Add(2*time.Second)), badRequest, now.Add(2*time.Second)); err == nil {
 		t.Fatal("the cross-workflow request was accepted")
 	}
 

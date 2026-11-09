@@ -467,7 +467,7 @@ func TestMultiRepoRestoreKeepsPerRepoProjectIDsAndPinnedSHAs(t *testing.T) {
 	}
 
 	// ProjectID must be resolved from each repo's own path.
-	infos := restoredManager.multiRepoRows(ctx, rec, after)
+	infos := restoredManager.multiRepoRows(after)
 	if len(infos) != 2 {
 		t.Fatalf("repo infos = %d, want 2", len(infos))
 	}

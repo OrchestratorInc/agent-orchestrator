@@ -56,6 +56,7 @@ export type ModelSearchResult = {
 	strategy: "direct" | "provider-index" | "text-index" | "fuzzy-fallback";
 };
 
+/** 按模型 ID 选择，重名条目同时显示 ID 以避免误选。 */
 export function AgentModelCombobox({
 	value,
 	models,
@@ -110,7 +111,7 @@ export function AgentModelCombobox({
 	renderTrigger?: (label: string) => ReactNode;
 	/** Persists explicit model choices for this agent and pins them below the current model. */
 	recentScope?: string;
-	/** Flat model names with no groups or badges.
+	/** Flat model names with identifying IDs for duplicate names, without groups or badges.
 	 *  Search still shows once the catalog passes MODEL_SEARCH_THRESHOLD,
 	 *  same as non-compact mode; only the grouping/decoration is stripped. For
 	 *  contexts where the menu should read like a simple choice, not a
@@ -447,6 +448,9 @@ export function AgentModelCombobox({
 										>
 											<div className="min-w-0 flex-1">
 												<span className="truncate text-settings-label">{item.label}</span>
+												{shouldShowModelID(item, searchIndex.models, "") && (
+													<p className="truncate text-xs text-settings-muted" title={item.id}>{item.id}</p>
+												)}
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
@@ -663,7 +667,8 @@ function rememberRecentModel(scope: string, modelID: string): string[] {
 	return next;
 }
 
-function shouldShowModelID(item: IndexedModel, siblings: IndexedModel[], search: string): boolean {
+/** 重名或仅 ID 命中搜索时展示 ID；传入完整候选列表可保留搜索、分页后的辨识信息。 */
+export function shouldShowModelID(item: Pick<AgentModel, "id" | "label">, siblings: Pick<AgentModel, "id" | "label">[], search: string): boolean {
 	if (item.id === item.label) return false;
 
 	const label = normalizeSearch(item.label);

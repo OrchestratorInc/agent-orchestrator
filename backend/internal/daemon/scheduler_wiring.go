@@ -45,6 +45,7 @@ func newM3Services(deps m2GatewayDeps) *m3Services {
 		},
 	})
 	m.Workflows = newWorkflowServiceWithAdmission(deps.Store, m.Scheduler)
+	m.Workflows.SetProviderProfiles(deps.Profiles)
 	m.Budget = budget.New(deps.Store, time.Now)
 	return m
 }
@@ -70,7 +71,7 @@ func (m *m3Services) resolveHarness(ctx context.Context, task domain.WorkflowTas
 		if !found {
 			break
 		}
-		return domain.AgentHarness(project.Config.Worker.Harness), nil
+		return project.Config.Worker.Harness, nil
 	}
 	return "", domain.ErrCapabilityEvidenceInsufficient
 }

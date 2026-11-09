@@ -29,7 +29,13 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderScopeID = s.newID()
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
-	cfg.Effort = ""
+	var fixed *ports.ChatTurnSettings
+	if cfg.Profile == "" {
+		cfg.Effort = ""
+	} else {
+		// 固定供应商不能采用原生短调用的低 effort 自动选择，空值也保留默认语义。
+		fixed = &ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort}
+	}
 	cfg.ReadOnly = true
 	cfg.DisableNetwork = true
 	cfg.DisableTools = true
@@ -49,13 +55,20 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		input, _ := json.Marshal(prompt)
 		prompt = instructions + "\n\nInput data (JSON string):\n" + string(input)
 	}
-	return runBackgroundTurn(ctx, harness, conversation, prompt)
+	return runBackgroundTurn(ctx, harness, conversation, prompt, fixed)
 }
 
-func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string) (string, error) {
-	settings, err := backgroundTaskSettings(ctx, conversation)
-	if err != nil {
-		return "", fmt.Errorf("configure background %s task: %w", harness, err)
+// runBackgroundTurn 在固定供应商选择与原生低成本策略之间保留明确边界，然后消费同一短调用事件流。
+func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, conversation ports.ChatConversation, prompt string, fixed *ports.ChatTurnSettings) (string, error) {
+	var settings ports.ChatTurnSettings
+	if fixed != nil {
+		settings = *fixed
+	} else {
+		var err error
+		settings, err = backgroundTaskSettings(ctx, conversation)
+		if err != nil {
+			return "", fmt.Errorf("configure background %s task: %w", harness, err)
+		}
 	}
 	turn, err := conversation.SendTurn(ctx, ports.ChatUserMessage{
 		Text:     prompt,

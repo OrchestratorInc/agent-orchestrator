@@ -860,7 +860,7 @@ func TestDestroyRetainsSessionWhenPIDCannotBeStopped(t *testing.T) {
 	rt.destroyWait = 0
 
 	err := rt.Destroy(context.Background(), ports.RuntimeHandle{ID: "sess-stuck"})
-	if err == nil || !strings.Contains(err.Error(), "still alive") || !strings.Contains(err.Error(), "access denied") {
+	if err == nil || !strings.Contains(err.Error(), "exit was not confirmed") || !strings.Contains(err.Error(), "access denied") {
 		t.Fatalf("Destroy error = %v, want force-kill and final-liveness evidence", err)
 	}
 	rt.mu.Lock()

@@ -6,13 +6,9 @@ import { agentModelsQueryOptions } from "./useAgentModelsQuery";
 import { useOfferedModels } from "./useOfferedModels";
 
 /**
- * The models and provider options a chat composer offers, for local and cloud chats alike.
- * `liveModelsLoaded` reports whether `controllerModels` is the provider's answer yet;
- * until it is, the agent's saved device catalog is shown so the picker never waits.
- * `runsOnDevice` is false for a chat whose agent runs elsewhere (a cloud worker): the
- * device catalog's availability marks describe this computer's CLI, not that one, and
- * its own list names its models, so the device catalog stands in only while that list
- * is empty.
+ * 为本地和云端聊天提供模型与供应商选项；liveModelsLoaded 表示实时目录是否已返回。
+ * 实时目录未返回时使用保存目录，仅本机回退路径按 runnableModels 收窄并保留已选项。
+ * 云端模型由其工作进程决定，不应用本机可运行范围及 CLI 可用性标记。
  */
 export function useChatModelChoices(
 	harness: string | undefined,
@@ -76,6 +72,7 @@ export function useChatModelChoices(
 	const { models } = useOfferedModels(harness, catalogModels, {
 		hostId,
 		keep: [...currentModels, ...currentModels.map((id) => id ? resolveClaudeChoice?.(id)?.id : undefined)],
+		runnableModels: runsOnDevice && showSavedCatalog && savedCatalog?.models?.length ? savedCatalog.runnableModels : undefined,
 	});
 	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
 	const claudeChoiceID = useMemo(

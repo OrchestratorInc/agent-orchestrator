@@ -103,6 +103,7 @@ func (r CapabilityReadiness) Valid() bool {
 // unknown means nobody asked or the answer did not arrive.
 type CapabilityState string
 
+// CapabilitySupported 要求肯定证据；未观察与明确不支持必须区分。
 const (
 	CapabilitySupported    CapabilityState = "supported"
 	CapabilityUnsupported  CapabilityState = "unsupported"
@@ -130,6 +131,7 @@ func (s CapabilityState) DeterminatelyUnsupported() bool { return s == Capabilit
 // CapabilitySurface is the interaction surface a harness was observed to offer.
 type CapabilitySurface string
 
+// CapabilitySurfaceChat 表示已观察到的 Chat 交互面。
 const (
 	CapabilitySurfaceChat    CapabilitySurface = "chat"
 	CapabilitySurfaceTUI     CapabilitySurface = "tui"
@@ -191,6 +193,7 @@ func (r CapabilityResume) State() CapabilityState {
 // acts on gives a user no gate.
 type CapabilityApproval string
 
+// CapabilityApprovalEnforced 表示已验证执行审批策略，不能由广告能力推定。
 const (
 	CapabilityApprovalEnforced       CapabilityApproval = "enforced"
 	CapabilityApprovalAdvertisedOnly CapabilityApproval = "advertised_only"
@@ -227,6 +230,7 @@ func (a CapabilityApproval) State() CapabilityState {
 // policy cannot be switched live without restarting the provider.
 type CapabilityApplyAt string
 
+// CapabilityApplyAtLaunch 表示审批策略仅在启动时生效。
 const (
 	CapabilityApplyAtLaunch  CapabilityApplyAt = "launch"
 	CapabilityApplyAtTurn    CapabilityApplyAt = "turn"
@@ -248,6 +252,7 @@ func (a CapabilityApplyAt) Valid() bool {
 // reports money, so cost is never exact even when usage is.
 type CapabilityUsage string
 
+// CapabilityUsageExact 表示用量计量精确，不代表费用精确。
 const (
 	CapabilityUsageExact     CapabilityUsage = "exact"
 	CapabilityUsageEstimated CapabilityUsage = "estimated"
@@ -279,6 +284,7 @@ func (u CapabilityUsage) State() CapabilityState {
 // feature, never on a harness name.
 type CapabilityFeature string
 
+// CapabilityFeatureStreaming 标识可以独立获取证据的功能。
 const (
 	CapabilityFeatureStreaming CapabilityFeature = "streaming"
 	CapabilityFeatureTools     CapabilityFeature = "tools"
@@ -335,6 +341,8 @@ func (c CapabilityModelChoice) Validate() error {
 // account path may ever be stored here.
 type HarnessCapabilitySnapshot struct {
 	Harness AgentHarness `json:"harness"`
+	// Profile 绑定宿主路由摘要；凭据身份仅保存在探测器内存中。
+	Profile string `json:"profile,omitempty"`
 
 	// Executable identifies the resolved binary for display and support triage.
 	// It must be a path or name only, never an argument containing a secret.

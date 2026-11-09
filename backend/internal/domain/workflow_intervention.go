@@ -67,6 +67,7 @@ func (m WorkflowInterventionMode) Valid() bool {
 // WorkflowInterventionState is the durable progress of one intervention.
 type WorkflowInterventionState string
 
+// WorkflowInterventionStateRequested 表示干预已记录，尚无执行回执。
 const (
 	WorkflowInterventionStateRequested WorkflowInterventionState = "requested"
 	WorkflowInterventionStateQueued    WorkflowInterventionState = "queued"
@@ -75,7 +76,7 @@ const (
 	WorkflowInterventionStateRejected  WorkflowInterventionState = "rejected"
 	WorkflowInterventionStateCancelled WorkflowInterventionState = "cancelled"
 	WorkflowInterventionStateUnknown   WorkflowInterventionState = "unknown"
-	// The stop-specific states. A stop never passes through applied: an interrupt
+	// WorkflowInterventionStateStopRequested starts the stop-specific states. A stop never passes through applied: an interrupt
 	// either has a receipt or it does not.
 	WorkflowInterventionStateStopRequested WorkflowInterventionState = "stop_requested"
 	WorkflowInterventionStateStopConfirmed WorkflowInterventionState = "stop_confirmed"

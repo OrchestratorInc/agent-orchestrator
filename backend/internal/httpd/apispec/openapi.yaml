@@ -17615,6 +17615,55 @@ paths:
       summary: Start a read-only planning task
       tags:
       - workflows
+  /api/v1/workflows/provider-profiles:
+    get:
+      operationId: listWorkflowProviderProfiles
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowProviderProfilesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 读取宿主供应商引用目录
+      tags:
+      - workflows
   /api/v1/workflows/recover-expired:
     post:
       operationId: recoverExpiredWorkflows
@@ -24639,6 +24688,27 @@ components:
       - providerTurnId
       - activityId
       type: object
+    ProviderProfileChoice:
+      properties:
+        contextWindow:
+          format: int64
+          type: integer
+        effort:
+          type: string
+        harness:
+          type: string
+        model:
+          type: string
+        name:
+          type: string
+        reference:
+          type: string
+      required:
+      - reference
+      - name
+      - harness
+      - model
+      type: object
     ProviderSwitchRequest:
       properties:
         autoCompactWindow:
@@ -29277,6 +29347,15 @@ components:
           type: array
       required:
       - candidates
+      type: object
+    WorkflowProviderProfilesResponse:
+      properties:
+        profiles:
+          items:
+            $ref: '#/components/schemas/ProviderProfileChoice'
+          type: array
+      required:
+      - profiles
       type: object
     WorkflowQualitySummaryResponse:
       properties:

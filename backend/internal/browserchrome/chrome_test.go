@@ -70,7 +70,8 @@ func (r *fakeRegistry) Lookup(name string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-func testInstaller(t *testing.T) (Installer, string, string) {
+// testInstaller 显式注入目录模式或内存注册表，所有文件均写入测试临时目录。
+func testInstaller(t *testing.T, registry hostRegistry) (Installer, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	chromeDir := filepath.Join(root, "Chrome")
@@ -98,6 +99,7 @@ func testInstaller(t *testing.T) (Installer, string, string) {
 		Paths:           NewPaths(filepath.Join(root, "data")),
 		Executable:      executable,
 		ExtensionSource: source,
+		registry:        func() hostRegistry { return registry },
 		Browsers: []Browser{
 			{Name: "Google Chrome", UserDataDir: chromeDir},
 			{Name: "Google Chrome Beta", UserDataDir: filepath.Join(root, "Chrome Beta")},
@@ -106,7 +108,7 @@ func testInstaller(t *testing.T) (Installer, string, string) {
 }
 
 func TestSetupRegistersInstalledChannelsOnly(t *testing.T) {
-	installer, chromeDir, root := testInstaller(t)
+	installer, chromeDir, root := testInstaller(t, nil)
 	if installer.Status().Enabled {
 		t.Fatal("enabled before setup")
 	}
@@ -176,7 +178,7 @@ func TestSetupRegistersInstalledChannelsOnly(t *testing.T) {
 }
 
 func TestRemoveKeepsForeignManifest(t *testing.T) {
-	installer, chromeDir, _ := testInstaller(t)
+	installer, chromeDir, _ := testInstaller(t, nil)
 	foreign := filepath.Join(chromeDir, "NativeMessagingHosts", HostName+".json")
 	if err := os.MkdirAll(filepath.Dir(foreign), 0o700); err != nil {
 		t.Fatal(err)
@@ -196,7 +198,7 @@ func TestRemoveKeepsForeignManifest(t *testing.T) {
 }
 
 func TestSetupWithoutChromeFails(t *testing.T) {
-	installer, _, root := testInstaller(t)
+	installer, _, root := testInstaller(t, nil)
 	installer.Browsers = []Browser{{Name: "Google Chrome", UserDataDir: filepath.Join(root, "missing")}}
 	if _, err := installer.Setup(); !errors.Is(err, ErrChromeNotFound) {
 		t.Fatalf("error = %v", err)
@@ -204,9 +206,8 @@ func TestSetupWithoutChromeFails(t *testing.T) {
 }
 
 func TestSetupUsesRegistryWhenPresent(t *testing.T) {
-	installer, _, _ := testInstaller(t)
 	reg := &fakeRegistry{values: map[string]string{}}
-	installer.registry = reg
+	installer, _, _ := testInstaller(t, reg)
 	status, err := installer.Setup()
 	if err != nil {
 		t.Fatal(err)
@@ -224,10 +225,8 @@ func TestSetupUsesRegistryWhenPresent(t *testing.T) {
 
 func TestRemoveKeepsAnotherInstallsRegistryEntry(t *testing.T) {
 	reg := &fakeRegistry{values: map[string]string{}}
-	first, _, _ := testInstaller(t)
-	first.registry = reg
-	second, _, _ := testInstaller(t) // another AO data directory
-	second.registry = reg
+	first, _, _ := testInstaller(t, reg)
+	second, _, _ := testInstaller(t, reg) // another AO data directory
 	if _, err := first.Setup(); err != nil {
 		t.Fatal(err)
 	}

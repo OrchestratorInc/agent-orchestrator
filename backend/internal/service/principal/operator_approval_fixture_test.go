@@ -1,12 +1,13 @@
 package principal_test
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // approvalFixture is a store with a controllable clock.

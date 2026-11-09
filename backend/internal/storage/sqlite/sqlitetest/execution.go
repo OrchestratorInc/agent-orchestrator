@@ -16,7 +16,7 @@ type ExecutionStore interface {
 }
 
 // ExecutionContext 为单次测试写显式加载内部许可；不续租、不接管任期，也不创建缺失 Admission。
-func ExecutionContext(t testing.TB, ctx context.Context, s ExecutionStore, id domain.WorkflowAttemptID, now time.Time) context.Context {
+func ExecutionContext(ctx context.Context, t testing.TB, s ExecutionStore, id domain.WorkflowAttemptID, now time.Time) context.Context {
 	t.Helper()
 	leader, err := s.GetSchedulerLeader(ctx)
 	if err != nil {

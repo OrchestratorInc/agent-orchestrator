@@ -3,11 +3,12 @@ package store_test
 import (
 	"context"
 	"errors"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // TestM4QualityAdmissionAndReviewerGeneration 删除质量放行或 Session 代际检查，会放行无证据后继或旧审查者。
@@ -59,7 +60,7 @@ func TestM4QualityAdmissionAndReviewerGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review task must start after Gate without waiting for its own review: %v", err)
 	}
-	permitCtx := func() context.Context { return sqlitetest.ExecutionContext(t, ctx, x.s, reviewer.ID, x.now) }
+	permitCtx := func() context.Context { return sqlitetest.ExecutionContext(ctx, t, x.s, reviewer.ID, x.now) }
 	b := domain.WorkflowAttemptBinding{AttemptID: reviewer.ID, WorkflowID: a.WorkflowID, TaskID: reviewer.TaskID, SpawnRequestID: "review-spawn", SpawnHash: strings.Repeat("a", 64)}
 	b, _, err = x.s.CreateWorkflowAttemptBinding(permitCtx(), b, nil, x.now)
 	if err != nil {

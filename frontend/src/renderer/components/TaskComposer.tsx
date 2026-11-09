@@ -609,6 +609,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const { models: localOfferedModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
+		// 云端回退目录仍遵循禁用设置，但不受本机凭据可运行范围限制。
+		runnableModels: isCloudProject ? undefined : localCatalog?.runnableModels,
 	});
 	// Named as the Cloud chat names them, from the catalog alone: Claude's "haiku" is
 	// the model its description names, which the worker's CLI runs.

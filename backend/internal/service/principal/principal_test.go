@@ -484,7 +484,6 @@ func TestUnconfiguredTokenTrustRefusesEverything(t *testing.T) {
 		"empty token":        principal.NewTokenTrust(""),
 		"entirely nil trust": nil,
 	} {
-		trust := trust
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			resolver := principal.NewResolver(
@@ -698,7 +697,6 @@ func TestAuditRecordValidation(t *testing.T) {
 		"no workflow":   func(r *principal.AuditRecord) { r.WorkflowID = "" },
 		"no subject":    func(r *principal.AuditRecord) { r.AttemptID = "" },
 	} {
-		mutate := mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			record := valid

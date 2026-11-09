@@ -25,11 +25,11 @@ func admitCollaborationSession(t *testing.T, s *sqlite.Store, attempt domain.Wor
 	t.Helper()
 	ctx := context.Background()
 	binding, repos := bindingIntent(attempt, projectID)
-	binding, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now), binding, repos, now)
+	binding, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now), binding, repos, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, _, err = s.TransitionWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now), attempt.ID,
+	binding, _, err = s.TransitionWorkflowAttemptBinding(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now), attempt.ID,
 		domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, now)
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +43,11 @@ func admitCollaborationSession(t *testing.T, s *sqlite.Store, attempt domain.Wor
 	record.ClientRequestID = binding.SpawnRequestID
 	record.ClientRequestHash = binding.SpawnHash
 	record.CreatedAt, record.UpdatedAt = now, now
-	session, _, err := s.CreateAdmittedSession(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now), record, admission, "", now)
+	session, _, err := s.CreateAdmittedSession(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now), record, admission, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.BindWorkflowAttemptSession(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now), attempt.ID, session.ID,
+	if _, _, err := s.BindWorkflowAttemptSession(sqlitetest.ExecutionContext(ctx, t, s, attempt.ID, now), attempt.ID, session.ID,
 		"collaboration-generation", domain.WorkflowBindingStateBoundReady, binding.Revision, now); err != nil {
 		t.Fatal(err)
 	}

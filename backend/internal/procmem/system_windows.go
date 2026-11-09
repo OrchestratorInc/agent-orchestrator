@@ -52,7 +52,7 @@ func ReadSystem() (System, error) {
 
 	var mem memoryStatusEx
 	mem.length = uint32(unsafe.Sizeof(mem))
-	ret, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&mem)))
+	ret, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&mem))) // #nosec G103 -- mem 按 MEMORYSTATUSEX 布局分配并写入 Sizeof 长度，同步调用期保持存活。
 	if ret == 0 {
 		return System{}, fmt.Errorf("procmem: GlobalMemoryStatusEx failed")
 	}
@@ -68,7 +68,7 @@ func ReadSystem() (System, error) {
 	// rather than a fabricated number; SwapPages is deliberately left at 0.
 
 	var idle, kernel, user windows.Filetime
-	ret, _, _ = procGetSystemTimes.Call(uintptr(unsafe.Pointer(&idle)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
+	ret, _, _ = procGetSystemTimes.Call(uintptr(unsafe.Pointer(&idle)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user))) // #nosec G103 -- 三个 x/sys FILETIME 缓冲分别接收固定 8 字节结果，地址只用于本次同步调用。
 	if ret != 0 {
 		// Kernel time already includes idle time on Windows, so total is
 		// kernel+user and busy is total minus idle — the standard formula

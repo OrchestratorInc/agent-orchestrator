@@ -3,8 +3,9 @@ package specgen_test
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec/specgen"
 	"gopkg.in/yaml.v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec/specgen"
 )
 
 // TestBuild_ArtifactFilesPreserveFrozenNull 删除冻结工件数组的豁免会使契约拒绝合法的无变更快照。

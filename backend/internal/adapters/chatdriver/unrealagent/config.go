@@ -46,6 +46,9 @@ func writeProviderConfig(cfg providerConfig) (string, error) {
 	return path, nil
 }
 
+// readProviderConfig 校验 AO 子命令传入的私有配置，拒绝未知字段和不安全路径。
+//
+//nolint:unused // provider.go 的 RunProvider 在 darwin/linux 调用；Windows 构建不包含该运行时。
 func readProviderConfig(path string) (providerConfig, error) {
 	file, err := os.Open(path) //nolint:gosec // path is supplied only by AO's hidden child command
 	if err != nil {

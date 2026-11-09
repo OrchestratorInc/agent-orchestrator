@@ -10,6 +10,7 @@ import (
 func planningOperations() []operation {
 	errors := []respUnit{{400, envelope.APIError{}}, {403, envelope.APIError{}}, {404, envelope.APIError{}}, {409, envelope.APIError{}}, {500, envelope.APIError{}}, {501, envelope.APIError{}}}
 	return []operation{
+		{method: "GET", path: "/api/v1/workflows/provider-profiles", id: "listWorkflowProviderProfiles", tag: "workflows", summary: "读取宿主供应商引用目录", resps: append([]respUnit{{200, controllers.WorkflowProviderProfilesResponse{}}}, errors...)},
 		{method: "GET", path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/capabilities", id: "getWorkflowAttemptCapabilities", tag: "workflows", summary: "Read negotiated capabilities for the bound session", pathParams: []any{controllers.WorkflowAttemptIDParam{}}, resps: append([]respUnit{{200, controllers.GetWorkflowCapabilitiesResponse{}}}, errors...)},
 		{method: "GET", path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions", id: "listWorkflowInterventionReceipts", tag: "workflows", summary: "Read durable intervention receipts for an attempt", pathParams: []any{controllers.WorkflowAttemptIDParam{}}, resps: append([]respUnit{{200, controllers.WorkflowInterventionReceiptsResponse{}}}, errors...)},
 		{method: "POST", path: "/api/v1/workflows/{workflowId}/replan", id: "startWorkflowReplan", tag: "workflows", summary: "Start a new planner after trusted stop", pathParams: []any{controllers.WorkflowIDParam{}}, reqBody: workflowsvc.ReplanInput{}, resps: append([]respUnit{{200, controllers.WorkflowTaskEnvelope{}}}, errors...)},

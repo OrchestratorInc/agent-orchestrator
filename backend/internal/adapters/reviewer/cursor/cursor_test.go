@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -225,7 +226,8 @@ func TestPreLaunchWritesIsolatedReviewerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profileInfo.Mode().Perm() != 0o700 {
+	// Windows mode 不编码 ACL；本例仍验证隔离写入，权限独占性仅在 Unix 断言。
+	if runtime.GOOS != "windows" && profileInfo.Mode().Perm() != 0o700 {
 		t.Fatalf("profile mode = %o, want 700", profileInfo.Mode().Perm())
 	}
 	configPath := filepath.Join(profileDir, cursorConfigFileName)
@@ -233,7 +235,7 @@ func TestPreLaunchWritesIsolatedReviewerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && configInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode = %o, want 600", configInfo.Mode().Perm())
 	}
 	trustPaths, err := filepath.Glob(filepath.Join(profileDir, "projects", "*", ".workspace-trusted"))
@@ -247,7 +249,14 @@ func TestPreLaunchWritesIsolatedReviewerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(trustData), workspace) || !strings.Contains(string(trustData), `"aoManaged": true`) {
+	var marker struct {
+		WorkspacePath string `json:"workspacePath"`
+		AOManaged     bool   `json:"aoManaged"`
+	}
+	if err := json.Unmarshal(trustData, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker.WorkspacePath != workspace || !marker.AOManaged {
 		t.Fatalf("reviewer trust marker = %s", trustData)
 	}
 	config := readReviewerConfig(t, configPath)

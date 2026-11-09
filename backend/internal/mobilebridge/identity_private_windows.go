@@ -17,12 +17,8 @@ func identityNeedsPrivacyRepair(ctx context.Context, path string) (bool, error) 
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return false, err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return false, err
 	}
@@ -71,7 +67,7 @@ func identityNeedsPrivacyRepair(ctx context.Context, path string) (bool, error) 
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return true, nil
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)) // #nosec G103 -- GetAce 返回系统校验 DACL 内的 ACCESS_ALLOWED_ACE；已检查 ACE 类型，SID 从 SidStart 读取并立即 IsValid。
 		if !sid.IsValid() || !sid.Equals(user.User.Sid) && !sid.Equals(system) && !sid.Equals(admins) {
 			return true, nil
 		}
@@ -95,12 +91,8 @@ func createPrivateIdentityTemp(ctx context.Context, root *os.Root) (*os.File, er
 		return nil, err
 	}
 	defer func() { _ = parent.Close() }()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return nil, err
 	}

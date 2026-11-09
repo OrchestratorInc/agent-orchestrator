@@ -29,32 +29,32 @@ func envValue(env []string, key string) string {
 // Every recipe pins the release, installs inside the release directory, keeps
 // the user's HOME and PATH out of the installer, and names where the CLI lands.
 func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
-	dir := "/data/harnesses/x/versions/v3"
+	dir := t.TempDir()
 	for target, want := range map[Target]struct {
 		env  map[string]string
 		args []string
 	}{
 		TargetOpencode: {env: map[string]string{"VERSION": "1.19.3"}, args: []string{"--no-modify-path"}},
-		TargetKimi:     {env: map[string]string{"KIMI_INSTALL_DIR": dir, "KIMI_CODE_HOME": dir + "/.install-home/.kimi-code", "KIMI_VERSION": "1.19.3", "KIMI_NO_MODIFY_PATH": "1"}},
-		TargetGoose:    {env: map[string]string{"GOOSE_BIN_DIR": dir + "/bin", "GOOSE_VERSION": "v1.19.3", "CONFIGURE": "false"}},
-		TargetMemcode:  {env: map[string]string{"MEMCODE_INSTALL_DIR": dir + "/bin", "MEMCODE_VERSION": "v1.19.3"}},
-		TargetFX:       {env: map[string]string{"FX_INSTALL_DIR": dir + "/bin"}, args: []string{"v1.19.3"}},
-		TargetOMP:      {env: map[string]string{"PI_INSTALL_DIR": dir + "/bin"}, args: []string{"--binary", "--ref", "v1.19.3"}},
+		TargetKimi:     {env: map[string]string{"KIMI_INSTALL_DIR": dir, "KIMI_CODE_HOME": filepath.Join(dir, ".install-home", ".kimi-code"), "KIMI_VERSION": "1.19.3", "KIMI_NO_MODIFY_PATH": "1"}},
+		TargetGoose:    {env: map[string]string{"GOOSE_BIN_DIR": filepath.Join(dir, "bin"), "GOOSE_VERSION": "v1.19.3", "CONFIGURE": "false"}},
+		TargetMemcode:  {env: map[string]string{"MEMCODE_INSTALL_DIR": filepath.Join(dir, "bin"), "MEMCODE_VERSION": "v1.19.3"}},
+		TargetFX:       {env: map[string]string{"FX_INSTALL_DIR": filepath.Join(dir, "bin")}, args: []string{"v1.19.3"}},
+		TargetOMP:      {env: map[string]string{"PI_INSTALL_DIR": filepath.Join(dir, "bin")}, args: []string{"--binary", "--ref", "v1.19.3"}},
 		TargetQwen: {env: map[string]string{
-			"QWEN_INSTALL_LIB_DIR": dir + "/lib", "QWEN_INSTALL_BIN_DIR": dir + "/bin",
+			"QWEN_INSTALL_LIB_DIR": filepath.Join(dir, "lib"), "QWEN_INSTALL_BIN_DIR": filepath.Join(dir, "bin"),
 			"QWEN_INSTALL_VERSION": "1.19.3", "QWEN_INSTALL_METHOD": "standalone", "QWEN_NO_MODIFY_PATH": "1",
 		}},
 		TargetCodex: {env: map[string]string{
-			"CODEX_HOME": dir + "/codex-home", "CODEX_INSTALL_DIR": dir + "/bin",
+			"CODEX_HOME": filepath.Join(dir, "codex-home"), "CODEX_INSTALL_DIR": filepath.Join(dir, "bin"),
 			"CODEX_RELEASE": "1.19.3", "CODEX_NON_INTERACTIVE": "1",
 		}},
 		TargetOpencodeV2: {env: map[string]string{"VERSION": "1.19.3"}, args: []string{"--no-modify-path"}},
 		TargetAmp:        {env: map[string]string{"AMP_HOME": dir, "AMP_VERSION": "1.19.3"}},
 		TargetAutohand: {env: map[string]string{
-			"AUTOHAND_INSTALL_DIR": dir + "/bin", "AUTOHAND_VERSION": "1.19.3",
+			"AUTOHAND_INSTALL_DIR": filepath.Join(dir, "bin"), "AUTOHAND_VERSION": "1.19.3",
 			"AUTOHAND_SKIP_ZIT_INSTALL": "1", "AUTOHAND_SKIP_COMPUTER_CONTROL_INSTALL": "1", "AUTOHAND_INSTALL_FIRST_RUN": "no",
 		}},
-		TargetAgy:   {args: []string{"--dir", dir + "/bin"}},
+		TargetAgy:   {args: []string{"--dir", filepath.Join(dir, "bin")}},
 		TargetDroid: {},
 	} {
 		t.Run(string(target), func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 				t.Fatal("no recipe")
 			}
 			env := recipe.env(dir, "1.19.3")
-			if home := envValue(env, "HOME"); !strings.HasPrefix(home, dir+"/") {
+			if home := envValue(env, "HOME"); !strings.HasPrefix(home, dir+string(filepath.Separator)) {
 				t.Fatalf("HOME = %q, want a directory inside the release", home)
 			}
 			if path := envValue(env, "PATH"); path != managedInstallerPath {
@@ -177,12 +177,13 @@ func assertResolvesInto(t *testing.T, launcher, release string) {
 // Droid's own script kills every running droid, so AO downloads the pinned
 // release and its checksum from where the script gets them.
 func TestDroidDownloadsThePinnedReleaseWithoutItsScript(t *testing.T) {
-	argv, err := droidDownloadCommand("/rel/v2", "0.244.0", "darwin", "arm64")
+	release := t.TempDir()
+	argv, err := droidDownloadCommand(release, "0.244.0", "darwin", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "https://downloads.factory.ai/factory-cli/releases/0.244.0/darwin/arm64/droid"
-	if len(argv) != 7 || argv[0] != "/bin/sh" || argv[4] != want || argv[5] != want+".sha256" || argv[6] != "/rel/v2/bin/droid" {
+	if len(argv) != 7 || argv[0] != "/bin/sh" || argv[4] != want || argv[5] != want+".sha256" || argv[6] != filepath.Join(release, "bin", "droid") {
 		t.Fatalf("argv = %q", argv)
 	}
 	if strings.Contains(argv[2], "kill") {

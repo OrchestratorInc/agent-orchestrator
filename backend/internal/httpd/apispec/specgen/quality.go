@@ -1,10 +1,11 @@
 package specgen
 
 import (
+	"net/http"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"net/http"
 )
 
 // qualityOperations 将正式质量路由及精确批准正文纳入同一代码生成契约。

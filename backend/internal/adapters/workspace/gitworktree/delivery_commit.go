@@ -1,6 +1,7 @@
 package gitworktree
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -112,7 +113,7 @@ func ObserveDeliveryCommit(ctx context.Context, a domain.ArtifactSnapshot, expec
 	if err != nil {
 		return "unknown", err
 	}
-	if string(value) != string(body) {
+	if !bytes.Equal(value, body) {
 		return "unknown", domain.ErrArtifactStale
 	}
 	return "committed", nil

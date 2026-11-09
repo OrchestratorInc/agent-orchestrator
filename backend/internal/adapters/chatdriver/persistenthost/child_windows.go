@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,8 +39,13 @@ func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 	}
 	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
+	// x/sys 此包装接收 uintptr；显式固定地址，防止调用期间 GC 或栈移动使指针失效。
+	var pinned runtime.Pinner
+	pinned.Pin(&limits)
+	_, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))) // #nosec G103 -- x/sys 结构匹配 Win32 布局且长度为 Sizeof；Pinner 保持缓冲存活并固定地址直到同步调用结束。
+	pinned.Unpin()
+	if err != nil {
 		_ = windows.CloseHandle(job)
 		return nil, fmt.Errorf("set provider job limit: %w", err)
 	}
@@ -53,8 +59,9 @@ func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 		_ = windows.CloseHandle(job)
 		return nil, err
 	}
+	pid := uint32(cmd.Process.Pid) // #nosec G115 -- 唯一来源为上方成功的 cmd.Start，Windows CreateProcess 返回 DWORD PID，非外部输入。
 	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
-		false, uint32(cmd.Process.Pid))
+		false, pid)
 	if err != nil {
 		return abort(fmt.Errorf("open provider process for job: %w", err))
 	}
@@ -63,13 +70,14 @@ func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 	if assignErr != nil {
 		return abort(fmt.Errorf("assign provider to job: %w", assignErr))
 	}
-	if err := resumeProviderProcess(cmd.Process.Pid); err != nil {
+	if err := resumeProviderProcess(pid); err != nil {
 		return abort(fmt.Errorf("resume provider process: %w", err))
 	}
 	return func() { _ = windows.CloseHandle(job) }, nil
 }
 
-func resumeProviderProcess(pid int) error {
+// resumeProviderProcess 只恢复刚启动的挂起进程的初始线程，PID 沿用系统 DWORD。
+func resumeProviderProcess(pid uint32) error {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
 	if err != nil {
 		return err
@@ -78,7 +86,7 @@ func resumeProviderProcess(pid int) error {
 	var entry windows.ThreadEntry32
 	entry.Size = uint32(unsafe.Sizeof(entry))
 	for err = windows.Thread32First(snapshot, &entry); err == nil; err = windows.Thread32Next(snapshot, &entry) {
-		if entry.OwnerProcessID != uint32(pid) {
+		if entry.OwnerProcessID != pid {
 			continue
 		}
 		thread, openErr := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)

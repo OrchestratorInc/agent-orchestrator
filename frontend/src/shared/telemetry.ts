@@ -152,36 +152,10 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 	return undefined;
 }
 
+/** 与 daemon 使用同一恢复锁串行读取、创建和空文件修复，避免 Windows 读删冲突。 */
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
 	const file = path.join(dataDir, "telemetry_install_id");
 	await mkdir(dataDir, { recursive: true });
-	for (let attempt = 0; attempt < 5; attempt++) {
-		try {
-			const existing = (await readFile(file, "utf8")).trim();
-			if (existing) return existing;
-			return recoverEmptyTelemetryInstallId(dataDir, file);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-
-		const distinctId = `ins_${randomUUID()}`;
-		const temporary = path.join(dataDir, `.telemetry_install_id_${randomUUID()}`);
-		try {
-			await writeFile(temporary, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
-			await link(temporary, file);
-			return distinctId;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		} finally {
-			await unlink(temporary).catch(() => {});
-		}
-	}
-	throw new Error("telemetry install id creation did not settle");
-}
-
-// Both the daemon and Electron use this lock before repairing a legacy empty
-// file. Re-read under the lock so a second repair cannot erase the first ID.
-async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Promise<string> {
 	const lock = `${file}.recovery`;
 	const deadline = Date.now() + 20_000;
 	for (;;) {
@@ -189,7 +163,14 @@ async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Pr
 			await mkdir(lock, { mode: 0o700 });
 			break;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			if (Date.now() > deadline) throw new Error("timed out waiting for telemetry install id recovery", { cause: error });
+			const code = (error as NodeJS.ErrnoException).code;
+			// Windows 删除未完成时，同名 mkdir 可暂时返回权限错误；仍受上方截止约束。
+			if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				continue;
+			}
+			if (code !== "EEXIST") throw error;
 			let age: number;
 			try {
 				age = Date.now() - (await stat(lock)).mtimeMs;
@@ -198,22 +179,38 @@ async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Pr
 				throw statError;
 			}
 			if (age > 10_000) {
-				await rmdir(lock).catch(() => {});
+				try {
+					await rmdir(lock);
+				} catch (removeError) {
+					if ((removeError as NodeJS.ErrnoException).code !== "ENOENT") throw removeError;
+				}
 				continue;
 			}
-			if (Date.now() > deadline) throw new Error("timed out waiting for telemetry install id recovery");
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 	}
 	try {
-		try {
-			const existing = (await readFile(file, "utf8")).trim();
-			if (existing) return existing;
-			await unlink(file);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				const existing = (await readFile(file, "utf8")).trim();
+				if (existing) return existing;
+				await unlink(file);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			const distinctId = `ins_${randomUUID()}`;
+			const temporary = path.join(dataDir, `.telemetry_install_id_${randomUUID()}`);
+			try {
+				await writeFile(temporary, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
+				await link(temporary, file);
+				return distinctId;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			} finally {
+				await unlink(temporary).catch(() => {});
+			}
 		}
-		return loadOrCreateTelemetryInstallId(dataDir);
+		throw new Error("telemetry install id creation did not settle");
 	} finally {
 		await rmdir(lock).catch(() => {});
 	}

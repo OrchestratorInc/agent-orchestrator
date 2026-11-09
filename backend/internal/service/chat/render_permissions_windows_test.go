@@ -11,12 +11,8 @@ import (
 // 非当前用户、System 或 Administrators 的有效授权，不用 POSIX mode 代替访问控制。
 func assertRenderArtifactPrivate(t *testing.T, file string) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,6 +28,11 @@ func Alive(pid int) bool {
 	return !isZombie(pid)
 }
 
+// Probe 保留 Unix 既有 Kill/ps 语义；本次只调整 Windows 查询失败的分类。
+func Probe(pid int) (bool, error) {
+	return Alive(pid), nil
+}
+
 func isZombie(pid int) bool {
 	out, err := aoprocess.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {

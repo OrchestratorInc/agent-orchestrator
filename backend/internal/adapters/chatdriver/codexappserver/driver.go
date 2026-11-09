@@ -79,6 +79,7 @@ func (fixedCodexPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, erro
 
 // Driver opens Codex conversations over `codex app-server`.
 type Driver struct {
+	profiles     ports.ProviderProfiles
 	plugin       codexPlugin
 	log          *slog.Logger
 	spawn        spawnFunc
@@ -102,7 +103,7 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 // conversation without creating a provider thread.
 func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	driver := New(fixedCodexPlugin(binary), slog.New(slog.DiscardHandler))
-	conv, err := driver.connect(ctx, workdir, env, "")
+	conv, err := driver.connect(ctx, workdir, env, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
-	conv, err := d.connect(probeCtx, workdir, nil, "")
+	conv, err := d.connect(probeCtx, workdir, nil, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +230,7 @@ func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[str
 			workdir = os.TempDir()
 		}
 	}
-	conv, err := d.connect(ctx, workdir, env, "")
+	conv, err := d.connect(ctx, workdir, env, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +273,7 @@ func (v codexVersion) String() string {
 
 func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 	cmd := aoprocess.CommandContext(ctx, bin, "--version")
-	cmd.Env = codexProcessEnv(ctx, bin, nil)
+	cmd.Env = codexProcessEnv(ctx, bin, nil, "")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -282,6 +283,11 @@ func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 
 // Start opens a new Codex thread in the session worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	profileConfig, prepare, identity, err := d.profileLaunch(ctx, cfg.Profile, cfg.Model, cfg.Effort, cfg.Env, cfg.PrepareEnv)
+	if err != nil {
+		return nil, err
+	}
+	cfg.PrepareEnv = prepare
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -292,7 +298,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, identity,
 	)
 	if err != nil {
 		return nil, err
@@ -307,6 +313,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
 	conv.disableNetwork = cfg.DisableNetwork
+	conv.profile = cfg.Profile
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"cwd":               cfg.WorkspacePath,
@@ -326,6 +333,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}
+	applyProfileConfig(params, profileConfig)
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
 	}
@@ -348,6 +356,11 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, errors.New("thread/start returned no thread id")
 	}
 
+	// 空 effort 固定的是供应商默认策略，不要求 Provider 把有效默认值报告为空。
+	if cfg.Profile != "" && (resp.Model != cfg.Model || cfg.Effort != "" && resp.ReasoningEffort != cfg.Effort) {
+		_ = conv.Terminate()
+		return nil, errors.New("provider did not confirm the pinned model and effort")
+	}
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -361,6 +374,11 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 // Resume reattaches to a stored Codex thread after a daemon or app-server
 // restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	profileConfig, prepare, identity, err := d.profileLaunch(ctx, cfg.Profile, cfg.Model, cfg.Effort, cfg.Env, cfg.PrepareEnv)
+	if err != nil {
+		return nil, err
+	}
+	cfg.PrepareEnv = prepare
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -372,7 +390,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly, identity,
 	)
 	if err != nil {
 		return nil, err
@@ -382,6 +400,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
+		conv.profile = cfg.Profile
 		conv.launchMode = cfg.Permissions
 		// Neither the tier nor the collaboration mode the thread was left on is
 		// known; the next turn states both.
@@ -392,6 +411,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.profile = cfg.Profile
 	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          cfg.ProviderConversationID,
@@ -409,6 +429,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}
+	applyProfileConfig(params, profileConfig)
 	// Developer instructions are launch context, not durable conversation
 	// history. Reapply AO's current standing role when app-server reconstructs a
 	// native thread, just as the TUI adapter does with its resume command.
@@ -437,6 +458,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		if err = conv.conn.request(resumeCtx, "thread/start", params, &started); err == nil && started.Thread.ID == "" {
 			err = errors.New("thread/start returned no thread id")
 		}
+		if err == nil && cfg.Profile != "" && (started.Model != cfg.Model || cfg.Effort != "" && started.ReasoningEffort != cfg.Effort) {
+			err = errors.New("provider did not confirm the pinned model and effort")
+		}
 		if err != nil {
 			_ = conv.Terminate()
 			return nil, fmt.Errorf("%w: start in place of a missing thread: %w", ports.ErrChatResumeFailed, err)
@@ -457,6 +481,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume does not report the collaboration mode, and Plan sticks to
 	// the thread across a restart, so the next turn states it.
 	conv.planUnknown = true
+	if cfg.Profile != "" && (resp.Model != cfg.Model || cfg.Effort != "" && resp.ReasoningEffort != cfg.Effort) {
+		_ = conv.Terminate()
+		return nil, errors.New("provider did not confirm the pinned model and effort")
+	}
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
@@ -523,13 +551,13 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 }
 
 // connect spawns app-server and completes the initialize handshake.
-func (d *Driver) connect(ctx context.Context, workdir string, env map[string]string, providerScopeID string) (*conversation, error) {
+func (d *Driver) connect(ctx context.Context, workdir string, env map[string]string, providerScopeID, profileIdentity string) (*conversation, error) {
 	bin, err := d.plugin.ResolveBinary(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 
-	proc, err := d.spawn(ctx, bin, workdir, codexProcessEnv(ctx, bin, env))
+	proc, err := d.spawn(ctx, bin, workdir, codexProcessEnv(ctx, bin, env, profileIdentity))
 	if err != nil {
 		return nil, fmt.Errorf("%w: launch app-server: %w", ports.ErrChatDriverUnavailable, err)
 	}
@@ -550,6 +578,7 @@ func (d *Driver) connectSession(
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
 	reconnectOnly bool,
+	profile string,
 ) (*conversation, bool, error) {
 	// Injected driver tests intentionally retain the direct pipe launcher. The
 	// shipped driver uses spawnAppServer and therefore the persistent host.
@@ -564,7 +593,7 @@ func (d *Driver) connectSession(
 				return nil, false, err
 			}
 		}
-		conv, err := d.connect(ctx, workdir, env, providerScopeID)
+		conv, err := d.connect(ctx, workdir, env, providerScopeID, profile)
 		return conv, false, err
 	}
 	var bin string
@@ -576,12 +605,13 @@ func (d *Driver) connectSession(
 		}
 	}
 	hostConfig := persistenthost.Config{
-		SessionID:     string(sessionID),
-		ReconnectOnly: reconnectOnly,
-		DataDir:       dataDir,
-		Workdir:       workdir,
-		Env:           envSlice(env),
-		Argv:          []string{bin, "app-server"},
+		OwnershipFingerprint: profile,
+		SessionID:            string(sessionID),
+		ReconnectOnly:        reconnectOnly,
+		DataDir:              dataDir,
+		Workdir:              workdir,
+		Env:                  envSlice(env),
+		Argv:                 []string{bin, "app-server"},
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -590,7 +620,7 @@ func (d *Driver) connectSession(
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
+				Env: codexProcessEnv(prepareCtx, bin, preparedEnv, profile), Argv: []string{bin, "app-server"},
 			}, nil
 		}
 	}
@@ -803,7 +833,7 @@ func envSlice(env map[string]string) []string {
 // resolved npm launcher can be absolute and still depend on `#!/usr/bin/env
 // node`; Finder-launched daemons commonly resolve the launcher from inventory
 // while omitting the Node version manager from PATH.
-func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []string {
+func codexProcessEnv(ctx context.Context, bin string, env map[string]string, profileIdentity string) []string {
 	overlay := make(map[string]string, len(env)+1)
 	for key, value := range env {
 		overlay[key] = value
@@ -812,18 +842,26 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 		overlay["PATH"] = os.Getenv("PATH")
 	}
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(agentlaunch.Executable, overlay["AO_DATA_DIR"]))
-	return envSlice(overlay)
+	result := envSlice(overlay)
+	// 只有 profileLaunch 验证过的启动回调才可在共享过滤后注入规范化密钥。
+	if profileIdentity != "" {
+		result = append(result, ports.ProviderProfileKeyEnv+"="+env[ports.ProviderProfileKeyEnv])
+	}
+	return result
 }
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if cfg.Profile != "" {
+		return nil, fmt.Errorf("provider profile does not support native side forks")
+	}
 	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
 		return nil, errors.New("source thread and exact turn anchor are required")
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
 	}
-	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, "")
 	if err != nil {
 		return nil, err
 	}

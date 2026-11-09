@@ -276,7 +276,7 @@ func (c *Coordinator) Steer(ctx context.Context, request SteerRequest) (Outcome,
 	}
 	if strings.TrimSpace(request.TargetProviderTurnID) == "" {
 		return Outcome{
-			ReasonCode:     string(domain.ErrInterventionTurnRequired.Error()),
+			ReasonCode:     domain.ErrInterventionTurnRequired.Error(),
 			QueueAvailable: true,
 		}, fmt.Errorf("%w: a steer must name the turn it joins", domain.ErrInterventionTurnRequired)
 	}
@@ -913,7 +913,7 @@ func (c *Coordinator) resolveTarget(
 	if !found {
 		return domain.WorkflowAttemptBinding{}, nil, ports.SessionObservation{}, &Outcome{
 			Frozen:     true,
-			ReasonCode: string(domain.ErrWorkflowBindingNotFound.Error()),
+			ReasonCode: domain.ErrWorkflowBindingNotFound.Error(),
 		}, domain.ErrWorkflowBindingNotFound
 	}
 	if binding.SessionID == nil {
@@ -950,7 +950,7 @@ func (c *Coordinator) resolveTarget(
 	observation, err := c.gateway.InspectSession(ctx, *binding.SessionID)
 	if err != nil {
 		// An unreadable session cannot produce a trustworthy receipt.
-		return domain.WorkflowAttemptBinding{}, nil, ports.SessionObservation{}, &Outcome{
+		return domain.WorkflowAttemptBinding{}, nil, ports.SessionObservation{}, &Outcome{ //nolint:nilerr // Frozen 结果闭锁副作用，nil error 不表示获准执行。
 			Frozen:     true,
 			ReasonCode: "session_not_live",
 		}, nil
@@ -958,7 +958,7 @@ func (c *Coordinator) resolveTarget(
 	if fenceErr := observation.ValidateFence(*binding.SessionID, binding.ControllerGeneration); fenceErr != nil {
 		// The evidence describes a different session, a replaced controller, or a
 		// terminated session. Acting on it would fence the wrong owner.
-		return binding, nil, observation, &Outcome{
+		return binding, nil, observation, &Outcome{ //nolint:nilerr // Frozen 结果闭锁副作用，nil error 不表示获准执行。
 			Frozen:     true,
 			ReasonCode: "session_fence_failed",
 		}, nil

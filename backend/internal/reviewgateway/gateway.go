@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -88,7 +89,7 @@ func PrepareHostTrustedEnvironment(dataDir, reviewerID string) (Environment, err
 		ConfigRoot:       filepath.Join(root, "config"), StateRoot: filepath.Join(root, "state"),
 		CacheRoot: filepath.Join(root, "cache"), TempRoot: filepath.Join(root, "tmp"),
 	}
-	for _, dir := range []string{env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
+	for _, dir := range []string{filepath.Join(dataDir, "reviewer-runtime"), env.Root, env.WorkingDirectory, env.ConfigRoot, env.StateRoot, env.CacheRoot, env.TempRoot} {
 		if err := ensurePrivateDir(dir); err != nil {
 			return Environment{}, err
 		}
@@ -130,7 +131,12 @@ func PrepareEnvironment(dataDir string, manifest Manifest) (Environment, error) 
 	}
 	sum := sha256.Sum256(raw)
 	env.ManifestPath = filepath.Join(root, "manifests", hex.EncodeToString(sum[:])+".json")
-	if prior, readErr := os.ReadFile(env.ManifestPath); readErr == nil {
+	if priorFile, readErr := openPrivateManifest(env.ManifestPath, false); readErr == nil {
+		prior, readErr := io.ReadAll(io.LimitReader(priorFile, int64(len(raw))+1))
+		closeErr := priorFile.Close()
+		if readErr != nil || closeErr != nil {
+			return Environment{}, fmt.Errorf("review gateway: read manifest: %w", errors.Join(readErr, closeErr))
+		}
 		if !bytes.Equal(prior, raw) {
 			return Environment{}, errors.New("review gateway: content-addressed manifest collision")
 		}
@@ -138,7 +144,7 @@ func PrepareEnvironment(dataDir string, manifest Manifest) (Environment, error) 
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return Environment{}, fmt.Errorf("review gateway: inspect manifest: %w", readErr)
 	}
-	f, err := os.OpenFile(env.ManifestPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := openPrivateManifest(env.ManifestPath, true)
 	if err != nil {
 		return Environment{}, fmt.Errorf("review gateway: create manifest: %w", err)
 	}
@@ -214,18 +220,4 @@ func validGitHubSegment(segment string) bool {
 		}
 	}
 	return true
-}
-
-func ensurePrivateDir(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf("review gateway: create private directory: %w", err)
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("review gateway: private path is not a real directory")
-	}
-	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // directories require execute permission and remain owner-only
-		return fmt.Errorf("review gateway: secure private directory: %w", err)
-	}
-	return nil
 }

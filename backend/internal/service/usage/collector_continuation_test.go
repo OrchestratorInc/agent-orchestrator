@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func TestCollectorDiscoversClaudeContinuationInWorkspaceDir(t *testing.T) {
 	collector := NewCollector(store, SourceRoots{ClaudeProjects: claudeRoot}, nil)
 	writeUsageFixture(t, filepath.Join(claudeRoot, "encoded-worktree", continuationNativeB+".jsonl"),
 		`{"type":"last-prompt","sessionId":"`+continuationNativeB+`"}`+"\n"+
-			`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")
+			claudeContinuationRecord(t, continuationNativeB, worktree))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 
 	sources := continuationBindingIDs(t, store, session.ID)
@@ -86,7 +87,7 @@ func TestCollectorContinuationDiscoveryIsIdempotent(t *testing.T) {
 
 	collector := NewCollector(store, SourceRoots{ClaudeProjects: claudeRoot}, nil)
 	writeUsageFixture(t, filepath.Join(claudeRoot, "encoded-worktree", continuationNativeB+".jsonl"),
-		`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")
+		claudeContinuationRecord(t, continuationNativeB, worktree))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 
@@ -111,7 +112,7 @@ func TestCollectorContinuationDiscoveryIgnoresCwdMismatch(t *testing.T) {
 
 	collector := NewCollector(store, SourceRoots{ClaudeProjects: claudeRoot}, nil)
 	writeUsageFixture(t, filepath.Join(claudeRoot, "encoded-worktree", continuationNativeB+".jsonl"),
-		`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+filepath.Join(worktree, "elsewhere")+`"}`+"\n")
+		claudeContinuationRecord(t, continuationNativeB, filepath.Join(worktree, "elsewhere")))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 
 	sources := continuationBindingIDs(t, store, session.ID)
@@ -138,7 +139,7 @@ func TestCollectorContinuationDiscoveryIgnoresPathBoundToAnotherSession(t *testi
 	)
 	claimedPath := filepath.Join(claudeRoot, "encoded-worktree", continuationNativeB+".jsonl")
 	writeUsageFixture(t, claimedPath,
-		`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")
+		claudeContinuationRecord(t, continuationNativeB, worktree))
 	identity, err := SourceIdentity(ctx, claimedPath)
 	mustNoError(t, err)
 	// Production always stores the resolved (symlink-followed) path; mirror that.
@@ -214,7 +215,7 @@ func TestCollectorContinuationDiscoveryIgnoresSessionIdFilenameMismatch(t *testi
 	// would strand a zero-source binding that fails every reconcile pass.
 	writeUsageFixture(t, filepath.Join(claudeRoot, "encoded-worktree", "mismatched.jsonl"),
 		`{"type":"last-prompt","sessionId":"`+continuationNativeB+`"}`+"\n"+
-			`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")
+			claudeContinuationRecord(t, continuationNativeB, worktree))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 	mustNoError(t, collector.ReconcileSources(ctx, 8))
 
@@ -222,4 +223,12 @@ func TestCollectorContinuationDiscoveryIgnoresSessionIdFilenameMismatch(t *testi
 	if _, ok := sources[continuationNativeB]; ok {
 		t.Fatalf("filename/sessionId mismatch must not mint a binding; bindings=%v", sources)
 	}
+}
+
+// claudeContinuationRecord 用 JSON 编码路径，让 Windows 分隔符参与真实 cwd 归属校验。
+func claudeContinuationRecord(t *testing.T, nativeID, cwd string) string {
+	t.Helper()
+	line, err := json.Marshal(map[string]string{"type": "user", "sessionId": nativeID, "cwd": cwd})
+	mustNoError(t, err)
+	return string(line) + "\n"
 }

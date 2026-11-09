@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // TerminalProviderSwitcher is late-bound during daemon construction.
@@ -144,6 +145,9 @@ func (s *Service) messageDelivered(ctx context.Context, id domain.SessionID, cli
 }
 
 func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+	if err := providerprofile.RefuseNativeTransition(ctx, s.store, id); err != nil {
+		return err
+	}
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}

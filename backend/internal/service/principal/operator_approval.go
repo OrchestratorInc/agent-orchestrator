@@ -350,12 +350,12 @@ func NewApprovalStore(opts ApprovalStoreOptions) *ApprovalStore {
 	if newCode == nil {
 		newCode = randomApprovalCode
 	}
-	max := opts.Max
-	if max <= 0 {
-		max = maxApprovals
+	limit := opts.Max
+	if limit <= 0 {
+		limit = maxApprovals
 	}
 	return &ApprovalStore{
-		ttl: ttl, clock: clock, newID: newID, newCode: newCode, max: max,
+		ttl: ttl, clock: clock, newID: newID, newCode: newCode, max: limit,
 		entries: make(map[string]Approval),
 	}
 }
@@ -749,7 +749,7 @@ type approvalBindingKey struct{}
 // The handler MUST call this before deriving the caller: an approval presented without a
 // binding is refused (fail closed), so forgetting the call disables the approval path rather
 // than weakening it.
-func WithApprovalBinding(req *http.Request, method, path string, digest string) *http.Request {
+func WithApprovalBinding(req *http.Request, method, path, digest string) *http.Request {
 	binding := approvalBinding{
 		method: strings.ToUpper(strings.TrimSpace(method)),
 		path:   strings.TrimSpace(path),

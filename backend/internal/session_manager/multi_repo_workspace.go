@@ -131,7 +131,6 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 		if createErr != nil {
 			return rollback(fmt.Errorf("repo %s: %w", plan.repoKey, createErr))
 		}
-		ws.RepoPath = plan.project.Path
 		if other, ok := seenPaths[filepath.Clean(ws.Path)]; ok {
 			// Two repos landed on one directory. Destroy the one just created so
 			// the conflict costs nothing beyond this spawn.
@@ -240,7 +239,7 @@ func (m *Manager) resolveMultiRepoPlans(
 
 		record, ok, err := m.store.GetProject(ctx, string(repo.ProjectID))
 		if err != nil {
-			return nil, fmt.Errorf("%w: load project %s: %v", ErrMultiRepoProjectUnresolved, repo.ProjectID, err)
+			return nil, fmt.Errorf("%w: load project %s: %s", ErrMultiRepoProjectUnresolved, repo.ProjectID, err.Error())
 		}
 		if !ok {
 			return nil, fmt.Errorf("%w: project %s (repo %s) is not registered",
@@ -340,7 +339,7 @@ func (m *Manager) verifyRepoWorktreeRepo(ctx context.Context, row ports.Workspac
 	}
 	project, found, err := m.store.GetProject(ctx, expectedProject)
 	if err != nil {
-		return fmt.Errorf("%w: load project %s: %v", ErrMultiRepoRepoMismatch, expectedProject, err)
+		return fmt.Errorf("%w: load project %s: %s", ErrMultiRepoRepoMismatch, expectedProject, err.Error())
 	}
 	if !found || project.ID != string(row.ProjectID) || !sameWorkspacePath(row.RepoPath, project.Path) {
 		return fmt.Errorf("%w: repo %s is not registered at project %s", ErrMultiRepoRepoMismatch, row.RepoName, expectedProject)
@@ -402,6 +401,7 @@ func worktreeContainsCommit(ctx context.Context, path, sha string) bool {
 // repository containing path. A non-zero exit is only "no" when git says so
 // (exit 1); any other failure is an error, so a caller never records divergence
 // for a question git could not answer.
+// Git 失败只作为文本诊断，调用方只能依据本层 WorktreeUnverified 分类，不能视作已证实的历史分叉。
 func gitIsAncestor(ctx context.Context, path, ancestor, descendant string) (bool, error) {
 	cmd := aoprocess.CommandContext(ctx, "git",
 		"-C", path, "merge-base", "--is-ancestor", "--end-of-options", ancestor, descendant)
@@ -414,7 +414,7 @@ func gitIsAncestor(ctx context.Context, path, ancestor, descendant string) (bool
 		return false, nil
 	}
 	return false, fmt.Errorf("%w: %s: merge-base --is-ancestor %s %s: %v: %s",
-		ErrMultiRepoWorktreeUnverified, path, ancestor, descendant, err, strings.TrimSpace(string(out)))
+		ErrMultiRepoWorktreeUnverified, path, ancestor, descendant, err.Error(), strings.TrimSpace(string(out)))
 }
 
 // sameWorkspacePath compares two paths the way a filesystem on this host does:
@@ -467,7 +467,7 @@ func (m *Manager) rollbackMultiRepoWorktrees(ctx context.Context, created []port
 
 // multiRepoRows 从持久化记录恢复授权归属；当前目录只供验证，不能成为身份来源。
 // 缺少身份的旧记录仍交给恢复检查闭锁，不伪造根 Session 的 ProjectID。
-func (m *Manager) multiRepoRows(ctx context.Context, rec domain.SessionRecord, rows []domain.SessionWorktreeRecord) []ports.WorkspaceRepoInfo {
+func (m *Manager) multiRepoRows(rows []domain.SessionWorktreeRecord) []ports.WorkspaceRepoInfo {
 	out := make([]ports.WorkspaceRepoInfo, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, ports.WorkspaceRepoInfo{
@@ -752,7 +752,7 @@ func (m *Manager) multiRepoSessionRows(ctx context.Context, rec domain.SessionRe
 	if len(expected) > 0 && len(byKey) != 0 {
 		return nil, true, fmt.Errorf("%w: session %s has an unexpected repository record", ErrMultiRepoRepoMismatch, rec.ID)
 	}
-	infos := m.multiRepoRows(ctx, rec, rows)
+	infos := m.multiRepoRows(rows)
 	sortRepoInfosByKey(infos)
 	return infos, true, nil
 }

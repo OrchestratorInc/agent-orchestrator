@@ -7,13 +7,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	schedulersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/scheduler"
-	"github.com/go-chi/chi/v5"
 )
 
 // SchedulerService 只提供观测和批准后的策略控制，不向 HTTP 暴露续租或调度权限。

@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/workflow"
 )
 
+// SampleInterval 限制资源采样频率，避免首个样本冒充完整区间。
 const (
 	SampleInterval = 5 * time.Second
 	ScanInterval   = 15 * time.Second
@@ -163,7 +164,7 @@ func (s *Service) PrepareWorkflowAdmission(ctx context.Context, task domain.Work
 	if err := s.eligibility(ctx, task, h); err != nil {
 		return domain.AdmissionEvidence{}, err
 	}
-	e, budgets, err := s.prepareLaunchAdmission(ctx, h)
+	e, budgets, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: h, Profile: task.Profile, Model: task.Model, Effort: task.Effort})
 	if err != nil {
 		return e, err
 	}
@@ -190,12 +191,13 @@ func (s *Service) PrepareSessionAdmission(ctx context.Context, cfg ports.SpawnCo
 		(cfg.RequestedMode != domain.SessionModeChat && cfg.RequestedMode != domain.SessionModeTUI) {
 		return domain.AdmissionEvidence{}, domain.ErrCapabilityEvidenceInsufficient
 	}
-	e, _, err := s.prepareLaunchAdmission(ctx, cfg.Harness)
+	e, _, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: cfg.Harness, Profile: cfg.AgentConfig.Profile, Model: cfg.AgentConfig.Model, Effort: cfg.AgentConfig.Effort})
 	return e, err
 }
 
 // prepareLaunchAdmission 不执行副作用；探测后重新校验当前任期和样本时间，慢探测不能放宽准入。
-func (s *Service) prepareLaunchAdmission(ctx context.Context, h domain.AgentHarness) (domain.AdmissionEvidence, []domain.BudgetPolicy, error) {
+func (s *Service) prepareLaunchAdmission(ctx context.Context, request ports.CapabilityProbeRequest) (domain.AdmissionEvidence, []domain.BudgetPolicy, error) {
+	h := request.Harness
 	l, err := s.currentLeader(ctx)
 	if err != nil {
 		return domain.AdmissionEvidence{}, nil, err
@@ -212,12 +214,12 @@ func (s *Service) prepareLaunchAdmission(ctx context.Context, h domain.AgentHarn
 	if s.deps.Capabilities == nil {
 		return e, nil, domain.ErrCapabilityEvidenceInsufficient
 	}
-	c, err := s.deps.Capabilities.Resolve(ctx, ports.CapabilityProbeRequest{Harness: h})
+	c, err := s.deps.Capabilities.Resolve(ctx, request)
 	if err != nil {
 		return e, nil, errors.Join(domain.ErrCapabilityEvidenceInsufficient, err)
 	}
 	e.Now = s.deps.Clock().UTC()
-	if c.Validate() != nil || c.Harness != h || !c.Source.AllowsSessionGating() || c.SessionScoped() ||
+	if c.Validate() != nil || c.Harness != h || c.Profile != request.Profile || !c.Source.AllowsSessionGating() || c.SessionScoped() ||
 		c.Readiness != domain.CapabilityReady || c.Expired(e.Now) || c.ObservedAt.After(e.Now) ||
 		(c.AuthState != domain.AgentAuthenticationAuthorized && c.AuthState != domain.AgentAuthenticationNotApplicable) {
 		return e, nil, domain.ErrCapabilityEvidenceInsufficient

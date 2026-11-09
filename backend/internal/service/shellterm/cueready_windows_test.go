@@ -15,12 +15,19 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// TestCueReadinessFromInteractiveWindowsShell 在临时目录验证真实交互与投递，禁用宿主 profile/AutoRun 副作用。
 func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 	for _, choice := range []string{"powershell", "pwsh", "cmd", "git-bash"} {
 		t.Run(choice, func(t *testing.T) {
 			argv, fallback := resolveWindowsShell(choice)
 			if fallback || len(argv) == 0 {
 				t.Skip("shell unavailable")
+			}
+			switch choice {
+			case "powershell", "pwsh":
+				argv = append(argv, "-NoProfile")
+			case "cmd":
+				argv = append(argv, "/D")
 			}
 			ready, err := prepareCueShellReadiness(t.TempDir(), argv, nil)
 			if err != nil {
@@ -129,12 +136,7 @@ func TestCueCommandWindowsPayloadDirectoryIsPrivate(t *testing.T) {
 		if err != nil || dacl == nil {
 			t.Fatalf("missing payload DACL: %v", err)
 		}
-		token, err := windows.OpenCurrentProcessToken()
-		if err != nil {
-			t.Fatal(err)
-		}
-		user, err := token.GetTokenUser()
-		token.Close()
+		user, err := windows.GetCurrentProcessToken().GetTokenUser()
 		if err != nil {
 			t.Fatal(err)
 		}

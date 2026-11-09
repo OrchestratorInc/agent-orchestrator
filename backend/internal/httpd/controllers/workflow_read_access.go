@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
-	"github.com/go-chi/chi/v5"
 )
 
 // WorkflowReadAccessResponse 只给 Main，Renderer 只得到授权到期时间。

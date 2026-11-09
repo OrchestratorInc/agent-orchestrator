@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// ErrTaskMaterializationUnsupported 表示请求类型不能物化为任务。
 var (
 	ErrTaskMaterializationUnsupported = errors.New("task request kind cannot create a workflow task")
 	ErrTaskMaterializationScope       = errors.New("materialized task exceeds the requesting task scope")

@@ -7,9 +7,10 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
 )
 
 // SessionAdmissionProvider 由 daemon 注入可信资源、能力和预算证据，调用方不能自报余额。
@@ -81,5 +82,9 @@ func (m *Manager) prepareSpawnAdmission(ctx context.Context, cfg *ports.SpawnCon
 
 // createAdmittedSession 始终使用 Store 的事务接口；fresh=false 绝不继续启动。
 func (m *Manager) createAdmittedSession(ctx context.Context, rec domain.SessionRecord, ad *domain.SchedulerAdmission, preparationID domain.SessionID) (domain.SessionRecord, bool, error) {
-	return m.store.(sessionAdmissionStore).CreateAdmittedSession(ctx, rec, *ad, preparationID, m.clock().UTC())
+	store, ok := m.store.(sessionAdmissionStore)
+	if !ok {
+		return domain.SessionRecord{}, false, domain.ErrAdmissionRequired
+	}
+	return store.CreateAdmittedSession(ctx, rec, *ad, preparationID, m.clock().UTC())
 }

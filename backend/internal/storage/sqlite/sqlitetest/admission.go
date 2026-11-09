@@ -9,13 +9,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AdmissionFixture 显式提供隔离 SQLite 的可信假证据；不改变 Open 默认值或释放占位。
+// AdmissionStore 提供构造隔离准入事实所需的持久化边界。
 type AdmissionStore interface {
 	ports.SchedulerStore
 	GetWorkflowTask(context.Context, domain.WorkflowID, domain.WorkflowTaskID) (domain.WorkflowTask, bool, error)
 	GetWorkflow(context.Context, domain.WorkflowID) (domain.Workflow, bool, error)
 }
 
+// AdmissionFixture 关联测试准入所需的资源、预算与能力事实。
 type AdmissionFixture struct {
 	Store AdmissionStore
 	Clock func() time.Time

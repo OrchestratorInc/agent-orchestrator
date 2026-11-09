@@ -31,6 +31,7 @@ type ChatDriverProbe struct {
 	readiness ports.AgentReadinessProvider
 	now       func() time.Time
 	ttl       time.Duration
+	profiles  ports.ProviderProfiles
 }
 
 // SessionProber reports the live controller state this probe needs for a
@@ -52,6 +53,7 @@ func NewChatDriverProbe(
 	readiness ports.AgentReadinessProvider,
 	now func() time.Time,
 	ttl time.Duration,
+	profiles ...ports.ProviderProfiles,
 ) ports.CapabilityProbe {
 	if now == nil {
 		now = time.Now
@@ -59,13 +61,17 @@ func NewChatDriverProbe(
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
-	return &ChatDriverProbe{
+	p := &ChatDriverProbe{
 		sessions:  sessions,
 		drivers:   drivers,
 		readiness: readiness,
 		now:       now,
 		ttl:       ttl,
 	}
+	if len(profiles) > 0 {
+		p.profiles = profiles[0]
+	}
+	return p
 }
 
 // ProbeCapabilities implements ports.CapabilityProbe.
@@ -79,6 +85,7 @@ func (p *ChatDriverProbe) ProbeCapabilities(
 	snapshot := domain.NewHarnessCapabilitySnapshot(
 		request.Harness, domain.CapabilitySourceLocalProbe, observedAt, p.ttl)
 	snapshot.ObservedSessionID = request.SessionID
+	snapshot.Profile = request.Profile
 	// request.Generation is deliberately NOT copied here. It is the caller's claim about
 	// which controller generation it is asking about, and the resolver's gate compares
 	// that claim with what was OBSERVED. Echoing it would make the comparison vacuous and
@@ -86,7 +93,7 @@ func (p *ChatDriverProbe) ProbeCapabilities(
 	// live controller.
 	snapshot.ReasonCode = ports.CapabilityReasonProbeFailed
 
-	installation, authentication, ready := p.readReadiness(ctx, request.Harness)
+	installation, authentication, ready := p.readReadiness(ctx, request)
 	snapshot.AuthState = authentication
 	snapshot.Readiness = DeriveReadiness(installation, authentication)
 
@@ -117,7 +124,7 @@ func (p *ChatDriverProbe) ProbeCapabilities(
 		// Surface stays unknown: "no chat driver" says nothing about whether the
 		// harness has a terminal interface, and this probe cannot see one.
 		snapshot.ReasonCode = ports.CapabilityReasonNotProbed
-		return snapshot, nil
+		return snapshot, nil //nolint:nilerr // 无 Driver 表示 unknown/not_probed，不能改为不支持或硬错误。
 	}
 
 	advertised, err := driver.Probe(ctx)
@@ -149,13 +156,32 @@ func (p *ChatDriverProbe) ProbeCapabilities(
 // unknown, which DeriveReadiness turns into CapabilityUnknown.
 func (p *ChatDriverProbe) readReadiness(
 	ctx context.Context,
-	harness domain.AgentHarness,
+	request ports.CapabilityProbeRequest,
 ) (domain.AgentInstallationState, domain.AgentAuthenticationState, bool) {
+	if request.Profile != "" {
+		installation := domain.AgentInstallationUnknown
+		// 自定义路由只借用安装事实，默认账号的探测与结果均不能参与。
+		if checker, ok := p.readiness.(interface {
+			EnsureAgentInstallation(context.Context, string) (domain.AgentInstallationState, error)
+		}); ok {
+			if state, err := checker.EnsureAgentInstallation(ctx, string(request.Harness)); err == nil {
+				installation = state
+			}
+		}
+		if p.profiles == nil || installation != domain.AgentInstallationInstalled {
+			return installation, domain.AgentAuthenticationUnknown, false
+		}
+		auth, err := p.profiles.Authentication(ctx, request.Profile, request.Harness, request.Model, request.Effort)
+		if err != nil {
+			return installation, domain.AgentAuthenticationUnknown, false
+		}
+		return installation, auth, auth == domain.AgentAuthenticationAuthorized
+	}
 	if p.readiness == nil {
 		return domain.AgentInstallationUnknown, domain.AgentAuthenticationUnknown, false
 	}
 	snapshot, err := p.readiness.EnsureAgentReadiness(
-		ctx, string(harness), domain.AgentReadinessPurposeLaunch)
+		ctx, string(request.Harness), domain.AgentReadinessPurposeLaunch)
 	if err != nil {
 		return domain.AgentInstallationUnknown, domain.AgentAuthenticationUnknown, false
 	}

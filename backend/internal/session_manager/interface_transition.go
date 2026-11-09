@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 const (
@@ -100,7 +101,10 @@ func (m *Manager) InterfaceTransitionStatus(
 	}
 	target := oppositeSessionMode(rec.Mode)
 	status := InterfaceTransitionStatus{TargetMode: target}
-	if rec.IsTerminated {
+	if profileErr := providerprofile.RefuseNativeTransition(ctx, m.store, id); profileErr != nil {
+		status.ReasonCode = "PROVIDER_PROFILE_FIXED"
+		status.Reason = profileErr.Error()
+	} else if rec.IsTerminated {
 		status.ReasonCode = "SESSION_TERMINATED"
 		status.Reason = "Terminated sessions must be restored before switching interfaces."
 	} else if interfaceWorkspaceUnavailable(rec) {
@@ -162,6 +166,9 @@ func (m *Manager) StartInterfaceTransition(
 	policy domain.SessionInterfaceTransitionPolicy,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (domain.SessionInterfaceTransition, error) {
+	if err := providerprofile.RefuseNativeTransition(ctx, m.store, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if !target.Valid() {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("target mode %q is invalid", target)
 	}

@@ -64,12 +64,8 @@ func createRenderArtifact(ctx context.Context, root *os.Root, name string) (*os.
 // renderArtifactSecurityDescriptor 只授权当前用户、SYSTEM 和 Administrators，
 // 显式指定当前用户所有权，并关闭从父目录继承权限。
 func renderArtifactSecurityDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return nil, err
 	}

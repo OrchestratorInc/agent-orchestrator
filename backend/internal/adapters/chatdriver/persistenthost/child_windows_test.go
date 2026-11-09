@@ -172,7 +172,7 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 			}
 			select {
 			case err := <-done:
-				if err != nil && !(tc.providerExit && errors.Is(err, io.EOF)) {
+				if err != nil && (!tc.providerExit || !errors.Is(err, io.EOF)) {
 					t.Fatal(err)
 				}
 			case <-time.After(8 * time.Second):

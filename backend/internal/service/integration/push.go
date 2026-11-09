@@ -97,7 +97,7 @@ func (s *Service) Push(ctx context.Context, w domain.WorkflowID, planID string, 
 	}
 	op := domain.IntegrationOperation{ID: req.IdempotencyKey, PlanID: planID, WorkflowID: w, Action: "push", RequestDigest: digest, Fence: fence}
 	op, created, err := store.BeginIntegrationOperation(ctx, op, req, s.Clock(), func() (string, error) {
-		return s.Approvals.Consume(approval, "POST", IntegrationPath(w, planID, "push"), digest)
+		return s.Approvals.Consume(approval, "POST", Path(w, planID, "push"), digest)
 	})
 	if err != nil || !created {
 		return op, err

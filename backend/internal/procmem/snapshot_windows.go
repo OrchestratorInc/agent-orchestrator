@@ -34,10 +34,11 @@ type processMemoryCounters struct {
 	peakPagefileUsage          uintptr
 }
 
+// getProcessMemoryInfo 同步读取进程计数，查询失败时保留调用方的未知值处理。
 func getProcessMemoryInfo(h windows.Handle) (workingSetSize uint64, ok bool) {
 	var counters processMemoryCounters
 	counters.cb = uint32(unsafe.Sizeof(counters))
-	ret, _, _ := procGetProcessMemoryInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&counters)), uintptr(counters.cb))
+	ret, _, _ := procGetProcessMemoryInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&counters)), uintptr(counters.cb)) // #nosec G103 -- counters 匹配 PROCESS_MEMORY_COUNTERS 的 DWORD/SIZE_T 布局，大小随指针位宽，缓冲在同步调用期存活。
 	if ret == 0 {
 		return 0, false
 	}
@@ -74,7 +75,7 @@ func Snapshot(ctx context.Context, run Runner) (*Table, error) {
 		// tolerance the ps-based path already has for a row that vanishes
 		// mid-parse. PROCESS_QUERY_LIMITED_INFORMATION is the version of this
 		// handle that does not need administrator rights.
-		if h, openErr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid)); openErr == nil {
+		if h, openErr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, entry.ProcessID); openErr == nil {
 			if rss, ok := getProcessMemoryInfo(h); ok {
 				p.RSSBytes = rss
 			}

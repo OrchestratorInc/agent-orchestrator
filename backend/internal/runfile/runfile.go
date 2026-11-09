@@ -130,6 +130,7 @@ func RemoveIfOwned(path string, ownerPID int) error {
 //
 // A run-file pointing at a dead PID is treated as stale and reported safe; the
 // fresh Write will overwrite it.
+// 进程查询失败返回错误并保留记录，启动方不能把未知当成可覆盖的旧记录。
 func CheckStale(path string) (*Info, error) {
 	info, err := Read(path)
 	if err != nil {
@@ -138,7 +139,11 @@ func CheckStale(path string) (*Info, error) {
 	if info == nil || info.PID <= 0 {
 		return nil, nil
 	}
-	if processalive.Alive(info.PID) {
+	alive, err := processalive.Probe(info.PID)
+	if err != nil {
+		return nil, err
+	}
+	if alive {
 		return info, nil
 	}
 	return nil, nil

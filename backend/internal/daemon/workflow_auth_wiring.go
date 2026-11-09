@@ -49,11 +49,6 @@ func newWorkflowOperatorAuth(
 	}
 }
 
-// newWorkflowPrincipals 保留现有调用入口，所有正式解析器共享相同授权规则。
-func newWorkflowPrincipals(dataDir string, store *sqlite.Store, authority principal.CapabilityAuthority, log *slog.Logger) *principal.Resolver {
-	return newWorkflowOperatorAuth(dataDir, store, authority, log).Principals
-}
-
 // logWorkflowOperatorAuth 只记录验证器装配状态，不将人工授权或凭据写入日志。
 func logWorkflowOperatorAuth(log *slog.Logger, auth workflowOperatorAuth) {
 	if log == nil {

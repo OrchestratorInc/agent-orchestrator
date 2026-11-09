@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -72,6 +73,7 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	// Merge and normalize the environment for an interactive true-color PTY.
 	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
 
+	// #nosec G702 -- exe 是当前 AO 二进制，固定 pty-host 入口按 argv 传入已校验长度的终端命令；此处不拼接 shell 表达式。
 	cmd := exec.CommandContext(ctx, exe, args...) //nolint:forbidigo // detached ConPTY host requires specialized creation flags
 	cmd.Dir = cwd
 	cmd.Env = merged
@@ -144,8 +146,13 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		}
 		// Unref: detach stdout so the child is not blocked, then release reference
 		// so our process can exit while the child keeps running.
-		stdout.Close()
-		cmd.Process.Release() // nolint: errcheck - best-effort detach
+		// READY 已确认存活；关闭父端资源失败只记警告，不能把已启动宿主报告成未启动。
+		if err := stdout.Close(); err != nil {
+			slog.Warn("conpty spawn: close ready pipe", "error", err)
+		}
+		if err := cmd.Process.Release(); err != nil {
+			slog.Warn("conpty spawn: release host reference", "error", err)
+		}
 		return r.addr, cmd.Process.Pid, nil
 	case <-timer.C:
 		pid, err := cleanupStartedHostFailure(cmd.Process.Pid, fmt.Errorf("conpty spawn: pty-host startup timeout (%s)", spawnReadyTimeout), cmd.Process.Kill)

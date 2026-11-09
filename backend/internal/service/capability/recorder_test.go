@@ -18,7 +18,7 @@ import (
 // on that session generation, and evidence that merely describes a provider must
 // never be. Everything else here is the plumbing that keeps those two apart.
 
-// memoryCapabilityStore is the CapabilityStore the recorder needs, in memory, so
+// memoryCapabilityStore is the Store the recorder needs, in memory, so
 // these tests exercise grading rules rather than SQLite.
 type memoryCapabilityStore struct {
 	mu       sync.Mutex

@@ -60,12 +60,8 @@ func openPrivateCacheObject(root *os.Root, name string, directory bool, disposit
 		return nil, err
 	}
 	defer func() { _ = parent.Close() }()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return nil, err
 	}

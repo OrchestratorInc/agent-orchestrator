@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,6 +35,21 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 	// Only a definite absence is "not found"; any other stat failure may be transient
 	// and must not tell callers the worktree is gone.
 	info, err := os.Stat(workspacePath)
+	// Windows 可以允许查询属性却拒绝列目录；读取一个条目即可验证，不扫描整个工作区。
+	if err == nil && info.IsDir() {
+		var directory *os.File
+		directory, err = os.Open(workspacePath)
+		if err == nil {
+			_, err = directory.Readdirnames(1)
+			closeErr := directory.Close()
+			if errors.Is(err, io.EOF) {
+				err = nil
+			}
+			if err == nil {
+				err = closeErr
+			}
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
 		return "", apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace is not available")
 	}
@@ -42,7 +58,7 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "AO can't read this session's folder. Check its permissions.", nil)
 	}
 	if err != nil {
-		return "", fmt.Errorf("stat session %s workspace: %w", id, err)
+		return "", fmt.Errorf("read session %s workspace: %w", id, err)
 	}
 	return filepath.Clean(workspacePath), nil
 }

@@ -142,6 +142,7 @@ func TestBridgeRequiresSourceDatabase(t *testing.T) {
 func TestGeminiHomePrefersSessionThenDaemonThenDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GEMINI_HOME", "")
 	if got, _ := GeminiHome(nil); got != filepath.Join(home, ".gemini") {
 		t.Errorf("default GeminiHome = %q", got)

@@ -287,7 +287,6 @@ func (f *fakeChats) generation() string {
 type fakeTurns struct {
 	mu                sync.Mutex
 	conversation      domain.ConversationRecord
-	conversationID    string
 	turns             map[string]domain.ConversationTurn
 	conversationErr   error
 	turnErr           error
@@ -586,14 +585,18 @@ func TestLocalGatewaySpawnRefusalClassBecomesExecutionRefused(t *testing.T) {
 	}
 }
 
+// 底层混合错误不能覆盖 Gateway 的 UNKNOWN；扩大 unwrap 会令 Coordinator 错选拒绝分支。
 func TestLocalGatewaySpawnLostAnswerIsUnknown(t *testing.T) {
 	f := newGatewayFixture()
-	// The spawner fails without leaving a row: the answer is lost and nothing exists.
-	f.spawner.err = errors.New("connection reset by peer")
+	f.spawner.err = errors.Join(errors.New("connection reset by peer"), ports.ErrExecutionRefused)
 
-	_, err := f.gateway.Spawn(context.Background(), sampleGatewaySpawnRequest())
-	if !errors.Is(err, ports.ErrSpawnOutcomeUnknown) {
-		t.Fatalf("err = %v, want ErrSpawnOutcomeUnknown", err)
+	coordinator := newTestCoordinator(t, newMemoryBindings(), f.gateway)
+	outcome, err := coordinator.BindAttempt(context.Background(), sampleSpawnRequest(), nil)
+	if err != nil || outcome.Binding.State != domain.WorkflowBindingStateSpawnUnknown || !outcome.Frozen || outcome.ReasonCode != "spawn_unknown" {
+		t.Fatalf("丢失响应必须冻结为 UNKNOWN，不能确认拒绝: %+v, err=%v", outcome, err)
+	}
+	if f.spawner.callCount() != 1 {
+		t.Fatal("未经过真实 Gateway 的启动路径")
 	}
 }
 

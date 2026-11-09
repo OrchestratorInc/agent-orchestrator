@@ -8,13 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// newCueCommandDirectory 只以当前进程的查询令牌取得 SID，为命令目录设置独占 DACL。
+// 伪令牌无须关闭，不申请额外权限或依赖线程模拟身份。
 func newCueCommandDirectory(root string) (string, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return "", err
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return "", err
 	}

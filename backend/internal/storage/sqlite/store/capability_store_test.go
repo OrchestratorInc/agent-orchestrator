@@ -12,7 +12,7 @@ import (
 
 // The production store must be usable directly as the recorder's backing store;
 // a mismatch here would only show up at daemon wiring time otherwise.
-var _ capability.CapabilityStore = (*sqlite.Store)(nil)
+var _ capability.Store = (*sqlite.Store)(nil)
 
 // Durable harness capability evidence.
 //

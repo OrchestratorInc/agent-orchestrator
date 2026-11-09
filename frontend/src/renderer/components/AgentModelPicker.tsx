@@ -25,6 +25,7 @@ type AgentModelPickerProps = {
 	onWarningChange: (warning: string | undefined) => void;
 };
 
+/** 按目标主机的可运行目录展示模型，同时保留当前模型或模式。 */
 export function AgentModelPicker({
 	agentId,
 	agentLabel,
@@ -41,7 +42,7 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
-	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [value, mode] });
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [value, mode], runnableModels: catalog?.runnableModels });
 	const revalidationQuery = useQuery({
 		queryKey: hostId
 			? ["agent-model-revalidation", hostId, agentId, projectId, catalog?.validatedAt ?? ""]

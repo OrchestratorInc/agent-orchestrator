@@ -7,9 +7,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/google/uuid"
 )
 
 // SaveArtifact 冻结不可变快照；幂等键为 Attempt、Repo、ArtifactRevision，重放不会恢复旧证据。

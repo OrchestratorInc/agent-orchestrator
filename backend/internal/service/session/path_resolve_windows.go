@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// resolvedFilesystemPath 从固定文件句柄解析真实路径，按系统所需长度扩容并保留 UNC 语义。
 func resolvedFilesystemPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -35,11 +36,11 @@ func resolvedFilesystemPath(path string) (string, error) {
 	size := uint32(256)
 	for {
 		buf := make([]uint16, size)
-		n, err := windows.GetFinalPathNameByHandle(handle, &buf[0], uint32(len(buf)), 0)
+		n, err := windows.GetFinalPathNameByHandle(handle, &buf[0], size, 0)
 		if err != nil {
 			return "", err
 		}
-		if n < uint32(len(buf)) {
+		if n < size {
 			return filepath.Clean(trimWindowsFinalPathPrefix(windows.UTF16ToString(buf[:n]))), nil
 		}
 		size = n + 1

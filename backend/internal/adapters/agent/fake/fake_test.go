@@ -47,7 +47,7 @@ func TestGetLaunchCommandIsScriptedTimeline(t *testing.T) {
 	}
 	// argv[0] must be the RESOLVED shell path (what Manager.Spawn validates), not
 	// a bare "sh" — see ResolveBinary / #2692 review.
-	if len(cmd) != 3 || cmd[1] != "-lc" || !strings.HasSuffix(cmd[0], "sh") || !strings.Contains(cmd[0], "/") {
+	if len(cmd) != 3 || cmd[1] != "-lc" || strings.TrimSuffix(filepath.Base(cmd[0]), ".exe") != "sh" || !filepath.IsAbs(cmd[0]) {
 		t.Fatalf("launch command shape = %#v, want [<resolved sh path> -lc <script>]", cmd)
 	}
 
@@ -86,7 +86,7 @@ func TestResolveBinaryReturnsResolvedShellPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveBinary: unexpected error: %v", err)
 	}
-	if !strings.HasSuffix(got, "sh") || !strings.Contains(got, "/") {
+	if strings.TrimSuffix(filepath.Base(got), ".exe") != "sh" || !filepath.IsAbs(got) {
 		t.Fatalf("ResolveBinary = %q, want an absolute resolved sh path", got)
 	}
 }

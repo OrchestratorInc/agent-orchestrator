@@ -2,12 +2,13 @@ package controllers_test
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // TestM2OperatorApprovalRefusals is the negative matrix: every unusable approval is refused with a

@@ -30,7 +30,7 @@ const threadWithRenderedHistory = `{"thread":{"id":"thread-1","turns":[` +
 func openConversation(t *testing.T) (*conversation, *scriptedServer) {
 	t.Helper()
 	d, srv := newTestDriver(t)
-	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

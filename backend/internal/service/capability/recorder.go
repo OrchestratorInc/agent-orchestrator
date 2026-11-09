@@ -19,11 +19,11 @@ import (
 // stores that value verbatim. Upgrading evidence inside a storage adapter would
 // make every gate downstream trust a grade nobody observed.
 
-// CapabilityStore is the durable half of the recorder. It is declared here rather
+// Store is the durable half of the recorder. It is declared here rather
 // than taken from the SQLite store package so the capability layer depends on the
 // four operations it uses and nothing else — the store can move a column without
 // this package noticing.
-type CapabilityStore interface {
+type Store interface {
 	UpsertHarnessCapabilitySnapshot(ctx context.Context, snapshot domain.HarnessCapabilitySnapshot) error
 	GetHarnessCapabilitySnapshot(ctx context.Context, harness domain.AgentHarness) (domain.HarnessCapabilitySnapshot, bool, error)
 	UpsertSessionCapabilitySnapshot(ctx context.Context, snapshot domain.HarnessCapabilitySnapshot) error
@@ -32,7 +32,7 @@ type CapabilityStore interface {
 
 // Recorder is a ports.CapabilityRecorder backed by the durable store.
 type Recorder struct {
-	store CapabilityStore
+	store Store
 	now   func() time.Time
 	ttl   time.Duration
 }
@@ -67,7 +67,7 @@ func WithRecorderTTL(ttl time.Duration) RecorderOption {
 }
 
 // NewRecorder builds a recorder over a durable store.
-func NewRecorder(store CapabilityStore, opts ...RecorderOption) *Recorder {
+func NewRecorder(store Store, opts ...RecorderOption) *Recorder {
 	recorder := &Recorder{
 		store: store,
 		now:   func() time.Time { return time.Now().UTC() },
@@ -82,6 +82,10 @@ func NewRecorder(store CapabilityStore, opts ...RecorderOption) *Recorder {
 // RecordCapabilities implements ports.CapabilityRecorder. A session-scoped
 // snapshot goes to its session row; everything else goes to the harness row.
 func (r *Recorder) RecordCapabilities(ctx context.Context, snapshot domain.HarnessCapabilitySnapshot) error {
+	// 持久表按 Harness/Session 索引，不能保存需当前秘密身份才能复用的 profile 认证。
+	if snapshot.Profile != "" {
+		return nil
+	}
 	if r == nil || r.store == nil {
 		return ErrRecorderUnavailable
 	}

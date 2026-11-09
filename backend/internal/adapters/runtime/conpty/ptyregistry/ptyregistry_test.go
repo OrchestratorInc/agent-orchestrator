@@ -16,7 +16,7 @@ import (
 func withFakePidAlive(t *testing.T, fn func(pid int) bool) {
 	t.Helper()
 	orig := pidAlive
-	pidAlive = fn
+	pidAlive = func(pid int) (bool, error) { return fn(pid), nil }
 	t.Cleanup(func() { pidAlive = orig })
 }
 

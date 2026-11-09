@@ -45,7 +45,7 @@ func TestM3BindingSessionAndAdmissionCountOnce(t *testing.T) {
 	now := workflowStoreTime()
 	a := seedClaimedAttempt(t, s, "bound-workflow", "bound-task", "bound-project", now)
 	b, repos := bindingIntent(a, "bound-project")
-	b, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, b.AttemptID, now.Add(3*time.Second)), b, repos, now.Add(3*time.Second))
+	b, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(ctx, t, s, b.AttemptID, now.Add(3*time.Second)), b, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestM3BindingSessionAndAdmissionCountOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.BindWorkflowAttemptSession(sqlitetest.ExecutionContext(t, ctx, s, a.ID, now.Add(4*time.Second)), a.ID, session.ID, "generation", domain.WorkflowBindingStateBoundReady, b.Revision, now.Add(4*time.Second)); err != nil {
+	if _, _, err := s.BindWorkflowAttemptSession(sqlitetest.ExecutionContext(ctx, t, s, a.ID, now.Add(4*time.Second)), a.ID, session.ID, "generation", domain.WorkflowBindingStateBoundReady, b.Revision, now.Add(4*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	m3Capacity(t, s, domain.HarnessCodex, 10, now)

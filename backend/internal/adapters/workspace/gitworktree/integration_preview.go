@@ -1,6 +1,7 @@
 package gitworktree
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -55,7 +56,7 @@ func PreviewDelivery(ctx context.Context, a domain.ArtifactSnapshot, taskCommitS
 	if err := validatePreviewTree(ctx, a.Repo.WorktreePath, target); err != nil {
 		return result, err
 	}
-	if err := os.MkdirAll(scratch, 0700); err != nil {
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		return result, err
 	}
 	if _, err := deliveryRoot(scratch); err != nil {
@@ -152,7 +153,7 @@ func VerifyIntegrationPreview(ctx context.Context, a domain.ArtifactSnapshot, p 
 		if err != nil {
 			return err
 		}
-		if string(body) != string(integrationCommitObject(a, p)) {
+		if !bytes.Equal(body, integrationCommitObject(a, p)) {
 			return domain.ErrArtifactStale
 		}
 	} else if p.Status != "conflict" {

@@ -1459,6 +1459,7 @@ func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			settingsPath := filepath.Join(home, ".claude", "settings.json")
 			if tt.userSettings != "" {
@@ -1497,7 +1498,7 @@ func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
 				t.Fatalf("hasSeenAutoDefaultNudge = %v, want %v", root["hasSeenAutoDefaultNudge"], tt.wantSeen)
 			}
 			projects := root["projects"].(map[string]any)
-			if entry, _ := projects[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+			if entry, _ := projects[filepath.ToSlash(workspace)].(map[string]any); entry["hasTrustDialogAccepted"] != true {
 				t.Fatalf("workspace not trusted: %v", projects)
 			}
 			if root["userID"] != "abc" || projects["/existing"] == nil {
@@ -1590,6 +1591,7 @@ func TestClaudeLaunchConfigPathsFollowTheLaunchConfigDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("CLAUDE_CONFIG_DIR", tt.daemon)
 			settings, global, err := claudeLaunchConfigPaths(tt.env)
 			if err != nil {
@@ -1610,6 +1612,7 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	home := t.TempDir()
 	daemonDir := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", daemonDir)
 	homeSeed := `{"userID":"home"}`
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(homeSeed), 0o600); err != nil {
@@ -1654,7 +1657,7 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	if root["hasSeenAutoDefaultNudge"] != true || root["userID"] != "project" {
 		t.Fatalf("project config = %v, want the nudge flag beside the existing keys", root)
 	}
-	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+	if entry, _ := root["projects"].(map[string]any)[filepath.ToSlash(workspace)].(map[string]any); entry["hasTrustDialogAccepted"] != true {
 		t.Fatalf("workspace not trusted in the project config: %v", root)
 	}
 	if data, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || string(data) != homeSeed {
@@ -1678,7 +1681,7 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
 		t.Fatalf("fresh profile got the nudge flag: %v", root)
 	}
-	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+	if entry, _ := root["projects"].(map[string]any)[filepath.ToSlash(workspace)].(map[string]any); entry["hasTrustDialogAccepted"] != true {
 		t.Fatalf("workspace not trusted in the fresh profile: %v", root)
 	}
 
@@ -1694,7 +1697,7 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
 		t.Fatalf("daemon config got the nudge flag although settings default to auto: %v", root)
 	}
-	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+	if entry, _ := root["projects"].(map[string]any)[filepath.ToSlash(workspace)].(map[string]any); entry["hasTrustDialogAccepted"] != true {
 		t.Fatalf("workspace not trusted in the daemon config: %v", root)
 	}
 }

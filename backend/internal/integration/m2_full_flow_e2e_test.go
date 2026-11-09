@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/intervention"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/workflow"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
@@ -93,6 +94,9 @@ type m2ffDeploy struct {
 
 // m2ffPlant is everything one boot needs that is not derived from the store.
 type m2ffPlant struct {
+	profiles   ports.ProviderProfiles
+	readiness  ports.AgentReadinessProvider
+	accounts   ports.AgentAccountLaunchEnv
 	store      *store.Store
 	dataDir    string
 	managedDir string
@@ -173,11 +177,20 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	t.Cleanup(func() { chatSvc.StopAll(context.Background()) })
 
 	recorder := capability.NewRecorder(st)
-	resolver := capability.NewResolver(capability.WithRecorder(recorder), capability.WithClock(clock))
+	resolver := capability.NewResolver(capability.WithRecorder(recorder), capability.WithClock(clock), capability.WithRequestScope(func(ctx context.Context, request ports.CapabilityProbeRequest) (ports.CapabilityProbeRequest, error) {
+		return providerprofile.ScopeCapabilityRequest(ctx, st, request)
+	}))
+	readiness := plant.readiness
+	if readiness == nil {
+		readiness = m2smReadiness{}
+	}
 	probe := capability.NewChatDriverProbe(
-		m2smChatProbe{svc: chatSvc}, registry, m2smReadiness{}, clock, capability.DefaultTTL,
+		m2smChatProbe{svc: chatSvc}, registry, readiness, clock, capability.DefaultTTL, plant.profiles,
 	)
 	resolver.RegisterProbe(m2smDriverHarness, probe)
+	if plant.profiles != nil && plant.m3 != nil {
+		plant.m3.capabilities.RegisterProbe(m2smDriverHarness, probe)
+	}
 
 	mgr := sessionmanager.New(sessionmanager.Deps{
 		Runtime:   &m2smRuntime{},
@@ -196,6 +209,10 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	mgr.SetAgentReadiness(m2smReadiness{})
+	mgr.SetProviderProfiles(plant.profiles)
+	if plant.accounts != nil {
+		mgr.SetAgentAccounts(plant.accounts)
+	}
 	var admission ports.WorkflowAdmissionProvider
 	var fence func(context.Context) (domain.SchedulerFence, error)
 	if plant.m3 != nil {
@@ -208,6 +225,7 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	}
 
 	gateway := execution.NewLocalGateway(execution.LocalGatewayDeps{
+		Profiles: plant.profiles,
 		Sessions: mgr, Resumer: mgr, Records: st, Commits: st, Worktrees: st, Turns: st,
 		Chats: chatSvc, Controllers: chatSvc,
 		Capabilities: recorder, Clock: clock, Log: slog.New(slog.DiscardHandler),
@@ -228,7 +246,8 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 		leaseDuration = 45 * time.Second
 	}
 	workflows := workflow.New(workflow.Deps{
-		Store: st, Clock: clock, Admission: admission,
+		Profiles: plant.profiles,
+		Store:    st, Clock: clock, Admission: admission,
 		GraphLimits:   domain.WorkflowGraphLimits{MaxTasks: 50, MaxDepth: 12, MaxFanOut: 8},
 		LeaseDuration: leaseDuration,
 	})
@@ -991,8 +1010,7 @@ func TestM2FullFlowOperatorBindThroughDaemonRestart(t *testing.T) {
 
 	// An approval is not a way for an agent to become the operator either: it may request one
 	// (that grants nothing) but Agent 标记会被拒绝，清除标记后仍须 OS 验证。
-	agentApprovalBody := fmt.Sprintf(
-		`{"outcome":"succeeded","expectedTaskRevision":1,"idempotencyKey":"m2ff-agent-resolve-2"}`)
+	agentApprovalBody := `{"outcome":"succeeded","expectedTaskRevision":1,"idempotencyKey":"m2ff-agent-resolve-2"}`
 	agentApprovalRequest := fmt.Sprintf(
 		`{"operationMethod":"POST","operationPath":%q,"payloadDigest":%q,"payload":%q}`,
 		"/api/v1"+f.attemptPath(workflowID, attemptID, "resolve"),
@@ -1659,7 +1677,7 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 		t.Fatalf("read workflow: found=%v err=%v", foundWorkflow, err)
 	}
 	const refusalPayload = `{"credits":5}`
-	requestContext := sqlitetest.ExecutionContext(t, context.Background(), f.store, attemptID, time.Now().UTC())
+	requestContext := sqlitetest.ExecutionContext(context.Background(), t, f.store, attemptID, time.Now().UTC())
 	raised, createdReq, err := f.store.CreateWorkflowTaskRequest(requestContext, domain.WorkflowTaskRequest{
 		ID: "m2ff-refusal-req", WorkflowID: workflowID, RequesterTaskID: taskID,
 		RequestKind: domain.WorkflowTaskRequestKindIncreaseBudget,

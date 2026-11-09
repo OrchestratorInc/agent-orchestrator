@@ -3,13 +3,12 @@ package gitworktree
 import (
 	"bytes"
 	"context"
-	"crypto/sha1" // Git SHA-1 对象标识；安全工件指纹仍使用 SHA-256。
+	"crypto/sha1" // #nosec G505 -- Git SHA-1 对象协议兼容；不用于认证或签名，交付指纹另用 SHA-256。
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -36,7 +35,8 @@ func (b *deliveryOutput) Write(p []byte) (int, error) {
 
 // deliveryGit 固定无交互 argv 和配置边界；不执行 hook、filter、fsmonitor 或懒拉取。
 func deliveryGit(ctx context.Context, root, index string, input []byte, args ...string) ([]byte, error) {
-	argv := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "protocol.allow=never", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "--no-pager"}
+	argv := make([]string, 0, 13+len(args))
+	argv = append(argv, "-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "protocol.allow=never", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "--no-pager")
 	cmd := process.CommandContext(ctx, "git", append(argv, args...)...)
 	cmd.Dir = root
 	for _, key := range []string{"PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"} {
@@ -220,7 +220,7 @@ func deliveryFile(root, path string) ([]byte, string, bool, error) {
 				return nil, "", false, domain.ErrDeliveryBlocked
 			}
 			mode := "100644"
-			if runtime.GOOS != "windows" && info.Mode()&0111 != 0 {
+			if runtime.GOOS != "windows" && info.Mode()&0o111 != 0 {
 				mode = "100755"
 			}
 			return data, mode, false, nil
@@ -230,7 +230,7 @@ func deliveryFile(root, path string) ([]byte, string, bool, error) {
 }
 
 // InspectDelivery 构造私有 index 的交付树，不改变用户索引、HEAD 或工作区；前后观察不同则拒绝。
-func InspectDelivery(ctx context.Context, repo domain.DeliveryRepo, scratch string) (domain.DeliveryRepo, domain.GitArtifact, error) {
+func InspectDelivery(ctx context.Context, repo domain.DeliveryRepo, scratch string) (resultRepo domain.DeliveryRepo, artifact domain.GitArtifact, resultErr error) {
 	repo, head, err := verifyDeliveryRepo(ctx, repo)
 	if err != nil {
 		return repo, domain.GitArtifact{}, err
@@ -252,14 +252,18 @@ func InspectDelivery(ctx context.Context, repo domain.DeliveryRepo, scratch stri
 	if err != nil || len(unmerged) != 0 {
 		return repo, domain.GitArtifact{}, domain.ErrDeliveryBlocked
 	}
-	if err = os.MkdirAll(scratch, 0700); err != nil {
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		return repo, domain.GitArtifact{}, err
 	}
 	dir, err := os.MkdirTemp(scratch, "artifact-index-")
 	if err != nil {
 		return repo, domain.GitArtifact{}, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove artifact index: %w", err))
+		}
+	}()
 	index := filepath.Join(dir, "index")
 	if _, err = deliveryGit(ctx, repo.WorktreePath, index, nil, "read-tree", head); err != nil {
 		return repo, domain.GitArtifact{}, err
@@ -347,7 +351,7 @@ func deliveryInventory(ctx context.Context, repo domain.DeliveryRepo) (string, [
 		}
 		file := domain.ArtifactFile{Path: path, Mode: mode, Deleted: deleted}
 		if !deleted {
-			var objectHash hash.Hash = sha1.New()
+			objectHash := sha1.New() // #nosec G401 -- 按 Git 对象格式计算 SHA-1 ID，不能替换为另一算法；不是安全签名。
 			if len(repo.BaseSHA) == 64 {
 				objectHash = sha256.New()
 			}

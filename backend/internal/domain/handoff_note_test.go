@@ -67,6 +67,9 @@ func TestBuildHandoffNoteGivesTheResponseWhatTheRequestLeaves(t *testing.T) {
 }
 
 func TestBuildHandoffNoteStaysUnderTheCapAndKeepsTheLatestTurn(t *testing.T) {
+	saved := handoffNoteMaxChars
+	handoffNoteMaxChars = handoffNoteCharLimit("windows")
+	t.Cleanup(func() { handoffNoteMaxChars = saved })
 	turns := handoffTestTurns(21)
 	for index := range turns {
 		turns[index].UserRequest += strings.Repeat("u", 5_000)
@@ -77,14 +80,15 @@ func TestBuildHandoffNoteStaysUnderTheCapAndKeepsTheLatestTurn(t *testing.T) {
 		files[index] = strings.Repeat("d/", 100) + fmt.Sprint(index)
 	}
 	got := BuildHandoffNote(HandoffNoteInput{OriginalTask: strings.Repeat("t", 9_000), ChangedFiles: files, Turns: turns})
-	if count := utf8.RuneCountInString(got); count > ProviderSwitchMaxBootstrapChars {
-		t.Fatalf("note is %d chars, over the %d cap", count, ProviderSwitchMaxBootstrapChars)
+	if count := utf8.RuneCountInString(got); count > handoffNoteMaxChars {
+		t.Fatalf("note is %d chars, over the %d cap", count, handoffNoteMaxChars)
 	}
 	if !strings.Contains(got, "request-21") || !strings.Contains(got, "response-21") {
 		t.Fatalf("the latest turn must never be dropped")
 	}
-	if !strings.Contains(got, "(and 150 more)") {
-		t.Fatalf("changed files beyond the limit must be counted")
+	shown := strings.Count(got, "\n- d/")
+	if !strings.Contains(got, fmt.Sprintf("(and %d more)", len(files)-shown)) {
+		t.Fatalf("changed files omitted for space must still be counted")
 	}
 }
 

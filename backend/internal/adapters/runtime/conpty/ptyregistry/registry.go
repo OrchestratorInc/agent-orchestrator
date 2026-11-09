@@ -22,7 +22,7 @@ type Entry struct {
 	RegisteredAt string `json:"registeredAt"` // RFC3339; set by caller
 }
 
-// pidAlive is the PID-liveness probe. Tests replace it with a fake.
+// pidAlive 区分存活、死亡和查询失败；未知不能变成完整的死亡扫描证据。
 // defaultPidAlive is provided in build-tagged files (pidalive_unix.go /
 // pidalive_windows.go).
 var pidAlive = defaultPidAlive
@@ -264,7 +264,7 @@ func Unregister(ctx context.Context, sessionID string) error {
 	return writeRaw(ctx, next)
 }
 
-// Scan returns the live registry entries and whether the scan is complete.
+// Scan 返回仍需保留的注册记录及扫描是否完整；未知 PID 不作为死亡证据。
 // Dead entries are pruned only after a complete read and parse. Any read,
 // parse, or prune-write failure returns incomplete evidence.
 func Scan(ctx context.Context) (entries []Entry, complete bool, err error) {
@@ -279,6 +279,7 @@ func Scan(ctx context.Context) (entries []Entry, complete bool, err error) {
 	return scanLocked(ctx)
 }
 
+// scanLocked 只在全部 PID 观察成功后清理；查询失败保留原始列表，阻止下游把拒连判成死亡。
 func scanLocked(ctx context.Context) (entries []Entry, complete bool, err error) {
 	all, complete, err := readRaw(ctx)
 	if err != nil || !complete {
@@ -293,8 +294,14 @@ func scanLocked(ctx context.Context) (entries []Entry, complete bool, err error)
 			// A prelaunch reservation has no PID to probe. Retain it until an
 			// exact owner replaces or explicitly unregisters the reservation.
 			live = append(live, e)
-		} else if pidAlive(e.PtyHostPID) {
-			live = append(live, e)
+		} else {
+			alive, probeErr := pidAlive(e.PtyHostPID)
+			if probeErr != nil {
+				return all, false, fmt.Errorf("observe pty-host pid %d: %w", e.PtyHostPID, probeErr)
+			}
+			if alive {
+				live = append(live, e)
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return live, false, err

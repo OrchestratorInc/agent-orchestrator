@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 func TestTerminateNativeSessionStopsTheActiveOwnerOfTheTranscript(t *testing.T) {
 	listJSON := []byte(`{"sessions":[{"id":"active-7","sessionId":"native-7","activeSessionId":"active-7","cwd":"/work","lifecycle":"active","activity":"idle","isSessionActive":true,"isStreaming":false,"isCompacting":false,"attachedClients":0,"messageCount":2,"sessionActions":{"queuedCount":0,"steering":[],"followUps":[]}}]}`)
+	dataDir := t.TempDir()
 	var stopped string
 	p := &Plugin{
 		resolvedBinary: "prime-agent",
@@ -19,7 +21,7 @@ func TestTerminateNativeSessionStopsTheActiveOwnerOfTheTranscript(t *testing.T) 
 			if _, ok := ctx.Deadline(); !ok {
 				return nil, errors.New("command context has no deadline")
 			}
-			wantPrimeDir := "/ao-data/agent-runtime/prime-agent"
+			wantPrimeDir := filepath.Join(dataDir, "agent-runtime", "prime-agent")
 			if binary != "prime-agent" || cwd != wantPrimeDir {
 				return nil, fmt.Errorf("binary=%q cwd=%q", binary, cwd)
 			}
@@ -39,7 +41,7 @@ func TestTerminateNativeSessionStopsTheActiveOwnerOfTheTranscript(t *testing.T) 
 	}
 	err := p.TerminateNativeSession(context.Background(), ports.SessionRef{
 		WorkspacePath: "/work",
-		DataDir:       "/ao-data",
+		DataDir:       dataDir,
 		Metadata: map[string]string{
 			ports.MetadataKeyAgentSessionID: "native-7",
 		},
@@ -53,9 +55,10 @@ func TestTerminateNativeSessionStopsTheActiveOwnerOfTheTranscript(t *testing.T) 
 }
 
 func TestAugmentRuntimeEnvUsesAOPrimeStateRoot(t *testing.T) {
+	dataDir := t.TempDir()
 	env := map[string]string{}
-	New().AugmentRuntimeEnv(env, "/ao-data")
-	if got, want := env["PRIME_AGENT_CODING_AGENT_DIR"], "/ao-data/agent-runtime/prime-agent"; got != want {
+	New().AugmentRuntimeEnv(env, dataDir)
+	if got, want := env["PRIME_AGENT_CODING_AGENT_DIR"], filepath.Join(dataDir, "agent-runtime", "prime-agent"); got != want {
 		t.Fatalf("PRIME_AGENT_CODING_AGENT_DIR = %q, want %q", got, want)
 	}
 }

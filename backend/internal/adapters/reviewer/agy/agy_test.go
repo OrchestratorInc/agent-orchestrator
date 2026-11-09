@@ -34,7 +34,10 @@ func TestReviewCommandPreflightShapeOnlyResolvesBinary(t *testing.T) {
 
 func TestReviewCommandLaunchesHostTrustedInteractiveTUI(t *testing.T) {
 	dataDir := t.TempDir()
-	spec, err := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9").ReviewCommand(context.Background(), ports.ReviewInvocation{
+	binary := filepath.Join(t.TempDir(), "agy")
+	reviewer := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	reviewer.resolveBinary = func(context.Context) (string, error) { return binary, nil }
+	spec, err := reviewer.ReviewCommand(context.Background(), ports.ReviewInvocation{
 		DataDir:          dataDir,
 		ReviewerID:       "review-worker-1",
 		TaskPromptRoot:   "/ao/prompts/worker/reviewer",
@@ -46,7 +49,7 @@ func TestReviewCommandLaunchesHostTrustedInteractiveTUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrompt := "Read and follow the reviewer system instructions at `/ao/prompts/worker/reviewer/system.md`, then Read and follow `/ao/task.md`."
-	want := []string{"/opt/agy/bin/agy", "--sandbox", "--add-dir", "/worker", "--add-dir", "/ao/prompts/worker/reviewer", "--prompt-interactive", wantPrompt}
+	want := []string{binary, "--sandbox", "--add-dir", "/worker", "--add-dir", "/ao/prompts/worker/reviewer", "--prompt-interactive", wantPrompt}
 	if !slices.Equal(spec.Argv, want) || spec.WorkingDirectory != "/worker" {
 		t.Fatalf("spec = %+v, want argv %#v", spec, want)
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// TestKimiHandoffReachesKimiCodeWhenTheProjectCommitsItsInstructions 只启动临时Python协议fixture，验证两种项目规则归属。
 func TestKimiHandoffReachesKimiCodeWhenTheProjectCommitsItsInstructions(t *testing.T) {
 	for _, tracked := range []bool{false, true} {
 		t.Run(fmt.Sprintf("tracked=%v", tracked), func(t *testing.T) {
@@ -84,6 +86,17 @@ for line in sys.stdin:
 `
 			if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
 				t.Fatal(err)
+			}
+			if runtime.GOOS == "windows" {
+				python, err := exec.LookPath("python")
+				if err != nil {
+					t.Fatal(err)
+				}
+				wrapper := "@echo off\r\n\"" + python + "\" -X utf8 \"" + fake + "\" %*\r\n"
+				fake += ".cmd"
+				if err := os.WriteFile(fake, []byte(wrapper), 0o700); err != nil {
+					t.Fatal(err)
+				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

@@ -3,6 +3,15 @@ package controllers_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -15,14 +24,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/workflow"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 )
 
 // 审批 HTTP 测试使用真实 router、service 和临时 SQLite，仅 OS 验证替换为 fake。
@@ -44,29 +45,17 @@ const legacyOperatorToken = "operator-token-that-authorizes-nothing"
 // 它记录每次被调用的操作与正文摘要，以便断言验证器收到的正是人类被问到的那个操作，
 // 并允许分别返回 ErrConsentDenied / ErrConsentUnavailable 覆盖两种失败关闭路径。
 type recordingConsent struct {
-	mu      sync.Mutex
-	err     error
-	busy    bool
-	entered chan struct{}
-	release chan struct{}
-	calls   []principal.Approval
+	mu    sync.Mutex
+	err   error
+	calls []principal.Approval
 }
 
-// Verify 记录操作并按当前设定返回结果；busy 时阻塞直到 release 被关闭。
-func (c *recordingConsent) Verify(ctx context.Context, approval principal.Approval) error {
+// Verify 记录操作并返回测试明确设定的结果。
+func (c *recordingConsent) Verify(_ context.Context, approval principal.Approval) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.calls = append(c.calls, approval)
-	busy, entered, release, err := c.busy, c.entered, c.release, c.err
-	c.mu.Unlock()
-	if busy {
-		close(entered)
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return err
+	return c.err
 }
 
 // set 设置后续验证调用的结果；nil 表示本次人工验证成功。
@@ -75,16 +64,6 @@ func (c *recordingConsent) set(err error) {
 	defer c.mu.Unlock()
 	c.err = err
 }
-
-// hold 让下一次验证停在中途，直到 releaseConsent 调用，用来观察锁内状态。
-func (c *recordingConsent) hold() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.busy, c.entered, c.release = true, make(chan struct{}), make(chan struct{})
-}
-
-// releaseConsent 放行被 hold 的验证。
-func (c *recordingConsent) releaseConsent() { close(c.release) }
 
 // seen 返回验证器收到过的操作快照，副本避免与 HTTP goroutine 竞争。
 func (c *recordingConsent) seen() []principal.Approval {
@@ -106,7 +85,6 @@ type approvalEnv struct {
 	workflowID string
 	taskID     string
 	attemptID  string
-	requestID  string
 }
 
 // serverWith builds another router over the SAME services with a different principal resolver.

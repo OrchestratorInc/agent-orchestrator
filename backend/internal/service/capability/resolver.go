@@ -41,6 +41,7 @@ type Resolver struct {
 	recorder ports.CapabilityRecorder
 	now      func() time.Time
 	ttl      time.Duration
+	scope    func(context.Context, ports.CapabilityProbeRequest) (ports.CapabilityProbeRequest, error)
 }
 
 // Option configures a Resolver.
@@ -63,6 +64,11 @@ func WithTTL(ttl time.Duration) Option {
 // WithRecorder installs durable evidence so a restart can answer without probing.
 func WithRecorder(recorder ports.CapabilityRecorder) Option {
 	return func(r *Resolver) { r.recorder = recorder }
+}
+
+// WithRequestScope 从持久 Session 所属任务恢复路由，调用方不能冒用默认账号或另一配置。
+func WithRequestScope(scope func(context.Context, ports.CapabilityProbeRequest) (ports.CapabilityProbeRequest, error)) Option {
+	return func(r *Resolver) { r.scope = scope }
 }
 
 // NewResolver builds a resolver. Probes are registered per harness; registering
@@ -144,6 +150,13 @@ func (r *Resolver) Resolve(
 	ctx context.Context,
 	request ports.CapabilityProbeRequest,
 ) (domain.HarnessCapabilitySnapshot, error) {
+	if r.scope != nil {
+		var err error
+		request, err = r.scope(ctx, request)
+		if err != nil {
+			return r.unknown(request, ports.CapabilityReasonProbeFailed), err
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return r.unknown(request, ports.CapabilityReasonProbeFailed), err
 	}
@@ -198,7 +211,7 @@ func (r *Resolver) observe(
 		// controller that could not report its generation) is a refusal, not an observation.
 		// Storing it would overwrite the harness row with cleared features — turning one
 		// unanswered session question into lost harness evidence — so it is not recorded.
-		if r.recorder != nil && !(request.SessionScoped() && !snapshot.SessionScoped()) {
+		if r.recorder != nil && request.Profile == "" && snapshot.Profile == "" && (!request.SessionScoped() || snapshot.SessionScoped()) {
 			// Recording is best effort: losing the memo must not fail a live read,
 			// because the evidence in hand is still valid.
 			_ = r.recorder.RecordCapabilities(ctx, snapshot)
@@ -206,6 +219,9 @@ func (r *Resolver) observe(
 		return snapshot, "", nil
 	}
 
+	if request.Profile != "" {
+		return r.unknown(request, ports.CapabilityReasonNotProbed), ports.CapabilityReasonNotProbed, nil
+	}
 	if r.recorder != nil {
 		if snapshot, found, err := r.loadRecorded(ctx, request); err == nil && found {
 			return snapshot, snapshot.ReasonCode, nil
@@ -249,6 +265,13 @@ func (r *Resolver) Gate(
 	request ports.CapabilityProbeRequest,
 	feature domain.CapabilityFeature,
 ) Decision {
+	if r.scope != nil {
+		var err error
+		request, err = r.scope(ctx, request)
+		if err != nil {
+			return Decision{State: domain.CapabilityStateUnknown, ReasonCode: ports.CapabilityReasonProbeFailed}
+		}
+	}
 	if !feature.Valid() {
 		return Decision{State: domain.CapabilityStateUnknown, ReasonCode: ports.CapabilityReasonNotObserved}
 	}
@@ -270,7 +293,7 @@ func (r *Resolver) Gate(
 	// The snapshot must describe the harness that was asked about. A resolver whose
 	// probe answered for a different harness would otherwise authorize a control on
 	// evidence about something else entirely.
-	if snapshot.Harness != request.Harness {
+	if snapshot.Harness != request.Harness || snapshot.Profile != request.Profile {
 		return Decision{
 			State: domain.CapabilityStateUnknown, Source: snapshot.Source,
 			ReasonCode: ports.CapabilityReasonHandshakeIncomplete,
@@ -414,6 +437,7 @@ func (r *Resolver) unknown(
 		request.Harness, domain.CapabilitySourceStatic, r.now().UTC(), r.ttl,
 	)
 	snapshot.ObservedSessionID = request.SessionID
+	snapshot.Profile = request.Profile
 	snapshot.Generation = request.Generation
 	snapshot.ReasonCode = reasonCode
 	return snapshot

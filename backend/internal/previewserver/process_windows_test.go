@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,5 +42,20 @@ func assertPreviewProcessGroup(t *testing.T, cmd *exec.Cmd) {
 	}
 	if got := cmd.SysProcAttr.CreationFlags; got&windows.CREATE_NEW_PROCESS_GROUP == 0 {
 		t.Fatalf("CreationFlags = %#x, want CREATE_NEW_PROCESS_GROUP", got)
+	}
+}
+
+// TestPreviewPIDRangeRejectsTruncatedIdentity 禁止高位 PID 别名获得其他进程的创建时间。
+func TestPreviewPIDRangeRejectsTruncatedIdentity(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("32 位 int 无法表示 DWORD 以上的 PID")
+	}
+	pid := os.Getpid()
+	if previewProcessStartTime(pid) == "" {
+		t.Fatal("无法读取当前测试进程的创建时间")
+	}
+	alias := int(uint64(pid) + 1<<32)
+	if got := previewProcessStartTime(alias); got != "" {
+		t.Fatalf("超出 DWORD 的 PID 获得了创建时间 %q", got)
 	}
 }

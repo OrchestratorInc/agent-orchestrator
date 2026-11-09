@@ -12,6 +12,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
+// 缺少事务能力的 Store 不得消费内部准入或重附着许可；删除能力检查会在这里 panic。
+func TestAdmissionStoreCapabilityIsRequired(t *testing.T) {
+	m := &Manager{store: newFakeStore(), clock: time.Now}
+	if _, _, err := m.createAdmittedSession(context.Background(), domain.SessionRecord{}, &domain.SchedulerAdmission{}, ""); !errors.Is(err, domain.ErrAdmissionRequired) {
+		t.Fatalf("不支持准入事务的 Store 未拒绝创建: %v", err)
+	}
+	ctx := ports.WithSessionReattachPermit(context.Background(), domain.SessionReattachPermit{}, time.Now)
+	if err := m.validateReattachedController(ctx, ChatStarted{LiveReconnect: true, ControllerGeneration: "observed"}); !errors.Is(err, domain.ErrAdmissionRequired) {
+		t.Fatalf("不支持重附着事务的 Store 未拒绝发布: %v", err)
+	}
+}
+
 // 删除 Manager 任一路径的 CreateAdmittedSession 会留下无 SessionID 的预留，或使重放重复启动。
 func TestM3ManagerEverySpawnPathConsumesOneAdmission(t *testing.T) {
 	for _, path := range []string{"ordinary", "client_request", "automation", "prepared"} {

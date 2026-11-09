@@ -3,12 +3,13 @@ package controllers
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
-	"github.com/go-chi/chi/v5"
 )
 
 // attemptCapabilities 从持久绑定选择 Session，代际和协商能力仍由真实 Controller 观测。

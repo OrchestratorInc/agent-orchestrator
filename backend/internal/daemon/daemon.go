@@ -74,6 +74,7 @@ import (
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -134,6 +135,10 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {
 	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	providerProfiles, err := providerprofile.CaptureEnvironment(filepath.Join(cfg.DataDir, providerprofile.Filename))
 	if err != nil {
 		return err
 	}
@@ -369,6 +374,11 @@ func Run(buildVersion string) error {
 		agentSvc.InvalidateAgentAuthentication(string(domain.HarnessClaudeCode))
 		agentSvc.RecheckAgent(string(domain.HarnessClaudeCode))
 	})
+	if driver, err := chatDrivers.Driver(domain.HarnessCodex); err == nil {
+		if configurable, ok := driver.(interface{ SetProviderProfiles(ports.ProviderProfiles) }); ok {
+			configurable.SetProviderProfiles(providerProfiles)
+		}
+	}
 
 	// Daemon-owned preferences. The store's type is field-compatible with the
 	// service's, adapted here so neither package imports the other. Offering
@@ -635,7 +645,9 @@ func Run(buildVersion string) error {
 	// own — a Spawn is a Session Manager spawn and a Send is a Chat send — so this is
 	// where the offline fake stops being the daemon's execution path.
 	concreteSessMgr, _ := wiredSessMgr.(*sessionmanager.Manager)
+	concreteSessMgr.SetProviderProfiles(providerProfiles)
 	m3 := newM3Services(m2GatewayDeps{
+		Profiles:    providerProfiles,
 		Store:       store,
 		Sessions:    concreteSessMgr,
 		Chats:       chatSvc,
@@ -1173,7 +1185,7 @@ func Run(buildVersion string) error {
 		Presence:           presenceTracker,
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
-		Import:             importsvc.New(importsvc.Deps{Store: store}),
+		Import:             importsvc.New(importsvc.Deps{Store: store, DataDir: cfg.DataDir}),
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),

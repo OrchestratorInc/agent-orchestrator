@@ -112,6 +112,7 @@ func TestEnsureWorkspaceTrustedSeedsRealKimiHome(t *testing.T) {
 	// throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("KIMI_CODE_HOME", "")
 
 	workspace := filepath.Join(t.TempDir(), "auth-workspace", "kimi")

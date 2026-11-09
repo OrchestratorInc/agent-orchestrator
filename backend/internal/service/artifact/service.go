@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/google/uuid"
 )
 
 // Store 只暴露工件所需的持久事实；SaveArtifact 在 writer 事务再次核对身份和任期。

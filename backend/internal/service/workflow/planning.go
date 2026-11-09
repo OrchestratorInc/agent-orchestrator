@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 )
 
 // PlanStore 复用已由 Chat Driver 持久化的输出，候选服务不另开 Provider loop。
@@ -70,6 +71,7 @@ func (s *Service) StartPlan(ctx context.Context, key string, input CreateInput, 
 	agent.Brief = "仅生成候选 JSON，不修改文件，不执行 Git 或终端命令。返回 {\"tasks\":[{\"id\":\"唯一ID\",\"kind\":\"development\",\"title\":\"任务\",\"brief\":\"说明\",\"agentHarness\":\"" + string(agent.AgentHarness) + "\"}],\"dependencies\":[{\"fromTaskId\":\"前置\",\"toTaskId\":\"后置\"}],\"taskRepositories\":[{\"taskId\":\"任务ID\",\"repoKey\":\"已选key\",\"allowedPaths\":[\"相对目录\"]}],\"retireTaskIds\":[]}。目标：" + input.Goal + "\n已选仓库：" + string(refs)
 	input.Tasks = []TaskInput{agent}
 	input.Tasks[0].Brief += "\n每个 taskRepositories 项必须包含 baseSha，逐字使用已选仓库的 baseSha；任务 model/effort 必须明确使用所选设置：" + agent.Model + "/" + agent.Effort
+	input.Tasks[0].Brief += "\n任务 profile 必须保留所选供应商引用（空值表示原生配置）：" + agent.Profile
 	input.TaskRepositories = nil
 	for _, repo := range input.Repositories {
 		input.TaskRepositories = append(input.TaskRepositories, TaskRepositoryInput{TaskID: agent.ID, RepoKey: repo.RepoKey, BaseSHA: repo.BaseSHA})
@@ -110,9 +112,11 @@ func (s *Service) PreparePlan(ctx context.Context, in PlanInput) (domain.Workflo
 		return domain.WorkflowPlanCandidate{}, apierr.Invalid("PLAN_SOURCE_INVALID", "规划 Attempt 没有对应 Session", nil)
 	}
 	planner := false
+	var sourceTask domain.WorkflowTask
 	for _, task := range definition.Tasks {
 		if task.ID == a.TaskID {
 			planner = task.Planner
+			sourceTask = task
 		}
 	}
 	if !planner {
@@ -189,8 +193,24 @@ func (s *Service) PreparePlan(ctx context.Context, in PlanInput) (domain.Workflo
 		if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 			return domain.WorkflowPlanCandidate{}, apierr.Invalid("PLAN_OUTPUT_INVALID", "候选包含额外内容", nil)
 		}
+		// 模型生成的候选不能自行换凭据；只有显式编辑候选可以清除或重新选择引用。
+		for i := range candidate.Tasks {
+			task := &candidate.Tasks[i]
+			if task.Profile != "" && task.Profile != sourceTask.Profile {
+				return domain.WorkflowPlanCandidate{}, apierr.Invalid("PLAN_PROFILE_MISMATCH", "规划输出改变了所选供应商", nil)
+			}
+			task.Profile = sourceTask.Profile
+			if sourceTask.Profile != "" {
+				if task.Model == "" {
+					task.Model = sourceTask.Model
+				}
+				if task.Effort == "" {
+					task.Effort = sourceTask.Effort
+				}
+			}
+		}
 	}
-	patch, err := s.planPatch(definition, candidate)
+	patch, err := s.planPatch(ctx, definition, candidate)
 	if err != nil {
 		return domain.WorkflowPlanCandidate{}, err
 	}
@@ -210,7 +230,7 @@ func (s *Service) PreparePlan(ctx context.Context, in PlanInput) (domain.Workflo
 }
 
 // planPatch 仅追加新 ID；现有图与 repository 共同参与正式 DAG 校验。
-func (s *Service) planPatch(old Definition, in PlanDefinition) (domain.WorkflowPlanPatch, error) {
+func (s *Service) planPatch(ctx context.Context, old Definition, in PlanDefinition) (domain.WorkflowPlanPatch, error) {
 	patch := domain.WorkflowPlanPatch{RetireTaskIDs: in.RetireTaskIDs}
 	if len(in.Tasks) == 0 {
 		return patch, apierr.Invalid("PLAN_EMPTY", "候选必须包含任务", nil)
@@ -220,13 +240,16 @@ func (s *Service) planPatch(old Definition, in PlanDefinition) (domain.WorkflowP
 		graph.TaskIDs = append(graph.TaskIDs, task.ID)
 	}
 	for _, task := range in.Tasks {
-		if task.Profile != "" || len(task.Model) > 256 || len(task.Effort) > 32 || (task.Effort != "" && task.Model == "") || strings.ContainsAny(task.Model+task.Effort, "\r\n\x00") || !task.AgentHarness.IsKnown() {
+		if err := providerprofile.Validate(ctx, s.profiles, task.Profile, task.AgentHarness, task.Model, task.Effort); err != nil {
+			return patch, err
+		}
+		if len(task.Model) > 256 || len(task.Effort) > 32 || (task.Effort != "" && task.Model == "") || strings.ContainsAny(task.Model+task.Effort, "\r\n\x00") || !task.AgentHarness.IsKnown() {
 			return patch, apierr.Invalid("PLAN_AGENT_INVALID", "模型/profile/Harness 不受支持", map[string]any{"taskId": task.ID})
 		}
 		if task.MaxAttempts == 0 {
 			task.MaxAttempts = 1
 		}
-		r := domain.WorkflowTask{ID: task.ID, WorkflowID: old.Workflow.ID, Kind: task.Kind, Title: task.Title, Brief: task.Brief, State: domain.WorkflowTaskStatePending, Priority: task.Priority, AgentHarness: task.AgentHarness, Model: task.Model, Effort: task.Effort, MaxAttempts: task.MaxAttempts, Revision: 1, CreatedAt: s.clock().UTC(), UpdatedAt: s.clock().UTC()}
+		r := domain.WorkflowTask{ID: task.ID, WorkflowID: old.Workflow.ID, Kind: task.Kind, Title: task.Title, Brief: task.Brief, State: domain.WorkflowTaskStatePending, Priority: task.Priority, AgentHarness: task.AgentHarness, Model: task.Model, Effort: task.Effort, Profile: task.Profile, MaxAttempts: task.MaxAttempts, Revision: 1, CreatedAt: s.clock().UTC(), UpdatedAt: s.clock().UTC()}
 		if err := r.Validate(); err != nil {
 			return patch, apierr.Invalid("PLAN_TASK_INVALID", err.Error(), nil)
 		}
@@ -280,6 +303,11 @@ func (s *Service) ConfirmPlan(ctx context.Context, w domain.WorkflowID, id, dige
 	}
 	if p.Digest != digest || p.ExpectedRevision != revision {
 		return p, apierr.Conflict("PLAN_STALE", "候选摘要或版本不匹配", nil)
+	}
+	for _, task := range p.Patch.Tasks {
+		if err := providerprofile.Validate(ctx, s.profiles, task.Profile, task.AgentHarness, task.Model, task.Effort); err != nil {
+			return p, err
+		}
 	}
 	p, err = ps.ConfirmWorkflowPlan(ctx, p, s.graphLimits, s.clock().UTC())
 	if err != nil {

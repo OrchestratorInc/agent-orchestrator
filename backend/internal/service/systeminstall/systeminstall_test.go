@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -1659,8 +1660,10 @@ func TestAutohandWindowsInstallerVerifiesCLIAfterComputerControlFailure(t *testi
 	}
 }
 
+// TestKimiUpdateReinstallsAdvisoryReleaseIntoConfirmedDirectory 用目标Darwin路径语义验证安装计划，安装器只捕获命令。
 func TestKimiUpdateReinstallsAdvisoryReleaseIntoConfirmedDirectory(t *testing.T) {
 	home := t.TempDir()
+	home = filepath.ToSlash(strings.TrimPrefix(home, filepath.VolumeName(home)))
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("PATH", "/usr/bin:"+home+"/.kimi-code/bin:/bin")

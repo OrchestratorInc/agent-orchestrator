@@ -1213,9 +1213,11 @@ func TestOnlyASwitchTargetTrustsTheWorkspaceForCopilot(t *testing.T) {
 		t.Fatalf("a spawn wrote the user's Copilot config: %v", err)
 	}
 	New().PrepareSwitchTarget(context.Background(), workspace)
-	data, err := os.ReadFile(config)
-	resolved, _ := filepath.EvalSymlinks(workspace)
-	if err != nil || !strings.Contains(string(data), resolved) {
-		t.Fatalf("config.json = %q (%v), want %s trusted", data, err, resolved)
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folders := readTrustedFolders(t, config); len(folders) != 1 || folders[0] != resolved {
+		t.Fatalf("trustedFolders = %v, want [%q]", folders, resolved)
 	}
 }

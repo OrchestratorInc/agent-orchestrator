@@ -3,10 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import type { components } from "../../../api/schema";
 
-const transport = vi.hoisted(() => ({ read: vi.fn(), run: vi.fn(), navigate: vi.fn() }));
+const transport = vi.hoisted(() => ({ read: vi.fn(), run: vi.fn(), navigate: vi.fn(), get: vi.fn() }));
 vi.mock("../../lib/navigate-to-session", () => ({ useNavigateToSession: () => transport.navigate }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { operator: { readWorkflow: transport.read, runVerb: transport.run } } }));
-vi.mock("../../lib/api-client", () => ({ apiClient: {}, getApiBaseUrl: () => "http://127.0.0.1:5100", subscribeApiBaseUrl: () => () => undefined, apiErrorMessage: () => "失败", apiErrorRequestId: () => undefined }));
+vi.mock("../../lib/api-client", () => ({ apiClient: { GET: transport.get }, getApiBaseUrl: () => "http://127.0.0.1:5100", subscribeApiBaseUrl: () => () => undefined, apiErrorMessage: () => "失败", apiErrorRequestId: () => undefined }));
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("../../hooks/useConversation", () => ({ useConversation: () => ({ snapshot: { turns: [{ state: "running", providerTurnId: "turn-1" }] } }) }));
 
@@ -68,3 +68,40 @@ it("队列入口导航既有会话，刷新取消回执不重发", async () => {
 	expect(screen.queryByRole("button", { name: "workflow.manageQueue" })).toBeNull();
 	expect(transport.run).not.toHaveBeenCalled();
 }, 8000);
+
+/** 删除 Codex 规划选择边界会把 sonnet 提交给 Codex；忽略原任务又会丢失固定 profile。 */
+it("确认停止后沿用 Codex Planner，切换固定供应商任务保留完整选择", async () => {
+	Object.defineProperty(window, "ao", { configurable: true, value: {} });
+	setEventsConnectionState("connected");
+	useWorkflowUi.setState({ requests: {}, drafts: {} });
+	transport.run.mockReset().mockResolvedValue({ status: 200, body: {} });
+	const profile = `custom@${"a".repeat(64)}`;
+	transport.get.mockResolvedValue({ data: { profiles: [{ reference: profile, name: "固定供应商", harness: "codex", model: "provider-model", effort: "high" }] } });
+	let attempt = { id: "native-attempt", taskId: "native", sessionId: "s1" } as components["schemas"]["WorkflowAttemptResponse"];
+	let state = "stop_unknown";
+	transport.read.mockImplementation(async ({ verb }) => ({ status: 200, body: verb === "binding"
+		? { binding: { controllerGeneration: "g1" } }
+		: verb === "intervention-receipts" ? { interventions: [{ id: `stop-${attempt.id}`, mode: "stop", state, attemptId: attempt.id, sessionId: attempt.sessionId, controllerGeneration: "g1" }] }
+		: verb === "attempt-capabilities" ? { capabilities: [] } : {} }));
+	const definition = { workflow: { id: "w", revision: 8 }, tasks: [
+		{ id: "planner", planner: true, agentHarness: "codex", model: "gpt-planner", effort: "medium", state: "succeeded" },
+		{ id: "native", agentHarness: "claude-code", model: "sonnet", effort: "low" },
+		{ id: "fixed", agentHarness: "codex", model: "provider-model", effort: "high", profile },
+	] } as unknown as WorkflowDefinition;
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const view = render(<QueryClientProvider client={client}><WorkflowIntervention key={attempt.id} definition={definition} attempt={attempt} current /></QueryClientProvider>);
+	expect(await screen.findByRole("status")).toHaveTextContent("stop_unknown");
+	expect(screen.queryByRole("button", { name: "workflow.startReplan" })).toBeNull();
+	state = "stop_confirmed";
+	await client.invalidateQueries();
+	fireEvent.click(await screen.findByRole("button", { name: "workflow.startReplan" }));
+	await waitFor(() => expect(transport.run).toHaveBeenCalledTimes(1));
+	expect(transport.run.mock.calls[0][0]).toMatchObject({ verb: "start-replan", operationPath: "/api/v1/workflows/w/replan" });
+	expect(JSON.parse(transport.run.mock.calls[0][0].body)).toMatchObject({ stopInterventionId: "stop-native-attempt", expectedRevision: 8, agentHarness: "codex", model: "gpt-planner", effort: "medium", profile: "" });
+	attempt = { ...attempt, id: "fixed-attempt", taskId: "fixed" };
+	view.rerender(<QueryClientProvider client={client}><WorkflowIntervention key={attempt.id} definition={definition} attempt={attempt} current /></QueryClientProvider>);
+	fireEvent.click(await screen.findByRole("button", { name: "workflow.startReplan" }));
+	await waitFor(() => expect(transport.run).toHaveBeenCalledTimes(2));
+	expect(JSON.parse(transport.run.mock.calls[1][0].body)).toMatchObject({ stopInterventionId: "stop-fixed-attempt", agentHarness: "codex", model: "provider-model", effort: "high", profile });
+	expect(screen.getByRole("textbox", { name: "workflow.replanModel" })).toBeDisabled();
+});

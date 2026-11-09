@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
@@ -292,7 +294,7 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 	}
 	// Codex raw hosts predate this ACP compatibility contract and retain their
 	// existing version/protocol fencing.
-	if d.Protocol == ProtocolRaw {
+	if d.Protocol == ProtocolRaw && cfg.OwnershipFingerprint == "" && d.OwnershipFingerprint == "" {
 		return nil
 	}
 	if cfg.OwnershipFingerprint == "" || d.OwnershipFingerprint != cfg.OwnershipFingerprint {
@@ -504,12 +506,15 @@ func bindConnToContext(ctx context.Context, conn net.Conn) func(error) error {
 	}
 }
 
-// HostPID returns the live provider host pid recorded for sessionID, for
-// memory accounting of runtime-less Chat sessions. A missing descriptor or an
-// exited host reports false; nothing is ever started or stopped here.
+// HostPID 仅为无 runtime 的 Chat 内存计量返回已确认存在的宿主 PID。
+// 查询失败不能冒充存活；该只读路径不改变宿主、锁或描述符。
 func HostPID(dataDir, sessionID string) (int, bool) {
 	d, err := readDescriptor(dataDir, sessionID)
-	if err != nil || d.PID <= 0 || !processalive.Alive(d.PID) {
+	if err != nil || d.PID <= 0 {
+		return 0, false
+	}
+	alive, err := processalive.Probe(d.PID)
+	if err != nil || !alive {
 		return 0, false
 	}
 	return d.PID, true
@@ -629,6 +634,16 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 
 // Run owns the provider until it exits or an authenticated shutdown arrives.
 func Run(ctx context.Context, cfg Config) error {
+	if cfg.Protocol == ProtocolRaw {
+		// 原始协议的可选指纹经私有环境传入，不进入 argv 或公开诊断。
+		for _, entry := range cfg.Env {
+			key, value, _ := strings.Cut(entry, "=")
+			if strings.EqualFold(key, rawFingerprintEnv) {
+				cfg.OwnershipFingerprint = value
+			}
+		}
+	}
+	cfg.Env = providerEnvironment(cfg)
 	if len(cfg.Argv) == 0 || !filepath.IsAbs(cfg.Workdir) {
 		return errors.New("chat host requires provider argv and absolute workdir")
 	}
@@ -1092,4 +1107,42 @@ func hostArgs(cfg Config) []string {
 		args = append(args, string(cfg.Protocol), cfg.OwnershipFingerprint)
 	}
 	return append(append(args, "--"), cfg.Argv...)
+}
+
+const rawFingerprintEnv = "AO_INTERNAL_RAW_HOST_IDENTITY"
+
+// withoutHostFingerprint 防止继承其他宿主的身份，并让 Provider 只收到其实际启动环境。
+func withoutHostFingerprint(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(key, rawFingerprintEnv) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// hostEnvironment 仅把原始协议的私有指纹交给宿主进程，旧原生调用仍保持空指纹。
+func hostEnvironment(cfg Config) []string {
+	env := providerEnvironment(cfg)
+	if cfg.Protocol == ProtocolRaw && cfg.OwnershipFingerprint != "" {
+		env = append(env, rawFingerprintEnv+"="+cfg.OwnershipFingerprint)
+	}
+	return env
+}
+
+// providerEnvironment 阻断宿主凭据继承，仅保留已固定身份的原始协议启动所选密钥。
+func providerEnvironment(cfg Config) []string {
+	env := processenv.StripWorkflowSecrets(withoutHostFingerprint(cfg.Env))
+	if cfg.Protocol == ProtocolRaw && cfg.OwnershipFingerprint != "" {
+		for _, entry := range cfg.Env {
+			key, _, _ := strings.Cut(entry, "=")
+			if key == ports.ProviderProfileKeyEnv {
+				env = append(env, entry)
+				break
+			}
+		}
+	}
+	return env
 }

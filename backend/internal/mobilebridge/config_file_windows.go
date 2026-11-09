@@ -61,7 +61,7 @@ func replaceAtomicFile(source, destination string) error {
 	}
 	configPublicationMu.Lock()
 	defer configPublicationMu.Unlock()
-	replaced, _, err := replaceFileW.Call(uintptr(unsafe.Pointer(to)), uintptr(unsafe.Pointer(from)), 0, 0, 0, 0)
+	replaced, _, err := replaceFileW.Call(uintptr(unsafe.Pointer(to)), uintptr(unsafe.Pointer(from)), 0, 0, 0, 0) // #nosec G103 -- UTF16PtrFromString 已拒绝 NUL；两个 UTF-16 缓冲在同步 ReplaceFileW.Call 返回前存活。
 	if replaced != 0 {
 		return nil
 	}

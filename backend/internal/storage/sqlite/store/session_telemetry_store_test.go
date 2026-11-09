@@ -8,11 +8,13 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
+// 遥测事实读写复用独立迁移模板，不重复测试空库迁移。
 func TestSessionTelemetryFactsRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	s, err := sqlite.Open(t.TempDir())
+	s, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +48,11 @@ func TestSessionTelemetryFactsRoundTrip(t *testing.T) {
 	}
 }
 
+// 首次克隆独立库，保留并发唯一认领及真实重开后的持久化检查。
 func TestSessionEndTelemetryClaimRequiresTerminationAndSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	s, err := sqlite.Open(dir)
+	s, err := sqlitetest.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

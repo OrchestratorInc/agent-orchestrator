@@ -94,6 +94,7 @@ type WorkflowsController struct {
 
 // Register mounts the workflow API routes on r.
 func (c *WorkflowsController) Register(r chi.Router) {
+	r.Get("/workflows/provider-profiles", c.providerProfiles)
 	r.Post("/workflows/plan", c.startPlan)
 	r.Post("/workflows/{workflowId}/replan", c.startReplan)
 	r.Post("/workflows/{workflowId}/plan-candidates", c.preparePlan)

@@ -1871,6 +1871,7 @@ func TestDefaultSourceRootsIncludesManagedKimiHome(t *testing.T) {
 func TestDefaultSourceRootsFollowsClaudeConfigDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	got, err := DefaultSourceRoots(context.Background(), "")
 	mustNoError(t, err)

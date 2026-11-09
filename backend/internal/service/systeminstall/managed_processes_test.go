@@ -52,18 +52,24 @@ func TestManagedCleanupRetainsDetachedNativeProcessRelease(t *testing.T) {
 	}
 }
 
+// TestBrewCleanupRetainsDetachedProviderHub 复用同一Cellar身份模拟存活及退出，不执行系统命令。
 func TestBrewCleanupRetainsDetachedProviderHub(t *testing.T) {
 	s, ran := updateWhileRunningService(t, nil)
+	verified, err := s.verifier.Verify(context.Background(), TargetKimi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseCommands := s.commands
 	s.SetHarnessUpdateObserver(&updateObserverStub{})
 	s.deferredCleanups = map[Target]string{TargetKimi: "kimi-code"}
 	alive := true
-	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, out, _ io.Writer) error {
-		text := "1 /usr/local/bin/ao\n"
-		if argv[0] == "ps" && alive {
-			text = "/opt/homebrew/Cellar/kimi-code/1.2.0/bin/kimi --provider-hub\n"
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		if argv[0] != "ps" {
+			return baseCommands.Run(ctx, argv, out, stderr)
 		}
-		if len(argv) > 1 && argv[1] == "--cellar" {
-			text = "/opt/homebrew/Cellar/kimi-code\n"
+		text := "1 /usr/local/bin/ao\n"
+		if alive {
+			text = verified.ResolvedPath + " --provider-hub\n"
 		}
 		if len(argv) > 0 && argv[0] == "ps" && !strings.HasPrefix(text, "1 ") {
 			text = "123 " + text
@@ -82,6 +88,7 @@ func TestBrewCleanupRetainsDetachedProviderHub(t *testing.T) {
 	}
 }
 
+// TestManagedProcessReferencesRespectReleaseBoundaries 输入已归一化的进程快照，保持与实际采集边界一致。
 func TestManagedProcessReferencesRespectReleaseBoundaries(t *testing.T) {
 	s := newTestService("darwin")
 	s.managedRoot = filepath.Join(t.TempDir(), "with spaces")
@@ -96,7 +103,7 @@ func TestManagedProcessReferencesRespectReleaseBoundaries(t *testing.T) {
 		{"mutable launcher", "node " + filepath.Join(s.managedRoot, "bin", "codex"), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := s.managedReleaseHasProcess(managedProcessSnapshot{commands: []string{tt.command}}, TargetCodex, record, "v1")
+			got := s.managedReleaseHasProcess(managedProcessSnapshot{commands: []string{filepath.ToSlash(tt.command)}}, TargetCodex, record, "v1")
 			if got != tt.want {
 				t.Fatalf("release referenced=%v want %v", got, tt.want)
 			}
@@ -212,18 +219,21 @@ func TestManagedCleanupRetainsRealDetachedProcess(t *testing.T) {
 	}
 }
 
+// TestBrewCleanupRetainsMutableScriptLauncher 保留Cellar外的可变入口，防止仅靠旧版本路径判断清理安全。
 func TestBrewCleanupRetainsMutableScriptLauncher(t *testing.T) {
 	s, ran := updateWhileRunningService(t, nil)
+	baseCommands := s.commands
+	launcher := filepath.Join(t.TempDir(), "bin", "kimi")
 	s.SetHarnessUpdateObserver(&updateObserverStub{})
 	s.deferredCleanups = map[Target]string{TargetKimi: "kimi-code"}
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-		return VerifyResult{ResolvedPath: "/opt/homebrew/bin/kimi"}, nil
+		return VerifyResult{ResolvedPath: launcher}, nil
 	})
-	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, out, _ io.Writer) error {
-		text := "node /opt/homebrew/bin/kimi\n"
-		if len(argv) > 1 && argv[1] == "--cellar" {
-			text = "/opt/homebrew/Cellar/kimi-code\n"
+	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
+		if argv[0] != "ps" {
+			return baseCommands.Run(ctx, argv, out, stderr)
 		}
+		text := "node " + launcher + "\n"
 		if len(argv) > 0 && argv[0] == "ps" && !strings.HasPrefix(text, "1 ") {
 			text = "123 " + text
 		}

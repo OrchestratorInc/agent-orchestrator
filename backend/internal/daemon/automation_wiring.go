@@ -10,15 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// startAutomations repairs crash-interrupted durable state before launching the
-// cadence-only observer. Reconciliation is best effort so one malformed legacy
-// row cannot prevent daemon readiness.
-func startAutomations(ctx context.Context, store *sqlite.Store, sessions *sessionsvc.Service, logger *slog.Logger) (*automationsvc.Service, <-chan struct{}) {
-	ready := make(chan struct{})
-	close(ready)
-	return startAutomationsAfter(ctx, store, sessions, logger, ready)
-}
-
 // startAutomationsAfter 保留查询服务，同时将首轮副作用延迟到调度恢复门禁。
 func startAutomationsAfter(ctx context.Context, store *sqlite.Store, sessions *sessionsvc.Service, logger *slog.Logger, ready <-chan struct{}) (*automationsvc.Service, <-chan struct{}) {
 	service := automationsvc.New(automationsvc.Deps{Store: store, Spawner: sessions})

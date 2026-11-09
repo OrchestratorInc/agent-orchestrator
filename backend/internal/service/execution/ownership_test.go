@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -15,8 +14,6 @@ import (
 // Every case is a refusal or a proven derivation, so each one asserts the error class
 // rather than a message: a caller branches on the sentinel, and a test that matched text
 // would keep passing after the meaning changed.
-
-var ownershipNow = time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
 
 type fakeOwnershipReader struct {
 	workflows map[domain.WorkflowID]domain.Workflow

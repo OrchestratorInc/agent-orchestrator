@@ -2,11 +2,10 @@ package gitworktree
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- 支持 Git SHA-1 仓库对象协议；SHA-256 仓库走独立分支。
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,7 +39,7 @@ func VerifyMaterializedDelivery(ctx context.Context, a domain.ArtifactSnapshot, 
 		if deleted || (runtime.GOOS != "windows" && mode != fields[0]) {
 			return domain.ErrArtifactStale
 		}
-		var h hash.Hash = sha1.New()
+		h := sha1.New() // #nosec G401 -- 此分支对应 Git SHA-1 对象 ID；对象完整交付身份另以 SHA-256 绑定。
 		if len(fields[2]) == 64 {
 			h = sha256.New()
 		}
@@ -78,7 +77,7 @@ func MaterializeDelivery(ctx context.Context, a domain.ArtifactSnapshot, scratch
 	if _, _, err = verifyDeliveryRepo(ctx, a.Repo); err != nil {
 		return "", err
 	}
-	if err = os.MkdirAll(scratch, 0700); err != nil {
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		return "", err
 	}
 	if _, err = deliveryRoot(scratch); err != nil {
@@ -131,12 +130,12 @@ func MaterializeDelivery(ctx context.Context, a domain.ArtifactSnapshot, scratch
 			return dir, domain.ErrDeliveryBlocked
 		}
 		full := filepath.Join(dir, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 			return dir, err
 		}
-		mode := os.FileMode(0600)
+		mode := os.FileMode(0o600)
 		if fields[0] == "100755" {
-			mode = 0700
+			mode = 0o700
 		}
 		file, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err != nil {

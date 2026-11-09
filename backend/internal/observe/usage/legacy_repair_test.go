@@ -72,8 +72,9 @@ func TestLegacyRepairerRefusesUnverifiableSourcesAndMismatchedEvents(t *testing.
 		{
 			name: "replaced transcript identity",
 			mutate: func(t *testing.T, _ string, path string, _ *sqlite.Store, _ int64) {
-				before, err := os.Stat(path)
+				before, err := usagesvc.SourceIdentity(t.Context(), path)
 				mustNoError(t, err)
+				// Windows 的 os.Stat 会延迟读取身份；必须在替换前通过句柄固定旧身份。
 				// Allocate the replacement while the original still holds its
 				// inode. Removing first lets the filesystem hand the same inode
 				// straight back, which leaves the file identity unchanged and
@@ -81,9 +82,9 @@ func TestLegacyRepairerRefusesUnverifiableSourcesAndMismatchedEvents(t *testing.
 				replacement := path + ".replacement"
 				mustNoError(t, os.WriteFile(replacement, []byte(legacyCodexTranscript(true)), 0o600))
 				mustNoError(t, os.Rename(replacement, path))
-				after, err := os.Stat(path)
+				after, err := usagesvc.SourceIdentity(t.Context(), path)
 				mustNoError(t, err)
-				if os.SameFile(before, after) {
+				if before == after {
 					t.Fatalf("replacement reused the file identity of %s", path)
 				}
 			},

@@ -8,6 +8,7 @@ import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { WorkflowAction } from "./WorkflowAction";
+import { WorkflowProviderSelect } from "./WorkflowProviderSelect";
 
 type S = components["schemas"];
 
@@ -26,8 +27,12 @@ export function WorkflowIntervention({ definition, attempt, current }: {
 	const receipts = useWorkflowResource<S["WorkflowInterventionReceiptsResponse"]>(id, "intervention-receipts", `${path}/interventions`, true, 5000);
 	const conversation = useConversation(attempt.sessionId);
 	const [text, setText] = useWorkflowDraft(`${scope[1]}:${path}:guidance`, "");
-	const [model, setModel] = useWorkflowDraft(`${scope[1]}:${path}:replan-model`, definition.tasks.find(task => task.planner)?.model || "");
-	const [effort, setEffort] = useWorkflowDraft(`${scope[1]}:${path}:replan-effort`, "");
+	const original = definition.tasks.find(task => task.id === attempt.taskId);
+	// 只读 Planner 仅支持 Codex；其他原生任务不能把自己的模型带入这条路由。
+	const replan = original?.agentHarness === "codex" ? original : definition.tasks.find(task => task.planner && task.agentHarness === "codex");
+	const [model, setModel] = useWorkflowDraft(`${scope[1]}:${path}:replan-model`, replan?.model || "");
+	const [effort, setEffort] = useWorkflowDraft(`${scope[1]}:${path}:replan-effort`, replan?.effort || "");
+	const [profile, setProfile] = useWorkflowDraft(`${scope[1]}:${path}:replan-profile`, replan?.profile || "");
 	const [now, setNow] = useState(Date.now);
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -41,7 +46,7 @@ export function WorkflowIntervention({ definition, attempt, current }: {
 	const history = receipts.data?.interventions || [];
 	const stop = [...history].reverse().find(r => r.mode === "stop" && r.attemptId === attempt.id && r.sessionId === attempt.sessionId && r.controllerGeneration === generation);
 	return <div className="space-y-3 border-t border-border pt-3">
-		<p className="break-all text-xs">Attempt {attempt.id} · Session {attempt.sessionId || "—"} · {generation || "UNKNOWN"}</p>
+		<p className="break-all text-xs">{t("workflow.attemptIdentity", { attempt: attempt.id, session: attempt.sessionId || "—", generation: generation || "UNKNOWN" })}</p>
 		{[binding.error?.message, observed.error?.message, conversation.error, capabilities.error?.message, receipts.error?.message].filter(Boolean).map((error, i) => <p key={i} role="alert" className="text-xs">{error}</p>)}
 		<label className="block text-sm">{t("workflow.guidance")}<textarea className="mt-1 min-h-20 w-full rounded-md border border-border bg-background p-2" value={text} onChange={e => setText(e.target.value)} /></label>
 		<div className="flex flex-wrap gap-2">{(["steer", "queue", "stop"] as const).map(mode => <WorkflowAction key={mode} verb="intervention" path={`${path}/interventions`} keyField="clientMessageId" payload={{ mode, ...(mode !== "stop" ? { text } : {}), controllerGeneration: generation, ...(mode === "steer" ? { targetProviderTurnId: turn } : {}) }} disabled={!live || !generation || (mode !== "stop" && !text.trim()) || (mode === "steer" && !supportsSteer) || (mode === "queue" && capability?.queue !== "supported") || (mode === "stop" && (capability?.interrupt !== "supported" || !!stop && stop.state !== "rejected"))}>{t(`workflow.${mode}`)}</WorkflowAction>)}</div>
@@ -51,6 +56,6 @@ export function WorkflowIntervention({ definition, attempt, current }: {
 			navigate(definition.repositories.find(repo => definition.taskRepositories.some(scope => scope.taskId === attempt.taskId && scope.repoKey === repo.repoKey))?.projectId, attempt.sessionId!);
 		}}>{t("workflow.manageQueue")}</Button>}
 		{history.map(receipt => <p key={receipt.id} role="status" className="text-sm">{receipt.mode}: {receipt.state} · {receipt.reasonCode} · {receipt.clientMessageId}</p>)}
-		{current && stop?.state === "stop_confirmed" && <div className="space-y-2"><label className="block text-sm">{t("workflow.replanModel")}<Input value={model} onChange={e => setModel(e.target.value)} /></label><label className="block text-sm">{t("workflow.effort")}<Input value={effort} onChange={e => setEffort(e.target.value)} /></label><WorkflowAction verb="start-replan" path={`/api/v1/workflows/${id}/replan`} payload={{ stopInterventionId: stop.id, expectedRevision: definition.workflow.revision, agentHarness: "codex", model, effort }} disabled={!model.trim() || definition.tasks.some(task => task.planner && !["succeeded", "cancelled", "failed"].includes(task.state))}>{t("workflow.startReplan")}</WorkflowAction></div>}
+		{current && stop?.state === "stop_confirmed" && <div className="space-y-2"><WorkflowProviderSelect value={profile} harness="codex" onChange={selection => { setProfile(selection.profile); setModel(selection.model); setEffort(selection.effort); }} /><label className="block text-sm">{t("workflow.replanModel")}<Input disabled={!!profile} value={model} onChange={e => setModel(e.target.value)} /></label><label className="block text-sm">{t("workflow.effort")}<Input disabled={!!profile} value={effort} onChange={e => setEffort(e.target.value)} /></label><WorkflowAction verb="start-replan" path={`/api/v1/workflows/${id}/replan`} payload={{ stopInterventionId: stop.id, expectedRevision: definition.workflow.revision, agentHarness: "codex", model, effort, profile }} disabled={!model.trim() || definition.tasks.some(task => task.planner && !["succeeded", "cancelled", "failed"].includes(task.state))}>{t("workflow.startReplan")}</WorkflowAction></div>}
 	</div>;
 }

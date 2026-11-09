@@ -2,11 +2,12 @@ package httpd
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"

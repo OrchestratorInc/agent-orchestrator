@@ -86,6 +86,9 @@ type CapabilityProbeRequest struct {
 	Harness    domain.AgentHarness
 	SessionID  domain.SessionID
 	Generation string
+	Profile    string
+	Model      string
+	Effort     string
 }
 
 // SessionScoped reports whether the request asks about one specific session.

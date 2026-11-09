@@ -204,9 +204,7 @@ func TestWorkflowCDCNoOpTaskAndWorkflowUpdatesEmitNothing(t *testing.T) {
 	}
 	claim := workflowStoreAttempt("attempt-cdc-noop", workflowID, taskID, "worker-noop", "lease-noop",
 		now.Add(2*time.Second), now.Add(2*time.Minute))
-	if _, created, err := claimWithAdmission(t, s,
-		ctx, claim, ready.Revision, "workflow-cdc-noop-claim", strings.Repeat("f", 64),
-	); err != nil || !created {
+	if _, created, err := claimWithAdmission(ctx, t, s, claim, ready.Revision, "workflow-cdc-noop-claim", strings.Repeat("f", 64)); err != nil || !created {
 		t.Fatalf("ClaimWorkflowTask created=%v err=%v", created, err)
 	}
 
@@ -265,9 +263,7 @@ func TestWorkflowCDCClaimEmitsAttemptEventWithoutLeaseCapability(t *testing.T) {
 	attempt := workflowStoreAttempt("attempt-cdc-claim", workflowID, taskID, workerID, leaseToken,
 		now.Add(2*time.Second), now.Add(2*time.Minute))
 	baseline := latestSeq(t, s)
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, attempt, ready.Revision, "workflow-cdc-claim-key", strings.Repeat("i", 64),
-	)
+	claimed, created, err := claimWithAdmission(ctx, t, s, attempt, ready.Revision, "workflow-cdc-claim-key", strings.Repeat("i", 64))
 	if err != nil || !created {
 		t.Fatalf("ClaimWorkflowTask created=%v err=%v", created, err)
 	}
@@ -328,8 +324,7 @@ func TestWorkflowCDCEventsCarryNoProjectOrSessionScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := claimWithAdmission(t, s,
-		ctx,
+	if _, created, err := claimWithAdmission(ctx, t, s,
 		workflowStoreAttempt("attempt-cdc-scope", workflowID, taskID, "worker-scope", "lease-scope",
 			now.Add(2*time.Second), now.Add(2*time.Minute)),
 		ready.Revision, "workflow-cdc-scope-claim", strings.Repeat("l", 64),

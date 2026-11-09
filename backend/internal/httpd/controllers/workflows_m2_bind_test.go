@@ -925,7 +925,6 @@ func TestM2BindSurfacesOwnershipFailures(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			binder := &bindRecorder{}

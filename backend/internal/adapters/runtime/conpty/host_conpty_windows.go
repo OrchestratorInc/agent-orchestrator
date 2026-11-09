@@ -8,9 +8,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	gopty "github.com/aymanbagabas/go-pty"
 	"golang.org/x/sys/windows"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 )
 
 // conptyConn is the real ptyConn implementation backed by go-pty's ConPty
@@ -52,7 +53,7 @@ func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (pty
 	cmd := cp.Command(shellCmd, shellArgs...)
 	cmd.Dir = cwd
 	// Inherit parent env so PATH, HOME, etc. are available.
-	cmd.Env = processenv.StripWorkflowLease(os.Environ())
+	cmd.Env = processenv.StripWorkflowSecrets(os.Environ())
 
 	if err := cmd.Start(); err != nil {
 		_ = cp.Close()

@@ -50,7 +50,7 @@ func (s *Store) ReserveAndClaim(ctx context.Context, in domain.ClaimAdmissionInp
 		if t.State != domain.WorkflowTaskStateReady || t.Revision != in.ExpectedTaskRevision || w.State != domain.WorkflowStateActive {
 			return domain.ErrWorkflowTaskNotClaimable
 		}
-		if t.AgentHarness != "" && t.AgentHarness != in.Evidence.Capability.Harness {
+		if t.Profile != in.Evidence.Capability.Profile || t.AgentHarness != "" && t.AgentHarness != in.Evidence.Capability.Harness {
 			return domain.ErrCapabilityEvidenceInsufficient
 		}
 		if err := checkPredecessorQuality(ctx, q, in.Attempt.WorkflowID, in.Attempt.TaskID, t.Kind, in.Evidence.Now); err != nil {

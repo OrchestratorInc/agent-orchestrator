@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
+// HeaderWorkflowReadAccess 承载仅供指定工作流读取的短期凭据。
 const HeaderWorkflowReadAccess = "X-AO-Workflow-Read-Access"
+
+// WorkflowReadAccessTTL 限制人工授权后读取凭据的有效期。
 const WorkflowReadAccessTTL = 30 * time.Minute
 
 var workflowReadID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)

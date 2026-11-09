@@ -85,7 +85,7 @@ func (w *resourceWindow) evaluate(r domain.ResourceSample, now time.Time, p doma
 	}
 	newSample := r.ObservedAt.After(w.observedAt)
 	w.observedAt = r.ObservedAt
-	if percentCompare(busy, total, p.CPUHardPercent) >= 0 || percentCompare(r.AvailableBytes, r.TotalBytes, p.RAMHardPercent) < 0 || r.AvailableBytes < uint64(p.RAMFloorBytes) {
+	if percentCompare(busy, total, p.CPUHardPercent) >= 0 || percentCompare(r.AvailableBytes, r.TotalBytes, p.RAMHardPercent) < 0 || r.AvailableBytes < uint64(p.RAMFloorBytes) { // #nosec G115 -- 生产调用只传默认或通过 SchedulerPolicy.Validate 的策略，RAMFloorBytes 非负且不超过 int64。
 		w.limit, w.healthy = 0, 0
 		return Capacity{ReasonCode: "RESOURCE_HARD_LIMIT"}
 	}
@@ -112,7 +112,7 @@ func (w *resourceWindow) evaluate(r domain.ResourceSample, now time.Time, p doma
 // percentCompare 用完整 128 位乘积比较比例，避免大 tick 或字节数溢出与浮点边界误差。
 func percentCompare(value, total uint64, percent int64) int {
 	lh, ll := bits.Mul64(value, 100)
-	rh, rl := bits.Mul64(total, uint64(percent))
+	rh, rl := bits.Mul64(total, uint64(percent)) // #nosec G115 -- 调用者只传已校验策略的百分比，范围为0到100，不可能转换溢出。
 	if lh < rh || lh == rh && ll < rl {
 		return -1
 	}

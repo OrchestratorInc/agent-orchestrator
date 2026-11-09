@@ -47,11 +47,10 @@ type FakeGateway struct {
 	sessionSeq int
 
 	// Scripted spawn behavior.
-	spawnErr            error
-	loseSpawnResponse   bool
-	spawnReadiness      ports.SessionReadiness
-	spawnGeneration     string
-	spawnDelayProvision bool
+	spawnErr          error
+	loseSpawnResponse bool
+	spawnReadiness    ports.SessionReadiness
+	spawnGeneration   string
 	// spawnWorktrees is the repository evidence every successful spawn reports. It
 	// exists so a test can withhold it (the single-repo shape) or supply it (the
 	// same-or-different-commit case) without a real Git worktree.

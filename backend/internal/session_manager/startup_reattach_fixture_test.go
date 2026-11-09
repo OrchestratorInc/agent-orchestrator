@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -19,7 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/scheduler"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
-	"github.com/google/uuid"
 )
 
 // startupHost 保留现存 Provider 与连接关闭的区别，验证失败重附着不能终止 Host。
@@ -204,7 +205,7 @@ func (f *startupReattachFixture) seedWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	permitCtx := func() context.Context { return sqlitetest.ExecutionContext(t, ctx, f.s, f.attempt.ID, f.now()) }
+	permitCtx := func() context.Context { return sqlitetest.ExecutionContext(ctx, t, f.s, f.attempt.ID, f.now()) }
 	b := domain.WorkflowAttemptBinding{AttemptID: f.attempt.ID, WorkflowID: w.ID, TaskID: task.ID, SpawnRequestID: "startup-spawn", SpawnHash: strings.Repeat("d", 64)}
 	b, _, err = f.s.CreateWorkflowAttemptBinding(permitCtx(), b, nil, now)
 	if err != nil {

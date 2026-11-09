@@ -220,34 +220,30 @@ func TestWorkflowLifecycleRetriesAndCompletesWithIdempotentAttempts(t *testing.T
 
 	leaseUntil1 := now.Add(2 * time.Minute)
 	attempt1 := workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), leaseUntil1)
-	claimed1, created, err := claimWithAdmission(t, s,
-		ctx, attempt1, ready.Revision, "claim-key-1", strings.Repeat("3", 64),
-	)
+	claimed1, created, err := claimWithAdmission(ctx, t, s, attempt1, ready.Revision, "claim-key-1", strings.Repeat("3", 64))
 	if err != nil || !created || claimed1.AttemptNo != 1 || claimed1.State != domain.WorkflowAttemptStateClaimed {
 		t.Fatalf("first claim = %+v created=%v err=%v", claimed1, created, err)
 	}
-	replayedClaim, created, err := claimWithAdmission(t, s,
-		ctx, attempt1, ready.Revision, "claim-key-1", strings.Repeat("3", 64),
-	)
+	replayedClaim, created, err := claimWithAdmission(ctx, t, s, attempt1, ready.Revision, "claim-key-1", strings.Repeat("3", 64))
 	if err != nil || created || replayedClaim.ID != claimed1.ID {
 		t.Fatalf("claim replay = %+v created=%v err=%v", replayedClaim, created, err)
 	}
 
 	started1, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed1.ID, now.Add(3*time.Second)), workflowID, claimed1.ID, "lease-1", "start-key-1", strings.Repeat("4", 64), now.Add(3*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed1.ID, now.Add(3*time.Second)), workflowID, claimed1.ID, "lease-1", "start-key-1", strings.Repeat("4", 64), now.Add(3*time.Second),
 	)
 	if err != nil || !applied || started1.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("start attempt 1 = %+v applied=%v err=%v", started1, applied, err)
 	}
 	replayedStart, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed1.ID, now.Add(3*time.Second)), workflowID, claimed1.ID, "lease-1", "start-key-1", strings.Repeat("4", 64), now.Add(3*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed1.ID, now.Add(3*time.Second)), workflowID, claimed1.ID, "lease-1", "start-key-1", strings.Repeat("4", 64), now.Add(3*time.Second),
 	)
 	if err != nil || applied || replayedStart.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("start replay = %+v applied=%v err=%v", replayedStart, applied, err)
 	}
 
 	failed1, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed1.ID, now.Add(4*time.Second)), workflowID, claimed1.ID, "lease-1", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed1.ID, now.Add(4*time.Second)), workflowID, claimed1.ID, "lease-1", domain.WorkflowAttemptStateFailed,
 		"test_failure", "settle-key-1", strings.Repeat("5", 64), now.Add(4*time.Second),
 	)
 	if err != nil || !applied || failed1.State != domain.WorkflowAttemptStateFailed {
@@ -258,7 +254,7 @@ func TestWorkflowLifecycleRetriesAndCompletesWithIdempotentAttempts(t *testing.T
 		t.Fatalf("task after failed attempt = %+v found=%v err=%v", retryWait, found, err)
 	}
 	replayedSettle, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed1.ID, now.Add(4*time.Second)), workflowID, claimed1.ID, "lease-1", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed1.ID, now.Add(4*time.Second)), workflowID, claimed1.ID, "lease-1", domain.WorkflowAttemptStateFailed,
 		"test_failure", "settle-key-1", strings.Repeat("5", 64), now.Add(4*time.Second),
 	)
 	if err != nil || applied || replayedSettle.State != domain.WorkflowAttemptStateFailed {
@@ -279,19 +275,17 @@ func TestWorkflowLifecycleRetriesAndCompletesWithIdempotentAttempts(t *testing.T
 	}
 	leaseUntil2 := now.Add(3 * time.Minute)
 	attempt2 := workflowStoreAttempt("attempt-2", workflowID, taskID, "worker-2", "lease-2", now.Add(6*time.Second), leaseUntil2)
-	claimed2, created, err := claimWithAdmission(t, s,
-		ctx, attempt2, retried.Revision, "claim-key-2", strings.Repeat("7", 64),
-	)
+	claimed2, created, err := claimWithAdmission(ctx, t, s, attempt2, retried.Revision, "claim-key-2", strings.Repeat("7", 64))
 	if err != nil || !created || claimed2.AttemptNo != 2 {
 		t.Fatalf("second claim = %+v created=%v err=%v", claimed2, created, err)
 	}
 	if _, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed2.ID, now.Add(7*time.Second)), workflowID, claimed2.ID, "lease-2", "start-key-2", strings.Repeat("8", 64), now.Add(7*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed2.ID, now.Add(7*time.Second)), workflowID, claimed2.ID, "lease-2", "start-key-2", strings.Repeat("8", 64), now.Add(7*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("start attempt 2: applied=%v err=%v", applied, err)
 	}
 	succeeded, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed2.ID, now.Add(8*time.Second)), workflowID, claimed2.ID, "lease-2", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed2.ID, now.Add(8*time.Second)), workflowID, claimed2.ID, "lease-2", domain.WorkflowAttemptStateSucceeded,
 		"", "settle-key-2", strings.Repeat("9", 64), now.Add(8*time.Second),
 	)
 	if err != nil || !applied || succeeded.State != domain.WorkflowAttemptStateSucceeded {
@@ -311,10 +305,11 @@ func TestWorkflowLifecycleRetriesAndCompletesWithIdempotentAttempts(t *testing.T
 	}
 }
 
+// 首次库使用迁移模板，两个真实实例仍竞争同一数据库上的认领权。
 func TestWorkflowClaimIsSingleWinnerAcrossStoreInstances(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
-	first, err := sqlite.Open(dataDir)
+	first, err := sqlitetest.Open(dataDir)
 	if err != nil {
 		t.Fatalf("open primary store: %v", err)
 	}
@@ -368,8 +363,7 @@ func TestWorkflowClaimIsSingleWinnerAcrossStoreInstances(t *testing.T) {
 				workflowID, taskID, "worker-"+string(rune('1'+i)), "lease-"+string(rune('1'+i)),
 				nowForAttempt, leaseUntil,
 			)
-			results[i], created[i], errs[i] = claimWithAdmission(t, stores[i],
-				ctx, attempt, task.Revision, "claim-racer-"+string(rune('1'+i)),
+			results[i], created[i], errs[i] = claimWithAdmission(ctx, t, stores[i], attempt, task.Revision, "claim-racer-"+string(rune('1'+i)),
 				strings.Repeat(string(rune('c'+i)), 64),
 			)
 		}(i)
@@ -421,12 +415,12 @@ func TestWorkflowDependenciesControlReadyStateAndUnlockOnSuccess(t *testing.T) {
 
 	leaseUntil := now.Add(time.Minute)
 	attempt := workflowStoreAttempt("attempt-task-a", workflowID, taskA.ID, "worker-1", "lease-a", now.Add(2*time.Second), leaseUntil)
-	claimed, _, err := claimWithAdmission(t, s, ctx, attempt, readyA.Revision, "dependency-claim", strings.Repeat("c", 64))
+	claimed, _, err := claimWithAdmission(ctx, t, s, attempt, readyA.Revision, "dependency-claim", strings.Repeat("c", 64))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-a", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-a", domain.WorkflowAttemptStateSucceeded,
 		"", "dependency-settle", strings.Repeat("d", 64), now.Add(3*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("settle predecessor: applied=%v err=%v", applied, err)
@@ -456,7 +450,7 @@ func TestWorkflowRecoveryMarksExpiredAttemptUnknownAndBlocksTask(t *testing.T) {
 	}
 	leaseUntil := now.Add(10 * time.Second)
 	attempt := workflowStoreAttempt("attempt-expired", workflowID, taskID, "worker-expired", "lease-expired", now.Add(2*time.Second), leaseUntil)
-	claimed, _, err := claimWithAdmission(t, s, ctx, attempt, task.Revision, "recovery-claim", strings.Repeat("c", 64))
+	claimed, _, err := claimWithAdmission(ctx, t, s, attempt, task.Revision, "recovery-claim", strings.Repeat("c", 64))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +496,7 @@ func TestWorkflowClaimRejectsAlreadyExpiredLease(t *testing.T) {
 		"attempt-expired-before-claim", workflowID, taskID, "worker-1", "lease-1",
 		now.Add(2*time.Second), expiredAt,
 	)
-	_, _, err = claimWithAdmission(t, s, ctx, attempt, task.Revision, "expired-claim", strings.Repeat("c", 64))
+	_, _, err = claimWithAdmission(ctx, t, s, attempt, task.Revision, "expired-claim", strings.Repeat("c", 64))
 	if !errors.Is(err, domain.ErrInvalidWorkflowAttemptLease) {
 		t.Fatalf("claim with expired lease error = %v, want invalid lease", err)
 	}
@@ -516,7 +510,7 @@ func TestWorkflowClaimRejectsAlreadyExpiredLease(t *testing.T) {
 		now.Add(2*time.Second), validLease,
 	)
 	invalidState.State = domain.WorkflowAttemptStateRunning
-	_, _, err = claimWithAdmission(t, s, ctx, invalidState, task.Revision, "wrong-state-key", strings.Repeat("d", 64))
+	_, _, err = claimWithAdmission(ctx, t, s, invalidState, task.Revision, "wrong-state-key", strings.Repeat("d", 64))
 	if !errors.Is(err, domain.ErrInvalidWorkflowAttempt) {
 		t.Fatalf("claim with non-claimed attempt state error = %v, want invalid attempt", err)
 	}
@@ -525,7 +519,7 @@ func TestWorkflowClaimRejectsAlreadyExpiredLease(t *testing.T) {
 		now.Add(2*time.Second), validLease,
 	)
 	invalidNumber.AttemptNo = 1
-	_, _, err = claimWithAdmission(t, s, ctx, invalidNumber, task.Revision, "wrong-number-key", strings.Repeat("e", 64))
+	_, _, err = claimWithAdmission(ctx, t, s, invalidNumber, task.Revision, "wrong-number-key", strings.Repeat("e", 64))
 	if !errors.Is(err, domain.ErrInvalidWorkflowAttempt) {
 		t.Fatalf("claim with caller-supplied attempt number error = %v, want invalid attempt", err)
 	}
@@ -550,12 +544,12 @@ func TestWorkflowFailsWhenTaskExhaustsAttemptBudget(t *testing.T) {
 	}
 	leaseUntil := now.Add(time.Minute)
 	attempt := workflowStoreAttempt("attempt-terminal", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), leaseUntil)
-	claimed, _, err := claimWithAdmission(t, s, ctx, attempt, task.Revision, "terminal-claim", strings.Repeat("c", 64))
+	claimed, _, err := claimWithAdmission(ctx, t, s, attempt, task.Revision, "terminal-claim", strings.Repeat("c", 64))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
 		"permanent_failure", "terminal-settle", strings.Repeat("d", 64), now.Add(3*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("settle terminal failure: applied=%v err=%v", applied, err)
@@ -570,10 +564,11 @@ func TestWorkflowFailsWhenTaskExhaustsAttemptBudget(t *testing.T) {
 	}
 }
 
+// 仅复用首次建库，真实关闭重开后未知执行仍须阻塞任务。
 func TestWorkflowRecoveryAfterStoreRestartKeepsUnknownAttemptBlocked(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
-	first, err := sqlite.Open(dataDir)
+	first, err := sqlitetest.Open(dataDir)
 	if err != nil {
 		t.Fatalf("open first store: %v", err)
 	}
@@ -604,7 +599,7 @@ func TestWorkflowRecoveryAfterStoreRestartKeepsUnknownAttemptBlocked(t *testing.
 		"attempt-before-restart", workflowID, taskID, "worker-before-restart", "lease-before-restart",
 		now.Add(2*time.Second), leaseUntil,
 	)
-	claimed, _, err := claimWithAdmission(t, first, ctx, attempt, task.Revision, "restart-claim", strings.Repeat("c", 64))
+	claimed, _, err := claimWithAdmission(ctx, t, first, attempt, task.Revision, "restart-claim", strings.Repeat("c", 64))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,15 +656,13 @@ func TestWorkflowTerminalFailureStillDrainsAlreadyClaimedSibling(t *testing.T) {
 	}
 
 	leaseUntil := now.Add(time.Minute)
-	claimedA, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-a", workflowID, taskA, "worker-a", "lease-a", now.Add(2*time.Second), leaseUntil),
+	claimedA, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-a", workflowID, taskA, "worker-a", "lease-a", now.Add(2*time.Second), leaseUntil),
 		readyA.Revision, "drain-claim-a", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
 		t.Fatalf("claim task a = %+v created=%v err=%v", claimedA, created, err)
 	}
-	claimedB, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-b", workflowID, taskB, "worker-b", "lease-b", now.Add(2*time.Second), leaseUntil),
+	claimedB, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-b", workflowID, taskB, "worker-b", "lease-b", now.Add(2*time.Second), leaseUntil),
 		readyB.Revision, "drain-claim-b", strings.Repeat("d", 64),
 	)
 	if err != nil || !created {
@@ -677,7 +670,7 @@ func TestWorkflowTerminalFailureStillDrainsAlreadyClaimedSibling(t *testing.T) {
 	}
 
 	if _, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimedA.ID, now.Add(3*time.Second)), workflowID, claimedA.ID, "lease-a", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimedA.ID, now.Add(3*time.Second)), workflowID, claimedA.ID, "lease-a", domain.WorkflowAttemptStateFailed,
 		"permanent_failure", "drain-settle-a", strings.Repeat("e", 64), now.Add(3*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("settle task a failure: applied=%v err=%v", applied, err)
@@ -688,13 +681,13 @@ func TestWorkflowTerminalFailureStillDrainsAlreadyClaimedSibling(t *testing.T) {
 	}
 
 	startedB, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimedB.ID, now.Add(4*time.Second)), workflowID, claimedB.ID, "lease-b", "drain-start-b", strings.Repeat("f", 64), now.Add(4*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimedB.ID, now.Add(4*time.Second)), workflowID, claimedB.ID, "lease-b", "drain-start-b", strings.Repeat("f", 64), now.Add(4*time.Second),
 	)
 	if err != nil || !applied || startedB.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("start already-claimed sibling = %+v applied=%v err=%v", startedB, applied, err)
 	}
 	settledB, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimedB.ID, now.Add(5*time.Second)), workflowID, claimedB.ID, "lease-b", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimedB.ID, now.Add(5*time.Second)), workflowID, claimedB.ID, "lease-b", domain.WorkflowAttemptStateSucceeded,
 		"", "drain-settle-b", strings.Repeat("0", 64), now.Add(5*time.Second),
 	)
 	if err != nil || !applied || settledB.State != domain.WorkflowAttemptStateSucceeded {
@@ -734,8 +727,7 @@ func TestWorkflowLeaseOrderingIsNormalizedToUTC(t *testing.T) {
 			t.Fatalf("load task %s: found=%v err=%v", taskID, found, err)
 		}
 		leaseUntil := claimedAt.Add(30 * time.Second)
-		if _, created, err := claimWithAdmission(t, s,
-			ctx,
+		if _, created, err := claimWithAdmission(ctx, t, s,
 			workflowStoreAttempt("attempt-"+domain.WorkflowAttemptID(suffix), workflowID, taskID, "worker-"+suffix, "lease-"+suffix, claimedAt, leaseUntil),
 			ready.Revision, "zone-claim-"+suffix, strings.Repeat("c", 64),
 		); err != nil || !created {
@@ -779,8 +771,7 @@ func TestWorkflowStartReplayWithNewKeyDoesNotConflict(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("load task: found=%v err=%v", found, err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "start-replay-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -788,13 +779,13 @@ func TestWorkflowStartReplayWithNewKeyDoesNotConflict(t *testing.T) {
 	}
 
 	first, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", "start-replay-key-1", strings.Repeat("d", 64), now.Add(3*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", "start-replay-key-1", strings.Repeat("d", 64), now.Add(3*time.Second),
 	)
 	if err != nil || !applied || first.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("first start = %+v applied=%v err=%v", first, applied, err)
 	}
 	replayed, applied, err := s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", "start-replay-key-2", strings.Repeat("d", 64), now.Add(4*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", "start-replay-key-2", strings.Repeat("d", 64), now.Add(4*time.Second),
 	)
 	if err != nil || applied || replayed.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("start replay with a new key = %+v applied=%v err=%v; want applied=false and no error", replayed, applied, err)
@@ -821,15 +812,14 @@ func TestWorkflowStartRejectsWrongLeaseToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "wrong-token-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
 		t.Fatalf("claim = %+v created=%v err=%v", claimed, created, err)
 	}
 	_, _, err = s.StartWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-other", "wrong-token-start", strings.Repeat("d", 64), now.Add(3*time.Second),
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-other", "wrong-token-start", strings.Repeat("d", 64), now.Add(3*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowAttemptLeaseConflict) {
 		t.Fatalf("start with wrong token error = %v, want lease conflict", err)
@@ -856,15 +846,14 @@ func TestWorkflowSettleRejectsWrongLeaseToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "settle-token-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
 		t.Fatalf("claim = %+v created=%v err=%v", claimed, created, err)
 	}
 	_, _, err = s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-other", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-other", domain.WorkflowAttemptStateSucceeded,
 		"", "settle-token-settle", strings.Repeat("d", 64), now.Add(3*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowAttemptLeaseConflict) {
@@ -892,15 +881,14 @@ func TestWorkflowSettleReplayWithNewKeyReportsCurrentOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1", now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "settle-replay-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
 		t.Fatalf("claim = %+v created=%v err=%v", claimed, created, err)
 	}
 	settled, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded,
 		"", "settle-replay-key-1", strings.Repeat("d", 64), now.Add(3*time.Second),
 	)
 	if err != nil || !applied || settled.State != domain.WorkflowAttemptStateSucceeded {
@@ -908,7 +896,7 @@ func TestWorkflowSettleReplayWithNewKeyReportsCurrentOutcome(t *testing.T) {
 	}
 
 	replayed, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded,
 		"", "settle-replay-key-2", strings.Repeat("d", 64), now.Add(4*time.Second),
 	)
 	if err != nil || applied || replayed.State != domain.WorkflowAttemptStateSucceeded {
@@ -916,7 +904,7 @@ func TestWorkflowSettleReplayWithNewKeyReportsCurrentOutcome(t *testing.T) {
 	}
 
 	_, _, err = s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(5*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(5*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
 		"late_failure", "settle-replay-key-3", strings.Repeat("e", 64), now.Add(5*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowAttemptLeaseConflict) {
@@ -1002,12 +990,11 @@ func TestWorkflowStoreCanonicalizesRepositoryPaths(t *testing.T) {
 	}
 }
 
-// openWorkflowStorePair opens the primary store and a second instance over the
-// same database file, which is how two daemon-size processes would race.
+// openWorkflowStorePair 克隆独立迁移模板，再打开同库第二实例以保留真实竞争。
 func openWorkflowStorePair(t *testing.T) (*sqlite.Store, *sqlite.Store) {
 	t.Helper()
 	dataDir := t.TempDir()
-	first, err := sqlite.Open(dataDir)
+	first, err := sqlitetest.Open(dataDir)
 	if err != nil {
 		t.Fatalf("open primary store: %v", err)
 	}
@@ -1075,9 +1062,7 @@ func TestWorkflowClaimWithSameKeyIsSharedAcrossStoreInstances(t *testing.T) {
 				domain.WorkflowAttemptID("attempt-racer-"+string(rune('1'+i))),
 				workflowID, taskID, "worker-shared", "lease-shared", claimAt, claimAt.Add(time.Minute),
 			)
-			results[i], created[i], errs[i] = claimWithAdmission(t, stores[i],
-				ctx, attempt, task.Revision, "claim-shared-key", strings.Repeat("c", 64),
-			)
+			results[i], created[i], errs[i] = claimWithAdmission(ctx, t, stores[i], attempt, task.Revision, "claim-shared-key", strings.Repeat("c", 64))
 		}(i)
 	}
 	close(start)
@@ -1136,8 +1121,7 @@ func TestWorkflowClaimWithReusedKeyAndDifferentFingerprintConflicts(t *testing.T
 				workflowID, taskID, "worker-"+string(rune('1'+i)), "lease-"+string(rune('1'+i)),
 				claimAt, claimAt.Add(time.Minute),
 			)
-			results[i], created[i], errs[i] = claimWithAdmission(t, stores[i],
-				ctx, attempt, task.Revision, "claim-shared-key",
+			results[i], created[i], errs[i] = claimWithAdmission(ctx, t, stores[i], attempt, task.Revision, "claim-shared-key",
 				strings.Repeat(string(rune('d'+i)), 64),
 			)
 		}(i)
@@ -1185,9 +1169,8 @@ func TestWorkflowSettleIsSingleWinnerAcrossStoreInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, first,
-		ctx, workflowStoreAttempt("attempt-race", workflowID, taskID, "worker-1", "lease-1",
-			now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, first, workflowStoreAttempt("attempt-race", workflowID, taskID, "worker-1", "lease-1",
+		now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "settle-race-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -1205,7 +1188,7 @@ func TestWorkflowSettleIsSingleWinnerAcrossStoreInstances(t *testing.T) {
 			defer wg.Done()
 			<-start
 			_, applied[i], errs[i] = stores[i].SettleWorkflowAttempt(
-				sqlitetest.ExecutionContext(t, ctx, stores[i], claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded, "",
+				sqlitetest.ExecutionContext(ctx, t, stores[i], claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded, "",
 				"settle-race-key-"+string(rune('1'+i)), strings.Repeat("d", 64), now.Add(3*time.Second),
 			)
 		}(i)
@@ -1256,9 +1239,8 @@ func TestWorkflowSiblingSuccessCannotLaunderBlockedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	leaseUntil := now.Add(10 * time.Second)
-	stuckClaim, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-stuck", workflowID, stuckTask, "worker-stuck", "lease-stuck",
-			now.Add(2*time.Second), leaseUntil),
+	stuckClaim, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-stuck", workflowID, stuckTask, "worker-stuck", "lease-stuck",
+		now.Add(2*time.Second), leaseUntil),
 		stuckReady.Revision, "blocked-sibling-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -1277,16 +1259,15 @@ func TestWorkflowSiblingSuccessCannotLaunderBlockedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	okClaim, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-ok", workflowID, okTask, "worker-ok", "lease-ok",
-			now.Add(12*time.Second), now.Add(2*time.Minute)),
+	okClaim, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-ok", workflowID, okTask, "worker-ok", "lease-ok",
+		now.Add(12*time.Second), now.Add(2*time.Minute)),
 		okReady.Revision, "blocked-sibling-ok-claim", strings.Repeat("d", 64),
 	)
 	if err != nil || !created {
 		t.Fatalf("claim sibling = %+v created=%v err=%v", okClaim, created, err)
 	}
 	if _, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, okClaim.ID, now.Add(13*time.Second)), workflowID, okClaim.ID, "lease-ok", domain.WorkflowAttemptStateSucceeded,
+		sqlitetest.ExecutionContext(ctx, t, s, okClaim.ID, now.Add(13*time.Second)), workflowID, okClaim.ID, "lease-ok", domain.WorkflowAttemptStateSucceeded,
 		"", "blocked-sibling-ok-settle", strings.Repeat("e", 64), now.Add(13*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("settle sibling: applied=%v err=%v", applied, err)
@@ -1296,9 +1277,8 @@ func TestWorkflowSiblingSuccessCannotLaunderBlockedTask(t *testing.T) {
 	if err != nil || !found || stillBlocked.State != domain.WorkflowTaskStateBlocked {
 		t.Fatalf("stuck task after sibling success = %+v found=%v err=%v, want blocked", stillBlocked, found, err)
 	}
-	_, _, err = claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-stuck-retry", workflowID, stuckTask, "worker-2", "lease-2",
-			now.Add(14*time.Second), now.Add(3*time.Minute)),
+	_, _, err = claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-stuck-retry", workflowID, stuckTask, "worker-2", "lease-2",
+		now.Add(14*time.Second), now.Add(3*time.Minute)),
 		stillBlocked.Revision, "blocked-sibling-reclaim", strings.Repeat("f", 64),
 	)
 	if !errors.Is(err, domain.ErrWorkflowTaskNotClaimable) {
@@ -1320,9 +1300,8 @@ func TestWorkflowIdempotencyKeyCannotBeReusedAcrossOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1",
-			now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-1", workflowID, taskID, "worker-1", "lease-1",
+		now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "cross-op-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -1330,7 +1309,7 @@ func TestWorkflowIdempotencyKeyCannotBeReusedAcrossOperations(t *testing.T) {
 	}
 
 	_, _, err = s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded, "",
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(3*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateSucceeded, "",
 		"cross-op-claim", strings.Repeat("d", 64), now.Add(3*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowIdempotencyConflict) {
@@ -1346,7 +1325,7 @@ func TestWorkflowIdempotencyKeyCannotBeReusedAcrossOperations(t *testing.T) {
 	}
 
 	if _, applied, err := s.SettleWorkflowAttempt(
-		sqlitetest.ExecutionContext(t, ctx, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
+		sqlitetest.ExecutionContext(ctx, t, s, claimed.ID, now.Add(4*time.Second)), workflowID, claimed.ID, "lease-1", domain.WorkflowAttemptStateFailed,
 		"boom", "cross-op-settle", strings.Repeat("e", 64), now.Add(4*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("settle = applied=%v err=%v", applied, err)
@@ -1392,11 +1371,10 @@ func recoveryBlockedAttempt(
 		t.Fatalf("load ready task: %v", err)
 	}
 	leaseUntil := now.Add(10 * time.Second)
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt(
-			domain.WorkflowAttemptID("attempt-"+keyPrefix), workflowID, taskID, "worker-"+keyPrefix,
-			"lease-"+keyPrefix, now.Add(2*time.Second), leaseUntil,
-		),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt(
+		domain.WorkflowAttemptID("attempt-"+keyPrefix), workflowID, taskID, "worker-"+keyPrefix,
+		"lease-"+keyPrefix, now.Add(2*time.Second), leaseUntil,
+	),
 		ready.Revision, keyPrefix+"-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -1459,9 +1437,8 @@ func TestWorkflowResolveUnknownAttemptReleasesBlockedTask(t *testing.T) {
 
 	// The resolved task is terminal and its attempt left the active set, so no
 	// further attempt may be launched for it.
-	_, _, err = claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-after-resolve", workflowID, stuckTask, "worker-after",
-			"lease-after", resolveAt.Add(time.Second), resolveAt.Add(time.Minute)),
+	_, _, err = claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-after-resolve", workflowID, stuckTask, "worker-after",
+		"lease-after", resolveAt.Add(time.Second), resolveAt.Add(time.Minute)),
 		succeeded.Revision, "resolve-succeeded-reclaim", strings.Repeat("e", 64),
 	)
 	if !errors.Is(err, domain.ErrWorkflowTaskNotClaimable) {
@@ -1473,9 +1450,8 @@ func TestWorkflowResolveUnknownAttemptReleasesBlockedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-sibling", workflowID, siblingTask, "worker-sibling",
-			"lease-sibling", resolveAt.Add(2*time.Second), resolveAt.Add(time.Minute)),
+	if _, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-sibling", workflowID, siblingTask, "worker-sibling",
+		"lease-sibling", resolveAt.Add(2*time.Second), resolveAt.Add(time.Minute)),
 		siblingReady.Revision, "resolve-succeeded-sibling", strings.Repeat("f", 64),
 	); err != nil || !created {
 		t.Fatalf("claim sibling task created=%v err=%v", created, err)
@@ -1567,9 +1543,8 @@ func TestWorkflowResolveRejectsNonUnknownAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, created, err := claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-claimed", workflowID, taskID, "worker-1", "lease-1",
-			now.Add(2*time.Second), now.Add(time.Minute)),
+	claimed, created, err := claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-claimed", workflowID, taskID, "worker-1", "lease-1",
+		now.Add(2*time.Second), now.Add(time.Minute)),
 		ready.Revision, "resolve-claimed-claim", strings.Repeat("c", 64),
 	)
 	if err != nil || !created {
@@ -1685,9 +1660,8 @@ func TestWorkflowResolveDoesNotRedispatch(t *testing.T) {
 	if err != nil || !found || failedWorkflow.State != domain.WorkflowStateFailed {
 		t.Fatalf("workflow after exhausted resolve = %+v found=%v err=%v, want failed", failedWorkflow, found, err)
 	}
-	_, _, err = claimWithAdmission(t, s,
-		ctx, workflowStoreAttempt("attempt-redispatch", workflowID, taskID, "worker-2", "lease-2",
-			resolveAt.Add(time.Second), resolveAt.Add(time.Minute)),
+	_, _, err = claimWithAdmission(ctx, t, s, workflowStoreAttempt("attempt-redispatch", workflowID, taskID, "worker-2", "lease-2",
+		resolveAt.Add(time.Second), resolveAt.Add(time.Minute)),
 		failedTask.Revision, "no-redispatch-reclaim", strings.Repeat("e", 64),
 	)
 	if !errors.Is(err, domain.ErrWorkflowTaskNotClaimable) {

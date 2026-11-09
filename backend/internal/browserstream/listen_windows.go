@@ -12,6 +12,7 @@ import (
 
 var unsafePipeChars = regexp.MustCompile(`[^a-zA-Z0-9\-]`)
 
+// Listen 创建当前运行实例的命名管道，仅允许系统和对象所有者访问。
 func Listen(runFilePath string) (net.Listener, string, error) {
 	suffix := unsafePipeChars.ReplaceAllString(filepath.Base(filepath.Dir(runFilePath)), "-")
 	if suffix == "" || suffix == ".ao" || suffix == "." {

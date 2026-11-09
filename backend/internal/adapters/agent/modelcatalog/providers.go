@@ -157,13 +157,14 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 	return providers
 }
 
+// ompConfiguredProviders 以只读文件 URI 打开本地缓存，保留路径转义并避免把 Windows 盘符解释为主机名。
 func ompConfiguredProviders(ctx context.Context, path string) ([]string, bool) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, false
 	} else if err != nil {
 		return nil, true
 	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: "mode=ro"}).String()
+	dsn := (&url.URL{Scheme: "file", OmitHost: true, Path: filepath.ToSlash(path), RawQuery: "mode=ro"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, true

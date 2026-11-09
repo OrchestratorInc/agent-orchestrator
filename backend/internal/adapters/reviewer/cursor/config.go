@@ -15,6 +15,7 @@ import (
 
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -278,7 +279,7 @@ func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDi
 		env = append(env, entry)
 	}
 	env = append(env, prefix+profileDir)
-	cmd.Env = env
+	cmd.Env = processenv.StripWorkflowSecrets(env)
 	return cmd
 }
 

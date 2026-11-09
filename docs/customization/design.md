@@ -1,6 +1,8 @@
 # 多编码 Agent 桌面编排平台 — 详细设计 V0.1
 
-> 状态（2026-11-08）：**总体设计 V0.1；M1 已独立验收 PASS，M2、M3 为 Windows 离线限定范围 PASS。M4 已在本地离线范围验收并提交 `8384bcc2a48d148e611f6d20b596de4eecd15a2d`。M5相关独立回归和部分真实桌面验收已通过，整体验收未通过；用户最新要求先跳过本人操作继续开发，正收口开发检查点提交，随后推进M6自动工作。M0 正式验收仍为 BLOCKED，M0-05 真实 Provider 预算暂缓。** 当前状态与证据统一见 [阶段调度](delivery-status.md)、[M4 统筹验收](m4-supervisor-acceptance.md) 和 [M5 统筹验收](m5-acceptance.md)；限定离线 PASS 不代表真实 Provider、Windows Hello 正向或安装升级通过。
+> 最新交付决定（2026-11-09）：用户已安装试用，明确授权提交当前M6开发检查点并合并到本地`main`，后续按试用反馈修复。该授权覆盖下文此前禁止本地Merge的约束，不包含Push或发布；原有失败及未验项保持原结论，详见[统筹验收](m6-acceptance.md)和[阶段调度](delivery-status.md)。
+
+> 状态（2026-11-08）：**总体设计 V0.1；M1 已独立验收 PASS，M2、M3 为 Windows 离线限定范围 PASS。M4 已在本地离线范围验收并提交 `8384bcc2a48d148e611f6d20b596de4eecd15a2d`。M5开发检查点已提交 `acf9bafa8c14de5533a35f66d4d2c9bfc057baae`，整体验收未通过；用户明确先跳过本人操作继续开发，M6已由唯一Astra会话推进回归修复与稳定性工作。M0 正式验收仍为 BLOCKED，M0-05 真实 Provider 预算暂缓。** 当前状态与证据统一见 [阶段调度](delivery-status.md)、[M4 统筹验收](m4-supervisor-acceptance.md) 和 [M5 统筹验收](m5-acceptance.md)；限定离线 PASS 不代表真实 Provider、Windows Hello 正向或安装升级通过。
 > 日期：2026-11-03；基座：Orchestrator.inc 上游 `23840aa54104`；本地改造分支：`feat/multi-agent-desktop`。
 > 需求输入：`requirements.md` Q1–Q10；源码事实：`gap-analysis.md`。未来调整以验证结果和明确需求变更为准。
 
@@ -413,6 +415,6 @@ Attempt 产物
 
 M0 的执行结果、剩余阻断与 M0-05 预算前提统一记录在 [m0-report.md](m0-report.md)；M0-05 预算暂未批准，后续执行，当前不得发送真实 Provider 请求。
 
-当前入口为 **M5 桌面双模式的剩余验收与返修**：实施范围见 [m5-plan.md](m5-plan.md)，统筹结论见 [m5-acceptance.md](m5-acceptance.md)，缺陷关闭条件见 [m5-supervisor-rework.md](m5-supervisor-rework.md)。M4 已提交；M5 必须验收成功并本地提交后，才可派发 [M6 阶段计划](m6-plan.md)。构建、完整回归及真实桌面未验项不得以定向测试或历史阶段 PASS 替代。
+当前入口为 **M6 稳定性、回归修复与交付准备**：[阶段计划](m6-plan.md)、[统筹验收](m6-acceptance.md)。用户于2026-11-08明确要求本人操作做不了时先跳过继续开发，因此M5已作为开发检查点本地提交 `acf9bafa8c14de5533a35f66d4d2c9bfc057baae`，并派发唯一M6执行会话。M5完整验收未通过，SV-06真实桌面Queue暂缓，完整build与回归失败继续追踪；不得以本次开发放行或历史阶段PASS替代发布门禁。M5原证据见 [m5-acceptance.md](m5-acceptance.md)。
 
 **执行约束**：仅保留统筹与一个执行会话，执行方不开子 Agent，不使用 `codexhost-delegation`；高 I/O 操作串行，新增缓存、依赖、日志与构建产物放 C 盘隔离目录。不改用户真实 AO 数据或 `.codex/`、`.claude/` 配置，不发送真实 Provider 请求，不 Push、Merge 或发布。详细调度与提交门禁见 [delivery-status.md](delivery-status.md)，仍须遵循根目录 `AGENTS.md`。若未来准备向上游提交 Feature PR，还需先满足 `CONTRIBUTING.md` 的 core-team approval 要求。

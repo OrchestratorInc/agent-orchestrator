@@ -244,7 +244,7 @@ func TestManager_CloneRegistersRepositoryAndPreservesOrigin(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	destinationParent := t.TempDir()
 
 	cloned, err := m.Clone(ctx, project.CloneInput{
@@ -275,7 +275,7 @@ func TestManager_PrepareClonePreservesEmptyRepositoryForImportSetup(t *testing.T
 		t.Fatalf("git init empty source: %v (%s)", err, out)
 	}
 	destinationParent := t.TempDir()
-	emptyURL := (&url.URL{Scheme: "file", Path: emptySource}).String()
+	emptyURL := localRepositoryURL(emptySource)
 
 	prepared, err := m.PrepareClone(ctx, project.CloneInput{RemoteURL: emptyURL, DestinationParent: destinationParent})
 	if err != nil {
@@ -307,7 +307,7 @@ func TestManager_PrepareClonePreservesEmptyRepositoryForImportSetup(t *testing.T
 func TestManager_PreparedCloneCanBeCleanedUpAfterAddFailure(t *testing.T) {
 	ctx := context.Background()
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 
 	t.Run("input validation", func(t *testing.T) {
 		m := newManager(t)
@@ -355,7 +355,7 @@ func TestManager_CleanupPreparedCloneRejectsStalePreparationID(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
 	source := gitRepo(t)
-	prepared := prepareClone(t, m, (&url.URL{Scheme: "file", Path: source}).String())
+	prepared := prepareClone(t, m, localRepositoryURL(source))
 
 	err := m.CleanupPreparedClone(ctx, project.ClonePreparationCleanupInput{
 		Path: prepared.Path, PreparationID: "stale-preparation",
@@ -371,7 +371,7 @@ func TestManager_AddPreparedCloneRejectsStalePreparationID(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
 	source := gitRepo(t)
-	prepared := prepareClone(t, m, (&url.URL{Scheme: "file", Path: source}).String())
+	prepared := prepareClone(t, m, localRepositoryURL(source))
 
 	_, err := m.Add(ctx, project.AddInput{
 		Path: prepared.Path, ClonePreparationID: "stale-preparation",
@@ -387,7 +387,7 @@ func TestManager_CleanupPreparedClonePreservesRegisteredProject(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	destinationParent := t.TempDir()
 
 	prepared, err := m.PrepareClone(ctx, project.CloneInput{RemoteURL: remoteURL, DestinationParent: destinationParent})
@@ -422,7 +422,7 @@ func TestManager_CleanupPreparedClonePreservesRegisteredProject(t *testing.T) {
 func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 	m := newManager(t)
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	destinationParent := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -440,7 +440,7 @@ func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 func TestManager_PrepareCloneReportsRequestTimeout(t *testing.T) {
 	m := newManager(t)
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
 	defer cancel()
 
@@ -455,9 +455,15 @@ func TestManager_PrepareCloneDoesNotReclaimExistingCheckoutAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 即使准备阶段提前失败，也先关闭 SQLite 再由 TempDir 清理文件。
+	t.Cleanup(func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	})
 	m := project.New(store)
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	parent := t.TempDir()
 	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: parent}
 	prepared, err := m.PrepareClone(ctx, in)
@@ -481,7 +487,6 @@ func TestManager_PrepareCloneDoesNotReclaimExistingCheckoutAfterRestart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	m = project.New(store)
 
 	_, err = m.PrepareClone(ctx, in)
@@ -580,7 +585,7 @@ func TestManager_CloneCleansUpFailedAndEmptyCheckouts(t *testing.T) {
 	destinationParent := t.TempDir()
 
 	missing := filepath.Join(t.TempDir(), "missing-repository")
-	missingURL := (&url.URL{Scheme: "file", Path: missing}).String()
+	missingURL := localRepositoryURL(missing)
 	_, err := m.Clone(ctx, project.CloneInput{RemoteURL: missingURL, DestinationParent: destinationParent})
 	wantCode(t, err, "GIT_CLONE_FAILED")
 	if _, err := os.Stat(filepath.Join(destinationParent, "missing-repository")); !errors.Is(err, os.ErrNotExist) {
@@ -591,7 +596,7 @@ func TestManager_CloneCleansUpFailedAndEmptyCheckouts(t *testing.T) {
 	if out, err := exec.Command("git", "init", "-b", "main", emptySource).CombinedOutput(); err != nil {
 		t.Fatalf("git init empty source: %v (%s)", err, out)
 	}
-	emptyURL := (&url.URL{Scheme: "file", Path: emptySource}).String()
+	emptyURL := localRepositoryURL(emptySource)
 	_, err = m.Clone(ctx, project.CloneInput{RemoteURL: emptyURL, DestinationParent: destinationParent})
 	wantCode(t, err, "CLONE_EMPTY_REPOSITORY")
 	if _, err := os.Stat(filepath.Join(destinationParent, "empty-repository")); !errors.Is(err, os.ErrNotExist) {
@@ -1154,7 +1159,7 @@ func TestManager_InitializeRepositoryRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EvalSymlinks: %v", err)
 		}
-		if got := strings.TrimSpace(string(top)); got != want {
+		if got := filepath.FromSlash(strings.TrimSpace(string(top))); got != want {
 			t.Fatalf("show-toplevel = %q, want %q", got, want)
 		}
 	})
@@ -1211,7 +1216,7 @@ func TestManager_InitializeRepositoryRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EvalSymlinks: %v", err)
 		}
-		if got := strings.TrimSpace(string(top)); got != want {
+		if got := filepath.FromSlash(strings.TrimSpace(string(top))); got != want {
 			t.Fatalf("show-toplevel = %q, want %q", got, want)
 		}
 	})
@@ -2309,7 +2314,7 @@ func TestPrepareCloneCreatesDestinationParents(t *testing.T) {
 	source := gitRepo(t)
 	parent := filepath.Join(t.TempDir(), "Projects", "new folder")
 	prepared, err := m.PrepareClone(context.Background(), project.CloneInput{
-		RemoteURL: (&url.URL{Scheme: "file", Path: source}).String(), DestinationParent: parent,
+		RemoteURL: localRepositoryURL(source), DestinationParent: parent,
 	})
 	if err != nil {
 		t.Fatalf("PrepareClone: %v", err)
@@ -2332,7 +2337,7 @@ func TestEmptyCloneOnboardingCreatesFirstWorkspace(t *testing.T) {
 				t.Fatalf("init remote: %v (%s)", err, out)
 			}
 			prepared, err := m.PrepareClone(ctx, project.CloneInput{
-				RemoteURL:         (&url.URL{Scheme: "file", Path: origin}).String(),
+				RemoteURL:         localRepositoryURL(origin),
 				DestinationParent: filepath.Join(t.TempDir(), "Projects"),
 			})
 			if err != nil {
@@ -2379,7 +2384,7 @@ func TestCloneDestinationPreflightPreservesExistingFolders(t *testing.T) {
 	m := newManager(t)
 	ctx := context.Background()
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	parent := t.TempDir()
 	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: parent}
 	check, err := m.CheckCloneDestination(ctx, in)
@@ -2408,7 +2413,7 @@ func TestCloneDestinationPreflightRecognizesPreparedAndRegisteredCheckout(t *tes
 	m := newManager(t)
 	ctx := context.Background()
 	source := gitRepo(t)
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	remoteURL := localRepositoryURL(source)
 	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: t.TempDir()}
 	prepared, err := m.PrepareClone(ctx, in)
 	if err != nil {
@@ -2430,7 +2435,7 @@ func TestCloneDestinationPreflightRecognizesPreparedAndRegisteredCheckout(t *tes
 func TestPreparedCloneRegistrationRetryFindsRegisteredProject(t *testing.T) {
 	m := newManager(t)
 	source := gitRepo(t)
-	prepared := prepareClone(t, m, (&url.URL{Scheme: "file", Path: source}).String())
+	prepared := prepareClone(t, m, localRepositoryURL(source))
 	in := project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}
 	if _, err := m.Add(t.Context(), in); err != nil {
 		t.Fatal(err)
@@ -2442,7 +2447,7 @@ func TestPreparedCloneRegistrationRetryFindsRegisteredProject(t *testing.T) {
 func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
 	m := newManager(t)
 	source := gitRepo(t)
-	in := project.CloneInput{RemoteURL: (&url.URL{Scheme: "file", Path: source}).String(), DestinationParent: t.TempDir()}
+	in := project.CloneInput{RemoteURL: localRepositoryURL(source), DestinationParent: t.TempDir()}
 	prepared, err := m.PrepareClone(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
@@ -2562,4 +2567,13 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 	if !milestones["project_added"] {
 		t.Fatal("marker not claimed")
 	}
+}
+
+// localRepositoryURL 与 HTTP Clone fixture 一样，先转换盘符路径再编码为合法 file URL。
+func localRepositoryURL(path string) string {
+	urlPath := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" {
+		urlPath = "/" + urlPath
+	}
+	return (&url.URL{Scheme: "file", Path: urlPath}).String()
 }

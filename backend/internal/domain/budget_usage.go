@@ -2,6 +2,7 @@ package domain
 
 import "time"
 
+// BudgetQualityExact 表示费用已确证；估算和未知仍保留不同质量。
 const (
 	BudgetQualityExact     = "EXACT"
 	BudgetQualityEstimated = "ESTIMATED"

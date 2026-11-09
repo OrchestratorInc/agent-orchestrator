@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/collaboration"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/intervention"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/providerprofile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -80,7 +81,8 @@ type m2ChatOwners interface {
 // than built here because they come from different moments in the boot sequence: the
 // store exists first, the chat service next, and the Session Manager last.
 type m2GatewayDeps struct {
-	Store *sqlite.Store
+	Profiles ports.ProviderProfiles
+	Store    *sqlite.Store
 	// Sessions and Chats are the real owners. A nil value makes the gateway refuse the
 	// operations that need them rather than panic.
 	Sessions m2SessionOwners
@@ -134,12 +136,16 @@ func newM2ServicesWith(deps m2GatewayDeps) m2Services {
 	resolver := capability.NewResolver(
 		capability.WithRecorder(recorder),
 		capability.WithClock(func() time.Time { return time.Now().UTC() }),
+		capability.WithRequestScope(func(ctx context.Context, request ports.CapabilityProbeRequest) (ports.CapabilityProbeRequest, error) {
+			return providerprofile.ScopeCapabilityRequest(ctx, store, request)
+		}),
 	)
-	resolver = registerCapabilityProbes(resolver, deps, log)
+	resolver = registerCapabilityProbes(resolver, deps)
 
 	gateway := deps.Gateway
 	if gateway == nil {
 		gateway = execution.NewLocalGateway(execution.LocalGatewayDeps{
+			Profiles:  deps.Profiles,
 			Sessions:  deps.Sessions,
 			Resumer:   deps.Sessions,
 			Records:   store,
@@ -198,7 +204,6 @@ func newM2ServicesWith(deps m2GatewayDeps) m2Services {
 func registerCapabilityProbes(
 	resolver *capability.Resolver,
 	deps m2GatewayDeps,
-	log *slog.Logger,
 ) *capability.Resolver {
 	probe := capability.NewChatDriverProbe(
 		chatControllerProbe{svc: deps.Chats},
@@ -206,6 +211,7 @@ func registerCapabilityProbes(
 		deps.Readiness,
 		func() time.Time { return time.Now().UTC() },
 		capability.DefaultTTL,
+		deps.Profiles,
 	)
 	for _, harness := range domain.AllHarnesses {
 		resolver.RegisterProbe(harness, probe)

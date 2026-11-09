@@ -287,7 +287,7 @@ func (s *Store) CreateWorkflowInterventionIfNoOpenStop(
 	ctx context.Context,
 	intervention domain.WorkflowIntervention,
 	now time.Time,
-) (stored domain.WorkflowIntervention, created bool, blocked bool, err error) {
+) (stored domain.WorkflowIntervention, created, blocked bool, err error) {
 	if intervention.Mode != domain.WorkflowInterventionModeStop {
 		return domain.WorkflowIntervention{}, false, false,
 			fmt.Errorf("%w: only a stop is guarded by the open-stop rule", domain.ErrInvalidInterventionMode)

@@ -89,6 +89,6 @@ func retryDelay(attemptNo int64, id domain.WorkflowAttemptID) time.Duration {
 	}
 	delay = min(delay, 5*time.Minute)
 	sum := sha256.Sum256([]byte(id))
-	jitter := time.Duration(binary.BigEndian.Uint64(sum[:8]) % uint64(delay/5+1))
+	jitter := time.Duration(binary.BigEndian.Uint64(sum[:8]) % uint64(delay/5+1)) // #nosec G115 -- delay 限于5秒到5分钟；取模结果至多60秒的纳秒数，能由 time.Duration 表示。
 	return min(delay+jitter, 5*time.Minute)
 }

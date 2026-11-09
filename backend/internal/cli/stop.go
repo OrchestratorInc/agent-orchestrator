@@ -65,9 +65,9 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 	}
 	if !st.owned {
 		if st.Error != "" {
-			return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified: %s", st.PID, st.Error)
+			return daemonStatus{}, fmt.Errorf("daemon pid %d ownership could not be verified: %s", st.PID, st.Error)
 		}
-		return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified", st.PID)
+		return daemonStatus{}, fmt.Errorf("daemon pid %d ownership could not be verified", st.PID)
 	}
 
 	if err := c.requestShutdown(ctx, st.Port); err != nil {

@@ -27,12 +27,8 @@ func assertPrivateCachePath(t *testing.T, path string, directory bool) {
 // assertPrivateCacheHandle 验证有效授权只属于当前用户和系统管理员，并禁止父目录继承。
 func assertPrivateCacheHandle(t *testing.T, file *os.File) {
 	t.Helper()
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer token.Close()
-	user, err := token.GetTokenUser()
+	// 当前进程 TOKEN_QUERY 伪句柄不拥有可关闭资源。
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
 	}

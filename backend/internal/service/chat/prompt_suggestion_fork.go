@@ -22,7 +22,7 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	// Native children use the desktop launch's existing crash-cleanup journal.
 	// A standalone daemon retains the scratch-conversation fallback.
 	runID := s.sides.launchID()
-	if !canFork || runID == "" {
+	if !canFork || runID == "" || cfg.Profile != "" {
 		return s.RunBackgroundTask(ctx, harness, cfg, prompt)
 	}
 	source, release, err := s.workingController(ctx, id)
@@ -149,5 +149,5 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	if conversation.ProviderConversationID() != side.ProviderForkID {
 		return "", errors.New("suggestion fork ownership changed before generation")
 	}
-	return runBackgroundTurn(taskCtx, harness, conversation, prompt)
+	return runBackgroundTurn(taskCtx, harness, conversation, prompt, nil)
 }

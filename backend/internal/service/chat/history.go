@@ -325,7 +325,7 @@ func (s *Service) EditMessage(
 					provider, err = driver.Resume(operationCtx, ports.ChatResumeConfig{
 						SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
 						DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
-						Model: cfg.Model, Effort: cfg.Effort,
+						Model: cfg.Model, Effort: cfg.Effort, Profile: cfg.Profile,
 						Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote),
 						ProviderScopeID:       sourceBranch.ProviderScopeID,
 						ProviderIDsScoped:     sourceBranch.ProviderIDsScoped,
@@ -364,7 +364,7 @@ func (s *Service) EditMessage(
 			} else {
 				provider, err = driver.Start(operationCtx, ports.ChatStartConfig{
 					SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
-					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort,
+					Env: launchEnv, Model: cfg.Model, Effort: cfg.Effort, Profile: cfg.Profile,
 					Permissions:  cfg.Permissions,
 					SystemPrompt: withHandoffNote(cfg.SystemPrompt, sourceBranch.HandoffNote), AdditionalDirectories: cfg.AdditionalDirectories,
 					MCPServers: cfg.MCPServers, ProviderScopeID: providerScopeID, ProviderIDsScoped: true,
@@ -942,7 +942,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	provider, err := driver.Resume(operationCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: branch.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
-		Model: cfg.Model, Effort: cfg.Effort,
+		Model: cfg.Model, Effort: cfg.Effort, Profile: cfg.Profile,
 		Permissions: cfg.Permissions, SystemPrompt: withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,
 		ProviderIDsScoped:     branch.ProviderIDsScoped,
@@ -1062,7 +1062,7 @@ func (s *Service) restoreClosedSourceController(
 		// A branch whose agent never answered may have no native session to resume.
 		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
 		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
-		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
+		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort, Profile: cfg.Profile,
 		Permissions:           cmp.Or(conversation.Settings.ApprovalMode, cfg.Permissions),
 		SystemPrompt:          withHandoffNote(cfg.SystemPrompt, branch.HandoffNote),
 		ProviderScopeID:       branch.ProviderScopeID,

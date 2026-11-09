@@ -83,9 +83,10 @@ type Deps struct {
 	Out io.Writer
 	Err io.Writer
 
-	HTTPClient            *http.Client
-	Executable            func() (string, error)
-	StartProcess          func(processStartConfig) error
+	HTTPClient   *http.Client
+	Executable   func() (string, error)
+	StartProcess func(processStartConfig) error
+	// ProcessAlive 只排除确认死亡的 PID；Windows 查询未知时保留记录，存活状态仍由 HTTP 核验。
 	ProcessAlive          func(pid int) bool
 	LookPath              func(file string) (string, error)
 	CommandOutput         func(ctx context.Context, name string, args ...string) ([]byte, error)

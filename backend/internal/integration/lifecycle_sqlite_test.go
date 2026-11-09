@@ -209,6 +209,7 @@ func newStack(t *testing.T) *stack {
 	rt := &stubRuntime{}
 	ws := &stubWorkspace{}
 	mgr := sessionmanager.New(sessionmanager.Deps{Runtime: rt, Agents: stubAgents{}, Workspace: ws, Store: store, Messenger: msg, Lifecycle: lcm, LookPath: func(string) (string, error) { return "/usr/bin/true", nil }})
+	mgr.SetSessionAdmissionProvider(sqlitetest.NewAdmissionFixture(t, store, time.Now))
 	lcm.SetCompletionTerminator(mgr)
 	sm := sessionsvc.New(mgr, store)
 	return &stack{store: store, sm: sm, mgr: mgr, lcm: lcm, prm: prm, rt: rt, ws: ws, msg: msg}
@@ -257,6 +258,7 @@ func TestDelegateEndpointDoesNotDependOnCodexDeviceReconciliation(t *testing.T) 
 		CodexOperationGate: gate,
 	})
 	manager.SetAgentReadiness(agents)
+	manager.SetSessionAdmissionProvider(sqlitetest.NewAdmissionFixture(t, store, time.Now))
 	lcm.SetCompletionTerminator(manager)
 	sessions := sessionsvc.New(manager, store)
 	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Sessions: sessions}, httpd.ControlDeps{})
@@ -294,7 +296,7 @@ func TestDelegateEndpointDoesNotDependOnCodexDeviceReconciliation(t *testing.T) 
 	}
 
 	if err := agents.EnsureCodexDeviceAccountReconciled(ctx); err != nil {
-		t.Fatalf("local device reconciliation: %v", err)
+		t.Fatalf("local device reconciliation: %#v", err)
 	}
 	if factory.opens.Load() != 0 {
 		t.Fatalf("local reconciliation opened account-management client %d times", factory.opens.Load())

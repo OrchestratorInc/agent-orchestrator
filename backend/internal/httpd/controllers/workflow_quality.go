@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
@@ -16,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualitygate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualityreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/taskcommit"
-	"github.com/go-chi/chi/v5"
 )
 
 // QualityReader 仅提供既有质量事实；写动作走各自服务及其事务栅栏。

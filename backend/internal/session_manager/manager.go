@@ -397,6 +397,7 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
+	profiles  ports.ProviderProfiles
 	runtime   runtimeController
 	agents    ports.AgentResolver
 	workspace ports.Workspace
@@ -1028,6 +1029,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
 	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	profile, profileErr := m.workflowProfile(ctx, cfg.WorkflowSpawn, cfg.Harness, cfg.AgentConfig.Model, cfg.AgentConfig.Effort)
+	if profileErr != nil {
+		return domain.SessionRecord{}, 0, 0, profileErr
+	}
+	if cfg.AgentConfig.Profile != profile {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("workflow provider profile identity mismatch")
+	}
+	if profile != "" && cfg.RequestedMode != domain.SessionModeChat {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("workflow provider profile requires Chat mode")
+	}
+	if profile != "" && cfg.AgentAccountID != "" {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("workflow provider profile cannot select a native account")
+	}
 	if cfg.Harness == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
 	}
@@ -1183,7 +1197,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	id := rec.ID
-	if m.agentAccounts != nil {
+	if m.agentAccounts != nil && cfg.AgentConfig.Profile == "" {
 		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
 			if prep != nil {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
@@ -1676,6 +1690,17 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
 	resolved := applySpawnAgentConfig(base, requested)
+	if requested.Profile != "" {
+		// 宿主登记表是自定义模型的能力来源，不能用原生账号目录覆盖固定模型与 effort。
+		resolved.Model, resolved.Effort, resolved.Profile = requested.Model, requested.Effort, requested.Profile
+		if m.profiles == nil {
+			return ports.AgentConfig{}, fmt.Errorf("provider profiles unavailable")
+		}
+		if _, err := m.profiles.Resolve(ctx, requested.Profile, cfg.Harness, requested.Model, requested.Effort); err != nil {
+			return ports.AgentConfig{}, err
+		}
+		return resolved, nil
+	}
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
 	if cfg.EffortOverride {
@@ -2422,6 +2447,7 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 }
 
 func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
+	base.Profile = override.Profile
 	if override.Model != "" {
 		base.Model = override.Model
 	}
@@ -4805,7 +4831,7 @@ func (m *Manager) workspaceProjectRows(ctx context.Context, rec domain.SessionRe
 		// its project is an ordinary one. Reporting those rows here is what makes
 		// teardown, cleanup, and save-and-teardown treat every worktree, instead
 		// of destroying only the root and orphaning the others.
-		infos := m.multiRepoRows(ctx, rec, rows)
+		infos := m.multiRepoRows(rows)
 		if len(infos) == 0 {
 			return nil, false, nil
 		}
@@ -6382,8 +6408,8 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // command, which fails every callback and silently kills activity tracking).
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
-func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
-	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id))
+func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, profile ...string) map[string]string {
+	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id), profile...)
 	if err != nil {
 		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}
@@ -6394,7 +6420,7 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 // environment could not be resolved, for callers that must not go on under
 // another login (an account move's preflight). A nonempty accountID replaces
 // the session's binding.
-func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
+func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string, profile ...string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	// 账户环境在项目过滤后才合并；所有返回路径都必须移除旧租约及 Windows 别名。
@@ -6423,7 +6449,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
-	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
+	var accountErr error
+	if len(profile) == 0 || profile[0] == "" {
+		accountErr = m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
+	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
@@ -6513,8 +6542,9 @@ func pinRuntimePermissionEnv(env map[string]string, mode domain.PermissionMode) 
 	env[EnvPermissionMode] = string(ports.NormalizePermissionMode(mode))
 }
 
-func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) (map[string]string, string, error) {
-	env := m.runtimeEnv(id, project, issue, projectEnv)
+// launchRuntimeEnv 仅为原生任务合并账号环境；供应商秘密由 Driver 最后注入。
+func (m *Manager) launchRuntimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, profile ...string) (map[string]string, string, error) {
+	env := m.runtimeEnv(id, project, issue, projectEnv, profile...)
 	if m.browserCapabilities == nil {
 		return env, "", nil
 	}
@@ -6556,8 +6586,9 @@ func (m *Manager) prepareChatControllerEnv(
 	rec domain.SessionRecord,
 	projectEnv map[string]string,
 	expected domain.SessionControllerOwner,
+	profile ...string,
 ) (domain.SessionRecord, map[string]string, error) {
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv)
+	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, profile...)
 	if err != nil {
 		return rec, nil, err
 	}

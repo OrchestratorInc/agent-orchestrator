@@ -32,7 +32,7 @@ func TestWorkflowBindingStateValid(t *testing.T) {
 		}
 	}
 	for _, state := range []WorkflowBindingState{"", "spawned", "done", "RUNNING"} {
-		if WorkflowBindingState(state).Valid() {
+		if state.Valid() {
 			t.Fatalf("%q must not be a valid binding state", state)
 		}
 	}

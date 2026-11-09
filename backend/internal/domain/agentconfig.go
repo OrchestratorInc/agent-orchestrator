@@ -23,6 +23,8 @@ const (
 // former free-form map so the fields are validated and the API/UI render a
 // real form rather than arbitrary JSON. An empty value (IsZero) means unset.
 type AgentConfig struct {
+	// Profile 仅由 Workflow 持久任务固定，项目和普通会话请求不能注入路由。
+	Profile string `json:"-"`
 	// Model overrides the agent's default model (e.g. claude-opus-4-5).
 	Model string `json:"model,omitempty"`
 	// Effort selects a model-advertised reasoning level. Empty defers to the

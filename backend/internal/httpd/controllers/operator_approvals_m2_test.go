@@ -2,14 +2,15 @@ package controllers_test
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/collaboration"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/collaboration"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
 // TestM2OperatorApprovalBindCreatesTheBinding is the official-client bind path: request, confirm,
