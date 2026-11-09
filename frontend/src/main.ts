@@ -167,7 +167,6 @@ import {
 	getCloudAccessToken,
 	getCloudSession,
 	installCloudIPC,
-	readAuthStore,
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
