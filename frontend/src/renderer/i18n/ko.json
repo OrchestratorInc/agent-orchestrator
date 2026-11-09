@@ -3664,7 +3664,6 @@
 	"sessionImport.importing": "가져오는 중…",
 	"sessionImport.import_one": "대화 {{count}}개 가져오기",
 	"sessionImport.import_other": "대화 {{count}}개 가져오기",
-	"sessionImport.limit": "한 번에 최대 500개의 대화를 선택하세요.",
 	"sessionImport.selectConversation": "{{title}} 가져오기",
 	"sessionImport.messages_one": "메시지 {{count}}개",
 	"sessionImport.messages_other": "메시지 {{count}}개",

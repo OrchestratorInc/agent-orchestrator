@@ -7,7 +7,7 @@ import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../../../lib/format-time";
 import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
-import { folderName, importableProject, importChats, MAX_IMPORT, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
+import { folderName, importableProject, importChats, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
 import { useUiStore } from "../../../stores/ui-store";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -53,7 +53,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			setSelected((current) => new Set([...current].filter((id) => open.has(id))));
 			return;
 		}
-		setSelected(new Set(list.filter((c) => c.suggested && !c.sessionId).map((c) => c.id)));
+		setSelected(new Set(list.filter((c) => !c.sessionId).map((c) => c.id)));
 		setResults([]);
 	}, [preview.data]);
 	const candidates = useMemo(
@@ -269,7 +269,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 							setResults([]);
 							void preview.refetch().then(({ data }) => {
 								if (data && !keepChoicesRef.current) {
-									setSelected(new Set(data.candidates.filter((c) => c.suggested && !c.sessionId).map((c) => c.id)));
+									setSelected(new Set(data.candidates.filter((c) => !c.sessionId).map((c) => c.id)));
 								}
 							});
 						}}
@@ -279,22 +279,13 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</Button>
 					<Button
 						onClick={() => void importSelected()}
-						disabled={
-							!selectedVisible.length ||
-							selectedVisible.length > MAX_IMPORT ||
-							importing
-						}
+						disabled={!selectedVisible.length || importing}
 					>
 						{importing
 							? t("sessionImport.importing")
 							: t("sessionImport.import", { count: selectedVisible.length })}
 					</Button>
 				</div>
-				{selectedVisible.length > MAX_IMPORT ? (
-					<p role="alert" className="text-xs text-destructive">
-						{t("sessionImport.limit")}
-					</p>
-				) : null}
 			</div>
 		</div>
 	);

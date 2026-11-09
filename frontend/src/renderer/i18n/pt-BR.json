@@ -3725,7 +3725,6 @@
 	"sessionImport.importing": "Importando…",
 	"sessionImport.import_one": "Importar {{count}} conversa",
 	"sessionImport.import_other": "Importar {{count}} conversas",
-	"sessionImport.limit": "Selecione até 500 conversas por vez.",
 	"sessionImport.selectConversation": "Importar {{title}}",
 	"sessionImport.messages_one": "{{count}} mensagem",
 	"sessionImport.messages_other": "{{count}} mensagens",

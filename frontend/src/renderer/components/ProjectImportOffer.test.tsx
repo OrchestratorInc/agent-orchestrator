@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
-import { importChats, MAX_CHATS_PER_PROJECT, MAX_IMPORT, sessionImportPreviewQuery } from "../lib/session-import";
+import { importChats, MAX_IMPORT } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { ProjectImportOffer } from "./ProjectImportOffer";
@@ -34,7 +34,6 @@ const chat = (id: string, harness: string, extra: Record<string, unknown>) => ({
 	title: `Chat ${id}`,
 	lastActivity: `2026-11-0${id.length}T10:00:00Z`,
 	messageCount: 2,
-	suggested: true,
 	...extra,
 });
 
@@ -169,17 +168,4 @@ it("keeps earlier batches when a later one fails", async () => {
 	const results = await importChats(new QueryClient(), "project_offer", ids);
 	expect(results.filter((result) => result.status === "created")).toHaveLength(MAX_IMPORT);
 	expect(results.at(-1)).toEqual({ id: `c${MAX_IMPORT}`, status: "failed", error: "Import failed" });
-});
-
-it("imports at most the newest chats of each project in one go", async () => {
-	const queryClient = new QueryClient();
-	const at = (minutes: number) => new Date(Date.UTC(2026, 10, 9) - minutes * 60_000).toISOString();
-	const todo = Array.from({ length: MAX_CHATS_PER_PROJECT + 1 }, (_, i) => chat(`t${i}`, "codex", { projectId: "todo", lastActivity: at(i) }));
-	queryClient.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [...todo, chat("o", "codex", { projectId: "other", lastActivity: at(999) })] } as never);
-	api.POST.mockResolvedValueOnce({ data: { results: [] } });
-	await importChats(queryClient, "settings", ["o", ...todo.map((c) => c.id).reverse()]);
-	const sent = api.POST.mock.calls[0][1].body.ids;
-	expect(sent).toHaveLength(MAX_CHATS_PER_PROJECT + 1);
-	expect(sent[0]).toBe("o");
-	expect(sent).not.toContain(`t${MAX_CHATS_PER_PROJECT}`);
 });

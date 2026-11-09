@@ -1,19 +1,18 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Check, Download } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { agentLabel } from "../lib/agent-options";
 import { cn } from "../lib/utils";
-import { countBy, importableProject, importChats, projectChats, sessionImportPreviewQuery, useImportOfferShown } from "../lib/session-import";
+import { countBy, importableProject, projectChats, sessionImportPreviewQuery, useImportOfferShown } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { AgentAvatar } from "./AgentAvatar";
+import { useImportRun } from "./SessionImportDialog";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 
 export function ProjectImportOffer({ projectId, className }: { projectId: string; className?: string }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const project = workspaces.data?.find((workspace) => workspace.id === projectId);
 	const dismissed = useSessionImportStore((state) => state.dismissedProjects.includes(projectId));
@@ -23,9 +22,11 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const enabled = Boolean(project && importableProject(project)) && !dismissed;
 	const preview = useQuery({ ...sessionImportPreviewQuery, enabled, staleTime: 60_000 });
-	const [importing, setImporting] = useState(false);
-	const [error, setError] = useState<string>();
 	const chats = projectChats(preview.data?.candidates, projectId);
+	const { importing, error, run } = useImportRun("project_offer", (results) => {
+		const created = results.filter((result) => result.status === "created").length;
+		if (created) recordImport(projectId, created);
+	});
 	useImportOfferShown("project_board", enabled && !importedCount && chats.length > 0);
 	if (!enabled || !project) return null;
 	const dismiss = (
@@ -50,24 +51,6 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 	}
 	if (!chats.length) return null;
 	const perAgent = countBy(chats.map((chat) => chat.harness));
-	const importAll = async () => {
-		setImporting(true);
-		setError(undefined);
-		try {
-			const results = await importChats(queryClient, "project_offer", chats.map((chat) => chat.id));
-			const created = results.filter((result) => result.status === "created").length;
-			if (created) recordImport(projectId, created);
-			const failed = results.filter((result) => result.status === "failed").length;
-			if (failed) {
-				setError(t("sessionImport.resultFailed", { count: failed }));
-				void queryClient.invalidateQueries({ queryKey: sessionImportPreviewQuery.queryKey });
-			}
-		} catch (err) {
-			setError(err instanceof Error ? err.message : t("sessionImport.failed"));
-		} finally {
-			setImporting(false);
-		}
-	};
 	return (
 		<div className={cn("animate-in fade-in-0 duration-300 motion-reduce:animate-none", className)}>
 			<div className="flex items-center gap-3 rounded-lg border border-border bg-surface py-1.5 pl-3 pr-1.5">
@@ -86,7 +69,7 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 				<Button size="sm" variant="quiet" disabled={importing} onClick={() => openProjectImport(projectId)}>
 					{t("sessionImport.review")}
 				</Button>
-				<Button size="sm" variant="primary" disabled={importing} onClick={() => void importAll()}>
+				<Button size="sm" variant="primary" disabled={importing} onClick={() => void run(chats.map((chat) => chat.id))}>
 					{importing ? t("sessionImport.importing") : t("sessionImport.importShort")}
 				</Button>
 				{dismiss}

@@ -3646,7 +3646,6 @@
 	"sessionImport.importing": "正在导入…",
 	"sessionImport.import_one": "导入 {{count}} 个对话",
 	"sessionImport.import_other": "导入 {{count}} 个对话",
-	"sessionImport.limit": "每次最多选择 500 个对话。",
 	"sessionImport.selectConversation": "导入 {{title}}",
 	"sessionImport.messages_one": "{{count}} 条消息",
 	"sessionImport.messages_other": "{{count}} 条消息",

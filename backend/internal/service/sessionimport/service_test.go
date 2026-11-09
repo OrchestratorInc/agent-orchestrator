@@ -124,7 +124,7 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	for _, c := range preview.Candidates {
 		if c.Title == "fix parser" {
 			recentID = c.ID
-			if !c.Suggested || c.ProjectID != "repo" {
+			if c.ProjectID != "repo" {
 				t.Fatal(c)
 			}
 		} else {
@@ -356,7 +356,7 @@ func TestScanOffersFolderNoProjectHolds(t *testing.T) {
 		t.Fatalf("scan: %v %v", preview, err)
 	}
 	c := preview.Candidates[0]
-	if c.Folder != canonical(repo) || c.ProjectID != "" || !c.Suggested {
+	if c.Folder != canonical(repo) || c.ProjectID != "" {
 		t.Fatalf("candidate = %+v", c)
 	}
 	if results, err := svc.Import(ctx, []string{c.ID}); err != nil || results[0].Status != "failed" || len(st.sessions) != 0 {
@@ -369,5 +369,36 @@ func TestScanOffersFolderNoProjectHolds(t *testing.T) {
 	}
 	if results, err := svc.Import(ctx, []string{c.ID}); err != nil || results[0].Status != "created" || st.sessions[0].ProjectID != "widgets" {
 		t.Fatalf("import: %v %v", results, err)
+	}
+}
+
+func TestScanListsNewestChatsPerProject(t *testing.T) {
+	old := harnessImporters[domain.HarnessGemini]
+	t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
+	root, cwd := canonical(t.TempDir()), canonical(t.TempDir())
+	now := time.Now()
+	harnessImporters[domain.HarnessGemini] = harnessImporter{
+		root: func(string) string { return root },
+		discover: func(context.Context, string) ([]sourceFiles, error) {
+			files := make([]sourceFiles, maxChatsPerProject+1)
+			for i := range files {
+				files[i] = sourceFiles{harness: domain.HarnessGemini, root: root, paths: []string{fmt.Sprint(i)}, key: fmt.Sprint(i)}
+			}
+			return files, nil
+		},
+		read: func(_ context.Context, _ string, paths ...string) (transcript, error) {
+			var age int
+			_, _ = fmt.Sscan(paths[0], &age)
+			return transcript{harness: domain.HarnessGemini, root: root, path: paths[0], paths: paths, nativeID: paths[0], cwd: cwd, last: now.Add(-time.Duration(age) * time.Minute), messages: []Message{{Role: domain.MessageRoleUser, Text: "chat"}}}, nil
+		},
+	}
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}, "", nil)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessGemini: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != maxChatsPerProject || len(svc.selections) != maxChatsPerProject {
+		t.Fatalf("listed %d, selectable %d, %v", len(preview.Candidates), len(svc.selections), err)
+	}
+	if oldest := preview.Candidates[maxChatsPerProject-1].LastActivity; !oldest.Equal(now.Add(-(maxChatsPerProject - 1) * time.Minute)) {
+		t.Fatalf("oldest listed chat is from %v", oldest)
 	}
 }

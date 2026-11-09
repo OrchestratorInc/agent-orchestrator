@@ -3664,7 +3664,6 @@
 	"sessionImport.importing": "インポート中…",
 	"sessionImport.import_one": "{{count}} 件の会話をインポート",
 	"sessionImport.import_other": "{{count}} 件の会話をインポート",
-	"sessionImport.limit": "一度に選択できる会話は500件までです。",
 	"sessionImport.selectConversation": "{{title}} をインポート",
 	"sessionImport.messages_one": "{{count}} 件のメッセージ",
 	"sessionImport.messages_other": "{{count}} 件のメッセージ",

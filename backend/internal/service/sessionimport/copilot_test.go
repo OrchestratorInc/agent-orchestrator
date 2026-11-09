@@ -208,7 +208,7 @@ func TestCopilotScanImportRefreshAndDeduplication(t *testing.T) {
 		t.Fatalf("Copilot preview = %+v, %v", preview, err)
 	}
 	candidate := preview.Candidates[0]
-	if candidate.Harness != domain.HarnessCopilot || candidate.ProjectID != "repo" || candidate.MessageCount != 2 || !candidate.Suggested {
+	if candidate.Harness != domain.HarnessCopilot || candidate.ProjectID != "repo" || candidate.MessageCount != 2 {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 	results, err := svc.Import(context.Background(), []string{candidate.ID})

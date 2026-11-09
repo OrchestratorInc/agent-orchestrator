@@ -12,7 +12,6 @@ import {
 	countBy,
 	folderName,
 	importChats,
-	MAX_CHATS_PER_PROJECT,
 	projectChats,
 	sessionImportPreviewQuery,
 	type AgentBlock,
@@ -70,7 +69,7 @@ export function SessionImportDialog() {
 	);
 }
 
-function useImportRun(source: ImportSource, onDone: (results: ImportResult[]) => void) {
+export function useImportRun(source: ImportSource, onDone: (results: ImportResult[]) => void) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [importing, setImporting] = useState(false);
@@ -110,7 +109,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	const blockOf = useAgentBlocks();
 	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const [unchecked, setUnchecked] = useState(new Set<string>());
-	const chats = projectChats(preview.data?.candidates, projectId).slice(0, MAX_CHATS_PER_PROJECT);
+	const chats = projectChats(preview.data?.candidates, projectId);
 	const selected = chats.filter((chat) => !unchecked.has(chat.id));
 	const { importing, error, failures, run } = useImportRun("project_dialog", (results) => {
 		const created = results.filter((result) => result.status === "created").length;
@@ -192,7 +191,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 	}
 	const folders = [...byKey.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 	for (const folder of folders) {
-		folder.suggested = folder.chats.filter((chat) => chat.suggested && !blockOf(chat.harness)).length >= SUGGESTED_FOLDER_CHATS;
+		folder.suggested = folder.chats.filter((chat) => !blockOf(chat.harness)).length >= SUGGESTED_FOLDER_CHATS;
 	}
 	const suggested = folders.filter((folder) => folder.suggested);
 	const other = folders.filter((folder) => !folder.suggested);

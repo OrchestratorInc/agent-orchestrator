@@ -24,7 +24,10 @@ import (
 )
 
 // recentDays is the window of activity a chat needs to be offered.
-const recentDays = 30
+const (
+	recentDays         = 30
+	maxChatsPerProject = 100
+)
 
 // Store keeps registration and the readable copy atomic. It never launches a controller.
 type Store interface {
@@ -42,7 +45,6 @@ type Candidate struct {
 	Title        string              `json:"title"`
 	ProjectID    domain.ProjectID    `json:"projectId,omitempty"`
 	LastActivity time.Time           `json:"lastActivity"`
-	Suggested    bool                `json:"suggested"`
 	SessionID    domain.SessionID    `json:"sessionId,omitempty"`
 	MessageCount int                 `json:"messageCount"`
 	// Shortened reports text too large to import; the rest of the history is kept.
@@ -676,7 +678,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
+			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, MessageCount: result.count, Shortened: source.shortened}
 			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if sessionID, ok := managed[source.nativeID]; ok {
@@ -685,13 +687,26 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey()}
 		}
 	}
-	s.selections, s.cache = selected, cache
 	for _, item := range selected {
 		preview.Candidates = append(preview.Candidates, item.candidate)
 	}
 	sort.Slice(preview.Candidates, func(i, j int) bool {
 		return preview.Candidates[i].LastActivity.After(preview.Candidates[j].LastActivity)
 	})
+	listed := map[[2]string]int{}
+	kept := preview.Candidates[:0]
+	for _, c := range preview.Candidates {
+		if c.SessionID == "" {
+			key := [2]string{string(c.ProjectID), c.Folder}
+			if listed[key]++; listed[key] > maxChatsPerProject {
+				delete(selected, c.ID)
+				continue
+			}
+		}
+		kept = append(kept, c)
+	}
+	preview.Candidates = kept
+	s.selections, s.cache = selected, cache
 	return preview, nil
 }
 

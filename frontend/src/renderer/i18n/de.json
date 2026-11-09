@@ -3664,7 +3664,6 @@
 	"sessionImport.importing": "Importieren…",
 	"sessionImport.import_one": "{{count}} Unterhaltung importieren",
 	"sessionImport.import_other": "{{count}} Unterhaltungen importieren",
-	"sessionImport.limit": "Bis zu 500 Unterhaltungen gleichzeitig auswählen.",
 	"sessionImport.selectConversation": "{{title}} importieren",
 	"sessionImport.messages_one": "{{count}} Nachricht",
 	"sessionImport.messages_other": "{{count}} Nachrichten",

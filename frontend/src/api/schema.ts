@@ -7165,7 +7165,6 @@ export interface components {
             projectId?: string;
             sessionId?: string;
             shortened?: boolean;
-            suggested: boolean;
             title: string;
         };
         SessionImportPreview: {

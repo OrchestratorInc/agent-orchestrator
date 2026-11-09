@@ -4007,7 +4007,6 @@
 	"sessionImport.import_few": "Импортировать {{count}} чата",
 	"sessionImport.import_many": "Импортировать {{count}} чатов",
 	"sessionImport.import_other": "Импортировать {{count}} чата",
-	"sessionImport.limit": "За один раз можно выбрать до 500 чатов.",
 	"sessionImport.selectConversation": "Импортировать {{title}}",
 	"sessionImport.messages_one": "{{count}} сообщение",
 	"sessionImport.messages_few": "{{count}} сообщения",

@@ -19,7 +19,7 @@ vi.mock("../../../lib/navigate-to-session", async (importOriginal) => ({
 	useNavigateToSession: () => openSession,
 }));
 
-const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
+const chat = { lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	client.setQueryData(workspaceQueryKey, [{ id: "project", name: "Project", sessions: [] }] as unknown as WorkspaceSummary[]);
@@ -39,7 +39,7 @@ beforeEach(() => {
 		data: {
 			candidates: [
 				{ ...chat, id: "recent", title: "Fix parser", projectId: "project", harness: "claude-code" },
-				{ ...chat, id: "older", title: "Old discussion", harness: "claude-code", suggested: false, lastActivity: "2026-01-06T10:00:00Z", messageCount: 3, shortened: true },
+				{ ...chat, id: "older", title: "Old discussion", harness: "claude-code", lastActivity: "2026-01-06T10:00:00Z", messageCount: 3, shortened: true },
 				{ ...chat, id: "codex", title: "Codex refactor", projectId: "project", harness: "codex" },
 			],
 		},
@@ -53,20 +53,19 @@ it("lists OMP chats for import", async () => {
 	renderPanel("omp");
 	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
 });
-it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
+it("lists only this agent's chats, preselects the ones not imported and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });
 	expect(recent).toBeChecked();
 	expect(screen.queryByText("Codex refactor")).not.toBeInTheDocument();
 	const older = screen.getByRole("checkbox", { name: "Import Old discussion" });
-	expect(older).not.toBeChecked();
+	expect(older).toBeChecked();
 	expect(screen.getAllByText("Some text in this chat is too large to import.")).toHaveLength(1);
 	fireEvent.click(recent);
 	const user = userEvent.setup();
 	await user.click(screen.getByRole("combobox", { name: "Project" }));
 	await user.click(screen.getByRole("option", { name: "Standalone" }));
 	expect(screen.queryByText("Fix parser")).not.toBeInTheDocument();
-	fireEvent.click(older);
 	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
@@ -91,7 +90,6 @@ it("filters the list by a search over titles and projects", async () => {
 it("opens an imported chat from the result line and from its row", async () => {
 	renderPanel();
 	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Fix parser" }));
-	fireEvent.click(screen.getByRole("checkbox", { name: "Import Old discussion" }));
 	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
 	// A Standalone chat has no project to show.
@@ -131,8 +129,7 @@ it("offers no single chat after a bulk import, and the project only when there i
 it("offers neither a chat nor a project after a bulk import across projects", async () => {
 	api.POST.mockResolvedValueOnce({ data: { results: [{ id: "recent", status: "created", sessionId: "project-1" }, { id: "older", status: "created", sessionId: "standalone-1" }] } });
 	renderPanel();
-	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Old discussion" }));
-	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Import 2 conversations" }));
 	expect(await screen.findByText("2 conversations imported.")).toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Open chat" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Show project" })).not.toBeInTheDocument();
@@ -149,8 +146,7 @@ it("reports new, existing and failed imports separately", async () => {
 		},
 	});
 	renderPanel();
-	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Old discussion" }));
-	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Import 2 conversations" }));
 	expect(await screen.findByText("1 already in AO. 1 could not be imported.")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBeNull();
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(false);

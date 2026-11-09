@@ -20368,8 +20368,6 @@ components:
           type: string
         shortened:
           type: boolean
-        suggested:
-          type: boolean
         title:
           type: string
       required:
@@ -20377,7 +20375,6 @@ components:
       - harness
       - title
       - lastActivity
-      - suggested
       - messageCount
       type: object
     SessionImportPreview:
