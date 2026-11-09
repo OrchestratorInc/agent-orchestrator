@@ -97,7 +97,6 @@ function RenderDocument({
 	page: FramePage;
 	displayMode: RenderDisplayMode;
 	wrapContent: boolean;
-	/** An image the reader clicked in the page. */
 	onOpenImage: (image: RenderImage) => void;
 	className?: string;
 }) {
@@ -292,7 +291,6 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
-	// The last image stays while the dialog closes, so it fades out with it.
 	const [image, setImage] = useState<RenderImage>();
 	const [imageOpen, setImageOpen] = useState(false);
 	const openImage = (next: RenderImage) => {

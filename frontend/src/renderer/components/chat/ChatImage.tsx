@@ -176,7 +176,6 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 	);
 }
 
-/** An image at full size, up to the window, with the same copy and save menu. */
 export function ChatImageDialog({ open, onOpenChange, url, label }: { open: boolean; onOpenChange: (open: boolean) => void; url: string; label: string }) {
 	const { t } = useTranslation();
 	return (

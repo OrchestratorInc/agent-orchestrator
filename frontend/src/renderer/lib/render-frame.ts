@@ -166,8 +166,6 @@ export type RenderDisplayMode = "inline" | "fullscreen";
 /**
  * The fragment a render reads its theme and wrapping choice from before first
  * paint. scrollable lets a page scroll inside a capped frame with a scrollbar.
- * openImages (AO's own field) has a framed page hand clicked images to the chat
- * frame; a page opened on its own ignores it.
  */
 export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false): string {
 	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true }))}`;
@@ -199,12 +197,6 @@ export function readRenderLinkRequest(data: unknown): string | undefined {
 	return typeof url === "string" && /^https?:\/\//i.test(url) ? url : undefined;
 }
 
-/**
- * An image the reader clicked in the page. Only a data: image: the viewer loads
- * the URL in the app document, outside the page's sandbox, its CSP (an offline
- * render has no network) and the local-network guard, and a page can post this
- * message itself.
- */
 export function readRenderImageRequest(data: unknown): { src: string; alt: string } | undefined {
 	const params = rpc(data, "ao/open-image");
 	const src = params?.src;

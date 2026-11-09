@@ -22,8 +22,6 @@
   (document.head || document.documentElement).appendChild(zoomStyle);
   var framed = window.parent !== window;
   var seq = 0;
-  // The chat frame is only as tall as the page, so it opens a clicked image
-  // at full size itself. Only a framing host that asks gets the clicks.
   var images = document.createElement("style");
   images.id = "ao-images";
   (document.head || document.documentElement).appendChild(images);
@@ -141,12 +139,6 @@
     e.preventDefault();
     window.parent.postMessage({ jsonrpc: "2.0", id: "ao-link-" + (++seq), method: "ui/open-link", params: { url: url.href } }, "*");
   }, true);
-  // On window, so it hears the click after every page handler, delegated ones
-  // on document included: a page that handles the click itself (its own
-  // lightbox, a carousel) calls preventDefault and keeps it.
-  // Only data: images. The host loads the URL in the app document, outside
-  // this page's sandbox, CSP and local-network rules, and ao render inlines
-  // local images as data: anyway.
   window.addEventListener("click", function (e) {
     var img = e.target;
     if (!openImages || !e.isTrusted || e.defaultPrevented || !img || img.tagName !== "IMG" || img.closest("a[href],button")) return;

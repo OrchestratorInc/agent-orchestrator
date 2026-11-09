@@ -112,8 +112,6 @@ describe("render-frame helpers", () => {
 		const image = (params: unknown) => readRenderImageRequest({ jsonrpc: "2.0", method: "ao/open-image", params });
 		expect(image({ src: "data:image/png;base64,AA==", alt: "Before" })).toEqual({ src: "data:image/png;base64,AA==", alt: "Before" });
 		expect(image({ src: "DATA:IMAGE/svg+xml,<svg/>" })).toEqual({ src: "DATA:IMAGE/svg+xml,<svg/>", alt: "" });
-		// The app must not load anything a page names: no network URL (an offline
-		// render has none, and the local-network guard only judges agent frames).
 		for (const src of [
 			"https://evil.example/?d=secret",
 			"https://192.168.1.1/x.png",

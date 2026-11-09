@@ -69,7 +69,6 @@ describe("render activity", () => {
 		render(<ActivityRow activity={renderActivity()} />);
 		const src = "data:image/png;base64,iVBORw0KGgo=";
 		const request = { jsonrpc: "2.0", method: "ao/open-image", params: { src, alt: "Before" } };
-		// A page posting on load, before the reader is in its frame, opens nothing.
 		post(request, frame().contentWindow);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		act(() => frame().focus());
