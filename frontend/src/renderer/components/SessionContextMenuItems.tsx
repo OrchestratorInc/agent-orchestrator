@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, Cloud, Code2, Copy, ExternalLink, GitBranch, GitFork, Laptop, Link, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { useIsCloudSessionCreator } from "../hooks/useCloudAgentSwitch";
@@ -13,6 +13,7 @@ import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { CLOUD_BRANCH_FEATURE } from "../lib/move-session";
+import { sessionLink } from "../lib/session-links";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
 import { isOrchestratorSession, primaryPR, sessionIsActive, type WorkspaceSession } from "../types/workspace";
@@ -182,6 +183,9 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	}
 	if (showBranch && branch) {
 		entries.push({ kind: "item", id: "session-copy-branch", icon: <GitBranch aria-hidden="true" />, label: t("command.copyBranch"), onSelect: () => copyToClipboard(branch), accelerator: "b" });
+	}
+	if (session && hasLocalWorkspace) {
+		entries.push({ kind: "item", id: "session-copy-link", icon: <Link aria-hidden="true" />, label: t("command.copySessionLink"), onSelect: () => copyToClipboard(sessionLink(session.workspaceId, session.id)) });
 	}
 	if (onArchive) {
 		entries.push(

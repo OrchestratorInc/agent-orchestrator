@@ -2865,6 +2865,7 @@ describe("Sidebar", () => {
 			["Pin session", "P"],
 			["Fork session", "F"],
 			["Move to Orchestrator Cloud…", null],
+			["Copy session link", null],
 			["Archive session", "A"],
 		]);
 		expect(label(renameItem)).toBe("Rename");
