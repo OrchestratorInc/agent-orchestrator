@@ -685,3 +685,40 @@ func TestSinkExportsNothingWhileIdentityIsUnpersisted(t *testing.T) {
 		t.Fatalf("exported %d request(s) with an unpersisted identity", hits.Load())
 	}
 }
+
+// The desktop retires the binding itself on sign-out, so a sign-out the daemon
+// never received (down, or the app quit) still holds: a daemon started later,
+// for example by the CLI, comes up anonymous on the rotated ID, and a running
+// daemon that later receives the hand-off adopts that ID too.
+func TestDesktopRetiredBindingHoldsWithoutTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	running, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := running.SetCloudUserID(context.Background(), "user_A"); err != nil {
+		t.Fatal(err)
+	}
+	// What TelemetryIdentityController.retireBinding writes.
+	if err := os.WriteFile(filepath.Join(dir, anonymousIDFile), []byte("anon_rotated_by_desktop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, boundUserFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	cliStarted, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap := cliStarted.Snapshot(); snap.CloudUserID != "" || snap.DistinctID() != "anon_rotated_by_desktop" {
+		t.Fatalf("daemon started after the sign-out = %+v, want anonymous on the rotated ID", snap)
+	}
+
+	if err := running.SetCloudUserID(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := running.Snapshot().DistinctID(); got != "anon_rotated_by_desktop" {
+		t.Fatalf("running daemon distinct ID after the hand-off = %q, want the desktop's rotated ID", got)
+	}
+}

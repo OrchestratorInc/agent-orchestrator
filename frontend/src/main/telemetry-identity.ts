@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** Same file the daemon's telemetry Identity reads (adapters/telemetry/identity.go). */
@@ -85,6 +86,16 @@ export class TelemetryIdentityController {
 		this.cloudUserId = userId;
 		this.pushed = false;
 		const mine = ++this.generation;
+		// A sign-out must hold even if the daemon never hears it (down,
+		// restarting, or the app quits first): a daemon started later, for
+		// example by the CLI, would otherwise restore the old binding.
+		// Serialized with the hand-offs, and skipped if a later sign-in already
+		// replaced this sign-out, so it cannot remove that account's binding.
+		if (userId === null) {
+			const retire = this.queue.then(() => (this.cloudUserId === null ? this.retireBinding() : undefined));
+			this.queue = retire.catch(() => undefined);
+			await this.queue;
+		}
 		await this.flush();
 		if (this.ackedGeneration === mine) return true;
 		return this.unsupportedGeneration === mine ? "unsupported" : false;
@@ -99,6 +110,27 @@ export class TelemetryIdentityController {
 		if (!this.known) return;
 		this.pushed = false;
 		this.generation++;
+	}
+
+	/**
+	 * Does what the daemon does on sign-out, durably: a new anonymous ID is
+	 * written before the binding is removed, so no reader sees an unbound install
+	 * still using the anonymous ID that may be linked to the account. The CLI
+	 * usage summary of the retired identity is dropped too.
+	 */
+	private async retireBinding(): Promise<void> {
+		const bound = path.join(this.dataDir, "telemetry_bound_user");
+		try {
+			if (!(await lstat(bound)).isFile()) return;
+		} catch {
+			return;
+		}
+		const anonymous = path.join(this.dataDir, "telemetry_anonymous_id");
+		const temporary = `${anonymous}.${randomUUID()}.tmp`;
+		await writeFile(temporary, `anon_${randomUUID()}\n`, { mode: 0o600 });
+		await rename(temporary, anonymous);
+		await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
+		await rm(bound, { force: true });
 	}
 
 	/** Retries the hand-off; called when the daemon becomes ready. */

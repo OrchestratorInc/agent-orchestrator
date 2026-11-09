@@ -202,6 +202,11 @@ func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 }
 
 func (i *Identity) bindLocked(id string) error {
+	// The desktop retires a binding itself on sign-out (so it holds while the
+	// daemon is down); pick up the anonymous ID it wrote.
+	if anon, err := readTrimmed(filepath.Join(i.dataDir, anonymousIDFile)); err == nil && anon != "" {
+		i.anonymousID = anon
+	}
 	boundPath := filepath.Join(i.dataDir, boundUserFile)
 	bound, err := readTrimmed(boundPath)
 	if err != nil {
