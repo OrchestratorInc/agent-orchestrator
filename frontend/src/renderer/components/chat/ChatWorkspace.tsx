@@ -188,6 +188,7 @@ import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
+import { agentAccountProviderFor } from "../../hooks/useAgentAccounts";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
@@ -2055,7 +2056,7 @@ function ChatWorkspaceContent({
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
-							signInRequired={needsReauth(snapshot)}
+							signInRequired={needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud}
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}

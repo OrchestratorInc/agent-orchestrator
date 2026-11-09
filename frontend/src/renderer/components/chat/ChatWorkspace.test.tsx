@@ -41,6 +41,10 @@ import { renderChat as render } from "../../test/render-chat";
 import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
 
 vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: () => ({ data: {}, isPending: false }),
+}));
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -2638,8 +2642,11 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
-	it("asks only for a sign-in while the stopped agent's login is refused", () => {
-		const stopped = { ...chatFixtureSettled, harness: "opencode", controller: { state: "stopped" as const } };
+	it.each([
+		["codex", false],
+		["opencode", true],
+	] as const)("on a refused %s login, keeps Resume agent only where the daemon cannot see a sign-in: %s", (harness, keepsResume) => {
+		const stopped = { ...chatFixtureSettled, harness, controller: { state: "stopped" as const } };
 		const view = (account: ConversationSnapshot["account"]) => (
 			<QueryClientProvider client={new QueryClient()}>
 				<ChatWorkspace snapshot={{ ...stopped, account }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />
@@ -2647,8 +2654,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		const { rerender } = render(view({ authenticationState: "required", reauthRequiredAt: "2026-08-03T00:00:00Z" }));
 		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		expect(Boolean(screen.queryByRole("button", { name: "Resume agent" }))).toBe(keepsResume);
 
 		rerender(view({ authenticationState: "authenticated" }));
 		expect(screen.queryByRole("button", { name: "Log in again" })).not.toBeInTheDocument();
