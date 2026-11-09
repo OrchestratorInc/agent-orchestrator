@@ -173,22 +173,32 @@ test("renderer: streaming replies keep updating through rapid session switches @
 	harness.startStreaming();
 	await throttle(page, 4);
 	try {
+		let previous = sessions[0];
 		for (const session of [sessions[1], sessions[2], sessions[0], sessions[2], sessions[1], sessions[0], sessions[1]]) {
 			const clicked = Date.now();
 			const firstRequest = harness.requests.length;
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
 			await expect(page).toHaveURL(new RegExp(`/sessions/${session.id}$`));
 			const routed = Date.now() - clicked;
-			await page.waitForTimeout(250);
-			const inertAfterHoldLimit = await page.locator("#session-workspace").getAttribute("inert");
+			// A streaming session on screen must not stall the switch: every
+			// streamed update restarts the destination's background render, so
+			// the hold gives way after a bounded time. What follows is the
+			// destination's own render, which a throttled dev build makes slow,
+			// so only the hold is bounded here.
+			const diagnostics = () => `routed ${routed} ms; conversation fetches since click: ${harness.requests.slice(firstRequest)
+				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`)
+				.join(", ")}`;
+			try {
+				await expect.poll(() => page.evaluate((marker) => {
+					const held = document.getElementById("session-workspace")?.hasAttribute("inert") ?? false;
+					const text = document.querySelector('[role="log"][aria-label="Conversation"]')?.textContent ?? "";
+					return !held && !text.includes(marker);
+				}, `Answer from ${previous.title} 0.`), { timeout: 3_000 }).toBe(true);
+			} catch (error) {
+				throw new Error(`The previous session stayed on screen or inert; ${diagnostics()}`, { cause: error });
+			}
 			await expectShowing(page, session);
-			const shown = Date.now() - clicked;
-			// A streaming session on screen must not stall the switch: the hold
-			// gives way after a bounded time even if the background render
-			// keeps restarting. Loose for a throttled CI machine.
-			const fetches = harness.requests.slice(firstRequest)
-				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
-			expect(shown, `routed ${routed} ms; inert 250 ms later: ${inertAfterHoldLimit !== null}; conversation fetches since click: ${fetches.join(", ")}`).toBeLessThan(3_000);
+			previous = session;
 			// The shown session keeps streaming after the switch.
 			const seen = harness.chunks(session);
 			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });
