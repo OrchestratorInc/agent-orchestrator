@@ -69,6 +69,10 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
+	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
+	// and the turn's result is the latest prompt's.
+	ACPSteerPromptMetaKey = "ao.steerPrompt"
 )
 
 var (

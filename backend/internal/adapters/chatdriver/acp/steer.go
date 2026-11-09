@@ -9,7 +9,9 @@ import (
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -83,6 +85,28 @@ type SteerDrain struct {
 	Wait time.Duration
 }
 
+// SteerPrompt is for an agent that takes mid-turn guidance as another
+// session/prompt on the running session, as Antigravity's `agy acp` does. The
+// agent answers the earlier prompt with end_turn once it has the guidance and
+// carries on the same work under the new prompt, so AO keeps one turn open
+// across them and settles it only when the latest prompt returns.
+//
+// Steer returns once the agent has handed off the earlier prompt. If the new
+// prompt fails before that, the agent refused it and the earlier prompt keeps
+// the turn.
+type SteerPrompt struct {
+	// Supported reports from the handshake whether the agent steers this way.
+	Supported func(acpsdk.InitializeResponse) bool
+	// Wait bounds how long Steer waits for the handoff. Zero uses five seconds.
+	// Past it the guidance is still in flight and the turn stays open for it,
+	// so Steer reports it delivered.
+	Wait time.Duration
+}
+
+// defaultSteerPromptWait bounds how long a prompt-mode steer waits for the
+// agent to hand off the earlier prompt. Antigravity answers at once.
+const defaultSteerPromptWait = 5 * time.Second
+
 // sessionSteeringRequest is ACP's _session/steering extension, as implemented
 // by claude-agent-acp, codex-acp, and OMP. promptRequired is load-bearing: if
 // the turn ends before the request arrives, the agent hands the text back to
@@ -134,13 +158,17 @@ var sessionSteeringRequest = SteerRequest{
 type steering struct {
 	request *SteerRequest
 	drain   *SteerDrain
+	prompt  *SteerPrompt
 }
 
-// steeringFor returns the binding's protocol. A drain takes precedence; a
-// binding that names neither uses ACP's _session/steering extension.
+// steeringFor returns the binding's protocol. A drain takes precedence, then a
+// prompt; a binding that names none uses ACP's _session/steering extension.
 func steeringFor(cfg Config) steering {
 	if cfg.SteerDrain != nil {
 		return steering{drain: cfg.SteerDrain}
+	}
+	if cfg.SteerPrompt != nil {
+		return steering{prompt: cfg.SteerPrompt}
 	}
 	if cfg.SteerRequest != nil {
 		return steering{request: cfg.SteerRequest}
@@ -152,6 +180,8 @@ func (s steering) supported(init acpsdk.InitializeResponse) bool {
 	switch {
 	case s.drain != nil:
 		return s.drain.Supported != nil && s.drain.Supported(init)
+	case s.prompt != nil:
+		return s.prompt.Supported != nil && s.prompt.Supported(init)
 	case s.request != nil:
 		return s.request.Supported != nil && s.request.Supported(init)
 	default:
@@ -212,6 +242,9 @@ func (c *conversation) Steer(
 	}
 	if c.steering.drain != nil {
 		return c.steerByDrain(ctx, providerTurnID, sessionID, prompt)
+	}
+	if c.steering.prompt != nil {
+		return c.steerByPrompt(ctx, providerTurnID, sessionID, msg.ClientMessageID, prompt)
 	}
 	request := c.steering.request
 	if request == nil {
@@ -335,6 +368,147 @@ func (c *conversation) steerByDrain(
 	// The agent collected it, or the turn ended, in the same instant the wait
 	// gave up. The settlement was sent under the lock withdrawSteer took.
 	return settled(<-pending.done)
+}
+
+// steerByPrompt sends the guidance as another session/prompt under the running
+// turn's context, so Stop cancels it with the rest of the turn. The new prompt
+// becomes the one that settles the turn; Steer reports injected when the agent
+// hands off the earlier prompt.
+func (c *conversation) steerByPrompt(
+	ctx context.Context,
+	providerTurnID string,
+	sessionID string,
+	clientMessageID string,
+	prompt []acpsdk.ContentBlock,
+) (ports.ChatTurnRef, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ports.ChatTurnRef{}, errConversationClosed
+	}
+	// A turn whose latest prompt has already returned is settling: the agent
+	// would take the text as a new turn of its own.
+	if c.activeTurn != providerTurnID || c.turnCtx == nil || c.settlingTurn == providerTurnID {
+		c.mu.Unlock()
+		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
+	}
+	seq := c.promptSeq + 1
+	c.promptSeq = seq
+	handedOff := make(chan struct{})
+	c.handedOff[seq-1] = handedOff
+	turnCtx := c.turnCtx
+	c.mu.Unlock()
+
+	messageID := strings.TrimSpace(clientMessageID)
+	if messageID == "" {
+		messageID = uuid.NewString()
+	}
+	refused := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		resp, err := c.conn.Prompt(turnCtx, acpsdk.PromptRequest{
+			SessionId: acpsdk.SessionId(sessionID),
+			MessageId: &messageID,
+			Prompt:    prompt,
+			// A persistent host admits it into the running turn by this mark.
+			Meta: map[string]any{persistenthost.ACPSteerPromptMetaKey: true},
+		})
+		// Exactly one of refused and finished fires, so Steer never reads a
+		// refusal as a delivery.
+		if c.refusedBeforeHandoff(providerTurnID, seq, err) {
+			refused <- err
+			return
+		}
+		c.finishTurnPrompt(providerTurnID, seq, resp, err)
+		close(finished)
+	}()
+
+	wait := c.steering.prompt.Wait
+	if wait <= 0 {
+		wait = defaultSteerPromptWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	injected := func() (ports.ChatTurnRef, error) {
+		c.mu.Lock()
+		if c.activeTurn == providerTurnID {
+			c.steerSegment++
+		}
+		c.mu.Unlock()
+		return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
+	}
+	select {
+	case <-handedOff:
+		return injected()
+	case err := <-refused:
+		wrapped := fmt.Errorf("ACP session/prompt while a turn is running: %w", err)
+		var requestErr *acpsdk.RequestError
+		if errors.As(err, &requestErr) {
+			// The agent answered: a definite refusal. The earlier prompt still
+			// owns the turn, so nothing was lost.
+			return ports.ChatTurnRef{}, &providerRefusal{err: wrapped}
+		}
+		return ports.ChatTurnRef{}, wrapped
+	case <-finished:
+		// The steer prompt itself settled the turn: the agent ran it to the end
+		// inside this turn before the earlier prompt returned.
+		return injected()
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	// The agent holds the guidance but has not handed off yet. The turn stays
+	// open until the new prompt returns, so the text is answered in this turn.
+	c.log.Debug("ACP steer prompt sent; the agent has not handed off the earlier prompt yet",
+		"turn", providerTurnID, "wait", wait)
+	return injected()
+}
+
+// refusedBeforeHandoff reports whether a steer prompt failed while the prompt
+// before it still owned the turn, meaning the agent refused the guidance. It
+// then gives the turn back to that earlier prompt.
+func (c *conversation) refusedBeforeHandoff(turnID string, seq int, err error) bool {
+	if err == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeTurn != turnID || c.promptSeq != seq {
+		return false
+	}
+	if _, waiting := c.handedOff[seq-1]; !waiting {
+		return false
+	}
+	delete(c.handedOff, seq-1)
+	c.promptSeq = seq - 1
+	return true
+}
+
+// finishTurnPrompt routes one prompt's result. Only the turn's latest prompt
+// settles it. An earlier one returning means the agent handed the work to the
+// steer prompt after it; its usage is left to the prompt that settles.
+func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.PromptResponse, err error) {
+	c.mu.Lock()
+	switch {
+	case c.activeTurn == turnID && seq < c.promptSeq:
+		if done, ok := c.handedOff[seq]; ok {
+			close(done)
+			delete(c.handedOff, seq)
+		}
+		c.mu.Unlock()
+		if err != nil {
+			c.log.Debug("ACP prompt handed off with an error; the steer prompt keeps the turn",
+				"turn", turnID, "prompt", seq, "error", err)
+		}
+		return
+	case c.activeTurn == turnID && seq > 0:
+		c.steerSettledTurn = turnID
+	case c.activeTurn != turnID && c.steerSettledTurn == turnID:
+		// An earlier prompt answering after the steer prompt settled the turn.
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	c.finishPrompt(turnID, resp, err)
 }
 
 // withdrawSteer removes guidance the agent has not collected. It reports false

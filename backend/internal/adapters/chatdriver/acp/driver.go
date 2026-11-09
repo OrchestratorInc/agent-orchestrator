@@ -100,6 +100,10 @@ type Config struct {
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
+	// SessionModeForAgent picks the mode mapping from the handshake, for a
+	// harness whose ACP servers name their modes differently. It overrides
+	// SessionMode when it returns a mapping.
+	SessionModeForAgent func(acpsdk.InitializeResponse) func(ports.PermissionMode) string
 	// SuppressSessionModes drops the agent's mode surfaces from the
 	// config-option catalog: the legacy session-mode list and any
 	// mode-category config option. It is for agents whose modes are pure
@@ -146,8 +150,13 @@ type Config struct {
 	// extension, which is enabled when the agent advertises it.
 	SteerRequest *SteerRequest
 	// SteerDrain is for an agent that collects mid-turn guidance itself with
-	// an agent-to-client request. It takes precedence over SteerRequest.
+	// an agent-to-client request. It takes precedence over SteerPrompt and
+	// SteerRequest.
 	SteerDrain *SteerDrain
+	// SteerPrompt is for an agent that takes mid-turn guidance as another
+	// session/prompt on the running session. It takes precedence over
+	// SteerRequest.
+	SteerPrompt *SteerPrompt
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
@@ -477,7 +486,7 @@ func (d *Driver) openNewSession(
 	}
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
-		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+		d.sessionMode(init), d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 		settings.Approval, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(resp.ConfigOptions),
 		conv.legacyWire.modelState(), d.sessionModes(resp.Modes),
 	)
@@ -610,7 +619,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.hasDurableTurns = cfg.HasPriorTurns
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
-			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+			d.sessionMode(init), d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 			cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(setup.ConfigOptions),
 			setup.Models, d.sessionModes(setup.Modes),
 		)
@@ -704,7 +713,7 @@ func (d *Driver) resumeSession(
 	conv.hasDurableTurns = cfg.HasPriorTurns
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
-		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+		d.sessionMode(init), d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 		cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(configOptions),
 		conv.legacyWire.modelState(), d.sessionModes(modes),
 	)
@@ -1030,6 +1039,17 @@ func cloneCapabilities(in ports.ChatCapabilities) ports.ChatCapabilities {
 		out[capability] = enabled
 	}
 	return out
+}
+
+// sessionMode returns the binding's mode mapping for the agent that answered
+// the handshake.
+func (d *Driver) sessionMode(init acpsdk.InitializeResponse) func(ports.PermissionMode) string {
+	if d.cfg.SessionModeForAgent != nil {
+		if modeFor := d.cfg.SessionModeForAgent(init); modeFor != nil {
+			return modeFor
+		}
+	}
+	return d.cfg.SessionMode
 }
 
 // clientExtensionAliases adds the steering drain's legacy method name, if it

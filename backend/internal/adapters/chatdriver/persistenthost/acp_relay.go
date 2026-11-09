@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -93,6 +94,10 @@ type acpRelay struct {
 	// abandonedPrompts holds provider ids of prompts the watchdog failed. The
 	// adapter's own late answer to one is dropped, not forwarded.
 	abandonedPrompts map[string]struct{}
+	// latestPrompt is the provider id of the turn's newest session/prompt. A
+	// steer prompt (ACPSteerPromptMetaKey) takes the turn over; only the latest
+	// prompt's answer is the turn's result.
+	latestPrompt string
 }
 
 func newACPRelay(ctx context.Context, journalPath string) (*acpRelay, error) {
@@ -239,8 +244,13 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 		return acpClientFrames{provider: frame}, nil
 	}
 
+	steer := false
 	if method == "session/prompt" && (r.state.ActivePrompt || r.state.PendingResultEventID != "") {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged")}, nil
+		// A steer prompt joins the active turn; the agent hands the turn to it.
+		if !r.state.ActivePrompt || r.state.PendingResultEventID != "" || !isSteerPrompt(envelope["params"]) {
+			return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged")}, nil
+		}
+		steer = true
 	}
 	r.nextRequestID++
 	providerID, _ := json.Marshal(r.nextRequestID)
@@ -250,6 +260,10 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	}
 	envelope["id"] = providerID
 	if method == "session/prompt" {
+		r.latestPrompt = string(providerID)
+		r.lastActivityAt = time.Now()
+	}
+	if method == "session/prompt" && !steer {
 		r.state.ActivePrompt = true
 		r.state.ActiveCompaction = isCompactionPrompt(envelope["params"])
 		r.state.PendingResultEventID = ""
@@ -387,6 +401,14 @@ func (r *acpRelay) providerFrame(
 	delete(r.pending, string(id))
 	r.captureResponse(request, envelope)
 
+	if request.method == "session/prompt" && !r.settlesTurn(string(id), envelope) {
+		// A prompt that handed the turn to a steer prompt, or a steer prompt the
+		// agent refused: the turn goes on, so this is not its result.
+		if request.generation != generation || !attached {
+			return nil, false, nil
+		}
+		return rewriteResponseID(envelope, request.clientID, frame), false, nil
+	}
 	if request.method == "session/prompt" {
 		r.state.ActivePrompt = false
 		r.state.ActiveCompaction = false
@@ -431,6 +453,16 @@ func (r *acpRelay) failStalledPrompt(
 ) (acpClientFrames, error) {
 	if !r.state.ActivePrompt || len(r.serverRequests) > 0 || now.Sub(r.lastActivityAt) < promptStallTimeout {
 		return acpClientFrames{}, nil
+	}
+	// Fail the prompt that owns the turn; earlier prompts it took over from are
+	// dropped with it.
+	for providerID, request := range r.pending {
+		if request.method == "session/prompt" && providerID != r.latestPrompt {
+			if _, latestPending := r.pending[r.latestPrompt]; latestPending {
+				delete(r.pending, providerID)
+				r.abandonedPrompts[providerID] = struct{}{}
+			}
+		}
 	}
 	for providerID, request := range r.pending {
 		if request.method != "session/prompt" {
@@ -566,6 +598,49 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 			}
 		}
 	}
+}
+
+// settlesTurn reports whether a session/prompt answer is the turn's result. The
+// latest prompt's answer is, unless it is an error while an earlier prompt is
+// still running: the agent refused that steer prompt, and the earlier prompt
+// keeps the turn. An earlier prompt's answer never is.
+func (r *acpRelay) settlesTurn(providerID string, envelope map[string]json.RawMessage) bool {
+	if providerID != r.latestPrompt {
+		return false
+	}
+	failed := len(envelope["error"]) > 0 && string(envelope["error"]) != "null"
+	if earlier := r.newestPendingPrompt(); failed && earlier != "" {
+		r.latestPrompt = earlier
+		return false
+	}
+	return true
+}
+
+// newestPendingPrompt returns the provider id of the newest session/prompt
+// still waiting for an answer, or "".
+func (r *acpRelay) newestPendingPrompt() string {
+	newest, newestID := "", int64(-1)
+	for providerID, request := range r.pending {
+		if request.method != "session/prompt" {
+			continue
+		}
+		if n, err := strconv.ParseInt(providerID, 10, 64); err == nil && n > newestID {
+			newest, newestID = providerID, n
+		}
+	}
+	return newest
+}
+
+// isSteerPrompt reports whether session/prompt params carry ACPSteerPromptMetaKey.
+func isSteerPrompt(params json.RawMessage) bool {
+	var prompt struct {
+		Meta map[string]any `json:"_meta"`
+	}
+	if json.Unmarshal(params, &prompt) != nil {
+		return false
+	}
+	steer, _ := prompt.Meta[ACPSteerPromptMetaKey].(bool)
+	return steer
 }
 
 func (r *acpRelay) newEventID() string {

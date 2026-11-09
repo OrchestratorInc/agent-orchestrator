@@ -140,7 +140,19 @@ type conversation struct {
 	// streams without a message id after one goes to a new message, so it
 	// renders after the steer instead of growing the reply above it.
 	steerSegment int
-	legacyModel  bool
+	// turnCtx is the running turn's context. A SteerPrompt steer runs its prompt
+	// under it, so cancelling the turn reaches every prompt in it.
+	turnCtx context.Context
+	// promptSeq numbers the running turn's prompts: 0 started it and each
+	// SteerPrompt steer adds one. Only the latest settles the turn.
+	promptSeq int
+	// handedOff closes when the turn's prompt with that number returns while a
+	// later steer prompt owns the turn.
+	handedOff map[int]chan struct{}
+	// steerSettledTurn is the last turn a steer prompt settled. An earlier
+	// prompt of that turn answering late is dropped, not a second completion.
+	steerSettledTurn string
+	legacyModel      bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
@@ -778,6 +790,9 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
+	c.turnCtx = turnCtx
+	c.promptSeq = 0
+	c.handedOff = make(map[int]chan struct{})
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
 	c.steerSegment = 0
@@ -811,7 +826,7 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 		Prompt:    turn.prompt,
 	})
 
-	c.finishPrompt(turn.id, resp, err)
+	c.finishTurnPrompt(turn.id, 0, resp, err)
 }
 
 // reportServedModel tells the client which model actually answered when the
@@ -1000,6 +1015,9 @@ func (c *conversation) finishPrompt(
 		c.activeTurn = ""
 		c.settlingTurn = ""
 		c.turnCancel = nil
+		c.turnCtx = nil
+		c.promptSeq = 0
+		c.handedOff = nil
 		c.providerFailure = nil
 		if c.interrupt == interrupt {
 			c.interrupt = nil
