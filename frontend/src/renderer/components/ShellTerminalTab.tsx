@@ -65,9 +65,10 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const title = shell.terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
+	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
 	// An agent's name is display only, so renaming starts from the real title.
-	const renameBase = shell.terminalTitle ?? shell.title;
+	const renameBase = terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
