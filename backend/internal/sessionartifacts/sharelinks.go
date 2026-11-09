@@ -45,8 +45,8 @@ func (l *ShareLinks) Apply(id domain.SessionID, files []domain.SessionArtifactFi
 	}
 	urls := l.load()[id]
 	for i := range files {
-		if url, ok := urls.byID[files[i].ID]; ok && files[i].ID != "" {
-			files[i].ShareURL = url
+		if link, ok := urls.byID[files[i].ID]; ok && files[i].ID != "" {
+			files[i].ShareURL = link
 			continue
 		}
 		files[i].ShareURL = urls.byPath[files[i].Path]
