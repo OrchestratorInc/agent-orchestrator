@@ -295,7 +295,16 @@ describe("patchClaudeContextUsage", () => {
 });
 
 describe("patchClaudeContextWindowProbe", () => {
-	const streamedWindowInference = `
+	// The pinned adapter's top-level message_start branch, without message_delta.
+	const streamBranch = `
+                        if (message.parent_tool_use_id === null &&
+                            (message.event.type === "message_start" || message.event.type === "message_delta")) {
+                            if (message.event.type === "message_start") {
+                                lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
+                                const model = message.event.message.model;
+                                if (model && model !== "<synthetic>") {
+                                    lastAssistantModel = model;
+                                    // Only upgrade from the heuristic default.
                                     if (!session.contextWindowAuthoritative &&
                                         session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
                                         const inferred = inferContextWindowFromModel(model);
@@ -303,21 +312,47 @@ describe("patchClaudeContextWindowProbe", () => {
                                             session.contextWindowSize = inferred;
                                         }
                                     }
+                                }
+                            }
+                            const nextUsage = totalTokens(lastAssistantUsage);
+                            if (nextUsage !== lastAssistantTotalUsage) {
+                                lastAssistantTotalUsage = nextUsage;
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                            }
+                        }
+                        for (const notification of streamEventToAcpNotifications(message, params.sessionId)) {}
 `;
 
-	function patchedMessageStart() {
+	function patchedStream() {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
-		writeFileSync(adapterPath, streamedWindowInference);
+		writeFileSync(adapterPath, streamBranch);
 		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
 		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(false);
-		const run = new Function("session", "model", `
+		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+		const run = new AsyncFunction("session", "message", "sendUpdate", `
+			const params = { sessionId: "s" };
 			const DEFAULT_CONTEXT_WINDOW = 200000;
 			const inferContextWindowFromModel = (text) => /\\b1m\\b/i.test(text) ? 1000000 : null;
+			const snapshotFromUsage = (usage) => usage;
+			const totalTokens = (usage) => usage.input_tokens;
+			const streamEventToAcpNotifications = () => [];
+			let lastAssistantUsage = null, lastAssistantModel, lastAssistantTotalUsage = null;
 			${readFileSync(adapterPath, "utf8")}
 		`);
+		const updates = [];
 		const errors = [];
-		const logger = { error: (...args) => errors.push(args) };
-		return { errors, messageStart: (session, model) => run.call({ logger }, session, model) };
+		const self = { logger: { error: (...args) => errors.push(args) } };
+		const stream = (session, model, used) => run.call(self, session,
+			{ parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens: used } } } },
+			async ({ update }) => { updates.push([update.used, update.size]); });
+		return { stream, updates, errors };
 	}
 
 	function freshSession(modelId, getContextUsage) {
@@ -331,66 +366,71 @@ describe("patchClaudeContextWindowProbe", () => {
 
 	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-	it("learns a fable session's 1M window at the turn's first message, before its result", async () => {
-		const { messageStart } = patchedMessageStart();
-		const session = freshSession("claude-fable-5-1", async () => ({ totalTokens: 47155, rawMaxTokens: 1000000 }));
-		messageStart(session, "claude-fable-5-1");
-		messageStart(session, "claude-fable-5-1");
-		await vi.waitFor(() => expect(session.contextWindowSize).toBe(1000000));
-		expect(session.contextWindowAuthoritative).toBe(true);
+	it("publishes a fable session's 1M window when the SDK answers, however late", async () => {
+		const { stream, updates } = patchedStream();
+		let answer;
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve) => { answer = resolve; }));
+		vi.useFakeTimers();
+		try {
+			await stream(session, "claude-fable-5-1", 206000);
+			await stream(session, "claude-fable-5-1", 206000);
+			await vi.advanceTimersByTimeAsync(10000);
+			answer({ totalTokens: 206000, rawMaxTokens: 1000000 });
+		} finally {
+			vi.useRealTimers();
+		}
+		await settle();
 		expect(session.query.getContextUsage).toHaveBeenCalledTimes(1);
+		expect(updates).toEqual([[206000, 200000], [206000, 200000], [206000, 1000000]]);
+		expect(session.contextWindowAuthoritative).toBe(true);
 	});
 
-	it("leaves a window the adapter already knows", () => {
-		const { messageStart } = patchedMessageStart();
+	it("leaves a window the adapter already knows", async () => {
+		const { stream } = patchedStream();
 		const known = freshSession("claude-fable-5-1", async () => ({ rawMaxTokens: 1 }));
 		known.contextWindowAuthoritative = true;
-		messageStart(known, "claude-fable-5-1");
 		const named = freshSession("opus[1m]", async () => ({ rawMaxTokens: 1 }));
-		messageStart(named, "claude-opus-4-8[1m]");
+		await stream(known, "claude-fable-5-1", 10);
+		await stream(named, "claude-opus-4-8[1m]", 10);
 		expect(named.contextWindowSize).toBe(1000000);
 		for (const session of [known, named]) expect(session.query.getContextUsage).not.toHaveBeenCalled();
 	});
 
-	it("keeps the window a model switch seeded while the probe ran", async () => {
-		const { messageStart } = patchedMessageStart();
-		const session = freshSession("claude-fable-5-1", async () => {
-			session.models.currentModelId = "claude-haiku-5-5";
-			return { totalTokens: 10, rawMaxTokens: 1000000 };
-		});
-		messageStart(session, "claude-fable-5-1");
-		await settle();
-		expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual([200000, false]);
-	});
-
-	it("keeps the default window when the probe fails or stalls", async () => {
-		const { messageStart, errors } = patchedMessageStart();
-		const failed = freshSession("claude-fable-5-1", async () => { throw new Error("closed"); });
-		messageStart(failed, "claude-fable-5-1");
-		await settle();
-		vi.useFakeTimers();
-		try {
-			const stalled = freshSession("claude-fable-5-1", () => new Promise(() => {}));
-			messageStart(stalled, "claude-fable-5-1");
-			await vi.advanceTimersByTimeAsync(2000);
-			expect(errors.map(([message, error]) => [message, error.message])).toEqual([
-				["Failed to fetch Claude SDK context window:", "closed"],
-				["Failed to fetch Claude SDK context window:", "Claude SDK context window timed out"],
-			]);
-			for (const session of [failed, stalled]) {
-				expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual([200000, false]);
-			}
-		} finally {
-			vi.useRealTimers();
+	it("publishes nothing more when the probe fails, confirms 200k, or loses a race", async () => {
+		const { stream, updates, errors } = patchedStream();
+		// The last two: a result, then a model switch, set the window while the probe ran.
+		const racing = (change) => async (session) => { await null; Object.assign(session, change); return { rawMaxTokens: 1000000 }; };
+		const cases = [
+			[async () => { throw new Error("closed"); }, [200000, false]],
+			[async () => ({ rawMaxTokens: 0 }), [200000, false]],
+			[async () => ({ rawMaxTokens: 200000 }), [200000, true]],
+			[racing({ contextWindowSize: 900000, contextWindowAuthoritative: true }), [900000, true]],
+			[racing({ contextWindowSize: 150000, models: { currentModelId: "claude-haiku-5-5" } }), [150000, false]],
+		];
+		for (const [answer, window] of cases) {
+			const session = freshSession("claude-fable-5-1", () => answer(session));
+			await stream(session, "claude-fable-5-1", 10);
+			await settle();
+			expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual(window);
 		}
+		expect(errors).toHaveLength(1);
+		expect(updates).toEqual(cases.map(() => [10, 200000]));
 	});
 
-	it("fails packaging without modifying a changed adapter", () => {
+	it("ignores indentation but fails packaging without modifying a changed adapter", () => {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
-		const changed = streamedWindowInference.replace("const inferred", "const guessed");
-		writeFileSync(adapterPath, changed);
-		expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
-		expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+		writeFileSync(adapterPath, streamBranch.replace(/^ {8}/gm, ""));
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		for (const changed of [
+			streamBranch.replace("!session.contextWindowAuthoritative &&", ""),
+			streamBranch.replace("message.parent_tool_use_id === null &&", ""),
+			streamBranch.replace("size: session.contextWindowSize,", "size: window,"),
+			streamBranch + streamBranch,
+		]) {
+			writeFileSync(adapterPath, changed);
+			expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
+			expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+		}
 	});
 });
 

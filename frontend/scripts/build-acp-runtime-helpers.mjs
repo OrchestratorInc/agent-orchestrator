@@ -193,58 +193,94 @@ function collapseWhitespace(text) {
 /**
  * Learn the model's real context window during a fresh session's first turn.
  *
- * claude-agent-acp 0.70 starts a session at a 200k default unless the model id
- * or label carries a "1m" token, and learns the real window only from the
+ * claude-agent-acp 0.70 starts a fresh session at a 200k default unless the
+ * model's id, label or description carries a "1m" token or this adapter process
+ * has already cached its window. It learns the real window only from the
  * turn's result. A worker that does its whole task in one turn streams
  * `size: 200000` throughout, so a 1M model such as claude-fable-5-1 reads as
  * full at 200k (issue #8005). The SDK services getContextUsage once a turn is
- * running, so ask it at the turn's first assistant message, once per model,
- * without holding the stream. The next usage_update carries the window.
+ * running, so ask it at the turn's first assistant message without holding the
+ * stream, and publish the window when it answers: the turn may be waiting on a
+ * long tool and send no other usage_update meanwhile. The pinned SDK cannot
+ * cancel the request, so a late answer is still used. Drop this patch when the
+ * adapter learns the window before the first result.
  */
 export function patchClaudeContextWindowProbe(adapterPath) {
 	const source = readFileSync(adapterPath, "utf8");
-	if (source.includes("// AO: ask the SDK for the model's real window.")) return false;
-	const original = [
-		"const inferred = inferContextWindowFromModel(model);",
-		"                                        if (inferred !== null) {",
-		"                                            session.contextWindowSize = inferred;",
-		"                                        }",
-	].join("\n");
-	const at = source.indexOf(original);
-	if (at < 0 || source.indexOf(original, at + 1) >= 0 || !source.includes("session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {")) {
+	if (source.includes(CLAUDE_WINDOW_PROBE_MARKER)) return false;
+	const anchor = "const inferred = inferContextWindowFromModel(model);";
+	const anchorAt = source.indexOf(anchor);
+	const start = source.lastIndexOf("if (message.parent_tool_use_id === null &&", anchorAt);
+	const at = source.indexOf("}", source.indexOf("session.contextWindowSize = inferred;", anchorAt)) + 1;
+	const end = source.indexOf("for (const notification of streamEventToAcpNotifications(", at);
+	if (anchorAt < 0 || start < 0 || end < 0 || source.indexOf(anchor, anchorAt + 1) >= 0 ||
+		codeOnly(source.slice(start, at)) !== codeOnly(CLAUDE_STREAM_WINDOW_BLOCK) ||
+		!codeOnly(source.slice(at, end)).includes(codeOnly(CLAUDE_STREAM_USAGE_PUBLISH))) {
 		throw new Error("claude-agent-acp streamed window inference no longer matches AO's context window patch");
 	}
-	const replacement = `${original}
-                                        // AO: ask the SDK for the model's real window.
+	writeFileSync(adapterPath, source.slice(0, at) + CLAUDE_WINDOW_PROBE + source.slice(at));
+	return true;
+}
+
+// Comments and indentation are not part of the contract the patch relies on.
+function codeOnly(text) {
+	return collapseWhitespace(text.replace(/\/\/.*$/gm, ""));
+}
+
+const CLAUDE_WINDOW_PROBE_MARKER = "// AO: ask the SDK for the model's real window.";
+
+const CLAUDE_STREAM_WINDOW_BLOCK = `if (message.parent_tool_use_id === null &&
+    (message.event.type === "message_start" || message.event.type === "message_delta")) {
+    if (message.event.type === "message_start") {
+        lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
+        const model = message.event.message.model;
+        if (model && model !== "<synthetic>") {
+            lastAssistantModel = model;
+            if (!session.contextWindowAuthoritative &&
+                session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
+                const inferred = inferContextWindowFromModel(model);
+                if (inferred !== null) {
+                    session.contextWindowSize = inferred;
+                }`;
+
+const CLAUDE_STREAM_USAGE_PUBLISH = `lastAssistantTotalUsage = nextUsage;
+await sendUpdate({
+    sessionId: params.sessionId,
+    update: {
+        sessionUpdate: "usage_update",
+        used: nextUsage,
+        size: session.contextWindowSize,
+    },
+});`;
+
+const CLAUDE_WINDOW_PROBE = `
+                                        ${CLAUDE_WINDOW_PROBE_MARKER}
                                         else if (session.aoWindowProbeModelId !== session.models.currentModelId) {
+                                            // Remembers only the last model probed, so switching back probes again.
                                             const probeModelId = session.models.currentModelId;
                                             session.aoWindowProbeModelId = probeModelId;
                                             void (async () => {
-                                                let probeTimer;
                                                 try {
-                                                    const contextUsage = await Promise.race([
-                                                        session.query.getContextUsage(),
-                                                        new Promise((_, reject) => {
-                                                            probeTimer = setTimeout(() => reject(new Error('Claude SDK context window timed out')), 2000);
-                                                        }),
-                                                    ]);
+                                                    const { rawMaxTokens } = await session.query.getContextUsage();
                                                     // A result or a model switch while the probe ran already set the window.
-                                                    if (Number.isFinite(contextUsage.rawMaxTokens) && contextUsage.rawMaxTokens > 0 &&
-                                                        !session.contextWindowAuthoritative &&
-                                                        session.models.currentModelId === probeModelId) {
-                                                        session.contextWindowSize = contextUsage.rawMaxTokens;
-                                                        session.contextWindowAuthoritative = true;
+                                                    if (!Number.isFinite(rawMaxTokens) || rawMaxTokens <= 0 ||
+                                                        session.contextWindowAuthoritative || session.models.currentModelId !== probeModelId) {
+                                                        return;
+                                                    }
+                                                    const changed = rawMaxTokens !== session.contextWindowSize;
+                                                    session.contextWindowSize = rawMaxTokens;
+                                                    session.contextWindowAuthoritative = true;
+                                                    if (changed && lastAssistantTotalUsage !== null) {
+                                                        await sendUpdate({
+                                                            sessionId: params.sessionId,
+                                                            update: { sessionUpdate: "usage_update", used: lastAssistantTotalUsage, size: rawMaxTokens },
+                                                        });
                                                     }
                                                 } catch (error) {
-                                                    this.logger.error('Failed to fetch Claude SDK context window:', error);
-                                                } finally {
-                                                    clearTimeout(probeTimer);
+                                                    this.logger.error('Failed to learn Claude context window:', error);
                                                 }
                                             })();
                                         }`;
-	writeFileSync(adapterPath, source.slice(0, at) + replacement + source.slice(at + original.length));
-	return true;
-}
 
 // Reuse the pinned bridge's native task registry. Ending its process loses the
 // task monitor even when a background shell's process group survives. Claude
