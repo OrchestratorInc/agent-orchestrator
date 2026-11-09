@@ -2049,6 +2049,7 @@ function ChatWorkspaceContent({
 								{limitedTurn?.usageLimit && retryControl ? (
 									<UsageLimitNotice
 										key={limitedTurn.id}
+										className="justify-end"
 										usageLimit={limitedTurn.usageLimit}
 										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
 										onAutoResumeChange={retryControl.setAutoResume
