@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
@@ -451,9 +452,22 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	comment := func(id, reviewID string, resolved bool) domain.PullRequestComment {
+		return domain.PullRequestComment{
+			ID: id, ThreadID: "thread-" + id, ReviewID: reviewID, Author: "ao", File: "a.go", Line: 1,
+			Body: "fix this", Resolved: resolved, CreatedAt: now, AutoInjectReview: true,
+		}
+	}
 	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
 		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now.Add(-7 * 24 * time.Hour), ObservedAt: now,
-	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+	}, nil, nil, nil, []domain.PullRequestComment{
+		comment("PRRC_first", "103", false),
+		comment("PRRC_second", "103", false),
+		comment("PRRC_resolved", "103", true),
+		comment("PRRC_old", "101", false),
+		comment("PRRC_superseded", "102", false),
+		comment("PRRC_other", "999", false),
+	}, ports.ReviewWriteReplace); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertReview(ctx, domain.Review{
@@ -463,9 +477,9 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, run := range []struct{ id, sha, reviewID string }{
-		{"stale-head", "head0", "gh-old"},
-		{"superseded", "head1", "gh-superseded"},
-		{"current", "head1", "gh-current"},
+		{"stale-head", "head0", "101"},
+		{"superseded", "head1", "102"},
+		{"current", "head1", "103"},
 	} {
 		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
 			ID: run.id, ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
@@ -483,14 +497,15 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 		want          contract.DisplayStatus
 	}{
 		{"before delivery", "", contract.DisplayChangesRequested},
-		{"attempt is not delivery", `{"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayChangesRequested},
-		{"another PR receipt", `{"seen":{"review:pr/2:gh-current":"changes_requested"}}`, contract.DisplayChangesRequested},
-		{"another review receipt", `{"seen":{"review:pr/1:gh-other":"changes_requested"}}`, contract.DisplayChangesRequested},
-		{"older head receipt", `{"seen":{"review:pr/1:gh-old":"changes_requested"}}`, contract.DisplayChangesRequested},
-		{"superseded pass receipt", `{"seen":{"review:pr/1:gh-superseded":"changes_requested"}}`, contract.DisplayChangesRequested},
-		{"wrong signature", `{"seen":{"review:pr/1:gh-current":"approved"}}`, contract.DisplayChangesRequested},
-		{"after delivery", `{"seen":{"review:pr/1:gh-current":"changes_requested"},"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayAddressingComments},
-		{"same delivery again", `{"seen":{"review:pr/1:gh-current":"changes_requested"},"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayAddressingComments},
+		{"attempt is not delivery", `{"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayChangesRequested},
+		{"another PR receipt", `{"seen":{"comment:pr/2:PRRC_first":"sig","comment:pr/2:PRRC_second":"sig"}}`, contract.DisplayChangesRequested},
+		{"another review receipt", `{"seen":{"comment:pr/1:PRRC_other":"sig"}}`, contract.DisplayChangesRequested},
+		{"older head receipt", `{"seen":{"comment:pr/1:PRRC_old":"sig"}}`, contract.DisplayChangesRequested},
+		{"superseded pass receipt", `{"seen":{"comment:pr/1:PRRC_superseded":"sig"}}`, contract.DisplayChangesRequested},
+		{"review-level key is not comment delivery", `{"seen":{"review:pr/1:103":"changes_requested"}}`, contract.DisplayChangesRequested},
+		{"one of two comments delivered", `{"seen":{"comment:pr/1:PRRC_first":"sig"}}`, contract.DisplayChangesRequested},
+		{"every unresolved comment delivered", `{"seen":{"comment:pr/1:PRRC_first":"sig","comment:pr/1:PRRC_second":"sig"},"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayAddressingComments},
+		{"same delivery again", `{"seen":{"comment:pr/1:PRRC_first":"sig","comment:pr/1:PRRC_second":"sig"},"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayAddressingComments},
 		{"malformed receipt", `{invalid`, contract.DisplayChangesRequested},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -545,6 +560,81 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type kanbanRecordingMessenger struct{ messages []string }
+
+func (m *kanbanRecordingMessenger) Send(_ context.Context, _ domain.SessionID, message string) error {
+	m.messages = append(m.messages, message)
+	return nil
+}
+
+// An AO review posts as COMMENT and reaches the worker only as inline comment
+// nudges, so this drives the real lifecycle write instead of hand-writing a
+// receipt: a key format that drifts from the query fails here.
+func TestSessionKanbanAddressesCommentsOnceLifecycleDeliversThem(t *testing.T) {
+	st := newSQLiteKanbanTestStore(t)
+	ctx := context.Background()
+	seedKanbanTestProject(t, st, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityIdle}, AutoInjectReview: true,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const providerReviewID = "4876751117"
+	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+	}, nil, []domain.PullRequestReview{{
+		ID: "PRR_kwDOnode", Author: "ao", State: domain.ReviewNone, TargetSHA: "head1", SubmittedAt: now,
+	}}, nil, []domain.PullRequestComment{{
+		ID: "PRRC_kwDOnode", ThreadID: "PRRT_kwDOnode", ReviewID: providerReviewID, Author: "ao",
+		File: "a.go", Line: 1, Body: "fix this", CreatedAt: now, AutoInjectReview: true,
+	}}, ports.ReviewWriteReplace); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
+		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertReviewRun(ctx, domain.ReviewRun{
+		ID: "current", ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
+		PRURL: "pr/1", TargetSHA: "head1", GithubReviewID: providerReviewID,
+		Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+		AutoInjectReview: true, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{store: st}
+	display := func() contract.DisplayStatus {
+		t.Helper()
+		got, err := svc.Get(ctx, rec.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.DisplayStatus
+	}
+	if got := display(); got != contract.DisplayChangesRequested {
+		t.Fatalf("before delivery = %q, want %q", got, contract.DisplayChangesRequested)
+	}
+
+	messenger := &kanbanRecordingMessenger{}
+	manager := lifecycle.New(st, messenger)
+	if err := manager.ApplyPRObservation(ctx, rec.ID, ports.PRObservation{Fetched: true, URL: "pr/1", Review: domain.ReviewNone}); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.messages) != 1 {
+		t.Fatalf("nudges = %v, want the one inline comment", messenger.messages)
+	}
+	if got := display(); got != contract.DisplayAddressingComments {
+		t.Fatalf("after delivery = %q, want %q", got, contract.DisplayAddressingComments)
 	}
 }
 

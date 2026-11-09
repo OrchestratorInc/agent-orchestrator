@@ -130,6 +130,10 @@ FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, i
 -- so a superseded retry cannot outvote the rerun that replaced it.
 -- failed_auto_runs counts every failed auto pass on that head, the number auto
 -- review compares against its retry limit.
+-- feedback_delivered is true once every actionable inline comment of this pass's
+-- provider review has a lifecycle nudge receipt. AO reviews post as COMMENT and
+-- the worker receives only their inline comments, so those receipts are the
+-- delivery record; pr_comment.review_id matches github_review_id.
 SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
        (
            SELECT COUNT(*)
@@ -140,13 +144,33 @@ SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, 
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
        ) AS failed_auto_runs,
-       CAST(EXISTS (
-           SELECT 1
-           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-           WHERE review_run.github_review_id != ''
-             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
-             AND nudge.value = 'changes_requested'
-       ) AS INTEGER) AS feedback_delivered
+       CAST(
+           EXISTS (
+               SELECT 1
+               FROM pr_comment AS feedback
+               WHERE review_run.github_review_id != ''
+                 AND feedback.pr_url = review_run.pr_url
+                 AND feedback.review_id = review_run.github_review_id
+                 AND EXISTS (
+                     SELECT 1
+                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
+                 )
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM pr_comment AS feedback
+               WHERE feedback.pr_url = review_run.pr_url
+                 AND feedback.review_id = review_run.github_review_id
+                 AND feedback.resolved = 0
+                 AND (feedback.is_bot = 0 OR (TRIM(feedback.file) != '' AND feedback.line > 0))
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
+                 )
+           )
+       AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
@@ -183,13 +207,33 @@ SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_u
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
        ) AS failed_auto_runs,
-       CAST(EXISTS (
-           SELECT 1
-           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-           WHERE review_run.github_review_id != ''
-             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
-             AND nudge.value = 'changes_requested'
-       ) AS INTEGER) AS feedback_delivered
+       CAST(
+           EXISTS (
+               SELECT 1
+               FROM pr_comment AS feedback
+               WHERE review_run.github_review_id != ''
+                 AND feedback.pr_url = review_run.pr_url
+                 AND feedback.review_id = review_run.github_review_id
+                 AND EXISTS (
+                     SELECT 1
+                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
+                 )
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM pr_comment AS feedback
+               WHERE feedback.pr_url = review_run.pr_url
+                 AND feedback.review_id = review_run.github_review_id
+                 AND feedback.resolved = 0
+                 AND (feedback.is_bot = 0 OR (TRIM(feedback.file) != '' AND feedback.line > 0))
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
+                 )
+           )
+       AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id

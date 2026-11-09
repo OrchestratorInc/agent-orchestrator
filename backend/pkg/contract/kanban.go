@@ -61,7 +61,7 @@ type KanbanReviewRunFacts struct {
 	// worker for changes.
 	ChangesRequested bool
 	// FeedbackDelivered reports that a current-head changes request reached
-	// the worker through AO's review-feedback nudge.
+	// the worker through AO's inline review-comment nudges.
 	FeedbackDelivered bool
 	// Outcome reports that a pass for the current head returned a verdict.
 	// Present without Outcome is a head AO tried and failed to review, which
