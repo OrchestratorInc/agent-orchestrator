@@ -1380,7 +1380,6 @@
 	"cliShadow.confirmFile": "{{path}} sera supprimé et remplacé par un lien vers l'ao de cette application. Cette action est irréversible. Vos fichiers de shell ne changent pas.",
 	"cliShadow.replaceFailed": "Impossible de remplacer l'autre ao.",
 	"cliShadow.versionUnknown": "version inconnue",
-	"cliShadow.dismiss": "Ignorer",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",
 	"settings.cliLink.link": "Link",

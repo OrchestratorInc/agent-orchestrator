@@ -1415,7 +1415,6 @@
 	"cliShadow.confirmFile": "{{path}} будет удалён и заменён ссылкой на ao этого приложения. Это нельзя отменить. Файлы оболочки не изменятся.",
 	"cliShadow.replaceFailed": "Не удалось заменить другой ao.",
 	"cliShadow.versionUnknown": "версия неизвестна",
-	"cliShadow.dismiss": "Закрыть",
 	"settings.cliLink.label": "Глобальная команда ao",
 	"settings.cliLink.loading": "Проверка глобальной команды ao.",
 	"settings.cliLink.link": "Создать ссылку",

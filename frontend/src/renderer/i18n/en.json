@@ -1364,7 +1364,6 @@
 	"cliShadow.confirmFile": "{{path}} will be deleted and replaced with a link to this app's ao. This can't be undone. Your shell files aren't changed.",
 	"cliShadow.replaceFailed": "Could not replace the other ao.",
 	"cliShadow.versionUnknown": "version unknown",
-	"cliShadow.dismiss": "Dismiss",
 	"settings.cliLink.label": "Global ao command",
 	"settings.cliLink.loading": "Checking the global ao command.",
 	"settings.cliLink.link": "Link",

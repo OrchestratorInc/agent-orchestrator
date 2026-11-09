@@ -11,7 +11,6 @@ import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
-import { CliShadowBanner } from "../components/CliShadowBanner";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
@@ -1591,7 +1590,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						</main>
 					</div>
 					<DaemonFailureBanner status={daemonStatus} />
-					<CliShadowBanner />
 					{/* On macOS, keep a window-drag strip over
               the traffic-light band only. The fixed TitlebarNav renders after
               this strip so its no-drag buttons remain clickable. */}
