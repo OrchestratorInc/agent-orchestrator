@@ -20,6 +20,15 @@ last cached catalog for matching discovery inputs; no hardcoded Claude list is
 substituted. Without a matching cache, manual model entry remains available.
 A successfully discovered catalog also preserves an explicitly configured model.
 
+OpenCode 2's default model comes from OpenCode itself. AO cannot read it from
+config files, because OpenCode 2 also reads config from directories above a
+launch worktree's git root. Discovery therefore runs
+`opencode api --standalone GET /api/model/default` in the discovery directory
+and marks the reported model as the catalog default. If the lookup fails or
+reports no model (for example while OpenCode's plugins are still activating),
+no default is marked until the next refresh, and the picker falls back as it
+does for any catalog without a default.
+
 Native model caches may include providers without configured credentials.
 A **Configured** marker means AO observed credential configuration; it does
 not prove that the provider accepts it. Providers with no models are omitted
