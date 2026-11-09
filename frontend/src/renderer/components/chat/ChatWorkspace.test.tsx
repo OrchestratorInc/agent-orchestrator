@@ -426,6 +426,7 @@ describe("HumanMessage attachments", () => {
 
 		expect(screen.getByRole("img", { name: "Image 1" })).toBeInTheDocument();
 		expect(screen.getByText("attachment-cd34.pdf")).toBeInTheDocument();
+		expect(screen.getByText("PDF")).toBeInTheDocument();
 		expect(screen.getByRole("list", { name: "Attached files" })).toBeInTheDocument();
 		expect(screen.queryByText(/Attached files \(read these files/)).not.toBeInTheDocument();
 	});
