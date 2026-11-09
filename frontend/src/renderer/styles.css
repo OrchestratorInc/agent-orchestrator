@@ -827,12 +827,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
-/* Light: the selected tab is the panel's own surface, with no gray fill or
- * control edge. Hover keeps the secondary treatment above. */
+/* Light: the selected tab's fill leans toward the panel's surface. It keeps the
+ * control edge, and hover keeps the secondary treatment above. */
 html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:not(:hover)::before {
-	border-color: transparent;
-	background-color: var(--color-bg-primary);
-	box-shadow: none;
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button:focus-visible)::before {
