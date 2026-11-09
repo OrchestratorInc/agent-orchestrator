@@ -1146,6 +1146,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
+	// either the view-close path or the idle sweep can hibernate a provider.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
