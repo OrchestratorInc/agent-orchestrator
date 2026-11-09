@@ -752,7 +752,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					<Button
 						type="button"
 						variant="primary"
-						className="shadow-lg"
 						onClick={startBridge}
 						disabled={busy || enabled}
 					>

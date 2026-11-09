@@ -5,11 +5,12 @@ for (const mode of ["light", "dark"]) {
 	test(`@P0 topbar controls preserve affordances in ${mode} mode`, async ({ page }) => {
 		await page.setViewportSize({ width: 1800, height: 900 });
 		await installFakeAgent(page, { projectId: "ao-demo", workers: [{ id: "demo-working", title: "Topbar review", status: "working" }] });
-		await page.addInitScript(() => {
+		await page.addInitScript((theme) => {
 			Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
 			Object.defineProperty(navigator, "userAgentData", { get: () => ({ platform: "macOS" }), configurable: true });
 			localStorage.setItem("ao.developerMode", "true");
-		});
+			localStorage.setItem("ao.theme", theme);
+		}, mode);
 		await page.route("**/api/v1/projects/ao-demo/cues", (route) => route.fulfill({ json: { cues: [] } }));
 		await page.goto("/#/projects/ao-demo/sessions/demo-working");
 		await expect(page.locator(".workspace-topbar-actions").first()).toBeVisible({ timeout: 20_000 });
@@ -66,5 +67,43 @@ for (const mode of ["light", "dark"]) {
 		await expect(disabled).toHaveCSS("opacity", "0.35");
 		await disabled.hover();
 		expect(await disabled.evaluate((element) => getComputedStyle(element, "::before").display)).toBe("none");
+	});
+}
+
+for (const mode of ["light", "dark"]) {
+	test(`@P0 filled topbar actions retain palette text colors in ${mode} mode`, async ({ page }) => {
+		await page.setViewportSize({ width: 1800, height: 900 });
+		await installFakeAgent(page, { projectId: "topbar-palette" });
+		await page.addInitScript((theme) => {
+			localStorage.setItem("ao.developerMode", "true");
+			localStorage.setItem("ao.theme", theme);
+			localStorage.setItem("ao.theme-style", "vercel");
+		}, mode);
+		await page.goto("/#/projects/topbar-palette/sessions/topbar-palette-orchestrator");
+		const action = page.locator(".center-panel-shell--floating-topbar .workspace-topbar-actions").getByRole("button", { name: "New task", exact: true });
+		await expect(action).toBeEnabled({ timeout: 20_000 });
+		for (const palette of ["vercel", "gruvbox", "orchestrate"]) {
+			await page.mouse.move(0, 0);
+			const expected = await action.evaluate((element, { mode, palette }) => {
+				document.documentElement.dataset.theme = mode;
+				document.documentElement.dataset.styleTheme = palette;
+				const reference = document.createElement("span");
+				reference.style.color = "var(--primary-foreground)";
+				element.append(reference);
+				const color = getComputedStyle(reference).color;
+				reference.remove();
+				return color;
+			}, { mode, palette });
+			await expect(action, palette).toHaveCSS("color", expected);
+			await action.hover();
+			await expect(action, palette).toHaveCSS("color", expected);
+			await page.mouse.down();
+			try {
+				await expect(action, palette).toHaveCSS("color", expected);
+			} finally {
+				await page.mouse.move(0, 0);
+				await page.mouse.up();
+			}
+		}
 	});
 }
