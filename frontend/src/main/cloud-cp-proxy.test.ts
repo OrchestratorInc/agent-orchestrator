@@ -146,7 +146,7 @@ describe("cloud control-plane URL pinning", () => {
 describe("the account's machine directory", () => {
 	const listing = JSON.stringify({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example", token: "a".repeat(64) }], fixedAddresses: true });
 	const hosts = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/me/hosts", method: "GET" };
-	const fetchListing = () => vi.fn(async () => new Response(listing, { status: 200 }));
+	const fetchListing = () => vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(listing, { status: 200 }));
 
 	it("strips host tokens from renderer requests, including an encoded path", async () => {
 		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchListing() as unknown as typeof fetch });
@@ -156,9 +156,12 @@ describe("the account's machine directory", () => {
 		}
 	});
 
-	it("keeps host tokens for the main process", async () => {
-		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchListing() as unknown as typeof fetch });
-		expect((await proxy.request(hosts, { hostTokens: true })).body).toBe(listing);
+	it("keeps host tokens for the main process and passes its signal to the request", async () => {
+		const fetchImpl = fetchListing();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const { signal } = new AbortController();
+		expect((await proxy.request(hosts, { hostTokens: true, signal })).body).toBe(listing);
+		expect(fetchImpl.mock.calls[0][1]?.signal).toBe(signal);
 	});
 
 	it("refuses the directory on the binary and stream channels", async () => {

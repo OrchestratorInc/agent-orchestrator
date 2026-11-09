@@ -109,8 +109,8 @@ export interface CloudCpStreamSender {
 }
 
 export interface CloudCpProxy {
-	/** hostTokens is for the main process only: renderer requests never carry it. */
-	request(init: unknown, internal?: { hostTokens: true }): Promise<CloudCpProxyResponse>;
+	/** internal is for the main process only: renderer requests never carry it. */
+	request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse>;
 	/** sender is the WebContents that asked: its requests end when it goes away. */
 	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
 	/** Abort one of a WebContents' binary requests; another's is never touched. */
@@ -412,7 +412,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 	}
 
-	async function request(init: unknown, internal?: { hostTokens: true }): Promise<CloudCpProxyResponse> {
+	async function request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const redact = internal?.hostTokens !== true && isAccountHostsUrl(url);
@@ -424,6 +424,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 			method: valid.method.toUpperCase(),
 			headers: buildHeaders(valid.headers, token),
 			body: valid.body,
+			signal: internal?.signal,
 		});
 		const headers: Record<string, string> = {};
 		response.headers.forEach((value, key) => {

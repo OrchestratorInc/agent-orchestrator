@@ -49,7 +49,9 @@ export type RemotesIpcDeps = {
 	getAccountId: () => Promise<string>;
 	localIdentity: () => Promise<string | null>;
 	/** An AO Cloud request made with the signed-in session; paths start with /api/cloud/v1. */
-	cloudRequest: (method: string, path: string, body?: unknown) => Promise<{ status: number; body: string }>;
+	cloudRequest: (method: string, path: string, options?: { body?: unknown; signal?: AbortSignal }) => Promise<{ status: number; body: string }>;
+	/** How long reading the account's machines from AO Cloud may take. */
+	accountDirectoryTimeoutMs?: number;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 };
@@ -67,7 +69,7 @@ type AccountHost = { hostId: string; label: string; url: string; token: string }
  */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
-	{ file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
+	{ file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const refuseSelf = (hostId: string | undefined, localHostId: string | null) => {
@@ -187,8 +189,22 @@ export function registerRemotesIpc(
 		if (health !== "online") throw new ExpectedIpcError(`host ${url} is ${health}`);
 		return registry.connect(entry);
 	}));
-	const accountHosts = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-		const response = await cloudRequest(method, `/api/cloud/v1/me/hosts${path}`, body);
+	// AO Cloud calls run outside the ordered queue: a slow answer must not hold
+	// up list, connect and the other handlers for locally paired hosts.
+	const accountHosts = async <T>(method: string, path: string, options: { body?: unknown; timeoutMs?: number } = {}): Promise<T> => {
+		const signal = options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs);
+		let response: { status: number; body: string };
+		try {
+			const pending = cloudRequest(method, `/api/cloud/v1/me/hosts${path}`, { body: options.body, signal });
+			// The signal cancels the fetch; the race also ends a wait that never
+			// reaches the fetch, such as a stalled sign-in refresh.
+			response = signal
+				? await Promise.race([pending, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))])
+				: await pending;
+		} catch (error) {
+			if (error instanceof ExpectedIpcError) throw error;
+			throw new ExpectedIpcError("Orchestrator Cloud did not answer the host sync.");
+		}
 		if (response.status >= 300) throw new ExpectedIpcError(`Orchestrator Cloud host sync failed (${response.status}).`);
 		return (response.body ? JSON.parse(response.body) : {}) as T;
 	};
@@ -204,47 +220,63 @@ export function registerRemotesIpc(
 		}
 		await addRemote(file, { hostId: host.hostId, label: host.label, url: host.url, password: host.token, accountUserId: account });
 	};
-	ipcMain.handle("remotes:syncAccountHosts", async (_event, expectedAccountId: string) => ordered(async () => {
-		const account = await accountID();
-		if (account !== expectedAccountId) throw new ExpectedIpcError("Account changed during host sync.");
-		const { hosts = [] } = await accountHosts<{ hosts?: AccountHost[] }>("GET", "");
-		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during host sync.");
-		for (const host of hosts) await importAccountHost(account, host);
-		const current = new Set(hosts.map((host) => host.hostId));
-		for (const entry of await owned()) {
-			// Only account-imported credentials are directory-managed. A machine
-			// paired here with its original password remains a local pairing.
-			if (entry.hostId && !current.has(entry.hostId) && holdsAccountToken(entry)) {
-				await removeSavedRemote(file, entry.url, disconnect);
+	// Syncs read the directory at the same time. One that started before an
+	// already applied one holds an older listing and writes nothing.
+	let startedSyncs = 0;
+	let appliedSync = 0;
+	ipcMain.handle("remotes:syncAccountHosts", async (_event, expectedAccountId: string) => {
+		if (await accountID() !== expectedAccountId) throw new ExpectedIpcError("Account changed during host sync.");
+		const sync = ++startedSyncs;
+		const { hosts = [] } = await accountHosts<{ hosts?: AccountHost[] }>("GET", "", { timeoutMs: accountDirectoryTimeoutMs });
+		await ordered(async () => {
+			if (sync < appliedSync) return;
+			const account = await accountID();
+			if (account !== expectedAccountId) throw new ExpectedIpcError("Account changed during host sync.");
+			appliedSync = sync;
+			for (const host of hosts) await importAccountHost(account, host);
+			const current = new Set(hosts.map((host) => host.hostId));
+			for (const entry of await owned()) {
+				// Only account-imported credentials are directory-managed. A machine
+				// paired here with its original password remains a local pairing.
+				if (entry.hostId && !current.has(entry.hostId) && holdsAccountToken(entry)) {
+					await removeSavedRemote(file, entry.url, disconnect);
+				}
 			}
-		}
-	}));
-	ipcMain.handle("remotes:linkAccountHost", async (_event, url: string) => ordered(async () => {
-		const account = await accountID();
-		const entry = (await readRemotes(file)).find((saved) => saved.url === url && (!saved.accountUserId || saved.accountUserId === account));
-		if (!entry?.hostId) throw new ExpectedIpcError("Pair this host before linking it to your account.");
-		const localHostId = await requireLocalIdentity();
-		refuseSelf(entry.hostId, localHostId);
-		const actual = await identity(entry);
-		refuseSelf(actual, localHostId);
-		if (actual !== entry.hostId) throw new ExpectedIpcError("Remote host identity changed; connection refused.");
-		await checkConnectionContext(localHostId, account);
-		// Read before issuing: issuing the token moves it from any other account.
-		const { hostKeys } = await accountHosts<{ hostKeys?: boolean }>("GET", "");
-		const endpoint = new URL("/api/v1/remote-host/account-token", entry.url);
-		const response = await fetch(endpoint, {
-			method: "POST", redirect: "error",
-			headers: { Authorization: `Bearer ${entry.password}`, "X-AO-Expected-Host-ID": entry.hostId, "X-AO-Account-ID": account },
-			signal: AbortSignal.timeout(8_000),
 		});
-		if (!response.ok) throw new ExpectedIpcError("The host did not accept account linking. Check its password and version.");
-		const result = await response.json() as { hostId?: string; token?: string; hostKey?: string };
-		if (result.hostId !== entry.hostId || !ACCOUNT_TOKEN.test(result.token ?? "")) throw new ExpectedIpcError("The host returned an invalid account credential.");
-		// With the machine's host key AO Cloud needs its own signature; an AO Cloud
-		// that does not say it takes host keys refuses the field.
-		const hostKey = hostKeys === true && /^[A-Za-z0-9_-]{43}$/.test(result.hostKey ?? "") ? result.hostKey : undefined;
-		await accountHosts("PUT", `/${encodeURIComponent(entry.hostId)}`, { label: entry.label, url: entry.url, token: result.token, hostKey });
-	}));
+	});
+	ipcMain.handle("remotes:linkAccountHost", async (_event, url: string) => {
+		await accountID();
+		// Read before issuing: issuing the token moves it from any other account.
+		const { hostKeys } = await accountHosts<{ hostKeys?: boolean }>("GET", "", { timeoutMs: accountDirectoryTimeoutMs });
+		const issued = await ordered(async () => {
+			const account = await accountID();
+			const entry = (await readRemotes(file)).find((saved) => saved.url === url && (!saved.accountUserId || saved.accountUserId === account));
+			if (!entry?.hostId) throw new ExpectedIpcError("Pair this host before linking it to your account.");
+			const localHostId = await requireLocalIdentity();
+			refuseSelf(entry.hostId, localHostId);
+			const actual = await identity(entry);
+			refuseSelf(actual, localHostId);
+			if (actual !== entry.hostId) throw new ExpectedIpcError("Remote host identity changed; connection refused.");
+			await checkConnectionContext(localHostId, account);
+			const endpoint = new URL("/api/v1/remote-host/account-token", entry.url);
+			const response = await fetch(endpoint, {
+				method: "POST", redirect: "error",
+				headers: { Authorization: `Bearer ${entry.password}`, "X-AO-Expected-Host-ID": entry.hostId, "X-AO-Account-ID": account },
+				signal: AbortSignal.timeout(8_000),
+			});
+			if (!response.ok) throw new ExpectedIpcError("The host did not accept account linking. Check its password and version.");
+			const result = await response.json() as { hostId?: string; token?: string; hostKey?: string };
+			if (result.hostId !== entry.hostId || !ACCOUNT_TOKEN.test(result.token ?? "")) throw new ExpectedIpcError("The host returned an invalid account credential.");
+			// With the machine's host key AO Cloud needs its own signature; an AO Cloud
+			// that does not say it takes host keys refuses the field.
+			const hostKey = hostKeys === true && /^[A-Za-z0-9_-]{43}$/.test(result.hostKey ?? "") ? result.hostKey : undefined;
+			return { account, hostId: entry.hostId, registration: { label: entry.label, url: entry.url, token: result.token, hostKey } };
+		});
+		if (await accountID() !== issued.account) throw new ExpectedIpcError("Account changed during remote connection.");
+		// No time limit: AO Cloud may first make the machine's tunnel, which can
+		// take more than a minute.
+		await accountHosts("PUT", `/${encodeURIComponent(issued.hostId)}`, { body: issued.registration });
+	});
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:computerName", () => computerName());
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {

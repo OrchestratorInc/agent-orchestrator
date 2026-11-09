@@ -3386,13 +3386,13 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
-	cloudRequest: async (method, path, body) => {
+	cloudRequest: async (method, path, { body, signal } = {}) => {
 		const baseUrl = await cloudControlPlaneUrl();
 		if (!baseUrl) throw new ExpectedIpcError("No Orchestrator Cloud control plane is configured.");
 		return cloudCpProxy.request({
 			baseUrl, path, method,
 			...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-		}, { hostTokens: true });
+		}, { hostTokens: true, signal });
 	},
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
 		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }

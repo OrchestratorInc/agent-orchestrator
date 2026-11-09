@@ -515,23 +515,80 @@ describe("registerRemotesIpc", () => {
 			const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 			const file = await tempFile();
 			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url, password: "old", accountUserId: TEST_ACCOUNT }] }));
-			const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+			const requests: Array<{ method: string; path: string; body?: unknown; deadline: boolean }> = [];
+			let finishRegistration = () => {};
 			const ipc = fakeIpc();
 			registerRemotes(ipc.ipcMain, {
 				file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: async () => "h_workbox",
-				cloudRequest: async (method, path, body) => {
-					requests.push({ method, path, body });
+				cloudRequest: async (method, path, options) => {
+					requests.push({ method, path, body: options?.body, deadline: options?.signal !== undefined });
+					if (method === "PUT") await new Promise<void>((resolve) => { finishRegistration = resolve; });
 					return { status: 200, body: method === "GET" ? '{"hosts":[],"hostKeys":true}' : "" };
 				},
 			});
-			await expect(ipc.invoke("remotes:linkAccountHost", url)).resolves.toBeUndefined();
+			const linked = ipc.invoke("remotes:linkAccountHost", url);
+			await vi.waitFor(() => expect(requests).toHaveLength(2));
+			// AO Cloud may take more than a minute to register; other handlers do not wait for it.
+			await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+			finishRegistration();
+			await expect(linked).resolves.toBeUndefined();
 			expect(requests).toEqual([
-				{ method: "GET", path: "/api/cloud/v1/me/hosts", body: undefined },
-				{ method: "PUT", path: "/api/cloud/v1/me/hosts/h_workbox", body: { label: "workbox", url, token, hostKey: "k".repeat(43) } },
+				{ method: "GET", path: "/api/cloud/v1/me/hosts", body: undefined, deadline: true },
+				{ method: "PUT", path: "/api/cloud/v1/me/hosts/h_workbox", body: { label: "workbox", url, token, hostKey: "k".repeat(43) }, deadline: false },
 			]);
 		} finally {
 			server.close();
 		}
+	});
+
+	it("lists saved hosts while AO Cloud is slow to list the account's machines", async () => {
+		let answer: (response: { status: number; body: string }) => void = () => {};
+		const cloudRequest = vi.fn<RemotesIpcDeps["cloudRequest"]>(() => new Promise((resolve) => { answer = resolve; }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, cloudRequest });
+		const synced = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		await vi.waitFor(() => expect(cloudRequest).toHaveBeenCalledOnce());
+		expect(cloudRequest.mock.calls[0][2]?.signal).toBeInstanceOf(AbortSignal);
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+		answer({ status: 200, body: JSON.stringify({ hosts: [{ hostId: "h_cloud", label: "Cloud", url: "https://cloud.example", token: "a".repeat(64) }] }) });
+		await synced;
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(2);
+	});
+
+	it.each(["silent", "unreachable"])("gives up on an AO Cloud that is %s without holding other handlers", async (state) => {
+		let signal: AbortSignal | undefined;
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			accountDirectoryTimeoutMs: 20,
+			cloudRequest: (_method, _path, options) => {
+				signal = options?.signal;
+				return state === "silent" ? new Promise(() => {}) : Promise.reject(new TypeError("fetch failed"));
+			},
+		});
+		for (const channel of ["remotes:syncAccountHosts", "remotes:linkAccountHost"]) {
+			await expect(ipc.invoke(channel, channel.endsWith("Hosts") ? TEST_ACCOUNT : "http://192.0.2.1:1")).rejects.toBeInstanceOf(ExpectedIpcError);
+			if (state === "silent") expect(signal?.aborted).toBe(true);
+		}
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+	});
+
+	it("applies only the newest of two overlapping syncs", async () => {
+		const answers: Array<(response: { status: number; body: string }) => void> = [];
+		const listing = (label: string) => ({ status: 200, body: JSON.stringify({ hosts: [{ hostId: "h_cloud", label, url: "https://cloud.example", token: "a".repeat(64) }] }) });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			cloudRequest: () => new Promise((resolve) => { answers.push(resolve); }),
+		});
+		const older = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		const newer = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		await vi.waitFor(() => expect(answers).toHaveLength(2));
+		answers[1](listing("Newer"));
+		await newer;
+		answers[0](listing("Older"));
+		await older;
+		await expect(ipc.invoke("remotes:list")).resolves.toContainEqual({ hostId: "h_cloud", label: "Newer", url: "https://cloud.example" });
 	});
 
 	it.each([
