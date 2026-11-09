@@ -177,8 +177,10 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 							// One height makes the row read as a set. The width floor is for the
 							// decode: a lazy image has no width until it lands, so without it the
 							// row wraps against zero-width boxes and reflows image by image.
+							// A tile is the exception: it is a thumbnail that opens full size, so an
+							// image fills between one square and two rather than letterboxing.
 							inAttachmentRow
-								? "h-16 w-auto min-w-16 max-w-48 rounded-md border border-border bg-background"
+								? "h-16 w-auto min-w-16 max-w-32 rounded-md border border-border bg-background object-cover"
 								: inGallery
 									? "h-40 w-auto min-w-24"
 									: "h-auto max-h-80",
