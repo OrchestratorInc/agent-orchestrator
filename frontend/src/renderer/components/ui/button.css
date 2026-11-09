@@ -30,14 +30,6 @@
 	font-weight: var(--font-weight-medium);
 }
 
-@supports (color: contrast-color(red)) {
-	.button-raised {
-		/* 22% lighter bias: shift the luminance cutoff from 0.179129 to 0.359720.
-		   Use the resting fill so hover and press never flip the label color. */
-		color: contrast-color(color-mix(in srgb-linear, var(--button-color) 49.796664%, black));
-	}
-}
-
 @utility button-raised {
 	--button-face: var(--button-color);
 	--button-edge: color-mix(in oklab, var(--button-color), #000 5%);
@@ -45,6 +37,12 @@
 	border-color: var(--button-edge);
 	box-shadow: var(--shadow-control-inset);
 	touch-action: manipulation;
+
+	@supports (color: contrast-color(red)) {
+		/* 22% lighter bias: shift the luminance cutoff from 0.179129 to 0.359720.
+		   Use the resting fill so hover and press never flip the label color. */
+		color: contrast-color(color-mix(in srgb-linear, var(--button-color) 49.796664%, black));
+	}
 
 	@media (hover: hover) {
 		&:hover:not(:disabled, [aria-disabled="true"]) {
