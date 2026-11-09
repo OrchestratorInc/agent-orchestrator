@@ -248,6 +248,8 @@ function CueRunMenuTrigger({
 						data-priority="secondary"
 						disabled={disabled || spinner}
 						variant="quiet"
+						// Hover opens this menu; an open menu is not a pressed action.
+						className={simplifiedTopbar ? "data-[state=open]:before:opacity-0 data-[state=open]:before:bg-interactive-hover data-[state=open]:text-muted-foreground data-[state=open]:hover:before:opacity-100 data-[state=open]:hover:text-foreground data-[state=open]:focus-visible:before:opacity-100 data-[state=open]:focus-visible:text-foreground" : undefined}
 						onPointerEnter={handlePointerEnter}
 						onPointerLeave={handlePointerLeave}
 						// Keyboard activation opens the menu (Radix); only pointer

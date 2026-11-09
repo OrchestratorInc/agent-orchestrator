@@ -834,7 +834,8 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 /* Muted gray icons wash out on the light chrome; bar icons use the full
  * foreground there. Disabled controls keep their own reduced opacity. */
-html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]) {
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]),
+html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(:disabled) {
 	color: var(--color-foreground);
 }
 
@@ -3590,6 +3591,17 @@ html.sidebar-reordering * {
 	height: var(--size-topbar-control);
 	min-width: var(--size-topbar-control);
 	font-size: var(--font-size-sm-md);
+	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
+}
+
+.workspace-topbar-actions .group\/button:disabled {
+	pointer-events: auto;
+	cursor: not-allowed;
+	opacity: var(--opacity-control-disabled);
+}
+
+.workspace-topbar-actions .group\/button:disabled::before {
+	display: none;
 }
 
 .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button {

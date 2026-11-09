@@ -103,7 +103,7 @@ export function TopbarOpenEditorButton({
 
 	return (
 		<div
-			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md focus-within:before:inset-0 focus-within:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
+			className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md has-[:focus-visible]:before:inset-0 has-[:focus-visible]:before:opacity-100 ${mainDisabled && menuDisabled ? "before:hidden" : ""}`}
 			data-state={menuOpen ? "open" : "closed"}
 			style={style}
 		>
