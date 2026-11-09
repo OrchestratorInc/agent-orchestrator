@@ -11,7 +11,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
@@ -28,6 +28,7 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
+import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
@@ -37,7 +38,6 @@ import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, worksp
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
-import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -152,6 +152,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
+	useSessionMenuAvailable(
+		"open-orchestrator",
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
@@ -266,6 +270,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
 			freestyle={startsInPlace || autoStartPending}
 			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
+			harness={workspace?.orchestratorAgent ?? workspace?.sessions.find((session) => session.kind === "orchestrator")?.provider}
 		/>;
 	}
 
@@ -303,10 +308,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
 						<span className="min-w-0 flex-1">{health.message}</span>
 						{health.state === "restart_needed" || health.state === "duplicates" ? (
-							<TopbarButton disabled={isProjectRestarting} onClick={() => void restartOrchestrator()} variant="primary">
+							<Button type="button" size="sm" disabled={isProjectRestarting} onClick={() => void restartOrchestrator()} variant="primary">
 								<RotateCw className="size-3.5" aria-hidden="true" />
 								{t("shell.restart")}
-							</TopbarButton>
+							</Button>
 						) : null}
 					</div>
 				) : null}

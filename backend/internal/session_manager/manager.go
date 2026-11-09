@@ -1159,6 +1159,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
+		// Visible from its first row: without this, a view that opens the session
+		// before beginAsyncChatSpawn reads a ready session with no controller.
+		if asyncChat {
+			seed.ProvisionState = domain.SessionProvisionProvisioning
+		}
 		if cfg.ClientRequestID != "" {
 			var fresh bool
 			rec, fresh, err = m.store.CreateClientRequestSession(ctx, seed)
@@ -6269,7 +6274,8 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		inThread +
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or AO report notes. " +
 		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
-		"Saving a file here or attaching it to an AO report does not authorize external publishing."
+		"Saving a file here or attaching it to an AO report does not authorize external publishing. " +
+		"Only the user publishes an artifact, with Share in the AO desktop; after that, `ao session get " + string(id) + "` lists each artifact with its public link."
 }
 
 // artifactOutputPrompt is added for a session spawned with the artifact output

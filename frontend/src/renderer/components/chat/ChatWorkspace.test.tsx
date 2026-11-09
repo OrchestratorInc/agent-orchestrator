@@ -2358,6 +2358,24 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
 
+	// A worker started by `ao spawn` has no local echo or opening time in this
+	// renderer: the daemon's provisioning state and queued brief alone must read
+	// as starting, never as an empty chat whose controller stopped.
+	it("shows a CLI-spawned worker as starting from the daemon's state alone", () => {
+		render(
+			<ChatWorkspace
+				snapshot={startingSnapshot("queued")}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
+		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		expect(screen.queryByText("What do you want to work on?")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+	});
+
 	it("localizes the startup composer queue hint", async () => {
 		await appI18n.changeLanguage("zh-CN");
 		render(
@@ -2770,6 +2788,25 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("opens a chat whose history is still being read as one with messages, not as a new chat", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} historyPending />);
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+		expect(screen.getByText("Restoring your conversation")).toBeInTheDocument();
+		// Typing doesn't wait for the history.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+		// The history fades in when it arrives.
+		view.rerender(<ChatWorkspace snapshot={loaded} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+		view.unmount();
+		// Read and empty, it is a new chat after all.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
 	});
 
 	it("keeps the composer quiet while leaving chat for the terminal", () => {

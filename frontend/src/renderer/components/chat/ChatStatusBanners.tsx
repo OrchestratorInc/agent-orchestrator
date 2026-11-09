@@ -15,7 +15,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "lucide-react";
+import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
@@ -66,7 +66,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="outline" className="shrink-0"
+			<Button type="button" size="sm" variant="secondary" className="shrink-0"
 				onClick={onLogIn ?? (() => openGlobalSettings("harness", {
 					focusAgentId: harness,
 					...(hostId ? { hostId } : {}),

@@ -563,7 +563,7 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("Idle")).toBeInTheDocument();
 		const terminateButton = within(idleCard).getByRole("button", { name: "Archive brand-font-pipeline" });
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
-		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
+		expect(terminateButton.querySelector("svg")).toHaveClass("icon-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});

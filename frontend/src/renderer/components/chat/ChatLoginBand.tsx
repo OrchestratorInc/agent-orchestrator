@@ -1,4 +1,4 @@
-import { Check, CircleAlert } from "lucide-react";
+import { Check, CircleAlert } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";

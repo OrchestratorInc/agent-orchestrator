@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";

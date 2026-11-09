@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { parseNightlyVersion } from "../lib/build-channel";
@@ -239,7 +239,7 @@ function RestartToUpdateDialogBody() {
 				</div>
 
 				<div className={cn(settingsDialogFooterClass, "py-4")}>
-					<Button type="button" variant="outline" size="sm" onClick={close} disabled={pending}>
+					<Button type="button" variant="secondary" size="sm" onClick={close} disabled={pending}>
 						{t("confirm.cancel")}
 					</Button>
 					<Button

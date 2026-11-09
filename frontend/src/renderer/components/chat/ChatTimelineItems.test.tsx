@@ -9,6 +9,7 @@ import {
 	ChatHostId,
 	HumanMessage,
 	LiveResponseStatus,
+	liveTaskLabel,
 	ProviderSwitchMarker,
 	TurnOutcome,
 } from "./ChatTimelineItems";
@@ -780,5 +781,67 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+});
+
+describe("MCP tool rows", () => {
+	const base = { kind: "activity", sequence: 1, revision: 1, createdAt: "2026-11-08T00:00:00Z", activityKind: "mcp_tool" } as const;
+	const content = (text: string) => [{ type: "content", content: { type: "text", text } }];
+
+	it("names a Claude Code page preview in plain words and opens onto its console errors", () => {
+		const report = JSON.stringify({ width: 720, contentHeight: 87, consoleMessages: [{ level: "error", text: "test error" }] });
+		render(
+			<ActivityRow activity={{
+				...base, id: "preview", status: "completed", summary: "mcp__ao__html_preview",
+				detail: { providerToolName: "mcp__ao__html_preview", input: { html: "<p>x</p>" }, content: content(report) },
+			}} />,
+		);
+		const row = screen.getByRole("button", { name: /Previewed the page/ });
+		expect(row).toHaveTextContent("1 console error");
+		expect(screen.queryByText(/mcp__ao__/)).toBeNull();
+		fireEvent.click(row);
+		expect(screen.getByText("test error")).toBeInTheDocument();
+		expect(screen.queryByText(/720/)).toBeNull();
+	});
+
+	it("draws nothing for a shown page and keeps a failed one", () => {
+		const { container } = render(
+			<ActivityRow activity={{
+				...base, id: "render", status: "completed", summary: "Called ao/html_render",
+				detail: { server: "ao", toolName: "html_render", result: { content: [{ type: "text", text: "Shown above your reply (render r1)." }] } },
+			}} />,
+		);
+		expect(container.textContent).toBe("");
+
+		render(
+			<ActivityRow activity={{
+				...base, id: "render-failed", status: "completed", summary: "Called ao/html_render",
+				detail: {
+					server: "ao", toolName: "html_render",
+					result: { content: [{ type: "text", text: "invalid render: the page is empty (RENDER_INVALID) [request h/x-1]" }] },
+				},
+			}} />,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Couldn't show the page" }));
+		expect(screen.getByText("Invalid render: the page is empty")).toBeInTheDocument();
+	});
+
+	it("titles another server's tool as tool · server and shows Claude Code's arguments", () => {
+		render(
+			<ActivityRow activity={{
+				...base, id: "guide", status: "completed", summary: "mcp__claude_ai_Claude_Docs__guide",
+				detail: { providerToolName: "mcp__claude_ai_Claude_Docs__guide", input: { items: ["topic.index"] }, content: content("index") },
+			}} />,
+		);
+		const row = screen.getByRole("button", { name: /guide/ });
+		expect(row).toHaveTextContent("guide· claude_ai_Claude_Docs");
+		fireEvent.click(row);
+		expect(screen.getByText("Arguments")).toBeInTheDocument();
+		expect(screen.getByText(/topic\.index/)).toBeInTheDocument();
+	});
+
+	it("says what a running AO call is doing on the live line", () => {
+		expect(liveTaskLabel({ ...base, id: "p", status: "running", summary: "mcp__ao__html_preview", detail: { providerToolName: "mcp__ao__html_preview" } })).toBe("Previewing the page");
+		expect(liveTaskLabel({ ...base, id: "g", status: "running", summary: "Called linear/create_issue" })).toBe("create_issue");
 	});
 });

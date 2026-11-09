@@ -94,7 +94,7 @@ import {
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
-import { attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
+import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
@@ -105,6 +105,14 @@ import {
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL,
+	APP_MENU_ACTION_CHANNEL,
+	APP_MENU_COMMAND_IDS,
+	SET_APP_MENU_AVAILABILITY_CHANNEL,
+	effectiveShortcutBindings,
+	isAppMenuActionId,
+	shortcutBindingAccelerator,
+	type AppMenuAvailability,
+	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
@@ -242,7 +250,7 @@ import {
 	shouldToast,
 	toastSilent,
 } from "./main/notification-signals";
-import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
+import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate, coerceAppMenuAvailability, type AppMenuCommands } from "./main/menu";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
@@ -483,6 +491,7 @@ let browserStreamLink: BrowserStreamLinkHandle | null = null;
 let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
+let appMenuAvailability: AppMenuAvailability = {};
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
 let terminalFontSizeFocused = false;
@@ -803,6 +812,55 @@ function appMenuOptions() {
 	};
 }
 
+// A chord normally never reaches the menu: before-input-event consumes it and
+// sends the same message. It falls through while a binding is being recorded,
+// and when the Browser owns the chord; running the item then would double-handle it.
+function menuAcceleratorMayRun(id: AppShortcutId): boolean {
+	if (keybindingRecordingActive) return false;
+	if (!browserViewHost?.isLastUsedBrowser()) return true;
+	const binding = effectiveShortcutBindings(id, true, keybindingOverrides)[0];
+	return !binding || shouldHandleAppShortcutInBrowserContext(id, binding, true);
+}
+
+const appMenuCommands: AppMenuCommands = {
+	accelerator: (id) => {
+		if (isAppMenuActionId(id)) return undefined;
+		const binding = effectiveShortcutBindings(id, true, keybindingOverrides)[0];
+		return binding ? shortcutBindingAccelerator(binding) : undefined;
+	},
+	isEnabled: (id) => appMenuAvailability[id] === true,
+	run: (id, triggeredByAccelerator) => {
+		const shell = getShellWebContents();
+		if (!shell || shell.isDestroyed() || appMenuAvailability[id] !== true) return;
+		if (isAppMenuActionId(id)) {
+			shell.send(APP_MENU_ACTION_CHANNEL, id);
+			return;
+		}
+		if (triggeredByAccelerator && !menuAcceleratorMayRun(id)) return;
+		const { channel, payload } = appShortcutDelivery(id);
+		shell.send(channel, ...payload);
+	},
+};
+
+function applyAppMenuAvailability(next: AppMenuAvailability): void {
+	appMenuAvailability = next;
+	const menu = Menu.getApplicationMenu();
+	for (const id of APP_MENU_COMMAND_IDS) {
+		const item = menu?.getMenuItemById(id);
+		if (item) item.enabled = next[id] === true;
+	}
+}
+
+function installMacAppMenu(): void {
+	Menu.setApplicationMenu(
+		Menu.buildFromTemplate(
+			buildMacAppMenuTemplate(() => {
+				void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
+			}, { appName: app.name, onQuit: quitConfirm.menuQuit }, { ...appMenuOptions(), commands: appMenuCommands }),
+		),
+	);
+}
+
 function buildWindowsAppMenu(): Menu {
 	return Menu.buildFromTemplate(
 		buildWindowsAppMenuTemplate(() => {
@@ -954,9 +1012,13 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
 		quitConfirm.reset();
+		applyAppMenuAvailability({});
 	});
 	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
 	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
+	// did-navigate is main-frame only, so an artifact iframe loading cannot clear this.
+	// The reloaded renderer reports availability again.
+	shellWebContents.on("did-navigate", () => applyAppMenuAvailability({}));
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -969,13 +1031,7 @@ async function createWindowInternal(): Promise<void> {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
 	} else if (process.platform === "darwin") {
-		Menu.setApplicationMenu(
-			Menu.buildFromTemplate(
-				buildMacAppMenuTemplate(() => {
-					void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
-				}, { appName: app.name, onQuit: quitConfirm.menuQuit }, appMenuOptions()),
-			),
-		);
+		installMacAppMenu();
 	} else if (process.platform === "linux") {
 		Menu.setApplicationMenu(buildLinuxAppMenu());
 		mainWindow.setMenuBarVisibility(false);
@@ -3076,6 +3132,11 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
+ipcMain.on(SET_APP_MENU_AVAILABILITY_CHANNEL, (event, availability: unknown) => {
+	if (event.sender !== getShellWebContents()) return;
+	applyAppMenuAvailability(coerceAppMenuAvailability(availability));
+});
+
 ipcMain.on(QUIT_CONFIRM_RESULT_CHANNEL, (event, confirmed: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof confirmed !== "boolean") return;
 	quitConfirm.resolve(confirmed);
@@ -3398,7 +3459,8 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 		const rows = JSON.parse(stdout) as GitHubRepoRow[];
 		return rows.flatMap((row) => {
 			const fullName = row.fullName ?? row.full_name;
-			const url = row.url ?? row.html_url;
+			// `gh api user/repos` rows set `url` to the REST API URL, which git cannot clone.
+			const url = row.html_url ?? row.url;
 			if (!fullName || !url) return [];
 			return [{
 				fullName,
@@ -3573,6 +3635,8 @@ ipcMain.handle("keybindings:set", async (_event, overrides: KeybindingOverrides)
 	const runFile = runFilePath();
 	if (!runFile) return keybindingOverrides;
 	keybindingOverrides = await writeKeybindingOverrides(path.dirname(runFile), overrides);
+	// Menu items show the user's own bindings.
+	if (process.platform === "darwin" && getShellWebContents()) installMacAppMenu();
 	return keybindingOverrides;
 });
 ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {

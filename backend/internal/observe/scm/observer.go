@@ -275,6 +275,14 @@ type Observer struct {
 	// poll fetches regardless of guards and review cadence. Each request is
 	// consumed by exactly one poll, whatever its outcome.
 	forcedReviews map[string]bool
+	// forcedSessions holds sessions whose open PRs the next poll fetches
+	// regardless of guards. Guarded by forceMu.
+	forcedSessions map[domain.SessionID]bool
+	// sessionRefreshArmed is true while a debounce timer is pending. Guarded by
+	// forceMu.
+	sessionRefreshArmed bool
+	// sessionRefreshDebounce coalesces a burst of session refresh requests.
+	sessionRefreshDebounce time.Duration
 	// trigger wakes the poll loop for a forced refresh.
 	trigger chan struct{}
 	// lifecycleTimeout bounds each lifecycle notification.
@@ -284,7 +292,7 @@ type Observer struct {
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, trigger: make(chan struct{}, 1)}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -389,6 +397,41 @@ func (o *Observer) RequestReviewRefresh(prURL string) {
 	}
 }
 
+// RequestSessionRefresh asks the poll loop to re-fetch sessionID's open PRs
+// after a short debounce, for a local signal that they probably just changed
+// on the provider (the agent ran `gh pr merge`). It does not wait; the regular
+// cadence remains the fallback.
+func (o *Observer) RequestSessionRefresh(sessionID domain.SessionID) {
+	if sessionID == "" {
+		return
+	}
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	o.forcedSessions[sessionID] = true
+	if o.sessionRefreshArmed {
+		return
+	}
+	o.sessionRefreshArmed = true
+	time.AfterFunc(o.sessionRefreshDebounce, func() {
+		o.forceMu.Lock()
+		o.sessionRefreshArmed = false
+		o.forceMu.Unlock()
+		select {
+		case o.trigger <- struct{}{}:
+		default:
+		}
+	})
+}
+
+// takeForcedSessions returns and clears the pending forced sessions.
+func (o *Observer) takeForcedSessions() map[domain.SessionID]bool {
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	forced := o.forcedSessions
+	o.forcedSessions = map[domain.SessionID]bool{}
+	return forced
+}
+
 // takeForcedReviews returns and clears the pending forced refreshes.
 func (o *Observer) takeForcedReviews() map[string]bool {
 	o.forceMu.Lock()
@@ -426,6 +469,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		o.logger.Debug("scm observer: poll completed", attrs...)
 	}()
 	now := o.clock().UTC()
+	forcedSessions := o.takeForcedSessions()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -500,9 +544,8 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
 	forced := o.takeForcedReviews()
-	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, markRepoRefreshFailed, now)
+	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, forcedSessions, markRepoRefreshFailed, now)
 	// Item 2 — terminal-state reconciliation for GitHub: tracked open PRs
 	// not in the current state=open listing may have transitioned to
 	// merged/closed. Run a reconciliation pass that issues a full detail
@@ -1388,7 +1431,7 @@ func sessionBranchPrefixes(branch string) []string {
 	return prefixes
 }
 
-func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
+func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, forcedSessions map[domain.SessionID]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
 	selection := refreshSelection{
 		subjectsByPR:  map[string]*subject{},
 		commitETags:   map[string]pendingCacheString{},
@@ -1400,7 +1443,9 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 		}
 		key := keyForTrackedPR(s.known, s.repo)
 		selection.subjectsByPR[key] = s
-		candidate := missingLocalState(s.known) || forcedFor(forced, s.known)
+		// A forced session's terminal PRs stay terminal; only open ones can move.
+		candidate := missingLocalState(s.known) || forcedFor(forced, s.known) ||
+			(forcedSessions[s.session.ID] && !s.known.Merged && !s.known.Closed)
 		repoCursor := o.Cache.LastSyncCursor[prKey(s.repo, 0)]
 		hasCursor := !repoCursor.IsZero()
 		g := guards[prKey(s.repo, 0)]
@@ -1416,7 +1461,10 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 				candidate = true
 			}
 		}
-		if s.known.HeadSHA != "" {
+		// A poll forced by a session's local signal must not wait on one serial
+		// guard request per other tracked PR; the next regular tick checks them.
+		deferChecksGuard := len(forcedSessions) > 0 && !forcedSessions[s.session.ID]
+		if s.known.HeadSHA != "" && !deferChecksGuard {
 			commitKey := commitKey(s.repo, s.known.HeadSHA)
 			prev := o.Cache.CommitChecksETag[commitKey]
 			started := time.Now()
@@ -1706,7 +1754,7 @@ func applyStoredFailedLogTails(obs *ports.SCMObservation, checks []domain.PullRe
 		if obs.CI.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != obs.CI.HeadSHA {
 			continue
 		}
-		if ch.LogTail != "" && (ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled) {
+		if ch.LogTail != "" && ch.Status == domain.PRCheckFailed {
 			tailsByName[ch.Name] = ch.LogTail
 		}
 	}
@@ -2030,7 +2078,7 @@ func ciObservationFromLocal(pr domain.PullRequest, checks []domain.PullRequestCh
 			ProviderID: ch.Details,
 		}
 		ci.Checks = append(ci.Checks, check)
-		if ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled {
+		if ch.Status == domain.PRCheckFailed {
 			ci.FailedChecks = append(ci.FailedChecks, check)
 			if ch.LogTail != "" {
 				tails = append(tails, ch.LogTail)

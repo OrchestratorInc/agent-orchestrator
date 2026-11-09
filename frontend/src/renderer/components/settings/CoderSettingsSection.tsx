@@ -1,4 +1,4 @@
-import { ExternalLink, Loader2, Plus, RefreshCw } from "lucide-react";
+import { ExternalLink, Loader2, Plus, RefreshCw } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";

@@ -50,7 +50,7 @@ import {
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box, Image as ImageIcon } from "lucide-react";
+import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
