@@ -474,3 +474,24 @@ func TestIdentityProbeDoesNotCountTowardLockout(t *testing.T) {
 		t.Fatalf("authenticated request after probes got %d, want 200", w.Code)
 	}
 }
+
+func TestLockoutGroupsIPv6SourcesBySlash64(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := range 5 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, reqFrom(fmt.Sprintf("[2001:db8:1:2::%x]:5555", i+1), "Bearer wrong"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:2::ffff]:5555", "Bearer secret12"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("another address in the same /64: got %d want 429", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:3::1]:5555", "Bearer secret12"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("another /64: got %d want 200", w.Code)
+	}
+}
