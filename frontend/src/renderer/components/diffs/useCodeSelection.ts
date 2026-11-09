@@ -328,10 +328,12 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 		// One restore attempt per snapshot: if the engine refuses to apply it,
 		// retrying every frame would spin; the next real selection resets it.
 		let restoredFor: SelectionSnapshot | null = null;
-		let current: CodeSelection | null = null;
 		const redraws = new MutationObserver(() => schedule());
 		const update = () => {
 			frame = null;
+			// Dismissal and successful attachment clear this ref immediately, even
+			// if the viewer replaces its rows before the next selectionchange frame.
+			const current = selectionRef.current;
 			let next: CodeSelection | null = null;
 			for (const host of hosts()) {
 				next = readCodeSelection(host, pressed);
@@ -351,7 +353,6 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 				return;
 			}
 			restoredFor = null;
-			current = next;
 			publish(next);
 		};
 		const schedule = () => {

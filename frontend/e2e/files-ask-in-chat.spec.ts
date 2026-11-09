@@ -513,6 +513,33 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(askButton(page)).toBeHidden();
 	});
 
+	test("Escape stays dismissed when rows redraw in the same frame", { tag: "@P0" }, async ({ page }) => {
+		await openChatSession(page);
+		await row(page, REVIEW, 2).evaluate(element => {
+			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+			const root = element.getRootNode() as ShadowRoot & { getSelection: () => Selection };
+			const end = root.querySelector('[data-line="4"][data-line-type]')!;
+			root.getSelection().setBaseAndExtent(element, 0, end, end.childNodes.length);
+			document.dispatchEvent(new Event("selectionchange"));
+		});
+		await expect(askButton(page)).toBeVisible();
+		const dismissed = await page.locator(`${REVIEW} diffs-container`).first().evaluate(async host => {
+			const root = host.shadowRoot as ShadowRoot & { getSelection: () => Selection };
+			const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			document.dispatchEvent(escape);
+			const cleared = root.getSelection().anchorNode === null;
+			for (const column of root.querySelectorAll("[data-content]")) {
+				column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
+			}
+			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			return { handled: escape.defaultPrevented, cleared, restored: root.getSelection().toString() };
+		});
+		expect(dismissed).toEqual({ handled: true, cleared: true, restored: "" });
+		await expect(askButton(page)).toBeHidden();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);
+	});
+
 	test("shift+click extends the highlight across lines", async ({ page }) => {
 		const { sentToChat } = await openChatSession(page);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4));

@@ -298,6 +298,84 @@ describe("codeReference", () => {
 });
 
 describe("code selection capture scheduling", () => {
+	it.each(["dismiss", "ask", "reject", "click-away"] as const)("keeps %s authoritative across an immediate redraw", action => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
+		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 1).firstChild!, 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const flush = () => act(() => { const next = callback; callback = undefined; next?.(0); });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const ref = { current: container };
+		const deliver = vi.fn(() => action === "reject" ? false : undefined);
+		const hook = renderHook(() => useCodeSelection(ref, deliver));
+		flush();
+		expect(hook.result.current.source.get()).not.toBeNull();
+		act(() => {
+			if (action === "dismiss") { hook.result.current.dismiss(); hook.result.current.dismiss(); }
+			else if (action === "click-away") native.removeAllRanges();
+			else expect(hook.result.current.ask()).toBe(action !== "reject");
+		});
+		// A click-away selectionchange processed before a redraw also stays cleared.
+		if (action === "click-away") { act(() => fireEvent(document, new Event("selectionchange"))); flush(); }
+		rebuild(host);
+		act(() => fireEvent(document, new Event("selectionchange")));
+		flush(); flush();
+		if (action === "reject") {
+			expect(native.setBaseAndExtent).toHaveBeenCalledOnce();
+			expect(hook.result.current.source.get()?.rows.map(row => row.text)).toEqual(["one", "two"]);
+			deliver.mockReturnValue(undefined);
+			act(() => { expect(hook.result.current.ask()).toBe(true); });
+			expect(deliver).toHaveBeenCalledTimes(2);
+		} else {
+			expect(native.setBaseAndExtent).not.toHaveBeenCalled();
+			expect(hook.result.current.source.get()).toBeNull();
+		}
+		hook.unmount(); container.remove(); frame.mockRestore();
+	});
+
+	it("attempts a refused native restore only once", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
+		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 0).firstChild!, 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const flush = () => act(() => { const next = callback; callback = undefined; next?.(0); });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const ref = { current: container };
+		const hook = renderHook(() => useCodeSelection(ref, vi.fn()));
+		flush();
+		rebuild(host); native.removeAllRanges(); native.setBaseAndExtent.mockImplementation(() => {});
+		act(() => fireEvent(document, new Event("selectionchange")));
+		flush(); flush();
+		expect(native.setBaseAndExtent).toHaveBeenCalledOnce();
+		expect(hook.result.current.source.get()).toBeNull();
+		expect(callback).toBeUndefined();
+		hook.unmount(); container.remove(); frame.mockRestore();
+	});
+
+	it.each(["disable", "unmount"])("cancels pending restoration on %s", action => {
+		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
+		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 0).firstChild!, 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => { callback = undefined; });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const ref = { current: container };
+		const hook = renderHook(({ enabled }) => useCodeSelection(ref, vi.fn(), enabled), { initialProps: { enabled: true } });
+		act(() => { const next = callback; callback = undefined; next?.(0); });
+		rebuild(host); native.removeAllRanges();
+		act(() => fireEvent(document, new Event("selectionchange")));
+		expect(callback).toBeDefined();
+		const source = hook.result.current.source;
+		if (action === "disable") hook.rerender({ enabled: false });
+		else hook.unmount();
+		expect(callback).toBeUndefined();
+		expect(cancel).toHaveBeenCalledWith(1);
+		expect(source.get()).toBeNull();
+		expect(native.setBaseAndExtent).not.toHaveBeenCalled();
+		if (action === "disable") hook.unmount();
+		container.remove(); frame.mockRestore(); cancel.mockRestore();
+	});
+
 	it("exposes an explicit toolbar dismissal without handling other surfaces' Escape", () => {
 		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 0), 3);
