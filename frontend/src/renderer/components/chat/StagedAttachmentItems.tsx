@@ -6,7 +6,8 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { ChatImage, ChatImageAttachmentRow, ChatImageDialog } from "./ChatImage";
-import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { AttachmentFilePreview } from "./AttachmentFilePreview";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, attachmentPreviewKind, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 
 /** A file chip's words: the name, then its type and, when it is known, its size. */
 export function AttachmentFileText({ name, bytes, nameClassName }: { name: string; bytes?: number; nameClassName?: string }) {
@@ -83,6 +84,7 @@ export function StagedAttachmentItems({
 					const image = IMAGE_ATTACHMENT_PATH.test(path);
 					// An image with no preview URL shows as a file chip, but it still can't go.
 					const remove = image ? undefined : onRemove;
+					const previewKind = attachmentPreviewKind(path);
 					return image && apiBaseUrl !== null ? (
 						<li key={path} className="max-w-full">
 							<ChatImage
@@ -93,10 +95,13 @@ export function StagedAttachmentItems({
 					) : (
 						<li
 							key={path}
-							title={path}
+							title={name}
 							className={cn("group/attachment", ATTACHMENT_TILE_CLASS)}
 						>
 							<AttachmentFileCard name={name} />
+							{previewKind && apiBaseUrl !== null ? (
+								<AttachmentFilePreview kind={previewKind} url={attachmentURL(apiBaseUrl, sessionId, path)} name={name} />
+							) : null}
 							{/* Remove appears in the corner on hover, so the card keeps its size. */}
 							{remove ? (
 								<span className="absolute right-0.5 top-0.5 flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">

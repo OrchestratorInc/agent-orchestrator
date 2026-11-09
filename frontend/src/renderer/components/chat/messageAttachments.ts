@@ -1,3 +1,5 @@
+import { fileMediaKind } from "../../lib/file-media";
+
 // These are AO-owned prompt suffixes, not general markdown. Chat and spawn used
 // slightly different wording, and older conversations used "Attached images";
 // accepting every shipped form lets the transcript improve without rewriting
@@ -65,6 +67,20 @@ export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-wrap it
 export const ATTACHMENT_TILE_CLASS = "relative flex h-16 w-32 min-w-0 select-none flex-col justify-between overflow-hidden break-all rounded-md border border-border bg-interactive-hover p-2 text-left text-caption leading-tight text-muted-foreground";
 
 export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-full border border-border px-1.5 text-micro whitespace-nowrap";
+
+/** The type pill laid over a preview: solid, so it reads on any frame. */
+export const ATTACHMENT_TILE_OVERLAY_PILL_CLASS = "pointer-events-none absolute bottom-1.5 left-1.5 bg-background text-foreground";
+
+export type AttachmentPreviewKind = "video" | "pdf" | "text";
+
+const TEXT_PREVIEW_PATH = /\.(?:txt|md|mdx|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch|csv|tsv)$/i;
+
+/** How a file tile can preview this path, if it can. HTML keeps its name card: rendering it needs an isolated origin. */
+export function attachmentPreviewKind(path: string): AttachmentPreviewKind | undefined {
+	const media = fileMediaKind(path);
+	if (media === "video" || media === "pdf") return media;
+	return TEXT_PREVIEW_PATH.test(path) ? "text" : undefined;
+}
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
 	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path

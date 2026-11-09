@@ -17,7 +17,7 @@ import { PdfPreview } from "../PdfPreview";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { ChatImage, ChatImageAttachmentRow } from "./ChatImage";
-import { ATTACHMENT_TILE_CLASS } from "./messageAttachments";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS, ATTACHMENT_TILE_PILL_CLASS } from "./messageAttachments";
 import { AttachmentFileCard } from "./StagedAttachmentItems";
 
 type CloudAttachmentSource = { baseUrl: string; orgId: string; sessionId: string };
@@ -81,14 +81,13 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 			<Pressable
 				onClick={() => setOpen(true)}
 				title={attachment.fileName}
-				className={cn(ATTACHMENT_TILE_CLASS, "flex-row justify-start p-0 transition-colors hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring")}
+				className={cn(ATTACHMENT_TILE_CLASS, "focus-visible:ring-2 focus-visible:ring-ring")}
 			>
-				<div className="h-full w-10 shrink-0 overflow-hidden">
+				<AttachmentFileCard name={attachment.fileName} bytes={attachment.size} />
+				<span inert className="pointer-events-none absolute inset-0 flex flex-col overflow-hidden">
 					<PdfPreview firstPageOnly load={load} src={`cloud-attachment:${attachment.id}`} path={attachment.fileName} onError={() => setFailed(true)} />
-				</div>
-				<span className="flex min-w-0 flex-1 flex-col justify-between p-2">
-					<AttachmentFileCard name={attachment.fileName} bytes={attachment.size} />
 				</span>
+				<span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>PDF</span>
 			</Pressable>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
