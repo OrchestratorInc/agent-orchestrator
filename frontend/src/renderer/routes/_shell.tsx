@@ -208,10 +208,28 @@ function LocalSessionHost() {
 	// to keep, so it renders directly.
 	const deferredSessionId = useDeferredValue(liveSessionId);
 	const deferredProjectId = useDeferredValue(liveProjectId);
-	const sessionId = liveSessionId ? (deferredSessionId ?? liveSessionId) : undefined;
-	const projectId = deferredSessionId ? deferredProjectId : liveProjectId;
-	const switching = Boolean(liveSessionId && sessionId !== liveSessionId);
-	useLayoutEffect(() => setSessionSwitchHeld(switching), [switching]);
+	// Only the session already on screen is kept. Returning from another route
+	// before the deferred value caught up must not bring back an older session.
+	const shownSessionId = useRef<string | undefined>(undefined);
+	const keepShown = Boolean(liveSessionId && deferredSessionId && deferredSessionId === shownSessionId.current);
+	const sessionId = keepShown ? deferredSessionId : liveSessionId;
+	const projectId = keepShown ? deferredProjectId : liveProjectId;
+	const switching = sessionId !== liveSessionId;
+	useLayoutEffect(() => {
+		shownSessionId.current = sessionId;
+	});
+	useLayoutEffect(() => {
+		setSessionSwitchHeld(switching);
+		if (!switching) return;
+		// The kept session is only a placeholder now: keystrokes and clicks
+		// must not reach its composer or controls (keyboard switches leave focus
+		// there). inert has no visual effect.
+		const workspace = document.getElementById("session-workspace");
+		const active = document.activeElement;
+		if (workspace && active instanceof HTMLElement && workspace.contains(active)) active.blur();
+		workspace?.setAttribute("inert", "");
+		return () => workspace?.removeAttribute("inert");
+	}, [switching]);
 	useEffect(() => () => setSessionSwitchHeld(false), []);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),

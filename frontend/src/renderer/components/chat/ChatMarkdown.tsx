@@ -60,7 +60,6 @@ import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkP
 import {
 	explicitWorkspaceFilePath,
 	createWorkspaceFileLookup,
-	findWorkspaceFilePath,
 	isAbsoluteFileReference,
 	normalizeWorkspaceFileReference,
 	workspaceFileOpenTarget,
@@ -370,9 +369,9 @@ function compactEmoji(children: ReactNode): ReactNode {
 
 function MarkdownLink({ href, children, className, menuPath }: { href?: string; children?: ReactNode; className?: string; menuPath?: string }) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
-		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
+		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
