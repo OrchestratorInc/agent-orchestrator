@@ -112,7 +112,7 @@ func triageLogMessages(logs string) []string {
 			continue
 		}
 		switch strings.ToUpper(lines[i][level[2]:level[3]]) {
-		case "ERROR", "WARN", "WARNING", "PANIC", "FATAL":
+		case "ERROR", "WARN", "WARNING", "PANIC", "FATAL", "UNCAUGHT":
 		default:
 			continue
 		}

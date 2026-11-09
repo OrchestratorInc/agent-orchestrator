@@ -304,6 +304,23 @@ func TestTriageLogEvidence(t *testing.T) {
 	}
 }
 
+func TestTriageSnapshotIncludesUncaughtDesktopErrors(t *testing.T) {
+	deps, _, dir := triageTestDeps(t)
+	logs := "2026-11-10T00:00:00.000Z [uncaught] Error: startup failed\n"
+	if err := os.WriteFile(filepath.Join(dir, "desktop.log"), []byte(logs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+	for name, text := range map[string]string{"snapshot": snapshot, "draft": draft} {
+		if !strings.Contains(text, "- Log excerpt: Error: startup failed\n") {
+			t.Errorf("%s missing uncaught desktop error: %s", name, text)
+		}
+		if strings.Contains(text, "no warnings or errors") {
+			t.Errorf("%s incorrectly reports no warnings or errors: %s", name, text)
+		}
+	}
+}
+
 func TestTriageSnapshotRedactsNestedLogValues(t *testing.T) {
 	deps, _, dir := triageTestDeps(t)
 	var logs bytes.Buffer
