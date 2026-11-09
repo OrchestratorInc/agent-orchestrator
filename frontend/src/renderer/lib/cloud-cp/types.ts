@@ -706,6 +706,10 @@ export interface CloudCpSessionArtifact {
 	updatedAt: string;
 	/** Set on a file the agent registered with `ao artifact add`. */
 	registered?: boolean;
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
+	/** The paths the artifact had before it was renamed, latest last. */
+	previousPaths?: string[];
 }
 
 /** One kept version of a cloud artifact file, numbered per path; the newest is the committed file. */

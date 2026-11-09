@@ -539,12 +539,14 @@ export function toCloudWorkspaceSession(
 		// files from each session's own artifact list query. File URLs come from a short-lived access prefix when a file is
 		// opened (useCloudArtifactAccess), not from the list.
 		artifactFiles: session.artifactFiles?.map((file) => ({
+			...(file.id ? { id: file.id } : {}),
 			kind: file.kind,
 			name: file.name,
 			path: file.path,
 			size: file.size,
 			updatedAt: file.updatedAt,
 			registered: file.registered,
+			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 		})),
 	};
 }

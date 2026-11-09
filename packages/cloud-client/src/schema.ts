@@ -4167,6 +4167,11 @@ export interface components {
          */
         SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
         SessionArtifact: {
+            /**
+             * Format: uuid
+             * @description The artifact's identity. It stays the same when the session's agent renames or moves the file, so a client keys anything it keeps about the file, such as its share link, by it. Absent from a control plane that does not track artifacts across renames.
+             */
+            id?: string;
             /** @description Slash-separated path in the session's artifact directory. */
             path: string;
             name: string;
@@ -4183,6 +4188,8 @@ export interface components {
             updatedAt: string;
             /** @description Set on a file the session's agent registered as a deliverable with ao artifact add, or inside a bundle directory it registered. Absent otherwise. A client lists only registered files as the session's artifacts, or the files at the root of its artifact directory when none is registered. */
             registered?: boolean;
+            /** @description The paths the artifact had before it was renamed, most recent last, so a link naming one still opens it. Absent when it was never renamed. */
+            previousPaths?: string[];
         };
         SessionArtifactResult: {
             artifact: components["schemas"]["SessionArtifact"];
@@ -4415,6 +4422,12 @@ export interface components {
             files?: components["schemas"]["WorkerArtifactCommitFile"][];
             /** @description Paths this worker previously synced and has since removed. */
             deleted?: string[];
+            /** @description Files this worker previously synced that were renamed or moved: each keeps its artifact, registration and version history at its new path. Moves apply before files, so a file both moved and changed is listed in both, with its new path in files. */
+            moved?: components["schemas"]["WorkerArtifactMove"][];
+        };
+        WorkerArtifactMove: {
+            from: string;
+            to: string;
         };
         WorkerArtifactRegistrationInput: {
             paths: string[];
