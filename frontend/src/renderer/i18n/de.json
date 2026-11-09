@@ -4060,5 +4060,9 @@
 	"teams.accessVia": "{{access}} · über {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} hat {{thing}} mit {{team}} geteilt",
 	"teams.sharedToastWithYou": "{{name}} hat {{thing}} mit dir geteilt",
-	"teams.open": "Öffnen"
+	"teams.open": "Öffnen",
+	"chat.reminders.label": "Geplante Nachfassaktionen",
+	"chat.reminders.cancel": "Nachfassaktion abbrechen",
+	"chat.reminders.cancelFailed": "Die Nachfassaktion konnte nicht abgebrochen werden.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

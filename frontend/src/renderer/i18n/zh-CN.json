@@ -4042,5 +4042,9 @@
 	"teams.accessVia": "{{access}} · 通过 {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} 已与 {{team}} 共享 {{thing}}",
 	"teams.sharedToastWithYou": "{{name}} 已与你共享 {{thing}}",
-	"teams.open": "打开"
+	"teams.open": "打开",
+	"chat.reminders.label": "已安排的跟进",
+	"chat.reminders.cancel": "取消跟进",
+	"chat.reminders.cancelFailed": "无法取消跟进。",
+	"chat.reminders.item": "{{time}}：{{label}}"
 }

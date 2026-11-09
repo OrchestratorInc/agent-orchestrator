@@ -81,10 +81,11 @@ func TestMCPInitializeNegotiatesTheProtocolVersion(t *testing.T) {
 
 func TestMCPListsBothTools(t *testing.T) {
 	tools := runMCP(t, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)[0].Result.Tools
-	if len(tools) != 2 || tools[0].Name != "html_preview" || tools[1].Name != "html_render" {
+	if len(tools) != 5 || tools[0].Name != "html_preview" || tools[1].Name != "html_render" ||
+		tools[2].Name != "remind" || tools[3].Name != "remind_list" || tools[4].Name != "remind_cancel" {
 		t.Fatalf("tools = %+v", tools)
 	}
-	for _, tool := range tools {
+	for _, tool := range tools[:2] {
 		// html_render can write an artifact file, so only html_preview is read-only.
 		preview := tool.Name == "html_preview"
 		want := map[string]any{"readOnlyHint": preview, "destructiveHint": false, "openWorldHint": true,

@@ -4148,5 +4148,9 @@
 	"teams.accessVia": "{{access}} · via {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} a partagé {{thing}} avec {{team}}",
 	"teams.sharedToastWithYou": "{{name}} a partagé {{thing}} avec vous",
-	"teams.open": "Ouvrir"
+	"teams.open": "Ouvrir",
+	"chat.reminders.label": "Relances planifiées",
+	"chat.reminders.cancel": "Annuler la relance",
+	"chat.reminders.cancelFailed": "Impossible d'annuler la relance.",
+	"chat.reminders.item": "{{time}} : {{label}}"
 }

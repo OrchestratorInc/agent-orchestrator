@@ -4060,5 +4060,9 @@
 	"teams.accessVia": "{{access}} · {{team}} 経由",
 	"teams.sharedToastViaTeam": "{{name}} が {{thing}} を {{team}} と共有しました",
 	"teams.sharedToastWithYou": "{{name}} が {{thing}} をあなたと共有しました",
-	"teams.open": "開く"
+	"teams.open": "開く",
+	"chat.reminders.label": "予定されたフォローアップ",
+	"chat.reminders.cancel": "フォローアップをキャンセル",
+	"chat.reminders.cancelFailed": "フォローアップをキャンセルできませんでした。",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

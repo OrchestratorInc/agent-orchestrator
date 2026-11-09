@@ -4229,5 +4229,9 @@
 	"teams.accessVia": "{{access}} · через {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} открывает команде {{team}} доступ к «{{thing}}»",
 	"teams.sharedToastWithYou": "{{name}} открывает вам доступ к «{{thing}}»",
-	"teams.open": "Открыть"
+	"teams.open": "Открыть",
+	"chat.reminders.label": "Запланированные напоминания",
+	"chat.reminders.cancel": "Отменить напоминание",
+	"chat.reminders.cancelFailed": "Не удалось отменить напоминание.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }
