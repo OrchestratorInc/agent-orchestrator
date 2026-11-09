@@ -120,7 +120,7 @@ export function ArtifactActionsMenu({
 	const sharing = useRef(false);
 	const shareAvailable = useShareAvailable();
 	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
-	const actionClassName = cn(className, menuOpen && "opacity-100 [@media(hover:hover)]:opacity-100");
+	const actionClassName = cn(className, (menuOpen || shareOpen) && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
 	const sidebar = variant === "sidebar";
