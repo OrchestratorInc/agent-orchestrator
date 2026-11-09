@@ -228,5 +228,6 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	if summary.Title != "" {
 		t.title = summary.Title
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }

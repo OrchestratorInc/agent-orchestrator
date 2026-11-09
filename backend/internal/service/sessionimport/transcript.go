@@ -607,7 +607,8 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
 
 // finishTranscript rejects a relative working directory, dates

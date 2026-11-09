@@ -644,7 +644,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	for _, c := range preview.Candidates {
 		if c.SessionID == "" {
 			key := [2]string{string(c.ProjectID), c.Folder}
-			if listed[key]++; listed[key] > maxChatsPerProject {
+			listed[key]++
+			if listed[key] > maxChatsPerProject {
 				delete(selected, c.ID)
 				continue
 			}

@@ -312,7 +312,8 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 	if len(t.messages) == 0 {
 		return t, errors.New("no readable gemini conversation")
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
 
 func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {

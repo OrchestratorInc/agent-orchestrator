@@ -249,5 +249,6 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted {
 		return t, errNoReadableConversation
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }

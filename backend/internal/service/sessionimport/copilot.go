@@ -268,7 +268,8 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 	if metadata.Name != "" {
 		t.title = metadata.Name
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
 
 func readCopilotWorkspace(root *os.Root, sessionDir string) copilotWorkspace {

@@ -222,5 +222,6 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 	if name != "" {
 		t.title = name
 	}
-	return t, finishTranscript(&t)
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
