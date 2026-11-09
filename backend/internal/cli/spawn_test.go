@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -1170,5 +1171,81 @@ func TestSpawnEffortSurfacesDaemonUnsupportedEffort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "UNSUPPORTED_EFFORT") || !strings.Contains(err.Error(), "effort is only supported") {
 		t.Fatalf("err=%v, want daemon UNSUPPORTED_EFFORT envelope", err)
+	}
+}
+
+// spawnStartServer answers a project spawn as provisioning, then reports the
+// given provision states one GET at a time.
+func spawnStartServer(t *testing.T, states []string, requests *[]string, spawnBody *map[string]any) *httptest.Server {
+	t.Helper()
+	polls := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		appendPrimaryRequest(requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(spawnBody)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"spawning","provisionState":"provisioning"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-9":
+			state := states[min(polls, len(states)-1)]
+			polls++
+			body := map[string]any{"id": "demo-9", "status": "working", "provisionState": state, "isTerminated": false}
+			if state == "failed" {
+				body["provisionError"] = "git worktree add failed"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"session": body})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+// `ao spawn` takes the async start, so the session opens as starting with its
+// prompt shown, and still answers only once the agent is running.
+func TestSpawnWaitsForBackgroundStart(t *testing.T) {
+	cfg := setConfigEnv(t)
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+	var requests []string
+	var body map[string]any
+	srv := spawnStartServer(t, []string{"provisioning", "ready"}, &requests, &body)
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
+	if err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if body["async"] != true {
+		t.Fatalf("spawn body = %v, want async", body)
+	}
+	if !strings.Contains(out, "spawned session demo-9") || !strings.Contains(out, "(working)") {
+		t.Fatalf("output = %q, want the started session's status", out)
+	}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions", "GET /api/v1/sessions/demo-9", "GET /api/v1/sessions/demo-9"}
+	if !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
+// A start that fails in the background still fails the command, with the
+// daemon's reason.
+func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
+	cfg := setConfigEnv(t)
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+	var requests []string
+	var body map[string]any
+	srv := spawnStartServer(t, []string{"failed"}, &requests, &body)
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
+	if err == nil || !strings.Contains(err.Error(), "session demo-9 failed to start: git worktree add failed") {
+		t.Fatalf("err = %v, want the start failure reason", err)
 	}
 }

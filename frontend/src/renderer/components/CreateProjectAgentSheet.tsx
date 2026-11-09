@@ -7,7 +7,7 @@ import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, TriangleAlert, X, type AppIcon } from "@/components/app-icons";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -395,14 +395,9 @@ function ProjectSheetCloseButton({
 }) {
 	return (
 		<Dialog.Close asChild>
-			<button
-				type="button"
-				className="settings-close-button"
-				aria-label={ariaLabel}
-				disabled={disabled}
-			>
+			<Button type="button" variant="quiet" size="icon" aria-label={ariaLabel} disabled={disabled}>
 				{children}
-			</button>
+			</Button>
 		</Dialog.Close>
 	);
 }
@@ -431,7 +426,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	disabled?: boolean;
 	/** Caption beside the label, e.g. naming where a preselected default came from. */
 	hint?: string;
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	id: string;
 	invalid?: boolean;
 	label: string;

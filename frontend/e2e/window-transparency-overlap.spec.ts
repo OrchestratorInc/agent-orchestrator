@@ -61,11 +61,14 @@ for (const theme of ["dark", "light"]) {
 
 			const toggle = page.getByRole("button", { name: "Archive, 8 sessions", exact: true });
 			const archive = toggle.locator("../..");
-			await expectSurfaceTransparency(archive, transparency);
+			// Light keeps the center panel solid in a translucent window (only the
+			// sidebar chrome is frosted), so the board's archive is opaque there.
+			const centerClear = transparency && theme === "dark";
+			await expectSurfaceTransparency(archive, centerClear);
 			await toggle.click();
 			await expect(toggle).toHaveAttribute("aria-expanded", "true");
 			await expect(page.getByRole("list", { name: "Archived sessions" })).toBeVisible();
-			await expectSurfaceTransparency(archive, transparency);
+			await expectSurfaceTransparency(archive, centerClear);
 			await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'));
 			await toggle.click();
 			await expect(toggle).toHaveAttribute("aria-expanded", "false");

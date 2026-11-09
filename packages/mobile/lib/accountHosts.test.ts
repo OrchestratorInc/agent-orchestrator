@@ -23,6 +23,8 @@ vi.mock("./hosts", () => ({
 }));
 
 import { cancelAccountHostSync, clearAccountHosts, ignoreAccountHost, syncAccountHosts, unignoreAccountHost } from "./accountHosts";
+import type { Endpoint } from "./endpoints";
+import { mergeEndpoints } from "./mergeEndpoints";
 
 const account = { id: "user-a", email: "person@example.com" };
 const token = "a".repeat(64);
@@ -158,6 +160,39 @@ it("retains the chosen host appearance when an account tunnel changes", async ()
 	await syncAccountHosts(account);
 	expect(saved.hosts[0]?.appearance).toEqual({ symbol: "mac-mini" });
 	expect(saved.hosts[0]?.lastConnected).toBe(42);
+});
+
+it("keeps the routes a connect added to an account machine across later syncs", async () => {
+	// Every connect merges the machine's advertised routes beside the listed
+	// address. Resetting them on each 30 s sync changed the saved routes twice
+	// a tick, and each change restarted the machine's connection.
+	const tunnel = { kind: "tunnel", host: "h-00000000000000000011.useao.dev", port: 443, secure: true } as const;
+	const item = { ...host("h_00000000-0000-0000-0000-000000000011"), url: "https://h-00000000000000000011.useao.dev:443" };
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]?.endpoints).toEqual([tunnel]);
+	const advertised: Endpoint[] = [
+		{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false },
+		{ kind: "tailscale", host: "100.64.0.20", port: 3011, secure: false },
+		tunnel,
+	];
+	const connected = { ...saved.hosts[0]!, endpoints: mergeEndpoints(saved.hosts[0]!.endpoints, advertised) };
+	saved.hosts = [connected];
+	await syncAccountHosts(account);
+	await syncAccountHosts(account);
+	expect(saved.hosts).toEqual([connected]);
+	expect(saved.hosts[0]).toBe(connected);
+});
+
+it("replaces an account machine's routes when its listed address moves", async () => {
+	const item = { ...host("h_00000000-0000-0000-0000-000000000012"), url: "https://h-00000000000000000012.useao.dev:443" };
+	saved.hosts = [{ id: item.hostId, name: item.label, platform: "darwin", token, lastConnected: 0, accountUserId: account.id, endpoints: [
+		{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false },
+		{ kind: "tunnel", host: "h-000000000000000000ff.useao.dev", port: 443, secure: true },
+	] }];
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tunnel", host: "h-00000000000000000012.useao.dev", port: 443, secure: true }]);
 });
 
 it("does not replace a phone's chosen machine name with the account directory label", async () => {

@@ -59,10 +59,8 @@ export function sizingGeometryEqual(a: InspectorSizing, b: InspectorSizing): boo
 // changes where the inspector's data comes from, not how its rail behaves.
 export function SessionInspectorRail({
 	sessionKey,
-	showCollapsedHandle = true,
 	children,
 	isOpen,
-	onExpand,
 	onCloseAnimationComplete,
 	restoreMinWidth,
 	sizing,
@@ -70,10 +68,8 @@ export function SessionInspectorRail({
 	splitRef,
 }: {
 	sessionKey: string;
-	showCollapsedHandle?: boolean;
 	children: ReactNode;
 	isOpen: boolean;
-	onExpand: () => void;
 	onCloseAnimationComplete?: () => void;
 	restoreMinWidth?: number;
 	sizing: InspectorSizing;
@@ -98,7 +94,7 @@ export function SessionInspectorRail({
 		return inspectorMaxWidthPx(available, sizing.maxPercent, sizing.chatMinWidth) ?? sizing.defaultWidth;
 	}, [sizing.chatMinWidth, sizing.defaultWidth, sizing.maxPercent, splitRef]);
 	const getResizeTargets = useCallback(() => [gapRef.current, panelRef.current], []);
-	const { onPointerDown, onCollapsedPointerDown, onDoubleClick } = useResizable({
+	const { onPointerDown, onDoubleClick } = useResizable({
 		cssVar: inspectorWidthVar,
 		getCssTargets: getResizeTargets,
 		storageKey: sizing.storageKey,
@@ -106,7 +102,6 @@ export function SessionInspectorRail({
 		min: minWidth,
 		max: maxWidth,
 		edge: "left",
-		onExpand,
 		restoreMin: restoreMinWidth,
 		// Restore the preferred width after a narrow window or zoom level widens again.
 		reclampOnWindowResize: true,
@@ -171,6 +166,5 @@ export function SessionInspectorRail({
 			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 			<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{children}</div>
 		</div>
-		{isOpen || !showCollapsedHandle ? null : <div className="absolute inset-y-0 right-0 z-chrome w-2 cursor-e-resize touch-none" data-slot="inspector-collapsed-rail" data-testid="inspector-collapsed-rail" onPointerDown={onCollapsedPointerDown} style={noDragStyle} />}
 	</>;
 }

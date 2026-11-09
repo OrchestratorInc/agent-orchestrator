@@ -1,7 +1,7 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
+import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useMigrationOffer } from "../hooks/useMigrationOffer";
@@ -27,6 +27,9 @@ import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 /**
  * Home landing layout contracts (do not regress without explicit design sign-off):
@@ -49,7 +52,7 @@ import { Badge } from "./ui/badge";
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
-	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 text-left transition-[scale,background-color] duration-fast ease-out hover:bg-accent hover:text-foreground active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transform-none";
+	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 transition-[background-color] duration-fast ease-out hover:bg-accent hover:text-foreground";
 const HOME_ICON_SLOT_CLASS =
 	"grid size-8 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4";
 const HOME_PROJECT_ICON_CLASS =
@@ -86,19 +89,17 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
 
 	return (
-		<button
+		<Pressable
 			// Host must use NAV_ROW_HIGHLIGHT_HOST_CLASS — pill owns the fill.
 			className={cn(
-				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-left text-muted-foreground",
-				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-muted-foreground",
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
-			type="button"
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
-				{project.folderMissing ? <AlertTriangle strokeWidth={1.8} className="text-warning" /> : <Folder strokeWidth={1.8} />}
+				{project.folderMissing ? <AlertTriangle className="text-warning" /> : <Folder />}
 			</span>
 			<span className="relative z-[1] min-w-0 text-sm leading-5">
 				<span className="flex items-center gap-1.5">
@@ -111,7 +112,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 			<span className="relative z-[1] ml-auto shrink-0 text-right text-caption tabular-nums text-muted-foreground">
 				{relativeProjectTime(latestProjectFact, emptyTimeLabel)}
 			</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -127,20 +128,16 @@ function HomeActionCard({
 	onClick?: () => void;
 }) {
 	return (
-		<button
-			className={cn(
-				HOME_BUTTON_CLASS,
-				"disabled:pointer-events-none disabled:opacity-50",
-			)}
+		<Pressable
+			className={cn(HOME_BUTTON_CLASS, "disabled:pointer-events-none disabled:opacity-50")}
 			disabled={disabled}
 			onClick={onClick}
-			type="button"
 		>
 			<span className={HOME_ICON_SLOT_CLASS} aria-hidden="true">
 				{icon}
 			</span>
 			<span className="min-w-0 text-sm font-medium leading-5 text-foreground">{label}</span>
-		</button>
+		</Pressable>
 	);
 }
 
@@ -156,6 +153,7 @@ export function HomePage() {
 }
 
 function HomePageContent() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
@@ -275,49 +273,50 @@ function HomePageContent() {
 	}
 
 	return (
-		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
+		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
 					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
-							<button
-								className="inline-flex shrink-0 items-center gap-1.5 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground hover:border-current hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							<Button
+								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}
 								type="button"
+								variant="link"
 							>
-								<Star className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+								<Star className="size-3.5" aria-hidden="true" />
 								{t("home.starUs")}
-							</button>
+							</Button>
 						</div>
 
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
-								icon={<GitFork strokeWidth={1.8} />}
+								icon={<GitFork />}
 								label={t("createProject.cloneFromGit")}
 								onClick={() => requestSource("clone")}
 							/>
 							<HomeActionCard
-								icon={<FolderOpen strokeWidth={1.8} />}
+								icon={<FolderOpen />}
 								label={t("createProject.openLocal")}
 								onClick={() => requestSource("local")}
 							/>
 							<HomeActionCard
-								icon={<Folders strokeWidth={1.8} />}
+								icon={<Folders />}
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
 							{/* Cloud is on for everyone a control plane is configured for. */}
 							{cloudEnabled ? (
 								<HomeActionCard
-									icon={<Cloud strokeWidth={1.8} />}
+									icon={<Cloud />}
 									label={t("createProject.cloudTitle")}
 									onClick={() => requestSource("cloud")}
 								/>
 							) : (
 								<HomeActionCard
-									icon={<MessageSquarePlus strokeWidth={1.8} />}
+									icon={<MessageSquarePlus />}
 									label={t("home.newStandaloneAgent")}
 									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 								/>

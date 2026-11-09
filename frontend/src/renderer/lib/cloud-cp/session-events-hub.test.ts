@@ -165,6 +165,25 @@ describe("subscribeCloudSessionEvents", () => {
 		expect(bridge.openStream).toHaveBeenCalledTimes(2);
 	});
 
+	it("reads as closed once the last stream listener leaves a listener that only reads the state", async () => {
+		const bridge = fakeBridge();
+		const reader = vi.fn();
+		// Something that only reads what an open Chat streams, such as New Task's orchestrator model.
+		subscribe(bridge, { onStateChange: reader });
+		const leaveChat = subscribe(bridge, { live: true, onEvent: vi.fn(), resumeAfter: () => 3 });
+		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(1));
+		bridge.emit("stream-1", { type: "chunk", data: `event: session.live\ndata: ${JSON.stringify(liveState)}\n\n` });
+		expect(cloudSessionEventsState(TARGET)).toEqual({ open: true, live: liveState });
+
+		leaveChat();
+		await vi.waitFor(() => expect(bridge.closeStream).toHaveBeenCalledWith("stream-1"));
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		// No stream is open, so a Chat mounting again polls rather than waiting on one.
+		expect(cloudSessionEventsState(TARGET)).toEqual({ open: false, live: undefined });
+		expect(reader).toHaveBeenLastCalledWith({ open: false, live: undefined });
+		expect(bridge.openStream).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps sessions apart", async () => {
 		const bridge = fakeBridge();
 		subscribe(bridge, { onEvent: vi.fn() });

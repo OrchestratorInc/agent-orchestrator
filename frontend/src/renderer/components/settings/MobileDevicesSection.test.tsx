@@ -70,7 +70,7 @@ describe("MobileDevicesSection", () => {
 		renderSection();
 
 		const removeButton = await screen.findByRole("button", { name: /remove iPhone/i });
-		expect(removeButton.querySelector(".lucide-trash-2")).toBeInTheDocument();
+		expect(removeButton.querySelector(".icon-trash-2")).toBeInTheDocument();
 		fireEvent.click(removeButton);
 
 		// The row turns into a "removed · Undo" row right away; nothing is sent yet.

@@ -55,5 +55,4 @@ export function terminalPayload(text: string): string {
 
 /** Shown once after an automatic reroute, so the switch is never silent. */
 export const REROUTED_NOTICE = "Agent was paused on a prompt — sent straight to the terminal.";
-export const TERMINAL_MODE_NOTICE = "Sending composer text straight to the terminal.";
 export const TERMINAL_UNAVAILABLE_NOTICE = "Terminal is not connected yet — text was not sent.";

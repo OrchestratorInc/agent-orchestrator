@@ -8,11 +8,13 @@ import { BridgeError, isRecord } from "./protocol";
 
 const APPROVALS_KEY = "aoApprovals";
 const DENIALS_KEY = "aoDenials";
+/** Approval entry for "allow every AO session in this Chrome". */
+const ALL_SESSIONS = "*";
 const CONSENT_TIMEOUT_MS = 120_000;
 const DENIAL_COOLDOWN_MS = 10 * 60_000;
 
 export type Approval = { approvedAt: number; trusted: boolean };
-export type ConsentDecision = { type: "ao-consent-decision"; sessionId: string; allow: boolean; trusted: boolean };
+export type ConsentDecision = { type: "ao-consent-decision"; sessionId: string; allow: boolean; trusted: boolean; allSessions?: boolean };
 
 type Pending = {
 	promise: Promise<Approval>;
@@ -58,7 +60,8 @@ export class ConsentManager {
 
 	/** Resolve once the session is allowed; ask the user if it is not. */
 	async ensure(sessionId: string): Promise<Approval> {
-		const approval = (await this.approvals())[sessionId];
+		const approvals = await this.approvals();
+		const approval = approvals[sessionId] ?? approvals[ALL_SESSIONS];
 		if (approval) return approval;
 		const denials = await this.denials();
 		const deniedUntil = denials[sessionId];
@@ -109,7 +112,7 @@ export class ConsentManager {
 		if (decision.allow) {
 			const approvals = await this.approvals();
 			const approval = { approvedAt: this.now(), trusted: decision.trusted };
-			approvals[decision.sessionId] = approval;
+			approvals[decision.allSessions === true ? ALL_SESSIONS : decision.sessionId] = approval;
 			await this.chrome.storage.local.set({ [APPROVALS_KEY]: approvals });
 			const denials = await this.denials();
 			delete denials[decision.sessionId];
@@ -124,10 +127,20 @@ export class ConsentManager {
 		if (pending?.windowId !== undefined) await this.chrome.windows.remove(pending.windowId).catch(() => undefined);
 	}
 
-	/** Revoke one session, or every session (the kill switch). */
-	async revoke(sessionId?: string): Promise<void> {
+	/** The approval a session runs under, if any. */
+	approvalFor(approvals: Record<string, Approval>, sessionId: string): Approval | undefined {
+		return approvals[sessionId] ?? approvals[ALL_SESSIONS];
+	}
+
+	/**
+	 * Revoke one session, or every session (the kill switch). A session ending
+	 * leaves "allow every session" alone; a person revoking one session also
+	 * ends it, or that session would stay allowed.
+	 */
+	async revoke(sessionId?: string, includeAllSessions = false): Promise<void> {
 		const approvals = sessionId ? await this.approvals() : {};
 		if (sessionId) delete approvals[sessionId];
+		if (includeAllSessions) delete approvals[ALL_SESSIONS];
 		await this.chrome.storage.local.set({ [APPROVALS_KEY]: approvals });
 		for (const [id, pending] of this.pending) {
 			if (sessionId && id !== sessionId) continue;

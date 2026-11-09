@@ -1015,6 +1015,11 @@ const (
 	// ChatEventThreadState reports the provider's own lifecycle view of the thread:
 	// working, idle, archived, closed.
 	ChatEventThreadState ChatEventKind = "thread.state"
+	// ChatEventProviderState reports that the provider itself started or finished
+	// work (ThreadState.Status active or idle). It exists for work AO did not
+	// start: a cycle the agent runs on its own after a turn has no turn events,
+	// so this is the only sign that the agent is busy.
+	ChatEventProviderState ChatEventKind = "provider.state"
 	// ChatEventMCPServers reports the startup state of the tool servers this
 	// conversation can reach, which is what explains a tool call that failed for a
 	// reason the agent had no part in.
@@ -1150,7 +1155,7 @@ type ChatEvent struct {
 	Reroute *ChatModelReroute
 	// Account is set on account.changed.
 	Account *ChatAccount
-	// ThreadState is set on thread.state.
+	// ThreadState is set on thread.state and provider.state.
 	ThreadState *ChatThreadState
 	// MCPServers is set on mcp.servers. A single-server update carries one entry:
 	// the provider reports servers one at a time, so a consumer merges by name

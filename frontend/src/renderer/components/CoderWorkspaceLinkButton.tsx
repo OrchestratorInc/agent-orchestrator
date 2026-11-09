@@ -1,4 +1,4 @@
-import { SquareArrowOutUpRight } from "lucide-react";
+import { SquareArrowOutUpRight } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { TopbarButton } from "./TopbarButton";
@@ -19,10 +19,9 @@ export function CoderWorkspaceLinkButton({ url }: { url?: string }) {
 			<TooltipTrigger asChild>
 				<Button
 					type="button"
-					variant="ghost"
+					variant="quiet"
 					size="icon-sm"
 					aria-label={label}
-					className="text-muted-foreground hover:text-foreground"
 					data-testid="coder-workspace-link"
 					onClick={() => void openLinkInSystemBrowser(url)}
 				>

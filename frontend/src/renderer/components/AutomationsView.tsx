@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
@@ -15,6 +16,7 @@ import {
 	DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -126,9 +128,9 @@ export function AutomationsView() {
 						<Input type="search" aria-label={t("automations.search")} placeholder={t("automations.search")} value={search} onChange={(event) => setSearch(event.target.value)} className="h-8 pl-9 text-xs" />
 					</div>
 					<div className="mb-3 flex items-center gap-1" role="group" aria-label={t("automations.filter.label")}>
-						{(["all", "enabled", "paused"] as const).map((value) => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn("inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60", filter === value ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground")}>
+						{(["all", "enabled", "paused"] as const).map((value) => <Button key={value} type="button" variant="quiet" size="sm" aria-pressed={filter === value} onClick={() => setFilter(value)} className="gap-2">
 							{t(`automations.filter.${value}`)}{" "}<span className="text-[10px] tabular-nums text-muted-foreground">{value === "all" ? automations.length : automations.filter((item) => value === "enabled" ? item.enabled : !item.enabled).length}</span>
-						</button>)}
+						</Button>)}
 					</div>
 					<div className="overflow-hidden rounded-lg border border-border bg-background">
 						<div className="hidden grid-cols-[minmax(0,1fr)_180px_160px_132px] items-center gap-4 border-b border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground lg:grid" aria-hidden="true">
@@ -159,11 +161,11 @@ const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_
 function TemplateCard({ id, onSelect }: { id: Exclude<AutomationTemplateID, "custom">; onSelect: () => void }) {
 	const { t } = useTranslation();
 	const Icon = TEMPLATE_ICONS[id];
-	return <button type="button" aria-label={t(`automations.template.${id}`)} onClick={onSelect}
-		className="group flex min-w-0 flex-col rounded-lg border border-border bg-background p-4 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none">
+	return <Pressable aria-label={t(`automations.template.${id}`)} onClick={onSelect}
+		className="group flex min-w-0 flex-col rounded-lg border border-border bg-background p-4 transition-colors hover:bg-muted/30 motion-reduce:transition-none">
 		<span className="flex items-center gap-2 text-[13px] font-medium"><Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />{t(`automations.template.${id}`)}</span>
 		<span className="mt-2 text-xs leading-5 text-muted-foreground">{t(`automations.template.${id}.description`)}</span>
-	</button>;
+	</Pressable>;
 }
 
 function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
@@ -190,15 +192,15 @@ function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, o
 	const historyId = `automation-history-${item.id}`;
 	return <article className="group border-b border-border last:border-b-0">
 		<div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(0,1fr)_180px_160px_132px]", expanded ? "bg-muted/30" : "hover:bg-muted/20")}>
-			<button type="button" className="flex min-w-0 items-center gap-2.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
+			<Pressable className="flex min-w-0 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
 				<div className="min-w-0"><h2 className="truncate text-[13px] font-medium leading-5 text-foreground">{item.displayName}</h2><p className="truncate text-[11px] leading-5 text-muted-foreground">{projectName}</p></div>
-			</button>
+			</Pressable>
 			<div className="col-start-1 flex items-start gap-2 pl-6 text-xs lg:col-start-auto lg:pl-0"><CalendarClock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div><p className="capitalize">{scheduleLabel}{clockTime ? ` · ${clockTime}` : ""}</p></div></div>
 			<div className="col-start-1 pl-6 text-xs lg:col-start-auto lg:pl-0"><span className="mr-2 text-muted-foreground lg:hidden">{t("automations.nextRun")}</span><span className={cn("tabular-nums", !item.enabled && "text-muted-foreground")}>{item.enabled ? displayTime(item.nextRunAt, i18n.resolvedLanguage) : t("automations.paused")}</span>{item.latestRun ? <p className="mt-1 text-[11px] capitalize text-muted-foreground">{item.latestRun.status}</p> : null}</div>
 			<div className="col-start-2 row-start-1 row-span-3 flex items-center justify-end gap-1 lg:col-start-auto lg:row-start-auto lg:row-span-1">
-				<Button variant="ghost" size="icon-sm" className="text-muted-foreground lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
-				<Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
+				<Button variant="quiet" size="icon-sm" className="lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
+				<Button variant="destructive-ghost" size="icon-sm" className="lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
 				<Switch checked={item.enabled} disabled={busy} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
 			</div>
 		</div>
@@ -456,14 +458,7 @@ function AutomationFormDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent showCloseButton={false} className={centeredOnboardingDialogClass}>
 				<DialogClose asChild>
-					<button
-						type="button"
-						disabled={busy}
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("automations.create.close")}
-					>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating disabled={busy} aria-label={t("automations.create.close")} />
 				</DialogClose>
 
 				<DialogTitle className="settings-dialog-title px-4 pr-12 pt-3">

@@ -1,4 +1,4 @@
-import { Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, Copy, LoaderCircle, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
