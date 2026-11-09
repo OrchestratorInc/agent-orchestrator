@@ -391,6 +391,31 @@ func TestSideOrchestratorReconstructedContextKeepsNewestHistoryPastLimit(t *test
 	}
 }
 
+func TestSideReconstructedContextOmitsOversizedNewestTurn(t *testing.T) {
+	const omissionNote = "[Earlier main-chat history omitted: it exceeds the side-chat reconstruction limit.]\n"
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessOpenCode} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			h := newSideWorkflow(t, "", harnessType)
+			h.source(t)
+			turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: "oversized newest turn", ClientMessageID: "oversized", Origin: domain.MessageOriginHuman})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "oversized-reply", Text: strings.Repeat("x", 512*1024+1)}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return len(s.Messages) == 4 && s.Turns[1].State == domain.TurnStateCompleted
+			})
+			side := h.side(t, "oversized", true)
+			if side.ContextMode != "reconstructed" {
+				t.Fatalf("mode=%s", side.ContextMode)
+			}
+			if side.SeedHistory != omissionNote {
+				t.Fatalf("seed history has %d bytes, want only the omission note", len(side.SeedHistory))
+			}
+		})
+	}
+}
+
 func TestSideProviderFailurePausesQueueUntilExplicitRetry(t *testing.T) {
 	h := newSideWorkflow(t, "")
 	h.source(t)
