@@ -21,11 +21,6 @@ export type BannerCopy = {
 };
 
 /**
- * The desktop's one-line tool-server note (`chat.mcpNotice.unavailable`): which
- * servers did not start, and that the agent carries on without them. There is
- * nothing to do from the conversation, so no reason text and no action.
- */
-/**
  * Which run of a session the tool-server note belongs to: the machine, the
  * session, and when it was created, as the desktop keys on `session.createdAt`.
  * A restarted session starts its tool servers again, so it gets its own note.
@@ -34,6 +29,11 @@ export function mcpNoticeKey(hostId: string | undefined, sessionId: string, crea
 	return `${hostId ?? ""}:${sessionId}:${createdAt ?? ""}`;
 }
 
+/**
+ * The desktop's one-line tool-server note (`chat.mcpNotice.unavailable`): which
+ * servers did not start, and that the agent carries on without them. There is
+ * nothing to do from the conversation, so no reason text and no action.
+ */
 export function mcpNoticeText(servers: readonly McpServer[]): string | undefined {
 	if (servers.length === 0) return undefined;
 	const names = servers.map((server) => server.name.charAt(0).toUpperCase() + server.name.slice(1)).join(", ");
