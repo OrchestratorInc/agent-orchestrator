@@ -405,6 +405,7 @@ type Manager struct {
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness      ports.AgentReadinessProvider
 	backgroundTaskUsage BackgroundTaskUsage
+	usageFlusher        UsageFlusher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -654,6 +655,16 @@ type BackgroundTaskUsage interface {
 // SetBackgroundTaskUsage completes daemon wiring before request handling begins.
 func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
 	m.backgroundTaskUsage = usage
+}
+
+// UsageFlusher stores the usage AO has not read yet.
+type UsageFlusher interface {
+	Flush(ctx context.Context)
+}
+
+// SetUsageFlusher completes daemon wiring before request handling begins.
+func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
+	m.usageFlusher = flusher
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.

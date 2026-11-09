@@ -437,6 +437,28 @@ func TestDeleteSession_CleansUpFirst(t *testing.T) {
 	}
 }
 
+func TestDeleteSession_FlushesUsageBeforeTheRecordGoes(t *testing.T) {
+	m, st, _, _ := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{})
+	recordAtFlush := false
+	m.SetUsageFlusher(usageFlusherFunc(func(context.Context) {
+		_, recordAtFlush = st.sessions["mer-1"]
+	}))
+	if err := m.DeleteSession(ctx, "mer-1", false); err != nil {
+		t.Fatalf("DeleteSession = %v", err)
+	}
+	if !recordAtFlush {
+		t.Fatal("usage was not flushed while the session record still existed")
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("session survived its delete")
+	}
+}
+
+type usageFlusherFunc func(context.Context)
+
+func (f usageFlusherFunc) Flush(ctx context.Context) { f(ctx) }
+
 func TestDeleteSession_RefusesWhileAnotherOperationRuns(t *testing.T) {
 	m, st, _, _ := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{})

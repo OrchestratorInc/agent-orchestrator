@@ -779,6 +779,73 @@ func TestCoordinatorCollectsCodexUsageFromFilesystemEvents(t *testing.T) {
 	waitForFlushedTokenAggregate(t, coordinator, store, session.ID, 180)
 }
 
+func TestFlushBeforeDeleteKeepsUnreadUsageInAccountTotals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Now().UTC()
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessCodex, domain.ActivityIdle, "native-delete", now,
+	)
+	base := t.TempDir()
+	roots := usagesvc.SourceRoots{
+		CodexSessions: filepath.Join(base, "sessions"),
+		CodexArchived: filepath.Join(base, "archived_sessions"),
+	}
+	transcript := filepath.Join(roots.CodexSessions, "2026", "07", "28", "rollout-native-delete.jsonl")
+	mustNoError(t, os.MkdirAll(filepath.Dir(transcript), 0o700))
+	initial := string(codexSessionMetaLine(t, "native-delete", "")) + "\n" +
+		`{"type":"turn_context","payload":{"model":"gpt-5.6"}}` + "\n"
+	mustNoError(t, os.WriteFile(transcript, []byte(initial), 0o600))
+
+	watcher, err := NewTranscriptWatcher(ctx, []string{roots.CodexSessions, roots.CodexArchived})
+	mustNoError(t, err)
+	var coordinator *Coordinator
+	collector := usagesvc.NewCollector(store, roots, func(bool) { coordinator.NotifyInventoryChanged() })
+	coordinator = NewCoordinator(store, NewIngestor(store, IngestorConfig{ChunkBytes: 512}), watcher, CoordinatorConfig{
+		Workers:    1,
+		Initialize: collector.BackfillActive,
+	})
+	done := coordinator.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("usage coordinator did not stop")
+		}
+	})
+
+	waitForWatchableSource(ctx, t, store, transcript)
+	for n := int64(1); n <= 20; n++ {
+		appendJSONLRecord(t, transcript, codexTokenLine(fmt.Sprintf("2026-07-28T10:%02d:00Z", n), 100*n, 60*n, 0, 20*n, 5*n))
+	}
+	rec, ok, err := store.GetSession(ctx, session.ID)
+	mustNoError(t, err)
+	if !ok {
+		t.Fatal("session missing before finalization")
+	}
+	mustNoError(t, collector.FinalizeSession(ctx, rec.ID, rec.Metadata.RuntimeLaunchID, rec.Revision))
+	rec.IsTerminated = true
+	mustNoError(t, store.UpdateSession(ctx, rec))
+
+	flushCtx, flushCancel := context.WithTimeout(ctx, 5*time.Second)
+	coordinator.Flush(flushCtx)
+	flushCancel()
+	deleted, err := store.DeleteTerminatedSession(ctx, rec.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete session = %v, %v", deleted, err)
+	}
+	rows, err := store.AgentAccountUsageSince(ctx, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))
+	mustNoError(t, err)
+	var total int64
+	for _, row := range rows {
+		total += row.InputTokens + row.OutputTokens
+	}
+	if total != 2400 {
+		t.Fatalf("account usage after delete = %d tokens, want 2400; rows=%+v", total, rows)
+	}
+}
+
 func TestIngestorPersistsAppendOnlyUsageAcrossRestartAndFinalization(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()

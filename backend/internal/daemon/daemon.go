@@ -956,6 +956,11 @@ func Run(buildVersion string) error {
 		}); ok {
 			wired.SetBackgroundTaskUsage(usageCollector)
 		}
+		if wired, ok := sessMgr.(interface {
+			SetUsageFlusher(sessionmanager.UsageFlusher)
+		}); ok {
+			wired.SetUsageFlusher(usagePipeline)
+		}
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
