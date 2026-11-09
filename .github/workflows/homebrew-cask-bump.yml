@@ -1,0 +1,159 @@
+name: Homebrew cask bump
+
+# Opens a version-bump PR on Homebrew/homebrew-cask for cask `agent-orchestrator`
+# after a stable desktop release is published, but only when Homebrew is not
+# already bumping it. As of Nov 2026 the cask is on Homebrew's autobump list
+# (https://formulae.brew.sh/api/cask/agent-orchestrator.json has
+# "autobump": true), so BrewTestBot opens the bump PR within about 3 hours of a
+# stable release and this job skips with a notice. It takes over if the cask
+# ever gets `no_autobump!` or a livecheck `skip`.
+#
+# Release rules the cask depends on (breaking any of them breaks `brew install`):
+#   1. Keep the versioned macOS zip asset names on every stable release:
+#        Agent.Orchestrator-darwin-arm64-<version>.zip
+#        Agent.Orchestrator-darwin-x64-<version>.zip
+#      under the tag v<version>. The cask URL is built from exactly these.
+#      Upload both before publishing: BrewTestBot can pick a release up as
+#      soon as it is /releases/latest.
+#   2. Keep nightlies (v*-nightly.*) and every other pre-release marked
+#      pre-release. The cask's livecheck (used by BrewTestBot) reads GitHub's
+#      /releases/latest, and this workflow only runs for non-prerelease releases.
+#   3. Never re-upload or replace assets on a published release. The cask pins
+#      each zip's sha256, so a changed file fails every install of that version.
+#      Ship a new version instead.
+#
+# Non-blocking by design: the release is already published when this runs, and
+# the bump step is continue-on-error, so a Homebrew failure never fails a release.
+#
+# Needs the repository secret HOMEBREW_GITHUB_API_TOKEN: a classic personal
+# access token with the `public_repo` and `workflow` scopes, owned by an account
+# that can fork Homebrew/homebrew-cask and open PRs there. Without it the job
+# skips with a notice.
+
+on:
+  release:
+    # `released` fires when a release is published as non-prerelease, or when a
+    # pre-release is promoted to a full release. It never fires for nightlies.
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable version to bump the cask to (e.g. 0.14.11, no leading v)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-cask-bump
+  cancel-in-progress: false
+
+jobs:
+  bump-cask:
+    # Only the canonical repo publishes desktop releases.
+    if: ${{ !github.event.repository.fork }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve and check the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${EVENT_TAG:-}" ]]; then
+            tag="$EVENT_TAG"
+          else
+            tag="v${INPUT_VERSION#v}"
+          fi
+
+          # Stable semver only. Nightlies (v*-nightly.*) and any other
+          # pre-release suffix are rejected here as well as by the event type.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice::Skipping Homebrew cask bump: '$tag' is not a stable vX.Y.Z tag."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version="${tag#v}"
+
+          release_json="$(gh release view "$tag" --repo "$REPO" --json isPrerelease,isDraft,assets)"
+          if [[ "$(jq -r '.isPrerelease or .isDraft' <<<"$release_json")" == "true" ]]; then
+            echo "::notice::Skipping Homebrew cask bump: release $tag is a draft or pre-release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The cask downloads these exact files; bumping without them would
+          # open a PR that fails Homebrew's audit.
+          for arch in arm64 x64; do
+            asset="Agent.Orchestrator-darwin-${arch}-${version}.zip"
+            if ! jq -e --arg n "$asset" 'any(.assets[]; .name == $n)' <<<"$release_json" >/dev/null; then
+              echo "::warning::Skipping Homebrew cask bump: release $tag has no asset '$asset'."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether BrewTestBot already autobumps the cask
+        id: autobump
+        if: steps.release.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Homebrew publishes each cask's autobump status in its API. While it
+          # is true, BrewTestBot opens the bump PR itself (about every 3 hours,
+          # via the cask's livecheck) and `brew bump-cask-pr` refuses to run.
+          autobump="$(curl -fsSL https://formulae.brew.sh/api/cask/agent-orchestrator.json | jq -r '.autobump // false')" || autobump="unknown"
+          if [[ "$autobump" == "true" ]]; then
+            echo "::notice::Skipping Homebrew cask bump: BrewTestBot autobumps agent-orchestrator, so it will open the PR for ${{ steps.release.outputs.version }} itself."
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check Homebrew token
+        id: token
+        if: steps.release.outputs.skip == 'false' && steps.autobump.outputs.enabled == 'false'
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "${HOMEBREW_GITHUB_API_TOKEN:-}" ]]; then
+            echo "::notice::Skipping Homebrew cask bump: repository secret HOMEBREW_GITHUB_API_TOKEN is not set."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open bump PR on Homebrew/homebrew-cask
+        if: steps.release.outputs.skip == 'false' && steps.autobump.outputs.enabled == 'false' && steps.token.outputs.present == 'true'
+        continue-on-error: true
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Commit as the token's owner, the account whose fork the PR comes from.
+          login="$(GH_TOKEN="$HOMEBREW_GITHUB_API_TOKEN" gh api user -q .login)"
+          id="$(GH_TOKEN="$HOMEBREW_GITHUB_API_TOKEN" gh api user -q .id)"
+          git config --global user.name "$login"
+          git config --global user.email "${id}+${login}@users.noreply.github.com"
+          # bump-cask-pr edits the cask in a local clone of the tap; runners
+          # install from the API and have no clone by default.
+          brew tap --force homebrew/cask
+          # Exits non-zero (and opens nothing) when the cask is already at this
+          # version or an open PR for it exists.
+          brew bump-cask-pr --no-browse --version "$VERSION" agent-orchestrator
