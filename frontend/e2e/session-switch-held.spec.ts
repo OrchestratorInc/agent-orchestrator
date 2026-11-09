@@ -161,6 +161,38 @@ async function recordShown(page: Page) {
 	});
 }
 
+type SwitchFrame = { at: number; route: string; inert: boolean; log: string };
+
+/** Records, from the next frame on, each change in route, held state and shown session. */
+async function recordSwitch(page: Page): Promise<() => Promise<SwitchFrame[]>> {
+	await page.evaluate((titles) => {
+		const state = window as unknown as { __switchFrames: SwitchFrame[]; __switchStop: boolean };
+		const started = performance.now();
+		state.__switchFrames = [];
+		state.__switchStop = false;
+		let last = "";
+		const tick = () => {
+			const text = document.querySelector('[role="log"][aria-label="Conversation"]')?.textContent ?? "";
+			const frame = {
+				at: Math.round(performance.now() - started),
+				route: location.hash.split("/").pop() ?? "",
+				inert: document.getElementById("session-workspace")?.hasAttribute("inert") ?? false,
+				log: titles.find((title) => text.includes(`Answer from ${title} 0.`)) ?? "none",
+			};
+			const key = `${frame.route}|${frame.inert}|${frame.log}`;
+			if (key !== last) state.__switchFrames.push(frame);
+			last = key;
+			if (!state.__switchStop) requestAnimationFrame(tick);
+		};
+		requestAnimationFrame(tick);
+	}, sessions.map((session) => session.title));
+	return () => page.evaluate(() => {
+		const state = window as unknown as { __switchFrames: SwitchFrame[]; __switchStop: boolean };
+		state.__switchStop = true;
+		return state.__switchFrames;
+	});
+}
+
 test.afterEach(async ({ page }) => {
 	// Leave the next test an unthrottled browser even if this one failed.
 	await throttle(page, 1).catch(() => undefined);
@@ -177,27 +209,24 @@ test("renderer: streaming replies keep updating through rapid session switches @
 		for (const session of [sessions[1], sessions[2], sessions[0], sessions[2], sessions[1], sessions[0], sessions[1]]) {
 			const clicked = Date.now();
 			const firstRequest = harness.requests.length;
+			const timeline = await recordSwitch(page);
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
-			await expect(page).toHaveURL(new RegExp(`/sessions/${session.id}$`));
-			const routed = Date.now() - clicked;
+			await expectShowing(page, session);
+			const frames = await timeline();
 			// A streaming session on screen must not stall the switch: every
 			// streamed update restarts the destination's background render, so
-			// the hold gives way after a bounded time. What follows is the
-			// destination's own render, which a throttled dev build makes slow,
-			// so only the hold is bounded here.
-			const diagnostics = () => `routed ${routed} ms; conversation fetches since click: ${harness.requests.slice(firstRequest)
-				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`)
-				.join(", ")}`;
-			try {
-				await expect.poll(() => page.evaluate((marker) => {
-					const held = document.getElementById("session-workspace")?.hasAttribute("inert") ?? false;
-					const text = document.querySelector('[role="log"][aria-label="Conversation"]')?.textContent ?? "";
-					return !held && !text.includes(marker);
-				}, `Answer from ${previous.title} 0.`), { timeout: 3_000 }).toBe(true);
-			} catch (error) {
-				throw new Error(`The previous session stayed on screen or inert; ${diagnostics()}`, { cause: error });
-			}
-			await expectShowing(page, session);
+			// the hold gives way after a bounded time. Routing before the hold
+			// and the destination's own render are a throttled dev build's speed,
+			// not the hold's, so only the hold itself is bounded.
+			const heldFrom = frames.find((frame) => frame.inert)?.at;
+			const heldUntil = heldFrom === undefined ? undefined : frames.find((frame) => frame.at > heldFrom && !frame.inert)?.at;
+			const fetches = harness.requests.slice(firstRequest)
+				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
+			const report = `frames (ms since click | route | inert | log): ${frames.map((frame) => `${frame.at} ${frame.route} ${frame.inert ? "inert" : "-"} ${frame.log}`).join("; ")}; conversation fetches: ${fetches.join(", ")}`;
+			if (heldFrom !== undefined) expect((heldUntil ?? Infinity) - heldFrom, `the hold outlasted its limit; ${report}`).toBeLessThan(2_000);
+			// Once the destination shows, the previous session never comes back.
+			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
+			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
 			previous = session;
 			// The shown session keeps streaming after the switch.
 			const seen = harness.chunks(session);
