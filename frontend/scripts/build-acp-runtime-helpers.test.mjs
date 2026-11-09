@@ -297,6 +297,8 @@ describe("patchClaudeContextUsage", () => {
 describe("patchClaudeContextWindowProbe", () => {
 	// The pinned adapter's top-level stream branch, as 0.70.0 ships it.
 	const streamBranch = `
+                switch (message.type) {
+                    case "stream_event": {
                         if (message.parent_tool_use_id === null &&
                             (message.event.type === "message_start" || message.event.type === "message_delta")) {
                             if (message.event.type === "message_start") {
@@ -338,6 +340,9 @@ describe("patchClaudeContextWindowProbe", () => {
                             }
                         }
                         for (const notification of streamEventToAcpNotifications(message, params.sessionId)) {}
+                        break;
+                    }
+                }
 `;
 
 	// One consumer per session, holding its usage counters across messages the
@@ -358,7 +363,7 @@ describe("patchClaudeContextWindowProbe", () => {
 			let lastAssistantUsage = null, lastAssistantModel, lastAssistantTotalUsage = null;
 			return {
 				logger,
-				newTurn() { lastAssistantUsage = null; lastAssistantTotalUsage = null; },
+				newTurn() { session.activeTurn = {}; lastAssistantUsage = null; lastAssistantTotalUsage = null; },
 				async stream(message) { ${readFileSync(adapterPath, "utf8")} },
 			};
 		`);
@@ -369,8 +374,8 @@ describe("patchClaudeContextWindowProbe", () => {
 		return { consume, updates, errors };
 	}
 
-	const start = (model, input_tokens) => ({ parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens } } } });
-	const delta = (output_tokens) => ({ parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens } } });
+	const start = (model, input_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens } } } });
+	const delta = (output_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens } } });
 
 	function freshSession(modelId, getContextUsage) {
 		return {
@@ -438,26 +443,59 @@ describe("patchClaudeContextWindowProbe", () => {
 		expect(updates).toEqual(cases.map(() => [10, 200000]));
 	});
 
-	it("probes again when the session switches back to a model whose answer it discarded", async () => {
+	it("probes again after switching back to a model, whatever became of its earlier probe", async () => {
+		for (const earlier of ["discarded", "failed", "pending"]) {
+			const { consume, updates } = patchedConsumer();
+			const answers = [];
+			const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+			const turn = consume(session);
+			// The adapter's switch path replaces session.models and reseeds the window from the "1m" heuristic.
+			const switchTo = (model) => Object.assign(session, {
+				models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
+			});
+			await turn.stream(start("claude-fable-5-1", 300));
+			switchTo("claude-opus-4-8[1m]");
+			await turn.stream(start("claude-opus-4-8[1m]", 300));
+			if (earlier === "discarded") answers[0].resolve({ rawMaxTokens: 1000000 });
+			if (earlier === "failed") answers[0].reject(new Error("closed"));
+			await settle();
+			switchTo("claude-fable-5-1");
+			await turn.stream(start("claude-fable-5-1", 310));
+			expect(answers).toHaveLength(2);
+			// Still pending, the first answer may describe the other model.
+			answers[0].resolve({ rawMaxTokens: 1 });
+			await settle();
+			expect(session.contextWindowSize).toBe(200000);
+			answers[1].resolve({ rawMaxTokens: 1000000 });
+			await settle();
+			expect(updates.at(-1)).toEqual([310, 1000000]);
+		}
+	});
+
+	it("retries a failed probe on a later turn, never while one is pending", async () => {
 		const { consume, updates } = patchedConsumer();
 		const answers = [];
-		const session = freshSession("claude-fable-5-1", () => new Promise((resolve) => answers.push(resolve)));
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
 		const turn = consume(session);
-		// The adapter's switch path reseeds the window from the "1m" heuristic.
-		const switchTo = (model) => Object.assign(session, {
-			models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
-		});
-		await turn.stream(start("claude-fable-5-1", 300));
-		switchTo("claude-opus-4-8[1m]");
-		await turn.stream(start("claude-opus-4-8[1m]", 300));
-		answers[0]({ rawMaxTokens: 1000000 });
+		await turn.stream(start("claude-fable-5-1", 100));
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 200));
+		expect(answers).toHaveLength(1);
+		answers[0].reject(new Error("closed"));
 		await settle();
-		switchTo("claude-fable-5-1");
-		await turn.stream(start("claude-fable-5-1", 310));
+		// This turn has not asked yet.
+		await turn.stream(start("claude-fable-5-1", 210));
+		answers[1].resolve({ rawMaxTokens: 0 });
+		await settle();
+		await turn.stream(start("claude-fable-5-1", 220));
 		expect(answers).toHaveLength(2);
-		answers[1]({ rawMaxTokens: 1000000 });
+		// The turn was cancelled before its result corrected the window.
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 230));
+		answers[2].resolve({ rawMaxTokens: 1000000 });
 		await settle();
-		expect(updates.at(-1)).toEqual([310, 1000000]);
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(3);
+		expect(updates.at(-1)).toEqual([230, 1000000]);
 	});
 
 	it("ignores indentation but fails packaging without modifying a changed adapter", () => {
@@ -471,6 +509,12 @@ describe("patchClaudeContextWindowProbe", () => {
 			streamBranch.replace("if (nextUsage !== lastAssistantTotalUsage)", "if (nextUsage !== lastAssistantTotalUsage && false)"),
 			streamBranch.replace(publish, (code) => `/* ${code} */`),
 			streamBranch + streamBranch,
+			// A brace in a comment must not become the insertion point.
+			streamBranch.replace("session.contextWindowSize = inferred;", "$&\n// } end heuristic"),
+			// The branch is commented out from outside the compared text.
+			streamBranch.replace(/if \(message\.parent_tool_use_id[\s\S]*?(?=break;)/, (code) => `/*\n${code}*/ `),
+			streamBranch.replace("if (message.parent_tool_use_id === null &&", "if (message.event &&\n// $&"),
+			streamBranch.replace('case "stream_event": {', 'case "assistant": {'),
 		]) {
 			writeFileSync(adapterPath, changed);
 			expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");

@@ -211,9 +211,13 @@ export function patchClaudeContextWindowProbe(adapterPath) {
 	const anchor = "const inferred = inferContextWindowFromModel(model);";
 	const anchorAt = source.indexOf(anchor);
 	const start = source.lastIndexOf("if (message.parent_tool_use_id === null &&", anchorAt);
-	const at = source.indexOf("}", source.indexOf("session.contextWindowSize = inferred;", anchorAt)) + 1;
 	const end = source.indexOf("for (const notification of streamEventToAcpNotifications(", anchorAt);
-	if (anchorAt < 0 || start < 0 || end < 0 || source.indexOf(anchor, anchorAt + 1) >= 0 ||
+	// The probe chains onto the heuristic's closing brace, so only whitespace may separate them.
+	const heuristic = /const inferred = inferContextWindowFromModel\(model\);\s*if \(inferred !== null\) \{\s*session\.contextWindowSize = inferred;\s*\}/y;
+	heuristic.lastIndex = anchorAt;
+	const at = heuristic.test(source) ? heuristic.lastIndex : -1;
+	if (anchorAt < 0 || start < 0 || end < 0 || at < 0 || source.indexOf(anchor, anchorAt + 1) >= 0 ||
+		!startsLiveStreamCode(source, start) ||
 		codeOnly(source.slice(start, end)) !== codeOnly(CLAUDE_STREAM_USAGE_BRANCH)) {
 		throw new Error("claude-agent-acp streamed window inference no longer matches AO's context window patch");
 	}
@@ -224,6 +228,16 @@ export function patchClaudeContextWindowProbe(adapterPath) {
 // The pinned branch has only whole-line comments; anything else must match exactly.
 function codeOnly(text) {
 	return collapseWhitespace(text.replace(/^\s*\/\/.*$/gm, ""));
+}
+
+// codeOnly keeps every "/*" and "*/", so the compared branch is live if it starts in live code:
+// only indentation before it, no block comment open, and inside the stream_event case.
+// shortcut: a text scan, not a parse. A "/*" in an earlier string fails packaging, and a string
+// around the branch goes unseen; parse the adapter if upstream ever does either.
+function startsLiveStreamCode(source, at) {
+	return !/\S/.test(source.slice(source.lastIndexOf("\n", at) + 1, at)) &&
+		source.lastIndexOf("/*", at) <= source.lastIndexOf("*/", at) &&
+		source.startsWith('case "stream_event": {', source.lastIndexOf('case "', at));
 }
 
 const CLAUDE_WINDOW_PROBE_MARKER = "// AO: ask the SDK for the model's real window.";
@@ -272,21 +286,18 @@ const CLAUDE_STREAM_USAGE_BRANCH = `if (message.parent_tool_use_id === null &&
 
 const CLAUDE_WINDOW_PROBE = `
                                         ${CLAUDE_WINDOW_PROBE_MARKER}
-                                        else if (session.aoWindowProbeModelId !== session.models.currentModelId) {
-                                            const probeModelId = session.models.currentModelId;
-                                            session.aoWindowProbeModelId = probeModelId;
+                                        else if (session.aoWindowProbe?.models !== session.models ||
+                                            (session.aoWindowProbe.settled && session.aoWindowProbe.turn !== session.activeTurn)) {
+                                            // One probe per model selection while it is pending; a failed one is retried on a later turn.
+                                            // Every model switch replaces session.models, even a switch back.
+                                            const probe = { models: session.models, turn: session.activeTurn, settled: false };
+                                            session.aoWindowProbe = probe;
                                             void (async () => {
                                                 try {
                                                     const { rawMaxTokens } = await session.query.getContextUsage();
-                                                    if (!Number.isFinite(rawMaxTokens) || rawMaxTokens <= 0) {
-                                                        return;
-                                                    }
-                                                    // Answered: a later switch back to this model probes again.
-                                                    if (session.aoWindowProbeModelId === probeModelId) {
-                                                        session.aoWindowProbeModelId = undefined;
-                                                    }
                                                     // A result or a model switch while the probe ran already set the window.
-                                                    if (session.contextWindowAuthoritative || session.models.currentModelId !== probeModelId) {
+                                                    if (!Number.isFinite(rawMaxTokens) || rawMaxTokens <= 0 ||
+                                                        session.contextWindowAuthoritative || session.models !== probe.models) {
                                                         return;
                                                     }
                                                     const changed = rawMaxTokens !== session.contextWindowSize;
@@ -300,6 +311,8 @@ const CLAUDE_WINDOW_PROBE = `
                                                     }
                                                 } catch (error) {
                                                     this.logger.error('Failed to learn Claude context window:', error);
+                                                } finally {
+                                                    probe.settled = true;
                                                 }
                                             })();
                                         }`;
