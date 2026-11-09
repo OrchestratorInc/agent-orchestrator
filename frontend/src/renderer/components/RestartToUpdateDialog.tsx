@@ -239,7 +239,7 @@ function RestartToUpdateDialogBody() {
 				</div>
 
 				<div className={cn(settingsDialogFooterClass, "py-4")}>
-					<Button type="button" variant="outline" size="sm" onClick={close} disabled={pending}>
+					<Button type="button" variant="secondary" size="sm" onClick={close} disabled={pending}>
 						{t("confirm.cancel")}
 					</Button>
 					<Button

@@ -291,14 +291,14 @@ export function InstallDependencyDialog({
 					) : null}
 					<Button
 						type="button"
-						variant="footer"
+						variant="secondary"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
 					</Button>
 					<Button
 						type="button"
-						variant="footer-primary"
+						variant="primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
@@ -384,7 +384,7 @@ export function InstallAction({
 		<div className="flex flex-col gap-1.5">
 			<Button
 				type="button"
-				variant="footer-primary"
+				variant="primary"
 				className="self-start"
 				disabled={disabled}
 				onClick={onInstall}
@@ -430,7 +430,7 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 			</code>
 			<Button
 				type="button"
-				variant="footer"
+				variant="secondary"
 				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}

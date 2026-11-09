@@ -35,7 +35,7 @@ import { useEdgeFadeRef } from "../hooks/useEdgeFade";
  * Home landing layout contracts (do not regress without explicit design sign-off):
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
- *   TopbarButton / accent pill / bordered card.
+ *   filled button / accent pill / bordered card.
  * - Primary actions are always a 2×2 grid. The fourth cell is the
  *   standalone-agent action, or Clone to the cloud when Developer Mode and
  *   Cloud are both enabled (standalone stays reachable from the sidebar's
@@ -279,7 +279,7 @@ function HomePageContent() {
 					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
-							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
+							{/* Quiet text link — not filled button / accent. Dashed underline only on hover. */}
 							<Button
 								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}

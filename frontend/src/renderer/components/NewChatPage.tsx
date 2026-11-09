@@ -603,6 +603,7 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			disabled={disabled}
 			menuAlign="start"
 			menuClassName="w-48 max-h-72"
+			triggerVariant="ghost"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
 			// Icon and label share the row's colour, so hover changes both together.

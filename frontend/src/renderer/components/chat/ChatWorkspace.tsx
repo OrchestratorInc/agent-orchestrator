@@ -2648,7 +2648,7 @@ function ControllerBanner({
 								<Button
 									type="button"
 									size="sm"
-									variant="outline"
+									variant="secondary"
 									onClick={resumeClick}
 									disabled={resuming}
 								>
@@ -4827,7 +4827,7 @@ export function Timeline({
 				<Button
 					type="button"
 					size="icon-sm"
-					variant="outline"
+					variant="secondary"
 					aria-label="Jump to latest"
 					title="Jump to latest"
 					onClick={requestGlideToEnd}

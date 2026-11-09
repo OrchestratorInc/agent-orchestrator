@@ -63,7 +63,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="outline" className="shrink-0"
+			<Button type="button" size="sm" variant="secondary" className="shrink-0"
 				onClick={() => openGlobalSettings("harness", {
 					focusAgentId: harness,
 					...(hostId ? { hostId } : {}),

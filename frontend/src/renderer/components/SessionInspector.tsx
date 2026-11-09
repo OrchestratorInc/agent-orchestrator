@@ -2562,7 +2562,7 @@ function ReviewPanel({
 										onClick={onCloudInstallHarness}
 										size="sm"
 										type="button"
-										variant="outline"
+										variant="secondary"
 									>
 										{isInstallingCloudHarness ? "Installing…" : "Install"}
 									</Button>
@@ -2813,7 +2813,7 @@ function BrowserView({
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
 				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
 					<p className="text-md-sm text-muted-foreground">{t("inspector.browserInCenter")}</p>
-					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="outline">
+					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="secondary">
 						{t("inspector.returnToPanel")}
 					</Button>
 				</div>
@@ -2851,7 +2851,7 @@ function FilesView({ filesView, onOpenFiles }: { filesView?: ReactNode; onOpenFi
 		<div role="tabpanel">
 			<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 px-5 py-10 text-center")}>
 				<p className="text-md-sm text-muted-foreground">{t("inspector.filesUnavailable")}</p>
-				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="outline">
+				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="secondary">
 					{t("inspector.openFiles")}
 				</Button>
 			</div>

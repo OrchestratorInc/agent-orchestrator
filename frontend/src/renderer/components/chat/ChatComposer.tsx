@@ -2276,7 +2276,7 @@ export const ChatComposer = memo(function ChatComposer({
 					<div className="px-1.5">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="sm"
 							onClick={abandonUncertainSteer}
 						>
@@ -2327,7 +2327,7 @@ export const ChatComposer = memo(function ChatComposer({
 											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
 										}}
 									>
-										<OptionMenuTrigger
+										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
 											disabled={controlsDisabled}

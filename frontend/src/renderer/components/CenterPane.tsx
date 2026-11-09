@@ -708,7 +708,7 @@ export function CenterPane({
 // match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
 const sessionTabActionClassName = cn(
 	"grid place-items-center [&_svg]:size-icon-sm",
-	"[&_.topbar-control--icon]:relative [&_.topbar-control--icon]:size-icon-base [&_.topbar-control--icon]:rounded-sm [&_.topbar-control--icon]:before:absolute [&_.topbar-control--icon]:before:-inset-1.5 [&_.topbar-control--icon]:before:content-['']",
+	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );
 

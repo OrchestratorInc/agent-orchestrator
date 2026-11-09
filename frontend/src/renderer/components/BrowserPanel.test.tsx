@@ -1634,7 +1634,8 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveTextContent("2");
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveClass(
 			"browser-panel__annotation-send",
-			"bg-primary",
+			"button-raised",
+			"[--button-color:var(--primary)]",
 			"text-primary-foreground",
 		);
 

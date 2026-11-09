@@ -20,7 +20,6 @@ import {
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import type { ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import {
@@ -178,17 +177,14 @@ export function SessionInterfaceSwitchButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<TopbarButton
+					<Button size={showLabel ? "sm" : "icon-sm"}
+						data-interface-switch=""
 						aria-label={label}
-						className={cn(
-							!supported && "opacity-50",
-							showLabel && "topbar-control--labeled !inline-flex !h-control-lg !w-auto !min-w-0 gap-1.5 px-2 text-xs",
-							className,
-						)}
+						className={className}
 						disabled={!supported || pending}
 						onClick={onClick}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						{pending ? (
 							<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
@@ -196,7 +192,7 @@ export function SessionInterfaceSwitchButton({
 							<RoundedInterfaceIcon target={target} className="size-icon-md" />
 						)}
 						{showLabel ? <span data-compact-label>{target === "tui" ? "Terminal UI" : "Chat UI"}</span> : null}
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="max-w-52 text-left text-wrap">{tooltipLabel}</TooltipContent>
@@ -298,7 +294,7 @@ export function SessionInterfaceSwitchDialog({
 				</div>
 
 				<DialogFooter className="border-t border-border px-5 py-3">
-					<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+					<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 						Keep current interface
 					</Button>
 				</DialogFooter>
@@ -484,7 +480,7 @@ export function SessionInterfaceTransitionNotice({
 					<Button
 						type="button"
 						size="sm"
-						variant="outline"
+						variant="secondary"
 						className="mt-2 text-caption"
 						disabled={interrupting}
 						onClick={onSwitchWithInterrupt}
@@ -498,7 +494,7 @@ export function SessionInterfaceTransitionNotice({
 						<Button
 							type="button"
 							size="sm"
-							variant="outline"
+							variant="secondary"
 							className="text-caption"
 							disabled={retrying || dismissing}
 							onClick={onRetry}
@@ -510,7 +506,7 @@ export function SessionInterfaceTransitionNotice({
 							<Button
 								type="button"
 								size="sm"
-								variant="outline"
+								variant="secondary"
 								className="text-caption"
 								disabled={retrying || dismissing}
 								onClick={onUseProviderHistory}
