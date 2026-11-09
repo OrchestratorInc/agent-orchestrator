@@ -724,8 +724,7 @@ const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Load
 /**
  * What happens to a message the agent refused for its login. A message whose
  * turn did nothing else leads its own row under the bubble with it, before the
- * time and copy; otherwise it is the turn's last line. While the message waits,
- * its hourglass turns over now and then.
+ * time and copy; otherwise it is the turn's last line.
  */
 export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"] }) {
 	const { t } = useTranslation();

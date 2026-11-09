@@ -25,7 +25,7 @@ export interface ChatLoginBandProps {
 	onSendAgain?: () => void;
 	/** Why sending it again failed. */
 	error?: string;
-	/** Sending it again failed before the login took, so Log in stays on offer. */
+	/** No login has taken yet: a send says only that it is sending, and a failed one keeps Log in on offer. */
 	signedOut?: boolean;
 }
 
@@ -67,6 +67,10 @@ export function ChatLoginBand({ harness, agent, host, state, queued, onLogin, on
 				</>
 			)
 			: onSendAgain ? <Button type="button" variant="primary" size="sm" onClick={onSendAgain} className="px-3">{t("chat.login.sendAgainAction")}</Button> : undefined;
+	} else if (state === "sending" && signedOut) {
+		// Sent again before any login took: nothing says the user is in yet.
+		mark = <AgentAvatar provider={harness} decorative className="size-4 shrink-0" />;
+		title = t("chat.login.status.sending");
 	} else if (state === "sending" || state === "loggedIn") {
 		mark = <Check aria-hidden="true" className="size-4 shrink-0 text-status-ready" />;
 		title = t("chat.login.loggedIn", { agent });

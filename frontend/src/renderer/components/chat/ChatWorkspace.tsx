@@ -882,8 +882,10 @@ function ChatWorkspaceContent({
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
+	const retryableTurns = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
 	const chatLogin = useChatLogin({
 		snapshot,
+		retryable: retryableTurns,
 		retryControl,
 		hostId: activeRemoteHostId,
 		cloud: Boolean(session?.cloud),
@@ -2028,6 +2030,7 @@ function ChatWorkspaceContent({
 									remoteHost={Boolean(activeRemoteHostId)}
 									findUnavailable={Boolean(session?.cloud)}
 									loginLines={chatLogin.lines}
+									retryableTurns={retryableTurns}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2839,6 +2842,7 @@ export function Timeline({
 	openingStartedAt,
 	openingStartupLabel,
 	loginLines,
+	retryableTurns: chatRetryableTurns,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2888,6 +2892,8 @@ export function Timeline({
 	openingStartupLabel?: string;
 	/** The line under each message the agent refused for its login. */
 	loginLines?: ReadonlyMap<string, TurnOutcomeLogin>;
+	/** The failed turns a retry can pick up, as the chat already worked them out for this snapshot's turns. */
+	retryableTurns?: ReadonlyMap<string, ConversationTurn>;
 }) {
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
@@ -3404,8 +3410,14 @@ export function Timeline({
 			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
 		});
 	}, [minimapEnabled, uiSessionId]);
-	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(() => retryableFailedTurns(snapshot, consumedRetrySources), [snapshot, consumedRetrySources]);
+	// The chat works these out once, for its login band too. A page find jumped to
+	// brings turns of its own, and a side chat passes none: then they are worked out here.
+	const retryableTurns = useMemo(
+		() => chatRetryableTurns && snapshot.turns === sourceSnapshot.turns
+			? chatRetryableTurns
+			: retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)),
+		[chatRetryableTurns, snapshot, sourceSnapshot.turns],
+	);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -5949,14 +5961,15 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
  * refused the same way and becomes the latest, so it is the one sent again after
  * the login: that is how it queues.
  */
-function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }: {
+function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWorkDisabled }: {
 	snapshot: ConversationSnapshot;
+	/** The snapshot's failed turns a retry can pick up. */
+	retryable: ReadonlyMap<string, ConversationTurn>;
 	retryControl?: ChatRetryControl;
 	hostId?: string;
 	cloud: boolean;
 	newWorkDisabled: boolean;
 }): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean; logIn: () => void } {
-	const retryable = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
 	const workedTurnIds = useMemo(() => turnsThatDidWork(snapshot), [snapshot]);
 	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
 	// Switching the chat to another agent leaves this agent's login behind: a switch
@@ -6098,7 +6111,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				// Offered from signed out on, also for a message that did work: sending it
 				// again is the user's click, never automatic.
 				...(resendable ? { onSendAgain: sendAgain } : {}),
-				...(sendError ? { error: sendError, signedOut: !loggedIn } : {}),
+				signedOut: !loggedIn,
+				...(sendError ? { error: sendError } : {}),
 			},
 		} : {}),
 	};

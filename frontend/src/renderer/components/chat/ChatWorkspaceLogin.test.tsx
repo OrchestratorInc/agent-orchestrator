@@ -150,6 +150,18 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().settingsModal).toBeFalsy();
 	});
 
+	it("says only that it is sending when Send again goes before any login", async () => {
+		const retry = vi.fn();
+		const { rerender } = render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+
+		rerender(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry, pending: true, turnId: "turn-1" }} />);
+		expect(band()).toHaveAttribute("data-login-state", "sending");
+		// Nothing has said the user is in: the agent may refuse it again.
+		expect(band()).toHaveTextContent("Sending…");
+		expect(band()).not.toHaveTextContent("Logged in");
+	});
+
 	it("says when Send again failed while signed out, and keeps the login on offer", async () => {
 		const retry = vi.fn();
 		const { rerender } = render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
