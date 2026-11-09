@@ -10,6 +10,7 @@ import {
 	sessionCueTargetAvailable,
 	sessionIsActive,
 	sessionNeedsAttention,
+	sortedWorkerSessions,
 	toAgentProvider,
 	toSessionActivity,
 	toSessionStatus,
@@ -96,6 +97,19 @@ describe("toSessionActivity", () => {
 	it("returns undefined for a missing activity", () => {
 		expect(toSessionActivity(undefined)).toBeUndefined();
 		expect(toSessionActivity(null)).toBeUndefined();
+	});
+});
+
+describe("sortedWorkerSessions", () => {
+	it("orders imports not opened yet by the source chat's last activity, not the import time", () => {
+		const imported = (id: string, lastActivityAt: string, createdAt: string) =>
+			sessionWith({ id, needsResume: true, createdAt, activity: { state: "exited", lastActivityAt } });
+		const sessions = [
+			imported("oldest", "2026-10-15T04:11:25Z", "2026-11-09T16:13:54.159Z"),
+			imported("newest", "2026-10-26T06:06:05Z", "2026-11-09T16:13:54.137Z"),
+			sessionWith({ id: "native", createdAt: "2026-10-20T00:00:00Z", lastInteractionAt: "2026-10-20T00:00:00Z" }),
+		];
+		expect(sortedWorkerSessions(sessions).map((s) => s.id)).toEqual(["newest", "native", "oldest"]);
 	});
 });
 

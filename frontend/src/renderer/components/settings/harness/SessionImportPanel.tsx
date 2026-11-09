@@ -188,44 +188,46 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 			</div>
-			<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
-				{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
-				<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
-					<Checkbox
-						aria-label={t("sessionImport.selectAllAria")}
-						checked={
-							eligible.length > 0 && eligible.every((c) => selected.has(c.id))
-						}
-						onCheckedChange={(checked) =>
-							toggle(
-								eligible.map((c) => c.id),
-								checked === true,
-							)
-						}
-						disabled={importing || !eligible.length}
-					/>
-					{t("sessionImport.selectAll", { count: eligible.length })}
-				</label>
-				<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-					{visible.map((c) => (
-						<ImportRow
-							key={c.id}
-							candidate={c}
-							projectName={projectName(c)}
-							selected={selected.has(c.id)}
-							disabled={importing}
-							result={results.find((r) => r.id === c.id)}
-							onSelect={(checked) => toggle([c.id], checked)}
-							onOpen={(sessionId) => openSession(c, sessionId)}
+			{preview.isPending ? null : (
+				<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
+					{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
+					<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
+						<Checkbox
+							aria-label={t("sessionImport.selectAllAria")}
+							checked={
+								eligible.length > 0 && eligible.every((c) => selected.has(c.id))
+							}
+							onCheckedChange={(checked) =>
+								toggle(
+									eligible.map((c) => c.id),
+									checked === true,
+								)
+							}
+							disabled={importing || !eligible.length}
 						/>
-					))}
-					{!preview.isFetching && !visible.length ? (
-						<p className="p-6 text-sm text-muted-foreground">
-							{needle ? t("sessionImport.noMatches", { query: query.trim() }) : t("sessionImport.empty")}
-						</p>
-					) : null}
+						{t("sessionImport.selectAll", { count: eligible.length })}
+					</label>
+					<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+						{visible.map((c) => (
+							<ImportRow
+								key={c.id}
+								candidate={c}
+								projectName={projectName(c)}
+								selected={selected.has(c.id)}
+								disabled={importing}
+								result={results.find((r) => r.id === c.id)}
+								onSelect={(checked) => toggle([c.id], checked)}
+								onOpen={(sessionId) => openSession(c, sessionId)}
+							/>
+						))}
+						{!preview.isFetching && !visible.length ? (
+							<p className="p-6 text-sm text-muted-foreground">
+								{needle ? t("sessionImport.noMatches", { query: query.trim() }) : t("sessionImport.empty")}
+							</p>
+						) : null}
+					</div>
 				</div>
-			</div>
+			)}
 			<div className="flex shrink-0 flex-col gap-3">
 				{newFolders.length ? (
 					<p className="text-xs text-muted-foreground">

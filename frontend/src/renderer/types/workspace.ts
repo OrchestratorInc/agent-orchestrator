@@ -384,6 +384,7 @@ function sessionLastMessageTimestamp(session: WorkspaceSession): number {
 	return (
 		validTimestamp(session.lastInteractionAt) ??
 		validTimestamp(session.lastUserMessageAt) ??
+		(session.needsResume ? validTimestamp(session.activity?.lastActivityAt) : undefined) ??
 		validTimestamp(session.createdAt) ??
 		0
 	);
@@ -403,7 +404,7 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else creation), newest first. */
+/** Worker sessions ordered by the user's latest message (else an unopened import's source activity, else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,

@@ -96,6 +96,28 @@ export function useImportRun(source: ImportSource, onDone: (results: ImportResul
 	return { importing, error, failures, run };
 }
 
+function useImportedToast() {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const navigateToSession = useNavigateToSession();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	return (results: ImportResult[]): ImportCandidate[] => {
+		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
+		if (!created.size) return [];
+		const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
+			.filter((chat) => chat.sessionId && created.has(chat.id))
+			.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+		const latest = imported[0];
+		const sessionId = latest?.sessionId;
+		showGlobalToast(t("sessionImport.foldersImported", { count: created.size }), undefined, {
+			tone: "success",
+			durationMs: 10_000,
+			action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
+		});
+		return imported;
+	};
+}
+
 function useAgentBlocks() {
 	const readiness = useAgentReadinessQuery();
 	return (harness: string) => agentBlock(readiness.data?.agents?.find((agent) => agent.id === harness));
@@ -108,12 +130,14 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
 	const recordImport = useSessionImportStore((state) => state.recordImport);
+	const showImported = useImportedToast();
 	const [unchecked, setUnchecked] = useState(new Set<string>());
 	const chats = projectChats(preview.data?.candidates, projectId);
 	const selected = chats.filter((chat) => !unchecked.has(chat.id));
 	const { importing, error, failures, run } = useImportRun("project_dialog", (results) => {
 		const created = results.filter((result) => result.status === "created").length;
 		if (created) recordImport(projectId, created);
+		showImported(results);
 		if (!results.some((result) => result.status === "failed")) onClose();
 	});
 	return (
@@ -159,14 +183,12 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 
 function Folders({ onClose }: { onClose: () => void }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const navigateToSession = useNavigateToSession();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
 	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const recordImport = useSessionImportStore((state) => state.recordImport);
+	const showImported = useImportedToast();
 	const [picked, setPicked] = useState<Set<string>>();
 	const [showOther, setShowOther] = useState(false);
 	const byKey = new Map<string, Folder>();
@@ -208,21 +230,9 @@ function Folders({ onClose }: { onClose: () => void }) {
 			return next;
 		});
 	const { importing, error, failures, run } = useImportRun("home_folders", (results) => {
-		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
-		if (created.size) {
-			closeSessionImportOffer();
-			const imported = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? [])
-				.filter((chat) => chat.sessionId && created.has(chat.id))
-				.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
-			for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
-			const latest = imported[0];
-			const sessionId = latest?.sessionId;
-			showGlobalToast(t("sessionImport.foldersImported", { count: created.size }), undefined, {
-				tone: "success",
-				durationMs: 10_000,
-				action: sessionId ? { label: t("sessionImport.openChat"), run: () => navigateToSession(latest?.projectId, sessionId) } : undefined,
-			});
-		}
+		const imported = showImported(results);
+		if (results.some((result) => result.status === "created")) closeSessionImportOffer();
+		for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
 		if (!results.some((result) => result.status === "failed")) onClose();
 	});
 	const otherOpen = showOther || !suggested.length;

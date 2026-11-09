@@ -254,6 +254,7 @@
 	"agentSwitch.couldNotSwitch": "Не удалось переключить агента",
 	"session.statusChecking": "Проверка…",
 	"session.statusUnavailable": "Не удалось проверить",
+	"session.importedNotOpened": "Импортирован, ещё не открыт",
 	"artifactLink.unavailable": "Артефакт недоступен",
 	"artifactLink.noPreview": "Предпросмотр недоступен",
 	"session.agentTerminated": "Агент завершил работу",

@@ -252,6 +252,7 @@
 	"agentSwitch.couldNotSwitch": "エージェントを切り替えられませんでした",
 	"session.statusChecking": "確認中…",
 	"session.statusUnavailable": "確認できません",
+	"session.importedNotOpened": "インポート済み・まだ開いていません",
 	"artifactLink.unavailable": "アーティファクトを利用できません",
 	"artifactLink.noPreview": "プレビューはありません",
 	"session.agentTerminated": "エージェントは終了しました",

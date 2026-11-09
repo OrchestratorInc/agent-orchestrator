@@ -252,6 +252,7 @@
 	"agentSwitch.couldNotSwitch": "Couldn't switch agent",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
+	"session.importedNotOpened": "Imported, not opened yet",
 	"artifactLink.unavailable": "Artifact unavailable",
 	"artifactLink.noPreview": "No preview available",
 	"session.agentTerminated": "Agent terminated",

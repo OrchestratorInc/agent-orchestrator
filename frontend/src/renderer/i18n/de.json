@@ -252,6 +252,7 @@
 	"agentSwitch.couldNotSwitch": "Agent konnte nicht gewechselt werden",
 	"session.statusChecking": "Wird geprüft…",
 	"session.statusUnavailable": "Status nicht überprüfbar",
+	"session.importedNotOpened": "Importiert, noch nicht geöffnet",
 	"artifactLink.unavailable": "Artefakt nicht verfügbar",
 	"artifactLink.noPreview": "Keine Vorschau verfügbar",
 	"session.agentTerminated": "Agent beendet",

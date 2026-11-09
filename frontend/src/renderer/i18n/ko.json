@@ -252,6 +252,7 @@
 	"agentSwitch.couldNotSwitch": "에이전트를 전환하지 못했습니다",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",
+	"session.importedNotOpened": "가져옴, 아직 열지 않음",
 	"artifactLink.unavailable": "아티팩트를 사용할 수 없음",
 	"artifactLink.noPreview": "미리보기 없음",
 	"session.agentTerminated": "에이전트 종료됨",

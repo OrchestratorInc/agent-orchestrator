@@ -252,6 +252,7 @@
 	"agentSwitch.couldNotSwitch": "无法切换代理",
 	"session.statusChecking": "正在检查…",
 	"session.statusUnavailable": "无法验证",
+	"session.importedNotOpened": "已导入，尚未打开",
 	"artifactLink.unavailable": "工件不可用",
 	"artifactLink.noPreview": "无可用预览",
 	"session.agentTerminated": "代理已终止",
