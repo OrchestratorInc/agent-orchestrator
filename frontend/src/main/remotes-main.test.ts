@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
+import { setPasswordCipher } from "./remotes-store";
 import { createLocalHostIdentity } from "./remote-request";
 import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
@@ -530,6 +531,37 @@ describe("registerRemotesIpc", () => {
 			]);
 		} finally {
 			server.close();
+		}
+	});
+
+	it.each([
+		["a keychain that cannot decrypt them", { encrypt: (text: string) => `sealed:${text}`, decrypt: (): string => { throw new Error("another keychain"); } }],
+		["no keychain", null],
+	])("syncs over saved passwords it cannot read with %s", async (_name, cipher) => {
+		setPasswordCipher(() => cipher);
+		try {
+			const file = await tempFile();
+			await writeFile(file, JSON.stringify({ remotes: [
+				{ hostId: "h_paired", label: "Paired", url: "https://paired.example", sealedPassword: "sealed-pairing", accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_token", label: "Token", url: "https://token.example", sealedPassword: "sealed-token", accountToken: true, accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_gone", label: "Gone", url: "https://gone.example", sealedPassword: "sealed-gone", accountToken: true, accountUserId: TEST_ACCOUNT },
+			] }));
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+				cloudRequest: cloudListing(
+					{ hostId: "h_paired", label: "Renamed", url: "https://moved.example" },
+					{ hostId: "h_token", label: "Token", url: "https://token.example" },
+				),
+			});
+			await ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+			// Neither password is replaced by the account token, and the host the account dropped goes.
+			expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+				{ hostId: "h_paired", label: "Renamed", url: "https://moved.example", sealedPassword: "sealed-pairing", accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_token", label: "Token", url: "https://token.example", sealedPassword: "sealed-token", accountToken: true, accountUserId: TEST_ACCOUNT },
+			]);
+		} finally {
+			setPasswordCipher(() => null);
 		}
 	});
 });

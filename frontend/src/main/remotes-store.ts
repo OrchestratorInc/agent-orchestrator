@@ -12,7 +12,17 @@ export type RemoteEntry = {
 	accountUserId?: string;
 	/** An encrypted password this launch could not decrypt, kept so a write does not lose it. */
 	sealedPassword?: string;
+	/** Set beside sealedPassword when that password is the account's token, not a pairing password. */
+	accountToken?: true;
 };
+
+/** An AO account's token for a host: 32 random bytes in hex. A pairing password never has this shape. */
+export const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
+
+/** Whether the saved credential is the account's token; read from the marker when the password cannot be decrypted. */
+export function holdsAccountToken(entry: Pick<RemoteEntry, "password" | "accountToken">): boolean {
+	return entry.password ? ACCOUNT_TOKEN.test(entry.password) : entry.accountToken === true;
+}
 
 export type PasswordCipher = { encrypt(plain: string): string; decrypt(sealed: string): string };
 
@@ -26,7 +36,7 @@ export function setPasswordCipher(resolve: () => PasswordCipher | null): void {
 
 type StoredRemote = Omit<RemoteEntry, "password"> & { password?: string };
 
-function unseal({ password, sealedPassword, ...rest }: StoredRemote, cipher: PasswordCipher | null): RemoteEntry {
+function unseal({ password, sealedPassword, accountToken, ...rest }: StoredRemote, cipher: PasswordCipher | null): RemoteEntry {
 	if (sealedPassword === undefined) return { ...rest, password: password ?? "" };
 	if (cipher) {
 		try {
@@ -35,12 +45,12 @@ function unseal({ password, sealedPassword, ...rest }: StoredRemote, cipher: Pas
 			// Encrypted by another keychain; keep it and let the host ask for a new pairing.
 		}
 	}
-	return { ...rest, password: "", sealedPassword };
+	return { ...rest, password: "", sealedPassword, ...(accountToken ? { accountToken } : {}) };
 }
 
-function seal({ password, sealedPassword, ...rest }: RemoteEntry, cipher: PasswordCipher | null): StoredRemote {
-	if (cipher && password) return { ...rest, sealedPassword: cipher.encrypt(password) };
-	if (!password && sealedPassword) return { ...rest, sealedPassword };
+function seal({ password, sealedPassword, accountToken, ...rest }: RemoteEntry, cipher: PasswordCipher | null): StoredRemote {
+	if (cipher && password) return { ...rest, sealedPassword: cipher.encrypt(password), ...(ACCOUNT_TOKEN.test(password) ? { accountToken: true as const } : {}) };
+	if (!password && sealedPassword) return { ...rest, sealedPassword, ...(accountToken ? { accountToken } : {}) };
 	return { ...rest, password };
 }
 
@@ -147,6 +157,7 @@ export function applyRemoteChanges(entry: RemoteEntry, changes: RemoteChanges): 
 		hostId: entry.hostId,
 		accountUserId: changes.accountUserId ?? entry.accountUserId,
 		sealedPassword: changes.password === undefined ? entry.sealedPassword : undefined,
+		accountToken: changes.password === undefined ? entry.accountToken : undefined,
 	};
 }
 

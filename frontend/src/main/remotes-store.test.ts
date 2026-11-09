@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addRemote, readRemotes, removeRemote, RemotesFilePermissionError, sealSavedPasswords, setPasswordCipher, updateRemote } from "./remotes-store";
+import { addRemote, holdsAccountToken, readRemotes, removeRemote, RemotesFilePermissionError, sealSavedPasswords, setPasswordCipher, updateRemote } from "./remotes-store";
 
 async function tempFile(contents?: string, mode = 0o600): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "ao-remotes-"));
@@ -223,6 +223,25 @@ describe("password encryption", () => {
 		expect(JSON.parse(await readFile(path, "utf8")).remotes[0]).toEqual({ label: "renamed", url: "http://192.0.2.1:3011", sealedPassword: "other-keychain" });
 		await updateRemote(path, "http://192.0.2.1:3011", { password: "new" });
 		expect(JSON.parse(await readFile(path, "utf8")).remotes[0].sealedPassword).toBe("sealed:new");
+	});
+
+	it("marks an encrypted account token so it is known without decrypting", async () => {
+		setPasswordCipher(() => cipher);
+		const path = await tempFile();
+		const token = "a".repeat(64);
+		await addRemote(path, { label: "vm", url: "https://vm.example", password: token });
+		await addRemote(path, { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" });
+		const stored = async () => JSON.parse(await readFile(path, "utf8")).remotes;
+		expect(await stored()).toEqual([
+			{ label: "vm", url: "https://vm.example", sealedPassword: `sealed:${token}`, accountToken: true },
+			{ label: "workbox", url: "http://192.0.2.1:3011", sealedPassword: "sealed:pw" },
+		]);
+		setPasswordCipher(() => null);
+		expect((await readRemotes(path)).map(holdsAccountToken)).toEqual([true, false]);
+		await updateRemote(path, "https://vm.example", { label: "renamed" });
+		expect((await stored())[0]).toEqual({ label: "renamed", url: "https://vm.example", sealedPassword: `sealed:${token}`, accountToken: true });
+		await updateRemote(path, "https://vm.example", { password: "pairing1" });
+		expect((await stored())[0]).toEqual({ label: "renamed", url: "https://vm.example", password: "pairing1" });
 	});
 
 	it("keeps plaintext when no cipher is available", async () => {

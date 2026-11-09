@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
-import { addRemote, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
+import { ACCOUNT_TOKEN, addRemote, holdsAccountToken, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 import { ExpectedIpcError } from "./main-error-capture";
 
 // An isolated desktop run must not read or write the real user's credentials.
@@ -59,8 +59,6 @@ class LocalIdentityUnavailableError extends ExpectedIpcError {
 }
 
 type AccountHost = { hostId: string; label: string; url: string; token: string };
-
-const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
 
 /**
  * Saved AO daemons in ~/.ao/remotes.json. Everything the renderer receives back
@@ -198,8 +196,9 @@ export function registerRemotesIpc(
 		if (!host.hostId || !ACCOUNT_TOKEN.test(host.token ?? "")) throw new ExpectedIpcError("Invalid account host credential.");
 		const local = (await readRemotes(file)).find((entry) => entry.hostId === host.hostId);
 		// Keep the original password on the machine that performed pairing; a
-		// Cloud refresh must not replace it with the narrower account token.
-		if (local?.password && !ACCOUNT_TOKEN.test(local.password)) {
+		// Cloud refresh must not replace it with the narrower account token. A
+		// password this launch cannot decrypt is kept the same way.
+		if (local && (local.sealedPassword || (local.password && !holdsAccountToken(local)))) {
 			if (local.label !== host.label || local.url !== host.url) await updateRemote(file, local.url, { label: host.label, url: host.url });
 			return;
 		}
@@ -215,7 +214,7 @@ export function registerRemotesIpc(
 		for (const entry of await owned()) {
 			// Only account-imported credentials are directory-managed. A machine
 			// paired here with its original password remains a local pairing.
-			if (entry.hostId && !current.has(entry.hostId) && ACCOUNT_TOKEN.test(entry.password)) {
+			if (entry.hostId && !current.has(entry.hostId) && holdsAccountToken(entry)) {
 				await removeSavedRemote(file, entry.url, disconnect);
 			}
 		}
