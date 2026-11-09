@@ -4,18 +4,38 @@
 const STORAGE_KEY = "ao.chatAttachmentNames.v1";
 const MAX_FILES = 500;
 
-export function readAttachmentNames(): Record<string, string> {
+// Every message with attachments reads this on render, so the parse is kept
+// until the stored text changes.
+let cached: { raw: string | null; names: Record<string, string> } | undefined;
+
+function parse(raw: string | null): Record<string, string> {
+	const names: Record<string, string> = {};
 	try {
-		const entries = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as unknown;
-		return entries && typeof entries === "object" && !Array.isArray(entries) ? entries as Record<string, string> : {};
+		const entries = JSON.parse(raw ?? "{}") as unknown;
+		if (!entries || typeof entries !== "object" || Array.isArray(entries)) return names;
+		// Only text is kept: anything else in storage would reach React as a child.
+		for (const [path, name] of Object.entries(entries)) if (typeof name === "string") names[path] = name;
 	} catch {
-		return {};
+		// Unreadable storage is no names, not an error.
 	}
+	return names;
+}
+
+/** The remembered names, by staged path. Read-only: it is shared between callers. */
+export function readAttachmentNames(): Readonly<Record<string, string>> {
+	let raw: string | null = null;
+	try {
+		raw = window.localStorage.getItem(STORAGE_KEY);
+	} catch {
+		// Blocked storage reads as empty.
+	}
+	if (cached?.raw !== raw) cached = { raw, names: parse(raw) };
+	return cached.names;
 }
 
 export function rememberAttachmentName(path: string, name: string): void {
 	try {
-		const entries = readAttachmentNames();
+		const entries = { ...readAttachmentNames() };
 		delete entries[path];
 		entries[path] = name;
 		// Insertion order is recency, so the oldest files drop first.
