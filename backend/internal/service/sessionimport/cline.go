@@ -236,7 +236,7 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	return t, nil
+	return t, finishTranscript(&t)
 }
 
 // clineUserText is a user turn's typed text. Cline appends the context it

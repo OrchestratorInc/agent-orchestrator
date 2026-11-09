@@ -402,3 +402,24 @@ func TestScanListsNewestChatsPerProject(t *testing.T) {
 		t.Fatalf("oldest listed chat is from %v", oldest)
 	}
 }
+
+func TestScanHidesAOChatsNamedOnlyByTheirHistory(t *testing.T) {
+	old := harnessImporters[domain.HarnessGemini]
+	t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
+	root, cwd := canonical(t.TempDir()), canonical(t.TempDir())
+	harnessImporters[domain.HarnessGemini] = harnessImporter{
+		root: func(string) string { return root },
+		discover: func(context.Context, string) ([]sourceFiles, error) {
+			return []sourceFiles{{harness: domain.HarnessGemini, root: root, paths: []string{"chat.json"}, key: "chat.json"}}, nil
+		},
+		read: func(context.Context, string, ...string) (transcript, error) {
+			return transcript{harness: domain.HarnessGemini, root: root, path: "chat.json", paths: []string{"chat.json"}, nativeID: "own", cwd: cwd, last: time.Now(), messages: []Message{{Role: domain.MessageRoleUser, Text: "hi"}}}, nil
+		},
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}, sessions: []domain.SessionRecord{{ID: "ao-1", Metadata: domain.SessionMetadata{AgentSessionID: "own"}}}}
+	svc := New(st, "", nil)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessGemini: root}
+	if preview, err := svc.Scan(context.Background()); err != nil || len(preview.Candidates) != 0 {
+		t.Fatalf("AO's own chat was offered: %#v, %v", preview, err)
+	}
+}

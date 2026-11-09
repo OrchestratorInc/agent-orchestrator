@@ -268,8 +268,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 	if metadata.Name != "" {
 		t.title = metadata.Name
 	}
-	finishErr := finishTranscript(&t, errors.New("copilot working directory must be absolute"))
-	return t, finishErr
+	return t, finishTranscript(&t)
 }
 
 func readCopilotWorkspace(root *os.Root, sessionDir string) copilotWorkspace {

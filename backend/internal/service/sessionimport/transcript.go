@@ -628,16 +628,15 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}
-	finishErr := finishTranscript(&t, errRelativeCWD)
-	return t, finishErr
+	return t, finishTranscript(&t)
 }
 
-// finishTranscript rejects a relative working directory with cwdErr, dates
+// finishTranscript rejects a relative working directory, dates
 // undated messages by the newest record or else the file's mtime, and titles an
 // untitled conversation by its opening prompt.
-func finishTranscript(t *transcript, cwdErr error) error {
+func finishTranscript(t *transcript) error {
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return cwdErr
+		return errRelativeCWD
 	}
 	if t.last.IsZero() {
 		if info, err := os.Stat(t.path); err == nil {

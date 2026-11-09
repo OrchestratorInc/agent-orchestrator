@@ -214,6 +214,5 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted {
 		return t, errors.New("invalid native session id or no user prompt")
 	}
-	finishErr := finishTranscript(&t, errors.New("session cwd is not absolute"))
-	return t, finishErr
+	return t, finishTranscript(&t)
 }

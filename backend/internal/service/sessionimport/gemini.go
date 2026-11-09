@@ -312,10 +312,10 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 	if len(t.messages) == 0 {
 		return t, errors.New("no readable gemini conversation")
 	}
-	return t, nil
+	return t, finishTranscript(&t)
 }
 
-func discoverGeminiWithProjects(ctx context.Context, root string, projects []string) ([]sourceFiles, error) {
+func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 	var files []sourceFiles
 	err := filepath.WalkDir(filepath.Join(root, "tmp"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -324,18 +324,11 @@ func discoverGeminiWithProjects(ctx context.Context, root string, projects []str
 		if walkErr != nil || !entry.Type().IsRegular() || filepath.Base(filepath.Dir(path)) != "chats" || !strings.HasPrefix(entry.Name(), "session-") || (!strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, ".jsonl")) {
 			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
-		t, err := readGeminiTranscriptWithProjects(ctx, root, projects, path)
-		if err != nil {
-			return nil //nolint:nilerr // One malformed or unreadable conversation does not hide its neighbors.
-		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil //nolint:nilerr // Files removed or made unreadable during discovery are ineligible.
 		}
-		// Keep every copy until Scan applies project eligibility. Otherwise AO's
-		// own newer copy, under an AO worktree's project, would hide the eligible
-		// original with the same id.
-		files = append(files, sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
+		files = append(files, sourceFiles{harness: domain.HarnessGemini, root: root, key: path, paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
 	return files, err

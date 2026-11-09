@@ -411,8 +411,6 @@ func (s *Service) discoverFor(ctx context.Context, harness domain.AgentHarness, 
 	case importer.discoverRegistered != nil:
 		files, err := importer.discoverRegistered(ctx, projects)
 		return registeredSources(files, projects), err
-	case importer.discoverWithProjects != nil:
-		return importer.discoverWithProjects(ctx, root, projects)
 	default:
 		return s.discover(ctx, harness, root)
 	}
@@ -681,8 +679,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, MessageCount: result.count, Shortened: source.shortened}
 			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
-			} else if sessionID, ok := managed[source.nativeID]; ok {
-				c.SessionID = sessionID
+			} else if _, own := managed[source.nativeID]; own {
+				continue
 			}
 			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey()}
 		}

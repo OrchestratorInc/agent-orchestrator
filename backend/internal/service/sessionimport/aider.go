@@ -129,5 +129,5 @@ func readAiderTranscript(ctx context.Context, root string, paths ...string) (tra
 	if t.title == "" {
 		return t, errors.New("aider native history has no user message")
 	}
-	return t, nil
+	return t, finishTranscript(&t)
 }

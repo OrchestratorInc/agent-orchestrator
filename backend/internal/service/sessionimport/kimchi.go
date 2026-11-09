@@ -296,6 +296,5 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 	// Kimchi names a session with session_info.name; fall back to the opening
 	// prompt when it never set one.
 	t.title = activeTitle
-	finishErr := finishTranscript(&t, errRelativeCWD)
-	return t, finishErr
+	return t, finishTranscript(&t)
 }

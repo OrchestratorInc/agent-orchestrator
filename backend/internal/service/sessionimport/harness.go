@@ -2,7 +2,6 @@ package sessionimport
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -27,8 +26,7 @@ type harnessImporter struct {
 	// the native format being imported. Empty preserves capability selection.
 	mode domain.SessionMode
 	// Global stores can also need registered paths to resolve older metadata.
-	discoverWithProjects func(context.Context, string, []string) ([]sourceFiles, error)
-	readWithProjects     func(context.Context, string, []string, ...string) (transcript, error)
+	readWithProjects func(context.Context, string, []string, ...string) (transcript, error)
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
@@ -38,21 +36,14 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCline:  {root: clineRoot, discover: discoverCline, read: readClineTranscript},
 	domain.HarnessCursor: {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
 	domain.HarnessGrok:   {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
+	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
 }
 
-func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (t transcript, err error) {
+func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {
 	if read := harnessImporters[harness].readWithProjects; read != nil {
-		t, err = read(ctx, root, projects, paths...)
-	} else {
-		t, err = readTranscript(ctx, harness, root, paths...)
+		return read(ctx, root, projects, paths...)
 	}
-	if t.last.IsZero() {
-		if info, statErr := os.Stat(t.path); statErr == nil {
-			t.last = info.ModTime()
-		}
-	}
-	return t, err
+	return readTranscript(ctx, harness, root, paths...)
 }
 
 // importTitle keeps list titles compact without cutting UTF-8 characters.

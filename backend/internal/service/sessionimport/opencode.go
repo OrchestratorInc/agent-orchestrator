@@ -280,30 +280,17 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 	if !hasUser {
 		return t, errNoReadableConversation
 	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errRelativeCWD
-	}
 	if t.last.IsZero() && timeUpdated.Valid {
 		t.last = time.UnixMilli(timeUpdated.Int64)
 	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
 	// OpenCode titles an untitled chat "New session - <ISO>"; treat that
 	// placeholder as no title and fall back to the opening prompt.
-	t.title = strings.TrimSpace(title)
-	if t.title == "" || strings.HasPrefix(t.title, "New session - ") {
+	if t.title = strings.TrimSpace(title); strings.HasPrefix(t.title, "New session - ") {
 		t.title = ""
-		for _, m := range t.messages {
-			if m.Role == domain.MessageRoleUser {
-				t.title = m.Text
-				break
-			}
-		}
 	}
-	t.title = importTitle(t.title)
+	if err := finishTranscript(&t); err != nil {
+		return t, err
+	}
 	t.fingerprint, err = opencode.NativeSessionFingerprint(ctx, db, sessionID)
 	return t, err
 }

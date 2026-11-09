@@ -51,7 +51,7 @@ func readCursorTranscript(ctx context.Context, root string, paths ...string) (tr
 		}
 		t.messages = append(t.messages, Message{Role: role, Text: message.Text, At: message.At})
 	}
-	return t, nil
+	return t, finishTranscript(&t)
 }
 
 func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
