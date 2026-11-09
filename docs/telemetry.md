@@ -236,8 +236,10 @@ deleted before this counter was introduced cannot be reconstructed.
 emitting surface knows an AO Cloud sign-in and false otherwise. The daemon
 keeps the sign-in it last recorded across restarts (the
 `telemetry_bound_user` file). Signing out on the desktop removes that file and
-rotates the anonymous identifier itself, so the sign-out holds even when the
-daemon was not running to hear it. A paired phone omits the value until its
+rotates the anonymous identifier before the sign-out completes, so the sign-out
+holds even when the daemon was not running to hear it and the app quits right
+after. A launch that finds that file without a stored sign-in retires it the
+same way. A paired phone omits the value until its
 desktop answers. The desktop reads `lifetime_sessions` at launch, again once
 the daemon is ready if it was not available then, and again after the desktop
 creates a session; a session started from the CLI is reflected on the desktop's
@@ -615,7 +617,9 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
 - The desktop app loads PostHog feature flags so experiments can target an
   installation. Flags load only while Share usage analytics is on: an
   opted-out launch never starts the PostHog client, and turning analytics off
-  during a session stops flag requests until it is turned back on.
+  during a session stops flag requests until it is turned back on. Flag
+  requests carry no page address or referrer: the desktop does not let the
+  PostHog SDK store the first page it saw.
 - Person profiles are off for anonymous events. A profile is created when a
   GitHub username is first resolved (one update that sets the username and
   clears build details older versions stored on the profile) and when you sign

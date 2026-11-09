@@ -3311,6 +3311,9 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	// production WorkOS account is identified, as in TelemetryIdentityRuntime.
 	const stored = await readAuthStore(cloudDataDir()).catch(() => null);
 	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
+	// No stored sign-in but a binding left behind: a sign-out the daemon never
+	// heard (it was down, then the app quit). Retire it before anything exports.
+	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
 	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
@@ -3975,7 +3978,10 @@ function notifyRenderersOfCloudSession(
 	contents.send("cloud:sessionChanged", account);
 }
 
-installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession);
+// Telemetry's Cloud binding is retired as part of sign-out itself, not only when
+// the renderer later hands the sign-out to the daemon: the app can quit first,
+// and a CLI-started daemon would then restore the departed account.
+installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, () => telemetryIdentity.retireSignedOutBinding());
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback

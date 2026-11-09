@@ -404,3 +404,17 @@ describe("TelemetryIdentityController sign-out then sign-in", () => {
 		await expect(access(path.join(dir, "telemetry_bound_user"))).resolves.toBeUndefined();
 	});
 });
+
+describe("TelemetryIdentityController after the app quit mid sign-out", () => {
+  it("a fresh controller retires a binding the daemon never cleared", async () => {
+    const { writeFile, access } = await import("node:fs/promises");
+    const { dir } = await controller(vi.fn(async () => { throw new Error("connection refused"); }));
+    // Left behind: signed out while the daemon was down, then the app quit.
+    await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+    await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_linked\n");
+    const relaunched = new TelemetryIdentityController(dir, () => null);
+    await relaunched.retireSignedOutBinding();
+    await expect(access(path.join(dir, "telemetry_bound_user"))).rejects.toThrow();
+    expect((await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
+  });
+});

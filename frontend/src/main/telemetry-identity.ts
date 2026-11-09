@@ -91,11 +91,7 @@ export class TelemetryIdentityController {
 		// example by the CLI, would otherwise restore the old binding.
 		// Serialized with the hand-offs, and skipped if a later sign-in already
 		// replaced this sign-out, so it cannot remove that account's binding.
-		if (userId === null) {
-			const retire = this.queue.then(() => (this.cloudUserId === null ? this.retireBinding() : undefined));
-			this.queue = retire.catch(() => undefined);
-			await this.queue;
-		}
+		if (userId === null) await this.retireSignedOutBinding();
 		await this.flush();
 		if (this.ackedGeneration === mine) return true;
 		return this.unsupportedGeneration === mine ? "unsupported" : false;
@@ -110,6 +106,17 @@ export class TelemetryIdentityController {
 		if (!this.known) return;
 		this.pushed = false;
 		this.generation++;
+	}
+
+	/**
+	 * Retires the Cloud binding of a signed-out desktop, serialized with the
+	 * hand-offs and skipped if a later sign-in already replaced the sign-out, so
+	 * it cannot remove that account's binding. Never rejects.
+	 */
+	retireSignedOutBinding(): Promise<void> {
+		const retire = this.queue.then(() => (this.cloudUserId === null ? this.retireBinding() : undefined));
+		this.queue = retire.catch(() => undefined);
+		return this.queue;
 	}
 
 	/**

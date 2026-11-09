@@ -891,3 +891,20 @@ describe("the sign-in redirect each build sends", () => {
     });
   });
 });
+
+describe("cloud:signOut", () => {
+  it("finishes the signed-out hook before telling the renderers", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
+    const order: string[] = [];
+    mocks.ipcHandle.mockClear();
+    mocks.notifyRenderers.mockImplementation(() => order.push("notified"));
+    installCloudIPC(() => dataDir, mocks.notifyRenderers, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("telemetry retired");
+    });
+    const handler = mocks.ipcHandle.mock.calls.find(([channel]) => channel === "cloud:signOut")?.[1] as () => Promise<void>;
+    await handler();
+    expect(order).toEqual(["telemetry retired", "notified"]);
+    await rm(dataDir, { recursive: true, force: true });
+  });
+});

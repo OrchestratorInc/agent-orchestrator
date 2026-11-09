@@ -1011,3 +1011,31 @@ describe("feature flags across an in-session analytics opt-out", () => {
 		}
 	});
 });
+
+// /flags requests bypass before_send, so nothing the SDK stores from the page
+// may ride along: the raw route names projects and sessions.
+describe("feature flag requests carry no page route", () => {
+	it("sends no initial URL or referrer in /flags after a capture and identify", async () => {
+		vi.useFakeTimers();
+		const original = window.location.href;
+		window.history.replaceState(null, "", "/#/projects/private-project/sessions/secret-session?ref=private");
+		const client = new PostHog();
+		const bodies: string[] = [];
+		try {
+			client.init("phc_test", buildPostHogConfig("ins_route-test"));
+			(client as unknown as { _send_request: (options: { url: string; data?: unknown }) => void })._send_request = (options) => {
+				if (options.url.includes("/flags")) bodies.push(JSON.stringify(options.data ?? {}));
+			};
+			client.capture("ao.app.loaded", withTelemetryContext({}));
+			client.identify("user_A", { ao_cloud_user_id: "user_A" });
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(bodies.length).toBeGreaterThan(0);
+			for (const body of bodies) {
+				expect(body).not.toMatch(/private-project|secret-session|\$initial_current_url|\$initial_referrer/);
+			}
+		} finally {
+			window.history.replaceState(null, "", original);
+			vi.useRealTimers();
+		}
+	});
+});

@@ -1347,6 +1347,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		// stop /flags (stopPostHogForOptOut). An opted-out launch never creates
 		// the client. AO ships no surveys.
 		disable_surveys: true,
+		// The SDK otherwise stores the first URL and referrer as $initial_*
+		// person properties and sends them in /flags, which before_send never
+		// sees: the raw route would carry project and session identifiers.
+		save_campaign_params: false,
+		save_referrer: false,
 		// AO owns the stable random installation ID. Memory-only SDK
 		// persistence prevents legacy identified state from replacing it after
 		// an upgrade; the AO-owned heartbeat and route reservations continue to
