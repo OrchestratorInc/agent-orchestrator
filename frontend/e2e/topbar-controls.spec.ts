@@ -71,39 +71,38 @@ for (const mode of ["light", "dark"]) {
 }
 
 for (const mode of ["light", "dark"]) {
-	test(`@P0 filled topbar actions retain palette text colors in ${mode} mode`, async ({ page }) => {
-		await page.setViewportSize({ width: 1800, height: 900 });
-		await installFakeAgent(page, { projectId: "topbar-palette" });
-		await page.addInitScript((theme) => {
-			localStorage.setItem("ao.developerMode", "true");
-			localStorage.setItem("ao.theme", theme);
-			localStorage.setItem("ao.theme-style", "vercel");
-		}, mode);
-		await page.goto("/#/projects/topbar-palette/sessions/topbar-palette-orchestrator");
-		const action = page.locator(".center-panel-shell--floating-topbar .workspace-topbar-actions").getByRole("button", { name: "New task", exact: true });
-		await expect(action).toBeEnabled({ timeout: 20_000 });
-		for (const palette of ["vercel", "gruvbox", "orchestrate"]) {
-			await page.mouse.move(0, 0);
-			const expected = await action.evaluate((element, { mode, palette }) => {
-				document.documentElement.dataset.theme = mode;
-				document.documentElement.dataset.styleTheme = palette;
+	for (const palette of ["vercel", "gruvbox", "orchestrate"]) {
+		test(`@P0 filled topbar actions retain ${palette} text colors in ${mode} mode`, async ({ page }) => {
+			await page.setViewportSize({ width: 1800, height: 900 });
+			await installFakeAgent(page, { projectId: "topbar-palette" });
+			await page.addInitScript(({ mode, palette }) => {
+				localStorage.setItem("ao.developerMode", "true");
+				localStorage.setItem("ao.theme", mode);
+				localStorage.setItem("ao.theme-style", palette);
+			}, { mode, palette });
+			await page.goto("/#/projects/topbar-palette/sessions/topbar-palette-orchestrator");
+			const action = page.locator(".center-panel-shell--floating-topbar .workspace-topbar-actions").getByRole("button", { name: "New task", exact: true });
+			await expect(action).toBeEnabled({ timeout: 20_000 });
+			await expect(page.locator("html")).toHaveAttribute("data-theme", mode);
+			if (palette !== "orchestrate") await expect(page.locator("html")).toHaveAttribute("data-style-theme", palette);
+			const expected = await action.evaluate((element) => {
 				const reference = document.createElement("span");
 				reference.style.color = "var(--primary-foreground)";
 				element.append(reference);
 				const color = getComputedStyle(reference).color;
 				reference.remove();
 				return color;
-			}, { mode, palette });
-			await expect(action, palette).toHaveCSS("color", expected);
+			});
+			await expect(action).toHaveCSS("color", expected);
 			await action.hover();
-			await expect(action, palette).toHaveCSS("color", expected);
+			await expect(action).toHaveCSS("color", expected);
 			await page.mouse.down();
 			try {
-				await expect(action, palette).toHaveCSS("color", expected);
+				await expect(action).toHaveCSS("color", expected);
 			} finally {
 				await page.mouse.move(0, 0);
 				await page.mouse.up();
 			}
-		}
-	});
+		});
+	}
 }
