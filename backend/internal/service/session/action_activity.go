@@ -314,17 +314,17 @@ type actionCallerKey struct{}
 
 // WithActionCaller records which AO session issued the request, so an action
 // is shown in the chat of the session that asked for it.
-func WithActionCaller(ctx context.Context, caller domain.SessionID) context.Context {
-	caller = domain.SessionID(strings.TrimSpace(string(caller)))
-	if caller == "" {
+func WithActionCaller(ctx context.Context, session domain.SessionID) context.Context {
+	session = domain.SessionID(strings.TrimSpace(string(session)))
+	if session == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, actionCallerKey{}, caller)
+	return context.WithValue(ctx, actionCallerKey{}, session)
 }
 
 func actionCaller(ctx context.Context) domain.SessionID {
-	caller, _ := ctx.Value(actionCallerKey{}).(domain.SessionID)
-	return caller
+	session, _ := ctx.Value(actionCallerKey{}).(domain.SessionID)
+	return session
 }
 
 func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) domain.SessionRecord {
