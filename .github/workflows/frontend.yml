@@ -450,7 +450,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: renderer-smoke-results-${{ matrix.shard }}
+          # One name per attempt, so a re-run's upload can't clash with the first.
+          name: renderer-smoke-results-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: frontend/test-results/
           if-no-files-found: ignore
           retention-days: 7

@@ -18,22 +18,27 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
-// A screenshot taken while the surface is still settling (the archive mounts
-// its cards a frame after it opens and tracks its height with a
-// ResizeObserver) can differ from the next one for reasons unrelated to what is
-// underneath. Wait until two consecutive captures match, as toHaveScreenshot
-// does, so the comparison below only sees what the hidden content changes.
-async function settledScreenshot(target: Locator): Promise<Buffer> {
-	let previous = await target.screenshot({ animations: "disabled" });
-	for (let attempt = 0; attempt < 20; attempt++) {
-		await target.page().waitForTimeout(100);
-		const next = await target.screenshot({ animations: "disabled" });
-		if (next.equals(previous)) return next;
-		previous = next;
+// Keep captures in test-results, which CI uploads on failure.
+async function saveCaptures(captures: [name: string, image: Buffer][]) {
+	for (const [name, image] of captures) {
+		const path = test.info().outputPath(`${name}.png`);
+		await writeFile(path, image);
+		await test.info().attach(name, { path, contentType: "image/png" });
 	}
-	throw new Error("surface never settled: consecutive screenshots kept changing");
 }
 
+const setVisibility = (underneath: Locator, hidden: boolean) => underneath.evaluateAll((elements, hidden) => {
+	for (const element of elements) {
+		if (hidden) (element as HTMLElement).style.visibility = "hidden";
+		else (element as HTMLElement).style.removeProperty("visibility");
+	}
+}, hidden);
+
+// Bracket the capture with the content hidden between two captures with it
+// shown. If those two differ, the surface changed on its own (still settling
+// after it opened, for example), so the attempt says nothing about what is
+// underneath and is retried. If they match but the hidden capture differs, the
+// content underneath shows through.
 async function expectOccludes(surface: Locator, underneath: Locator) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
@@ -43,23 +48,31 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 	}));
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
-	const before = await settledScreenshot(surface);
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
-	});
-	const after = await settledScreenshot(surface);
-	if (!before.equals(after)) {
-		// Keep both captures in test-results, which CI uploads on failure.
-		for (const [name, image] of [["surface-with-content-underneath", before], ["surface-with-content-hidden", after]] as const) {
-			const path = test.info().outputPath(`${name}.png`);
-			await writeFile(path, image);
-			await test.info().attach(name, { path, contentType: "image/png" });
+	const attempts = 5;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		const shown = await surface.screenshot({ animations: "disabled" });
+		await setVisibility(underneath, true);
+		const hidden = await surface.screenshot({ animations: "disabled" });
+		await setVisibility(underneath, false);
+		const shownAgain = await surface.screenshot({ animations: "disabled" });
+		const captures: [string, Buffer][] = [
+			["surface-with-content-underneath", shown],
+			["surface-with-content-hidden", hidden],
+			["surface-with-content-underneath-again", shownAgain],
+		];
+		if (shown.equals(shownAgain)) {
+			if (!shown.equals(hidden)) await saveCaptures(captures.slice(0, 2));
+			const drifted = attempt > 1 ? ` (after ${attempt - 1} attempt${attempt > 2 ? "s" : ""} where the surface changed on its own)` : "";
+			expect(shown.equals(hidden), `content underneath must not affect the surface's pixels${drifted}`).toBe(true);
+			return;
 		}
+		test.info().annotations.push({ type: "surface changed on its own", description: `attempt ${attempt} of ${attempts}` });
+		if (attempt === attempts) {
+			await saveCaptures(captures);
+			throw new Error(`surface kept changing on its own: the captures before and after hiding the content underneath differed in all ${attempts} attempts`);
+		}
+		await surface.page().waitForTimeout(100);
 	}
-	expect(before.equals(after), "content underneath must not affect the surface's pixels").toBe(true);
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
-	});
 }
 
 for (const theme of ["dark", "light"]) {
