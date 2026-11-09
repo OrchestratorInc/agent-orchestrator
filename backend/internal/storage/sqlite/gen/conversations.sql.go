@@ -901,6 +901,24 @@ func (q *Queries) FinalizeConversationPlanActivity(ctx context.Context, arg Fina
 	return err
 }
 
+const hasConversationBranchActivity = `-- name: HasConversationBranchActivity :one
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns WHERE conversation_turns.branch_id = ?1
+    UNION ALL SELECT 1 FROM conversation_messages WHERE conversation_messages.branch_id = ?1
+    UNION ALL SELECT 1 FROM conversation_activities WHERE conversation_activities.branch_id = ?1
+    UNION ALL SELECT 1 FROM conversation_provider_events WHERE conversation_provider_events.branch_id = ?1
+)
+`
+
+// Include hidden turns and raw provider events, which can precede a timeline
+// item. An empty visible branch alone is not proof of an unused provider id.
+func (q *Queries) HasConversationBranchActivity(ctx context.Context, targetBranchID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasConversationBranchActivity, targetBranchID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasConversationTurns = `-- name: HasConversationTurns :one
 SELECT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = ?)
 `
@@ -2070,17 +2088,24 @@ func (q *Queries) ReleaseUntouchedConversationProvider(ctx context.Context, arg 
 const replaceUntouchedConversationProvider = `-- name: ReplaceUntouchedConversationProvider :execrows
 UPDATE conversation_branches
 SET provider_conversation_id = ?1
-WHERE parent_branch_id IS NULL
-  AND conversation_branches.provider_conversation_id = ?2
+WHERE conversation_branches.provider_conversation_id = ?2
   AND conversation_branches.id = (
       SELECT c.active_branch_id FROM conversations AS c
       WHERE c.current_session_id = ?3
         AND (c.session_id = ?3 OR (c.scope = 'project' AND c.session_id IS NULL))
-        AND c.latest_sequence = 0
-        AND NOT EXISTS (
-            SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
+        AND (
+            (conversation_branches.parent_branch_id IS NULL
+                AND c.latest_sequence = 0
+                AND NOT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = c.id))
+            OR (conversation_branches.parent_branch_id IS NOT NULL
+                AND c.scope = 'project'
+                AND conversation_branches.session_id = ?3)
         )
   )
+  AND NOT EXISTS (SELECT 1 FROM conversation_turns WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_activities WHERE branch_id = conversation_branches.id)
+  AND NOT EXISTS (SELECT 1 FROM conversation_provider_events WHERE branch_id = conversation_branches.id)
 `
 
 type ReplaceUntouchedConversationProviderParams struct {
@@ -2089,9 +2114,9 @@ type ReplaceUntouchedConversationProviderParams struct {
 	SessionID                      *domain.SessionID
 }
 
-// Same proof as ReleaseUntouchedConversationProvider, but rebinds the empty
-// root to a fresh provider id and keeps its provider scope, which is part of
-// the persistent provider host's identity.
+// Rebind only an unused branch owned by the current Chat session. A project
+// replacement may inherit old history, so its new child branch is eligible
+// even though the conversation's global sequence is nonzero.
 func (q *Queries) ReplaceUntouchedConversationProvider(ctx context.Context, arg ReplaceUntouchedConversationProviderParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceUntouchedConversationProvider, arg.ProviderConversationID, arg.ExpectedProviderConversationID, arg.SessionID)
 	if err != nil {

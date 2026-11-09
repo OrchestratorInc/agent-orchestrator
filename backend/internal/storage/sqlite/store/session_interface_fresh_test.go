@@ -325,6 +325,76 @@ func TestReplaceUnpersistedChatProviderMovesSessionAndRoot(t *testing.T) {
 	}
 }
 
+func TestReplaceUnpersistedChatProviderOnUntouchedReplacementBranch(t *testing.T) {
+	for _, withNewTurn := range []bool{false, true} {
+		name := "untouched"
+		if withNewTurn {
+			name = "new turn blocks replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			st := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, st, "replacement-branch")
+			now := time.Now()
+			makeSession := func(provider string) domain.SessionRecord {
+				rec := sampleRecord("replacement-branch")
+				rec.Kind = domain.KindOrchestrator
+				rec.Mode = domain.SessionModeChat
+				rec.Metadata.ProviderConversationID = provider
+				rec.Metadata.ControllerGeneration = "chat-generation"
+				created, err := st.CreateSession(ctx, rec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return created
+			}
+			old := makeSession("old-provider")
+			conversation, err := st.CreateConversation(ctx, "replacement-history", domain.ConversationScopeProject, old.ProjectID, old.ID, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.AdoptProviderTurn(ctx, conversation.ID, old.ID, "chat-generation", "old-turn", "old-provider-turn", now); err != nil {
+				t.Fatal(err)
+			}
+			replacement := makeSession("")
+			if _, err := st.CreateConversation(ctx, "ignored", domain.ConversationScopeProject, replacement.ProjectID, replacement.ID, now); err != nil {
+				t.Fatal(err)
+			}
+			child := domain.ConversationBranch{
+				ID: "replacement-child", ConversationID: conversation.ID, SessionID: replacement.ID,
+				ProviderConversationID: "reserved", ParentBranchID: conversation.ActiveBranchID,
+				ForkAfterSequence: 1, CreatedAt: now,
+			}
+			if err := st.CreateAndActivateConversationBranch(ctx, replacement.ID, child, "chat-generation", now); err != nil {
+				t.Fatal(err)
+			}
+			if withNewTurn {
+				if err := st.AdoptProviderTurn(ctx, conversation.ID, replacement.ID, "chat-generation", "new-turn", "new-provider-turn", now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = st.ReplaceUnpersistedChatProvider(ctx, replacement.ID, "reserved", "fresh-provider")
+			current, _, getErr := st.GetSession(ctx, replacement.ID)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			branch, branchErr := st.ConversationBranch(ctx, conversation.ID, child.ID)
+			if branchErr != nil {
+				t.Fatal(branchErr)
+			}
+			if withNewTurn {
+				if err == nil || current.Metadata.ProviderConversationID != "reserved" || branch.ProviderConversationID != "reserved" {
+					t.Fatalf("used branch was rebound: err=%v session=%q branch=%q", err, current.Metadata.ProviderConversationID, branch.ProviderConversationID)
+				}
+				return
+			}
+			if err != nil || current.Metadata.ProviderConversationID != "fresh-provider" || branch.ProviderConversationID != "fresh-provider" {
+				t.Fatalf("unused branch was not rebound: err=%v session=%q branch=%q", err, current.Metadata.ProviderConversationID, branch.ProviderConversationID)
+			}
+		})
+	}
+}
+
 // A project conversation handed to a replacement orchestrator keeps its root.
 // The root's session_id records the orchestrator that created it; the
 // conversation's current session is the live owner. An untouched reservation

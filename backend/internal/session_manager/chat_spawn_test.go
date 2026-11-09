@@ -86,6 +86,8 @@ type recordingLauncher struct {
 	relayOptions        []ports.MessageDeliveryOptions
 	relayIDs            []string
 	stopped             []domain.SessionID
+	stopErr             error
+	onStop              func()
 	backgroundHarnesses []domain.AgentHarness
 	background          []ports.ChatStartConfig
 	backgroundPrompts   []string
@@ -228,7 +230,10 @@ func (l *recordingLauncher) RelaySessionChatTurn(_ context.Context, _ domain.Ses
 func (l *recordingLauncher) StopChat(_ context.Context, id domain.SessionID) error { //nolint:unparam
 
 	l.stopped = append(l.stopped, id)
-	return nil
+	if l.onStop != nil {
+		l.onStop()
+	}
+	return l.stopErr
 }
 
 func (l *recordingLauncher) HasLiveChatController(domain.SessionID) bool {

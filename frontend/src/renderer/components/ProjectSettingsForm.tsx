@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useRef } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { apiClient } from "../lib/api-client";
@@ -17,7 +17,6 @@ import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestr
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { captureRendererEvent } from "../lib/telemetry";
 import { type OrchestratorReplacementFailure, useUiStore } from "../stores/ui-store";
-import { newestActiveOrchestrator } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
@@ -135,14 +134,10 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
-	const workspaceQuery = useQuery({ ...workspaceQueryOptions, enabled: !hostId });
-	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId);
 	const config = project.config ?? {};
 	const isScratchProject = project.kind === "scratch";
 	const { settings } = useSettings(hostId);
 	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
-	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.find((item) => item.id === projectId);
-	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const initialValues: ProjectSettingsDraft = {
 		displayName: project.name,
@@ -170,7 +165,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		intakeAssignee: intake.assignee ?? "",
 	};
 	const lastOrchestratorRef = useRef(config.orchestrator?.agent ?? "");
-	const replacementAttemptedRef = useRef(false);
 	const replacementFailedRef = useRef(false);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	useEnsureAgentReadiness({ hostId });
@@ -258,11 +252,12 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			body: { displayName, config: next },
 		});
 		if (error) throw apiErrorException(error);
-		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current ||
-			(Boolean(activeOrchestrator && activeOrchestrator.provider !== values.orchestratorAgent) && !replacementAttemptedRef.current);
+		// A worker-only settings save must not retire a live orchestrator that
+		// switched providers within its session. Replace only for an explicit
+		// default-agent change or a retry of a failed replacement.
+		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current;
 		lastOrchestratorRef.current = values.orchestratorAgent;
 		if (replaceOrchestrator) {
-			replacementAttemptedRef.current = true;
 			try {
 				const sessionId = hostId
 					? await openRemoteOrchestrator(hostId, projectId, undefined, undefined, true, "settings")

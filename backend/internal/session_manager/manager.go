@@ -2890,6 +2890,14 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if !ok || rec.IsTerminated {
 		return nil
 	}
+	// A project conversation is rebound to the replacement orchestrator. Drain
+	// the old Chat projector before that rebind or its in-flight turn can write
+	// into the replacement's branch after this session is terminated.
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		if err := m.stopAgentController(ctx, rec); err != nil {
+			return fmt.Errorf("retire replacement %s: stop chat controller: %w", id, err)
+		}
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	if rec.Metadata.WorkspacePath == "" || rec.Metadata.Branch == "" {

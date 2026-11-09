@@ -18,19 +18,23 @@ import (
 func TestResumeUntouchedChatStartsFreshWhenProviderNeverPersisted(t *testing.T) {
 	const reserved = "92fadfcb-3d31-4dd6-93c1-097bf823cc19"
 	for _, tc := range []struct {
-		name         string
-		kind         domain.SessionKind
-		scope        domain.ConversationScope
-		providerTurn bool
-		wantFresh    bool
-		replacement  bool
+		name             string
+		kind             domain.SessionKind
+		scope            domain.ConversationScope
+		providerTurn     bool
+		wantFresh        bool
+		replacement      bool
+		inheritedHistory bool
+		newBranchTurn    bool
 	}{
-		{"orchestrator", domain.KindOrchestrator, domain.ConversationScopeProject, false, true, false},
-		{"worker", domain.KindWorker, domain.ConversationScopeSession, false, true, false},
-		{"orchestrator with provider turn", domain.KindOrchestrator, domain.ConversationScopeProject, true, false, false},
+		{name: "orchestrator", kind: domain.KindOrchestrator, scope: domain.ConversationScopeProject, wantFresh: true},
+		{name: "worker", kind: domain.KindWorker, scope: domain.ConversationScopeSession, wantFresh: true},
+		{name: "orchestrator with provider turn", kind: domain.KindOrchestrator, scope: domain.ConversationScopeProject, providerTurn: true},
 		// The project conversation was handed to a replacement orchestrator,
 		// whose root still records the orchestrator that created it.
-		{"replacement orchestrator", domain.KindOrchestrator, domain.ConversationScopeProject, false, true, true},
+		{name: "replacement orchestrator", kind: domain.KindOrchestrator, scope: domain.ConversationScopeProject, wantFresh: true, replacement: true},
+		{name: "replacement with inherited history", kind: domain.KindOrchestrator, scope: domain.ConversationScopeProject, wantFresh: true, replacement: true, inheritedHistory: true},
+		{name: "replacement with a new turn", kind: domain.KindOrchestrator, scope: domain.ConversationScopeProject, replacement: true, inheritedHistory: true, newBranchTurn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// An empty Claude config dir: no transcript exists for the reserved id.
@@ -57,7 +61,7 @@ func TestResumeUntouchedChatStartsFreshWhenProviderNeverPersisted(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.providerTurn {
+			if tc.providerTurn || tc.inheritedHistory {
 				if err := store.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation",
 					"turn-1", "provider-turn-1", now); err != nil {
 					t.Fatal(err)
@@ -80,6 +84,24 @@ func TestResumeUntouchedChatStartsFreshWhenProviderNeverPersisted(t *testing.T) 
 					t.Fatal(err)
 				}
 				created = replacement
+				if tc.inheritedHistory {
+					// The replacement starts on a new branch after the old
+					// orchestrator has already contributed project history.
+					child := domain.ConversationBranch{
+						ID: "replacement-branch", ConversationID: conversation.ID, SessionID: replacement.ID,
+						ProviderConversationID: reserved, ParentBranchID: conversation.ActiveBranchID,
+						ForkAfterSequence: 1, CreatedAt: now,
+					}
+					if err := store.CreateAndActivateConversationBranch(ctx, replacement.ID, child, "chat-generation", now); err != nil {
+						t.Fatal(err)
+					}
+					if tc.newBranchTurn {
+						if err := store.AdoptProviderTurn(ctx, conversation.ID, replacement.ID, "chat-generation",
+							"turn-2", "provider-turn-2", now); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
 			}
 			launcher := &recordingLauncher{}
 			manager := New(Deps{
@@ -114,7 +136,25 @@ func TestResumeUntouchedChatStartsFreshWhenProviderNeverPersisted(t *testing.T) 
 				t.Fatalf("ResumeAgentWithMode: %v", err)
 			}
 			// The launcher stands in for a driver that started fresh ("thread-1").
-			assertFreshProviderOnRoot(t, store, created.ID, conversation)
+			if tc.inheritedHistory {
+				current, _, err := store.GetSession(ctx, created.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				active, err := store.ConversationForSession(ctx, created.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				branch, err := store.ConversationBranch(ctx, active.ID, active.ActiveBranchID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if current.Metadata.ProviderConversationID != "thread-1" || branch.ProviderConversationID != "thread-1" || branch.ParentBranchID == "" {
+					t.Fatalf("fresh provider was not bound to replacement branch: session=%q branch=%+v", current.Metadata.ProviderConversationID, branch)
+				}
+			} else {
+				assertFreshProviderOnRoot(t, store, created.ID, conversation)
+			}
 		})
 	}
 }

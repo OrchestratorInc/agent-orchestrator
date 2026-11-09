@@ -8956,6 +8956,44 @@ func TestRetireForReplacementCapturesAndReleasesWorkspace(t *testing.T) {
 	}
 }
 
+func TestRetireForReplacementStopsChatBeforeRebindingProjectHistory(t *testing.T) {
+	for _, stopErr := range []error{nil, errors.New("controller still running")} {
+		t.Run(fmt.Sprint(stopErr), func(t *testing.T) {
+			m, st, _, ws := newLifecycleManager()
+			chat := &recordingLauncher{stopErr: stopErr}
+			m.chat = chat
+			st.sessions["mer-orch"] = domain.SessionRecord{
+				ID: "mer-orch", ProjectID: "mer", Kind: domain.KindOrchestrator,
+				Mode:     domain.SessionModeChat,
+				Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-orch", Branch: "ao/mer-orchestrator"},
+				Activity: domain.Activity{State: domain.ActivityActive},
+			}
+			chat.onStop = func() {
+				if st.sessions["mer-orch"].IsTerminated || strings.Contains(strings.Join(ws.calls, ","), "ForceDestroy:mer-orch") {
+					t.Fatal("old Chat controller was stopped after retirement or workspace release")
+				}
+			}
+
+			err := m.RetireForReplacement(context.Background(), "mer-orch")
+			if len(chat.stopped) != 1 || chat.stopped[0] != "mer-orch" {
+				t.Fatalf("StopChat calls = %v, want retired controller stopped before branch reuse", chat.stopped)
+			}
+			if stopErr != nil {
+				if !errors.Is(err, stopErr) {
+					t.Fatalf("retire error = %v, want stop error", err)
+				}
+				if st.sessions["mer-orch"].IsTerminated || strings.Contains(strings.Join(ws.calls, ","), "ForceDestroy:mer-orch") {
+					t.Fatal("controller stop was unconfirmed but replacement retired the session or workspace")
+				}
+				return
+			}
+			if err != nil || !st.sessions["mer-orch"].IsTerminated {
+				t.Fatalf("retire = %v, session terminated = %v", err, st.sessions["mer-orch"].IsTerminated)
+			}
+		})
+	}
+}
+
 func TestRetireForReplacement_NativeTerminationFailurePreservesRuntimeAndWorkspace(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	agent := &nativeTerminatingAgent{wantID: "native-7", err: errors.New("prime stop failed")}
