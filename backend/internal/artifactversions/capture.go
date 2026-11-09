@@ -87,6 +87,11 @@ type Capturer struct {
 	// moves every version recorded at the old path. It is separate from mu, so
 	// a read waits for a version row, never for a file being copied.
 	trackMu sync.Mutex
+	// freed holds, per session, the blobs of versions Track deleted. A blob is
+	// removed only under mu, which a capture holds from committing a blob to
+	// recording its version, so a capture of the same content never loses its
+	// blob. Guarded by trackMu.
+	freed map[domain.SessionID][]string
 	// observed holds, per session and path, the last observation of each file
 	// that is not yet known to equal its latest version.
 	observed map[domain.SessionID]map[string]observation
@@ -104,6 +109,7 @@ func New(store versionStore, dataDir string, logger *slog.Logger) *Capturer {
 		now:      time.Now,
 		observed: make(map[domain.SessionID]map[string]observation),
 		swept:    make(map[domain.SessionID]bool),
+		freed:    make(map[domain.SessionID][]string),
 	}
 }
 
@@ -120,13 +126,14 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 	if err != nil {
 		return err
 	}
-	if _, err := c.track(ctx, sess, rows); err != nil {
-		c.logger.Debug("artifact versions: track failed", "session", sess.ID, "err", err)
-	}
-	files, err := sessionartifacts.List(ctx, dir)
+	files, err := c.track(ctx, sess, rows)
 	if err != nil {
-		return err
+		c.logger.Debug("artifact versions: track failed", "session", sess.ID, "err", err)
+		if files, err = sessionartifacts.List(ctx, dir); err != nil {
+			return err
+		}
 	}
+	c.removeFreed(ctx, sess)
 	if len(files) == 0 {
 		delete(c.observed, sess.ID)
 		return nil
@@ -201,7 +208,39 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 // first time gets a row. Changes that race another writer are left for the
 // next call, and the files are listed from rows as they were.
 func (c *Capturer) Track(ctx context.Context, sess domain.SessionRecord, rows []domain.SessionArtifactRecord) ([]domain.SessionArtifactFile, error) {
-	return c.track(ctx, sess, rows)
+	files, err := c.track(ctx, sess, rows)
+	// A read does not wait for a capture: what it freed is removed now if no
+	// capture is running, else by the session's next capture.
+	if c.mu.TryLock() {
+		c.removeFreed(ctx, sess)
+		c.mu.Unlock()
+	}
+	return files, err
+}
+
+// removeFreed removes the blobs Track freed for sess that no version refers
+// to any more. The caller holds mu.
+func (c *Capturer) removeFreed(ctx context.Context, sess domain.SessionRecord) {
+	c.trackMu.Lock()
+	sums := c.freed[sess.ID]
+	delete(c.freed, sess.ID)
+	c.trackMu.Unlock()
+	if len(sums) == 0 {
+		return
+	}
+	root, err := os.OpenRoot(cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID)))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	blobs := blobStore{root: root}
+	removed := make(map[string]bool, len(sums))
+	for _, sum := range sums {
+		if !removed[sum] {
+			removed[sum] = true
+			c.removeUnreferenced(ctx, sess.ID, blobs, sum)
+		}
+	}
 }
 
 func (c *Capturer) track(ctx context.Context, sess domain.SessionRecord, rows []domain.SessionArtifactRecord) ([]domain.SessionArtifactFile, error) {
@@ -227,13 +266,7 @@ func (c *Capturer) track(ctx context.Context, sess domain.SessionRecord, rows []
 		rows = updated
 	}
 	if len(freed) > 0 {
-		if root, err := os.OpenRoot(dir); err == nil {
-			blobs := blobStore{root: root}
-			for _, sum := range freed {
-				c.removeUnreferenced(ctx, sess.ID, blobs, sum)
-			}
-			_ = root.Close()
-		}
+		c.freed[sess.ID] = append(c.freed[sess.ID], freed...)
 	}
 	return observation.Apply(rows), nil
 }

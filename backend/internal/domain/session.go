@@ -197,11 +197,15 @@ type SessionArtifactChanges struct {
 	// Drop removes rows of files that were gone before a renamed artifact took
 	// their path, with their version rows.
 	Drop []SessionArtifactFileUpdate
+	// Forget removes rows of files that are gone and were never registered
+	// nor versioned, such as an editor's temporary files. A row with version
+	// history is kept, with no file, as SetFile would.
+	Forget []SessionArtifactFileUpdate
 }
 
 // Empty reports whether c changes nothing.
 func (c SessionArtifactChanges) Empty() bool {
-	return len(c.Insert) == 0 && len(c.Move) == 0 && len(c.SetFile) == 0 && len(c.Drop) == 0
+	return len(c.Insert) == 0 && len(c.Move) == 0 && len(c.SetFile) == 0 && len(c.Drop) == 0 && len(c.Forget) == 0
 }
 
 // SessionArtifactMove is one renamed artifact.
@@ -211,6 +215,9 @@ type SessionArtifactMove struct {
 	To            string
 	File          FileIdentity
 	PreviousPaths []string
+	// RegisteredAt carries the registration of a gone artifact the move
+	// replaces at To, so a deliverable written there again stays registered.
+	RegisteredAt *time.Time
 }
 
 // SessionArtifactFileUpdate names one artifact row by ID and current path.

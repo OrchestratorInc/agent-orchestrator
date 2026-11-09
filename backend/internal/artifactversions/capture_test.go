@@ -390,3 +390,52 @@ func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
 		t.Fatalf("history after an edit = %+v, want version 2 on top", vs)
 	}
 }
+
+// A read that drops a version does not remove its blob while a capture is
+// running, since the capture may be about to record a version of the same
+// content; the next capture removes it.
+func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
+	h := newHarness(t)
+	h.write("a.html", "<p>a</p>")
+	h.write("b.html", "<p>b</p>")
+	h.tick()
+	h.tick()
+	gone := h.versions("b.html")
+	if len(gone) != 1 {
+		t.Fatalf("b.html versions = %+v", gone)
+	}
+	if _, _, err := h.store.AddSessionArtifacts(h.ctx, h.sess.ID, []string{"b.html"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	track := func() {
+		t.Helper()
+		rows, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.cap.Track(h.ctx, h.sess, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(h.dir, "b.html")); err != nil {
+		t.Fatal(err)
+	}
+	track()
+	if err := os.Rename(filepath.Join(h.dir, "a.html"), filepath.Join(h.dir, "b.html")); err != nil {
+		t.Fatal(err)
+	}
+	h.cap.mu.Lock() // a capture is running
+	track()
+	if _, ok := h.blob(gone[0].SHA256); !ok {
+		h.cap.mu.Unlock()
+		t.Fatal("a read removed a blob while a capture held the lock")
+	}
+	h.cap.mu.Unlock()
+	if vs := h.versions("b.html"); len(vs) != 1 || vs[0].SHA256 != sum("<p>a</p>") {
+		t.Fatalf("b.html history = %+v, want a.html's", vs)
+	}
+	h.tick()
+	if _, ok := h.blob(gone[0].SHA256); ok {
+		t.Fatal("the next capture left the dropped version's blob")
+	}
+}

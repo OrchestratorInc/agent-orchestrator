@@ -85,9 +85,16 @@ func (d *identityDir) scan() (domain.SessionArtifactChanges, []domain.SessionArt
 	for _, drop := range changes.Drop {
 		dropped[drop.ID] = true
 	}
+	// The harness keeps no versions, so a forgotten row always goes.
+	for _, forget := range changes.Forget {
+		dropped[forget.ID] = true
+	}
 	for _, move := range changes.Move {
 		row := &d.rows[byID[move.ID]]
 		row.Path, row.File, row.PreviousPaths = move.To, move.File, move.PreviousPaths
+		if row.RegisteredAt == nil {
+			row.RegisteredAt = move.RegisteredAt
+		}
 	}
 	for _, update := range changes.SetFile {
 		d.rows[byID[update.ID]].File = update.File
@@ -194,7 +201,9 @@ func TestFileWrittenAgainInPlaceKeepsItsIdentity(t *testing.T) {
 	if d.idAt("page.html") != id {
 		t.Fatal("a file replaced in place got a new identity")
 	}
-	// And an agent that deletes and writes it again.
+	// And an agent that deletes and writes it again: a registered file keeps
+	// its row while it is gone (an unregistered one does if it has history).
+	d.register("page.html")
 	d.remove("page.html")
 	d.scan()
 	d.write("page.html", "three")
@@ -223,6 +232,7 @@ func TestRenameOntoAGoneFileTakesItsPath(t *testing.T) {
 	d.write("b.html", "b")
 	d.scan()
 	a, b := d.idAt("a.html"), d.idAt("b.html")
+	d.register("b.html")
 	d.remove("b.html")
 	d.scan()
 	d.rename("a.html", "b.html")
@@ -296,4 +306,52 @@ func TestRenamedAndEditedFileKeepsItsIdentity(t *testing.T) {
 	if d.scan(); d.idAt("summary.md") != id {
 		t.Fatal("a file renamed and edited before the scan got a new identity")
 	}
+}
+
+// A rename onto the path of a registered file that is gone keeps the path a
+// deliverable: the renamed artifact takes its registration.
+func TestRenameOntoAGoneRegisteredFileKeepsTheRegistration(t *testing.T) {
+	d := newIdentityDir(t)
+	d.write("report.html", "old")
+	d.write("draft.html", "new")
+	d.scan()
+	d.register("report.html")
+	d.remove("report.html")
+	d.scan()
+	draft := d.idAt("draft.html")
+	d.rename("draft.html", "report.html")
+	changes, _ := d.scan()
+	if len(changes.Move) != 1 || changes.Move[0].RegisteredAt == nil || len(changes.Drop) != 1 {
+		t.Fatalf("rename onto a gone registered file = %+v", changes)
+	}
+	// Registered rows are read back for the listing, as the store does.
+	files := observeFiles(d)
+	if file, ok := fileAt(files, "report.html"); !ok || file.ID != draft || !file.Registered {
+		t.Fatalf("report.html = %+v, want draft's artifact, registered", file)
+	}
+}
+
+// A gone file that was never registered is forgotten, so transient files such
+// as an editor's do not leave rows behind; a registered one is kept.
+func TestGoneUnregisteredFileIsForgotten(t *testing.T) {
+	d := newIdentityDir(t)
+	d.write("page.html.tmp", "x")
+	d.write("report.html", "r")
+	d.scan()
+	d.register("report.html")
+	d.remove("page.html.tmp")
+	d.remove("report.html")
+	changes, _ := d.scan()
+	if len(changes.Forget) != 1 || changes.Forget[0].Path != "page.html.tmp" || len(changes.SetFile) != 1 || changes.SetFile[0].Path != "report.html" {
+		t.Fatalf("gone files = %+v, want the temporary file forgotten and report.html kept", changes)
+	}
+}
+
+func observeFiles(d *identityDir) []domain.SessionArtifactFile {
+	d.t.Helper()
+	observation, err := Observe(context.Background(), d.dir, RegisteredPaths(d.rows))
+	if err != nil {
+		d.t.Fatal(err)
+	}
+	return observation.Apply(d.rows)
 }

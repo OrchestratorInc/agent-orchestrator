@@ -34,6 +34,7 @@ WHERE id = sqlc.arg(id) AND path = sqlc.arg(path);
 -- name: MoveSessionArtifact :execrows
 UPDATE session_artifacts
 SET path = sqlc.arg(to_path), previous_paths = sqlc.arg(previous_paths),
+    registered_at = COALESCE(registered_at, sqlc.narg(registered_at)),
     file_dev = sqlc.arg(file_dev), file_ino = sqlc.arg(file_ino), file_birth = sqlc.arg(file_birth),
     file_generation = sqlc.arg(file_generation), file_mtime = sqlc.arg(file_mtime)
 WHERE id = sqlc.arg(id) AND path = sqlc.arg(from_path);
@@ -46,6 +47,17 @@ WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(from_path);
 -- name: DeleteSessionArtifactByID :execrows
 DELETE FROM session_artifacts
 WHERE id = sqlc.arg(id) AND path = sqlc.arg(path);
+
+-- name: ForgetSessionArtifact :execrows
+DELETE FROM session_artifacts
+WHERE id = (
+    SELECT a.id FROM session_artifacts AS a
+    WHERE a.id = sqlc.arg(id) AND a.path = sqlc.arg(path) AND a.registered_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM session_artifact_versions AS v
+          WHERE v.session_id = a.session_id AND v.path = a.path
+      )
+);
 
 -- name: DeleteSessionArtifact :exec
 DELETE FROM session_artifacts

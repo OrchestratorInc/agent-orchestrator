@@ -55,6 +55,31 @@ func (q *Queries) DeleteSessionArtifacts(ctx context.Context, sessionID domain.S
 	return err
 }
 
+const forgetSessionArtifact = `-- name: ForgetSessionArtifact :execrows
+DELETE FROM session_artifacts
+WHERE id = (
+    SELECT a.id FROM session_artifacts AS a
+    WHERE a.id = ?1 AND a.path = ?2 AND a.registered_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM session_artifact_versions AS v
+          WHERE v.session_id = a.session_id AND v.path = a.path
+      )
+)
+`
+
+type ForgetSessionArtifactParams struct {
+	ID   string
+	Path string
+}
+
+func (q *Queries) ForgetSessionArtifact(ctx context.Context, arg ForgetSessionArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, forgetSessionArtifact, arg.ID, arg.Path)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertSessionArtifact = `-- name: InsertSessionArtifact :exec
 INSERT INTO session_artifacts (
     id, session_id, path, registered_at, file_dev, file_ino, file_birth, file_generation, file_mtime, previous_paths, created_at
@@ -206,14 +231,16 @@ func (q *Queries) ListSessionArtifactsForSessions(ctx context.Context, jsonEach 
 const moveSessionArtifact = `-- name: MoveSessionArtifact :execrows
 UPDATE session_artifacts
 SET path = ?1, previous_paths = ?2,
-    file_dev = ?3, file_ino = ?4, file_birth = ?5,
-    file_generation = ?6, file_mtime = ?7
-WHERE id = ?8 AND path = ?9
+    registered_at = COALESCE(registered_at, ?3),
+    file_dev = ?4, file_ino = ?5, file_birth = ?6,
+    file_generation = ?7, file_mtime = ?8
+WHERE id = ?9 AND path = ?10
 `
 
 type MoveSessionArtifactParams struct {
 	ToPath         string
 	PreviousPaths  string
+	RegisteredAt   sql.NullTime
 	FileDev        int64
 	FileIno        int64
 	FileBirth      int64
@@ -227,6 +254,7 @@ func (q *Queries) MoveSessionArtifact(ctx context.Context, arg MoveSessionArtifa
 	result, err := q.db.ExecContext(ctx, moveSessionArtifact,
 		arg.ToPath,
 		arg.PreviousPaths,
+		arg.RegisteredAt,
 		arg.FileDev,
 		arg.FileIno,
 		arg.FileBirth,

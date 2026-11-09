@@ -114,7 +114,7 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 		// Moves go through a path no file can have first, so artifacts that
 		// take each other's paths never meet on one.
 		for _, move := range changes.Move {
-			if err := moveSessionArtifact(ctx, q, id, move.ID, move.From, movingPath(move.ID), nil, domain.FileIdentity{}); err != nil {
+			if err := moveSessionArtifact(ctx, q, id, move.ID, move.From, movingPath(move.ID), nil, domain.FileIdentity{}, nil); err != nil {
 				return err
 			}
 		}
@@ -125,7 +125,7 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 				return err
 			}
 			freed = append(freed, sums...)
-			if err := moveSessionArtifact(ctx, q, id, move.ID, movingPath(move.ID), move.To, move.PreviousPaths, move.File); err != nil {
+			if err := moveSessionArtifact(ctx, q, id, move.ID, movingPath(move.ID), move.To, move.PreviousPaths, move.File, move.RegisteredAt); err != nil {
 				return err
 			}
 		}
@@ -135,6 +135,22 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 				FileDev: int64(update.File.Dev), FileIno: int64(update.File.Ino), FileBirth: update.File.Birth, FileGeneration: int64(update.File.Generation), FileMtime: update.File.ModTime, //nolint:gosec // stored as SQLite's signed integer and read back the same way
 			})
 			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return domain.ErrSessionArtifactsChanged
+			}
+		}
+		for _, forget := range changes.Forget {
+			n, err := q.ForgetSessionArtifact(ctx, gen.ForgetSessionArtifactParams{ID: forget.ID, Path: forget.Path})
+			if err != nil {
+				return err
+			}
+			if n == 1 {
+				continue
+			}
+			// Kept for its history, with no file; or changed since it was read.
+			if n, err = q.SetSessionArtifactFile(ctx, gen.SetSessionArtifactFileParams{ID: forget.ID, Path: forget.Path}); err != nil {
 				return err
 			}
 			if n != 1 {
@@ -166,7 +182,7 @@ func movingPath(id string) string {
 	return "\x00moving/" + id
 }
 
-func moveSessionArtifact(ctx context.Context, q *gen.Queries, session domain.SessionID, id, from, to string, previous []string, file domain.FileIdentity) error {
+func moveSessionArtifact(ctx context.Context, q *gen.Queries, session domain.SessionID, id, from, to string, previous []string, file domain.FileIdentity, registeredAt *time.Time) error {
 	if previous == nil {
 		previous = []string{}
 	}
@@ -174,8 +190,12 @@ func moveSessionArtifact(ctx context.Context, q *gen.Queries, session domain.Ses
 	if err != nil {
 		return err
 	}
+	var registered sql.NullTime
+	if registeredAt != nil {
+		registered = sql.NullTime{Time: *registeredAt, Valid: true}
+	}
 	n, err := q.MoveSessionArtifact(ctx, gen.MoveSessionArtifactParams{
-		ID: id, FromPath: from, ToPath: to, PreviousPaths: string(encoded),
+		ID: id, FromPath: from, ToPath: to, PreviousPaths: string(encoded), RegisteredAt: registered,
 		FileDev: int64(file.Dev), FileIno: int64(file.Ino), FileBirth: file.Birth, FileGeneration: int64(file.Generation), FileMtime: file.ModTime, //nolint:gosec // see ApplySessionArtifactChanges
 	})
 	if err != nil {

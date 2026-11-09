@@ -4,8 +4,9 @@
 -- directory. id is the artifact's identity and never changes: a rename moves
 -- the row to the new path, so the artifact keeps its registration, version
 -- history and share link. registered_at is when ao artifact add registered it
--- as a deliverable, NULL for a file it did not register. A row can outlive its
--- file; a file written again at the path is the same artifact.
+-- as a deliverable, NULL for a file it did not register. A registered row, or
+-- one with version history, outlives its file, and a file written again at the
+-- path is the same artifact; any other row goes with its file.
 --
 -- file_dev, file_ino and file_birth (nanoseconds, 0 where the platform does
 -- not report it) name the file on disk that the row last saw. A rename keeps

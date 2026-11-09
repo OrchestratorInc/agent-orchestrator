@@ -2729,6 +2729,59 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 	}
 }
 
+// A move onto a gone registered artifact's path takes its registration, and a
+// gone file is forgotten only when it was never registered nor versioned.
+func TestApplySessionArtifactChangesCarriesRegistrationAndForgets(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Insert: []domain.SessionArtifactRecord{
+		{ID: "id-draft", Path: "draft.html", CreatedAt: now},
+		{ID: "id-report", Path: "report.html", CreatedAt: now},
+		{ID: "id-tmp", Path: "page.tmp", CreatedAt: now},
+		{ID: "id-kept", Path: "kept.md", CreatedAt: now},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"report.html"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
+		SessionID: sess.ID, Path: "kept.md", SHA256: "sha-kept", ContentType: "text/markdown", ModTime: now, CreatedAt: now,
+	}, 50); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Drop:   []domain.SessionArtifactFileUpdate{{ID: "id-report", Path: "report.html"}},
+		Move:   []domain.SessionArtifactMove{{ID: "id-draft", From: "draft.html", To: "report.html", PreviousPaths: []string{"draft.html"}, RegisteredAt: &now}},
+		Forget: []domain.SessionArtifactFileUpdate{{ID: "id-tmp", Path: "page.tmp"}, {ID: "id-kept", Path: "kept.md"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListSessionArtifacts(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]domain.SessionArtifactRecord{}
+	for _, row := range rows {
+		byPath[row.Path] = row
+	}
+	if report := byPath["report.html"]; report.ID != "id-draft" || report.RegisteredAt == nil {
+		t.Fatalf("report.html = %+v, want draft's artifact, registered", report)
+	}
+	if _, ok := byPath["page.tmp"]; ok {
+		t.Fatal("an unregistered file with no history was kept")
+	}
+	if kept, ok := byPath["kept.md"]; !ok || kept.ID != "id-kept" {
+		t.Fatalf("a file with history was forgotten: %+v", rows)
+	}
+}
+
 func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
