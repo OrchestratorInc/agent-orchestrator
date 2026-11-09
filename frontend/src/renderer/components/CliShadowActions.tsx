@@ -110,8 +110,8 @@ export function CliShadowActions({ status, surface }: { status: Shadowed; surfac
 	const [error, setError] = useState<string | null>(null);
 	const [copied, setCopied] = useState(false);
 	const { fix } = status;
-	const primary = surface === "row" ? "footer-primary" : undefined;
-	const secondary = surface === "row" ? "footer" : "link";
+	const primary = surface === "row" ? "primary" : undefined;
+	const secondary = surface === "row" ? "secondary" : "link";
 	const secondaryClass = surface === "toast" ? "text-xs text-[var(--color-text-import-title)]" : undefined;
 
 	const replace = async () => {
