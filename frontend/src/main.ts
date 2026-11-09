@@ -59,6 +59,7 @@ import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
 import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
+import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { readNativeAppIcon } from "./main/native-app-icon";
@@ -2873,6 +2874,7 @@ registerCliLinkIpc({
 const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
 
 registerCliShadowIpc({
+	enabled: () => cliShadowEnabled(process.env, app.isPackaged),
 	shellPath: createCliShadowShellPath({
 		settleStartupProbes: async () => {
 			await ensureShellEnv();
