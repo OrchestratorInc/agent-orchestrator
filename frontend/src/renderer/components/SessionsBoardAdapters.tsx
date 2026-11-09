@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -235,24 +235,25 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	// Archiving is the owner workspace's; a guest's archive would always be refused.
+	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					<SessionArchiveDialog
-						onConfirm={(choice) => {
-							setConfirmOpen(false);
-							onTerminate(choice);
-						}}
-						onOpenChange={setConfirmOpen}
-						open={confirmOpen}
-						session={session}
-						trigger={
+		<SessionArchiveDialog
+			onConfirm={(choice) => {
+				setConfirmOpen(false);
+				onTerminate(choice);
+			}}
+			onOpenChange={setConfirmOpen}
+			open={confirmOpen}
+			session={session}
+			trigger={
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex">
 							<Button
 								aria-label={
 									termination.isPending
@@ -282,14 +283,14 @@ function DesktopSessionCard({
 									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
 							</Button>
-						}
-					/>
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
-			</TooltipContent>
-		</Tooltip>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
+					</TooltipContent>
+				</Tooltip>
+			}
+		/>
 	) : undefined;
 
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);

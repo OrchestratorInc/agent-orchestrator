@@ -4,7 +4,7 @@ import {
 	SquareTerminal,
 	TriangleAlert,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -20,7 +20,6 @@ import {
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import type { ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import {
@@ -36,7 +35,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /** The view an interface switch leads to: Lucide's boxed prompt or a speech bubble, with rounder corners. */
 export function RoundedInterfaceIcon({ target, className }: { target: SessionInterfaceMode; className?: string }) {
 	return (
-		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
 			aria-hidden="true" data-icon={target === "chat" ? "rounded-chat" : "rounded-terminal"} className={className}>
 			{target === "chat"
 				? <path d="M21 13a5 5 0 0 1-5 5H8l-5 3.5V8a5 5 0 0 1 5-5h8a5 5 0 0 1 5 5z" />
@@ -84,7 +83,7 @@ const accountPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 };
 
 const targetStopUnconfirmedDetail =
-	"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.";
+	"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.";
 
 export function SessionInterfaceSwitchButton({
 	target,
@@ -178,17 +177,14 @@ export function SessionInterfaceSwitchButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<TopbarButton
+					<Button size={showLabel ? "sm" : "icon-sm"}
+						data-interface-switch=""
 						aria-label={label}
-						className={cn(
-							!supported && "opacity-50",
-							showLabel && "topbar-control--labeled !inline-flex !h-control-lg !w-auto !min-w-0 gap-1.5 px-2 text-xs",
-							className,
-						)}
+						className={className}
 						disabled={!supported || pending}
 						onClick={onClick}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						{pending ? (
 							<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
@@ -196,7 +192,7 @@ export function SessionInterfaceSwitchButton({
 							<RoundedInterfaceIcon target={target} className="size-icon-md" />
 						)}
 						{showLabel ? <span data-compact-label>{target === "tui" ? "Terminal UI" : "Chat UI"}</span> : null}
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="max-w-52 text-left text-wrap">{tooltipLabel}</TooltipContent>
@@ -236,10 +232,10 @@ export function SessionInterfaceSwitchDialog({
 					</DialogTitle>
 					<DialogDescription className="pt-1 text-xs leading-5">
 						{mayStartFresh ? (
-							<>The same AO session and worktree continue, but Hermes may start a fresh conversation.
+							<>The same Orchestrator-managed session and worktree continue, but Hermes may start a fresh conversation.
 								Messages and tool results may not transfer into the target agent's context; the source history stays in its original interface.</>
 						) : (
-							<>The same AO session, worktree, and agent-native conversation continue in the other interface.
+							<>The same Orchestrator-managed session, worktree, and agent-native conversation continue in the other interface.
 								Completed messages and tool work stay in the agent's context.</>
 						)}
 					</DialogDescription>
@@ -248,7 +244,7 @@ export function SessionInterfaceSwitchDialog({
 				<div className="grid gap-2 px-5 py-4">
 					{requireExplicitTerminalStop ? (
 						<p className="text-xs leading-5 text-muted-foreground">
-							AO cannot verify whether this Terminal is idle. Nothing will stop until you confirm.
+							Orchestrator cannot verify whether this Terminal is idle. Nothing will stop until you confirm.
 							If work is underway, switching will interrupt it.
 						</p>
 					) : (
@@ -259,7 +255,7 @@ export function SessionInterfaceSwitchDialog({
 						>
 							<strong className="block text-sm font-medium text-foreground">Finish work, then switch</strong>
 							<span className="mt-1 block text-xs leading-5 text-muted-foreground">
-								Wait for the running turn and anything already queued to finish. New AO messages wait safely
+								Wait for the running turn and anything already queued to finish. New Orchestrator messages wait safely
 								for {targetName}.
 							</span>
 						</Pressable>
@@ -298,7 +294,7 @@ export function SessionInterfaceSwitchDialog({
 				</div>
 
 				<DialogFooter className="border-t border-border px-5 py-3">
-					<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+					<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 						Keep current interface
 					</Button>
 				</DialogFooter>
@@ -466,14 +462,14 @@ export function SessionInterfaceTransitionNotice({
 				</strong>
 				<p className="mt-0.5 text-caption leading-4 text-muted-foreground">
 					{(interactiveSourceUnverified
-						? "AO cannot verify whether this Terminal is idle. It was left running; terminate it to switch interfaces."
+						? "Orchestrator cannot verify whether this Terminal is idle. It was left running; terminate it to switch interfaces."
 						: transition.errorDetail) ||
 						(needsRestart
 							? targetStopUnconfirmedDetail
 							: recovered
-								? accountMove ? "The session stays on its previous account." : "AO restored the session in its last committed interface."
+								? accountMove ? "The session stays on its previous account." : "Orchestrator restored the session in its last committed interface."
 								: transition.phase === "recovery_required"
-									? "Restart AO to reconcile this session before sending more work."
+									? "Restart Orchestrator to reconcile this session before sending more work."
 									: accountMove
 										? "The agent stays on its previous account. You can retry the switch."
 										: "The original interface remains available. You can retry the switch.")}
@@ -484,7 +480,7 @@ export function SessionInterfaceTransitionNotice({
 					<Button
 						type="button"
 						size="sm"
-						variant="outline"
+						variant="secondary"
 						className="mt-2 text-caption"
 						disabled={interrupting}
 						onClick={onSwitchWithInterrupt}
@@ -498,7 +494,7 @@ export function SessionInterfaceTransitionNotice({
 						<Button
 							type="button"
 							size="sm"
-							variant="outline"
+							variant="secondary"
 							className="text-caption"
 							disabled={retrying || dismissing}
 							onClick={onRetry}
@@ -510,7 +506,7 @@ export function SessionInterfaceTransitionNotice({
 							<Button
 								type="button"
 								size="sm"
-								variant="outline"
+								variant="secondary"
 								className="text-caption"
 								disabled={retrying || dismissing}
 								onClick={onUseProviderHistory}

@@ -10,10 +10,10 @@
  * the list, so they take the chrome and keep their own contents.
  */
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/app-icons";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
-import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { MENU_GHOST_TRIGGER_CHROME, MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { Pressable } from "../ui/pressable";
 
 /**
@@ -41,18 +41,16 @@ export const SETTINGS_MENU_ROW =
 export const SETTINGS_MENU_LABEL =
 	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
-const TRIGGER = cn("group/settings-option-trigger", MENU_TRIGGER_CHROME);
-
 /**
  * The trigger. Pass it to DropdownMenuTrigger with `asChild`; the chevron is
  * appended after whatever the caller renders and flips when the menu opens.
  */
 export const SettingsMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
->(function SettingsMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean; variant?: "secondary" | "ghost" }
+>(function SettingsMenuTrigger({ className, children, showCaret = true, variant = "secondary", ...props }, ref) {
 	return (
-		<Pressable ref={ref} className={cn(TRIGGER, className)} {...props}>
+		<Pressable ref={ref} className={cn("group/settings-option-trigger", variant === "ghost" ? MENU_GHOST_TRIGGER_CHROME : MENU_TRIGGER_CHROME, className)} {...props}>
 			{children}
 			{showCaret ? (
 				<ChevronDown

@@ -1,10 +1,11 @@
 # Agent Orchestrator — Mobile
 
-Expo (expo-router) mobile supervisor for Agent Orchestrator. Four tabs — Kanban, PRs,
-Orchestrator, Settings — plus a Chat-first spawn flow, a native conversation surface,
-the existing live terminal, and a preview browser. Chat sessions expose durable history,
+Expo (expo-router) mobile supervisor for Agent Orchestrator. Three native tabs — Workers,
+Projects, Pull Requests — with Settings and Notifications in their headers, plus a
+Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
+preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
-worktree-shell escape hatch. It is a **thin client**: it talks to the AO daemon running on your
+worktree-shell escape hatch. It is a **thin client**: it talks to the Orchestrator daemon running on your
 computer through the endpoints advertised by the desktop pairing offer. It never runs agents itself.
 
 > **Development builds only — Expo Go is not supported.** The app depends on native modules,
@@ -65,7 +66,7 @@ must be removed from the desktop, rather than sending credentials to an unverifi
 
 | For             | You need                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| Everything      | Node 20+, and AO running on your machine (desktop app, or the daemon from source)     |
+| Everything      | Node 20+, and Orchestrator running on your machine (desktop app, or the daemon from source)     |
 | Phone ↔ machine | Same Wi-Fi network for LAN, or a reachable HTTPS endpoint for remote access         |
 | iOS build       | macOS, Xcode 16+, an Apple ID (a free one gives a 7-day signing profile), a USB cable |
 | Android build   | Android Studio (SDK + platform-tools for `adb`), a USB cable                          |
@@ -90,7 +91,7 @@ Two rules worth knowing before you fight an install:
 
 Nothing on the phone works until the desktop opens the LAN bridge. Do this first.
 
-**1. Start the desktop app.** Either launch the packaged AO app, or run it from source
+**1. Start the desktop app.** Either launch the packaged Orchestrator app, or run it from source
 (it starts its own daemon):
 
 ```bash
@@ -418,7 +419,8 @@ Play Store** checks on demand.
 
 ```
 app/                 expo-router routes
-  (tabs)/            Kanban (index), PRs, Orchestrator, Settings
+  (tabs)/            NativeTabs; one group per tab, each a stack for its native header:
+                     (workers)/index, (projects)/projects, (prs)/prs
   session/[id].tsx   persisted-mode router (native Chat or Terminal UI)
   shell/[handleId]   session-scoped worktree shell over the existing mux
   preview/[id]       unified live browser and generated app preview

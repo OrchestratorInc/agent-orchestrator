@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
 import { cacheAgentModels, clearCachedAgentModels, readCachedAgentModels, withCachedModelUsage } from "../lib/agent-model-cache";
 import { modelCatalogScope } from "../lib/cloud-agents";
@@ -51,7 +52,7 @@ async function requestAgentModels(
 					},
 				});
 	signal?.throwIfAborted();
-	if (result.error) throw new Error(apiErrorMessage(result.error));
+	if (result.error) throw apiErrorException(result.error);
 	const catalog = result.data as AgentModelCatalog;
 	const normalized = agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
 	if (mode !== "cached" || catalogOnly) {

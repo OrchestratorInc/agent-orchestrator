@@ -30,7 +30,7 @@ func pinDirectory(exe, dataDir string) (string, error) {
 		return dir, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("inspect AO install directory: %w", err)
+		return "", fmt.Errorf("inspect Orchestrator install directory: %w", err)
 	}
 	shared := false
 	for _, entry := range entries {
@@ -82,7 +82,7 @@ func pinDirectory(exe, dataDir string) (string, error) {
 // and returns its path.
 func ensureShimDir(exe, dataDir string) (string, error) {
 	if !filepath.IsAbs(dataDir) {
-		return "", fmt.Errorf("AO shim data directory must be absolute, got %q", dataDir)
+		return "", fmt.Errorf("the Orchestrator shim data directory must be absolute, got %q", dataDir)
 	}
 	absolute, err := filepath.Abs(exe)
 	if err != nil {
@@ -152,7 +152,7 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	target := filepath.Join(shimDir, "ao.exe")
 	sourceInfo, err := os.Stat(executable)
 	if err != nil {
-		return fmt.Errorf("stat AO executable: %w", err)
+		return fmt.Errorf("stat Orchestrator executable: %w", err)
 	}
 	if targetInfo, targetErr := os.Stat(target); targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) && !os.SameFile(sourceInfo, targetInfo) {
 		// Same size and mtime means same bytes. A shim left by an older AO build
@@ -164,7 +164,7 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	}
 	temp, err := os.CreateTemp(shimDir, ".ao-exe-*")
 	if err != nil {
-		return fmt.Errorf("create AO executable shim: %w", err)
+		return fmt.Errorf("create Orchestrator executable shim: %w", err)
 	}
 	tempPath := temp.Name()
 	if err := temp.Close(); err != nil {
@@ -175,7 +175,7 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 		return err
 	}
 	if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
-		return fmt.Errorf("copy AO executable: %w", err)
+		return fmt.Errorf("copy Orchestrator executable: %w", err)
 	}
 	// A running shim (for example `ao mcp` reading stdin) keeps its image open,
 	// so removing or replacing the file in place fails with access denied and
@@ -185,14 +185,14 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	if _, statErr := os.Stat(target); statErr == nil {
 		aside = filepath.Join(shimDir, fmt.Sprintf("ao.exe.old-%d", time.Now().UnixNano()))
 		if err := os.Rename(target, aside); err != nil {
-			return fmt.Errorf("replace AO executable shim: %w", err)
+			return fmt.Errorf("replace Orchestrator executable shim: %w", err)
 		}
 	}
 	if err := os.Rename(tempPath, target); err != nil {
 		if aside != "" {
 			_ = os.Rename(aside, target)
 		}
-		return fmt.Errorf("install AO executable shim: %w", err)
+		return fmt.Errorf("install Orchestrator executable shim: %w", err)
 	}
 	removeStaleShimExecutables(shimDir)
 	return nil

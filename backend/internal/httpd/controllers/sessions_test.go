@@ -2014,6 +2014,33 @@ func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {
 	}
 }
 
+// `ao spawn` asks for the async start so the session reads as provisioning
+// with its prompt queued while it starts; a standalone worker has no project
+// to start in the background and stays synchronous.
+func TestSessionsAPI_SpawnAsyncOnlyForProjectSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"project", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, true},
+		{"omitted", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix"}`, false},
+		{"standalone", `{"kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.Async != tc.want {
+				t.Fatalf("service Async = %v, want %v", svc.lastSpawn.Async, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionsAPI_OrchestratorAcceptsExplicitChatMode(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
@@ -4767,7 +4794,7 @@ func TestSessionsAPI_PreparesAndCancelsTaskWorkspace(t *testing.T) {
 func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", 4097)
+	brief := strings.Repeat("a", 100<<10)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4788,7 +4815,7 @@ func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", (16<<10)+1)
+	brief := strings.Repeat("a", (100<<10)+1)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4803,7 +4830,7 @@ func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 		Message string `json:"message"`
 	}
 	mustJSON(t, body, &got)
-	if got.Message != "Task must be 16 KiB or fewer" {
+	if got.Message != "Task must be 100 KiB or fewer" {
 		t.Fatalf("error message = %q, want actionable size limit", got.Message)
 	}
 	if svc.delegationInput.ProjectID != "" {

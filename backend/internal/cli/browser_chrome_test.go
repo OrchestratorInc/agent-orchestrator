@@ -37,7 +37,7 @@ func TestBrowserTargetCommand(t *testing.T) {
 	if !strings.Contains(capture.path, `"action":"target"`) || !strings.Contains(capture.path, `"target":"chrome"`) {
 		t.Fatalf("request = %s", capture.path)
 	}
-	if !strings.Contains(out, "your Chrome (AO Browser Bridge), not connected") || !strings.Contains(out, "ao browser chrome setup") {
+	if !strings.Contains(out, "your Chrome (Orchestrator Browser Bridge), not connected") || !strings.Contains(out, "ao browser chrome setup") {
 		t.Fatalf("output = %q", out)
 	}
 
@@ -48,7 +48,7 @@ func TestBrowserTargetCommand(t *testing.T) {
 	if strings.Contains(capture.path, `"target":`) && strings.Contains(capture.path, `"args"`) {
 		t.Fatalf("read request sent a target: %s", capture.path)
 	}
-	if !strings.Contains(out, "AO Browser panel") {
+	if !strings.Contains(out, "Orchestrator Browser panel") {
 		t.Fatalf("output = %q", out)
 	}
 }

@@ -202,7 +202,7 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 		req.SessionID = ""
 	}
 	if req.Scope != "ao" && req.Scope != "session" {
-		return invalid("choose AO or this session")
+		return invalid("choose Orchestrator or this session")
 	}
 	if req.Scope == "session" && req.SessionID == "" {
 		return invalid("session is required")
@@ -217,7 +217,7 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 		}
 	}
 	now := s.now()
-	source := domain.AwakeSession{ID: uuid.NewString(), Scope: req.Scope, SessionID: req.SessionID, Mode: req.Mode, CreatedAt: now, Label: "For AO", LidClosed: req.LidClosed, BoundID: req.BoundID}
+	source := domain.AwakeSession{ID: uuid.NewString(), Scope: req.Scope, SessionID: req.SessionID, Mode: req.Mode, CreatedAt: now, Label: "For Orchestrator", LidClosed: req.LidClosed, BoundID: req.BoundID}
 	if req.Scope == "session" {
 		source.Label = "For this session"
 	}
@@ -249,7 +249,7 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 		source.BoundIdentity = identity
 	case "download":
 		if !s.downloadActive(req.BoundID, now) {
-			return invalid("choose an active AO browser download")
+			return invalid("choose an active Orchestrator browser download")
 		}
 	default:
 		return invalid("unknown awake session mode")

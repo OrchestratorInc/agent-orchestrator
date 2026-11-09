@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
-	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
+	errDrainQuiescenceUnverified = errors.New("the Orchestrator daemon could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
+	errDrainDecisionPending      = errors.New("the Orchestrator daemon found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
 )
 
 // interfaceTransitionStore is optional so the existing narrow Manager Store
@@ -299,7 +299,7 @@ func (m *Manager) launchInterfaceTransition(ctx context.Context, transition doma
 		}
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	run := &interfaceTransitionRun{cancel: cancel, done: make(chan struct{})}
 	m.transitionMu.Lock()
 	m.transitions[transition.SessionID] = run
@@ -456,6 +456,7 @@ func (m *Manager) runInterfaceTransition(
 				"TRANSITION_CANCELLED", transitionDetail(transition, "TRANSITION_CANCELLED", "The interface switch was cancelled."))
 			return
 		}
+		captureBackgroundFault(context.WithoutCancel(ctx), cause, "interface_transition", "")
 		if sourceStopped {
 			m.rollbackInterfaceTransition(transition, sourceRuntimeHandle, modeChanged, accountStarting, code, cause)
 			return
@@ -577,7 +578,7 @@ func (m *Manager) runInterfaceTransition(
 	// be proven stopped, do not launch either controller: recovery is safer than
 	// two writers racing on one native conversation.
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
-		detail := "AO could not prove that the old controller stopped. Restart AO to reconcile this session before sending more work: " + err.Error()
+		detail := "Orchestrator could not prove that the old controller stopped. Restart Orchestrator to reconcile this session before sending more work: " + err.Error()
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"SOURCE_STOP_UNCERTAIN", detail)
 		return
@@ -617,7 +618,13 @@ func (m *Manager) runInterfaceTransition(
 			fail("LIFECYCLE_UNAVAILABLE", fmt.Errorf("lifecycle manager is unavailable"))
 			return
 		}
-		changed, err := m.lcm.CommitControllerEpoch(ctx, rec.ID, transition.SourceMode,
+		// A degraded identity-reset handoff may leave the source Chat archived
+		// with its messages; the strict path must still prove the root untouched.
+		commitEpoch := m.lcm.CommitControllerEpoch
+		if transition.DegradedKind != "" {
+			commitEpoch = m.lcm.CommitControllerEpochArchivedChat
+		}
+		changed, err := commitEpoch(ctx, rec.ID, transition.SourceMode,
 			transition.TargetMode, transition.NativeConversationID, transition.NativeConversationID == "")
 		if err != nil || !changed {
 			if err == nil {
@@ -701,6 +708,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed
 		// to advance; mark recovery so a user is never left with no controller.
+		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "state_record")
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"TRANSITION_STATE_FAILED", err.Error())
 		return
@@ -708,6 +716,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionCompleted, "", ""); err != nil {
 		m.logger.Error("interface transition completed but durable completion failed",
 			"sessionID", rec.ID, "transitionID", transition.ID, "error", err)
+		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "durable_completion")
 		return
 	}
 }
@@ -1435,11 +1444,37 @@ func (m *Manager) startTransitionTarget(
 	// A genuinely fresh target has nothing to replay. Every resumed TUI -> Chat
 	// handoff must import native history before activation; rollback and ordinary
 	// daemon restore deliberately use the normal context-resume policy.
-	_, err = m.relaunchSessionWithPolicy(
+	var promptOverride *string
+	if fresh && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && m.chatAcceptedWork(ctx, id) {
+		// The Chat already ran the session's prompt, so replaying it into a fresh
+		// terminal would start the task again. The prompt stays on the session.
+		noPrompt := ""
+		promptOverride = &noPrompt
+	}
+	_, err = m.relaunchSessionWithPolicyAndGeneration(
 		ctx, "switch interface", rec, project, ws, nil,
-		fresh, requireNativeHistory && !fresh, historyPolicy,
+		fresh, requireNativeHistory && !fresh, "", historyPolicy, promptOverride,
 	)
 	return err
+}
+
+// chatAcceptedWork reports whether the session's Chat conversation ever accepted
+// a message or activity. The sequence is monotonic, so rolled-back or hidden
+// turns still count. A failed read also counts: a terminal that opens without
+// the prompt is recoverable, and repeating a finished task is not.
+// (Guard reused from OrchestratorInc/agent-orchestrator#7725 by Meraj-08.)
+func (m *Manager) chatAcceptedWork(ctx context.Context, id domain.SessionID) bool {
+	store, ok := m.store.(interface {
+		ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
+	})
+	if !ok {
+		return false
+	}
+	conversation, err := store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return false
+	}
+	return err != nil || conversation.LatestSequence != 0
 }
 
 func (m *Manager) rollbackInterfaceTransition(
@@ -1511,6 +1546,7 @@ func (m *Manager) rollbackInterfaceTransition(
 		false,
 		domain.SessionInterfaceTransitionHistoryStrict,
 	); err != nil {
+		captureBackgroundFault(context.Background(), err, "interface_transition", "relaunch")
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"RECOVERY_REQUIRED", cause.Error()+"; source restore: "+err.Error())
 		return
@@ -1549,8 +1585,9 @@ func (m *Manager) retainUnconfirmedTransitionTarget(transition domain.SessionInt
 	// Keep the durable input fence and startup-recovery record. Terminalizing the
 	// saga would let ordinary restore adopt a target that never passed admission.
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionTargetStarting,
-		"TARGET_STOP_UNCONFIRMED", "AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
+		"TARGET_STOP_UNCONFIRMED", "Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
 		m.logger.Error("interface transition: retain unconfirmed target shutdown", "transition", transition.ID, "error", err)
+		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
 		return fmt.Errorf("persist unconfirmed target for transition %s: %w", transition.ID, err)
 	}
 	return nil
@@ -1762,6 +1799,7 @@ func (m *Manager) settleTransitionMessages(transition domain.SessionInterfaceTra
 	if err := m.deliverTransitionMessages(context.Background(), current); err != nil {
 		m.logger.Error("interface transition: queued-message delivery deferred",
 			"transitionID", transition.ID, "error", err)
+		captureBackgroundFault(context.Background(), err, "interface_transition", "queued_delivery")
 	}
 	m.wakeTransitionMessageDispatcher()
 }
@@ -1836,6 +1874,7 @@ func (m *Manager) startTransitionMessageDispatcher(ctx context.Context) {
 			}
 			if err := m.deliverAllTransitionMessages(ctx); err != nil {
 				m.logger.Error("interface transition: retry queued-message delivery", "error", err)
+				captureBackgroundFault(ctx, err, "interface_transition", "queued_delivery")
 				delay = interfaceDeliveryRetry
 			} else {
 				delay = interfaceDeliveryIdlePoll
@@ -1915,7 +1954,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 				return nil, ctx.Err()
 			}
 		}
-		detail := "The daemon restarted during the interface switch; AO recovered the session from its last committed mode."
+		detail := "The daemon restarted during the interface switch; Orchestrator recovered the session from its last committed mode."
 		if transition.AccountMove() {
 			detail = "The daemon restarted during the account switch; the session stays on its committed account."
 			switch transition.Phase {
@@ -1947,9 +1986,10 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 							return nil, err
 						}
 						m.logger.Error("account transition: session quarantined after unconfirmed target shutdown", "sessionID", transition.SessionID, "transition", transition.ID, "error", stopErr)
+						captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 						continue
 					}
-					detail = "The daemon restarted during the account switch; AO stopped the agent and kept the session on its committed account. Resume it to continue."
+					detail = "The daemon restarted during the account switch; Orchestrator stopped the agent and kept the session on its committed account. Resume it to continue."
 				}
 			}
 		} else if (transition.SourceMode == domain.SessionModeTUI && transition.TargetMode == domain.SessionModeChat) ||
@@ -1964,6 +2004,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 						return nil, err
 					}
 					m.logger.Error("interface transition: session quarantined after unconfirmed target shutdown", "sessionID", transition.SessionID, "transition", transition.ID, "error", stopErr)
+					captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 					continue
 				}
 				if m.lcm == nil {
@@ -1984,9 +2025,9 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 					return nil, fmt.Errorf("recover transition %s source mode: session changed", transition.ID)
 				}
 				if transition.SourceMode == domain.SessionModeTUI {
-					detail = "The daemon restarted during the interface switch; AO restored Terminal so native history can be replayed safely on retry."
+					detail = "The daemon restarted during the interface switch; Orchestrator restored Terminal so native history can be replayed safely on retry."
 				} else {
-					detail = "The daemon restarted during the interface switch; AO confirmed the failed Terminal controller stopped and restored Chat ownership."
+					detail = "The daemon restarted during the interface switch; Orchestrator confirmed the failed Terminal controller stopped and restored Chat ownership."
 				}
 			}
 		}
@@ -2068,7 +2109,7 @@ func transitionDetail(transition domain.SessionInterfaceTransition, code, detail
 	}
 	switch code {
 	case "DRAIN_QUIESCENCE_UNVERIFIED":
-		return "AO could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
+		return "Orchestrator could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
 	case "DRAIN_DECISION_PENDING":
 		return "The agent is waiting for an answer in the terminal, so it stays on its current account. Answer it, then try again."
 	case "TRANSITION_CANCELLED":

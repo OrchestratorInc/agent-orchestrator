@@ -287,7 +287,24 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
 	if err != nil || !strings.Contains(out, "https://h-0d483066194a12a5dc17.useao.dev:443") ||
 		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") ||
-		!strings.Contains(out, "Linked to an AO account") {
+		!strings.Contains(out, "Linked to an Orchestrator account") {
 		t.Fatalf("fixed address status = %q, %v", out, err)
+	}
+}
+
+// A machine whose account link AO Cloud refuses must not claim the
+// account's devices list it (#7976).
+func TestRemoteHostCLISaysARefusedLinkMayNotBeListed(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"accountLinked":true,"accountLinkRefused":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"quick.trycloudflare.com","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || strings.Contains(out, "devices list this machine") ||
+		!strings.Contains(out, "Orchestrator Cloud refuses this machine's account link") || !strings.Contains(out, "ao remote-host link") {
+		t.Fatalf("refused link status = %q, %v", out, err)
 	}
 }

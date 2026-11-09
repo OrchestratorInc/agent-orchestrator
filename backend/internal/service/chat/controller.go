@@ -81,7 +81,7 @@ type Store interface {
 	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
-	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, now time.Time) error
+	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, usageLimitResetsAt time.Time, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -224,6 +224,7 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
+	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 
 	// sendMu serializes command dispatch so only one operation mutates the
@@ -395,6 +396,7 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	recheckAccount func(domain.SessionID, domain.AgentHarness),
+	prChanged func(domain.SessionID),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
 ) *Controller {
@@ -413,6 +415,7 @@ func newController(
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
 		recheckAccount:         recheckAccount,
+		prChanged:              prChanged,
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
@@ -1033,6 +1036,8 @@ type nativeHistoryTurn struct {
 	text           string
 	messages       map[string]int
 	activities     map[string]int
+	// steers counts the user-message fingerprints of inputs steered into this turn.
+	steers map[string]int
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
@@ -1129,6 +1134,7 @@ func indexNativeHistoryTurnsForHarness(
 			state:          turn.State,
 			messages:       make(map[string]int),
 			activities:     make(map[string]int),
+			steers:         make(map[string]int),
 		}
 		if turn.ProviderInputText != "" {
 			candidate.text = turn.ProviderInputText
@@ -1179,9 +1185,12 @@ func indexNativeHistoryTurnsForHarness(
 			ProviderInputText         string `json:"providerInputText"`
 			ProviderInputStoredOnTurn bool   `json:"providerInputStoredOnTurn"`
 		}
-		if json.Unmarshal(activity.Detail, &steerInput) == nil &&
-			steerInput.ProviderInputText != "" && !steerInput.ProviderInputStoredOnTurn {
-			candidate.messages[nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, steerInput.ProviderInputText)]++
+		if json.Unmarshal(activity.Detail, &steerInput) == nil && steerInput.ProviderInputText != "" {
+			fingerprint := nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, steerInput.ProviderInputText)
+			candidate.steers[fingerprint]++
+			if !steerInput.ProviderInputStoredOnTurn {
+				candidate.messages[fingerprint]++
+			}
 		}
 		candidate.activities[nativeHistoryActivityFingerprint(
 			activity.Kind, activity.Status, activity.Summary, activity.Detail,
@@ -1290,7 +1299,97 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		bind(event.ProviderTurnID, match)
 	}
+	for replayTurnID, candidate := range index.splitTurnOwners(events, mapped) {
+		bind(replayTurnID, candidate)
+	}
 	return mapped, providerItems
+}
+
+// splitTurnOwners finds the durable turn of each replay turn that holds only a
+// user message.
+//
+// ACP history starts a new turn at every user message, and Claude stores each
+// steer as its own user message. A steer taken while Claude waits on the model
+// therefore splits one AO turn into several replay turns: the prompt alone,
+// each steer alone, then the answer. Only the last has an assistant or tool
+// item to match. A user-only turn belongs to the closest matched turn before or
+// after it when that turn's prompt, or a steer it recorded, has the same text.
+// Messages replayed inside matched turns claim their text first, so each
+// recorded prompt or steer absorbs at most one replayed message. Claims stay
+// local because the index is reused across replays.
+func (index *nativeHistoryTurnIndex) splitTurnOwners(
+	events []ports.ChatEvent,
+	mapped map[string]*nativeHistoryTurn,
+) map[string]*nativeHistoryTurn {
+	var order []string
+	userTexts := make(map[string][]string)
+	hasContent := make(map[string]bool)
+	for _, event := range events {
+		replayTurnID := event.ProviderTurnID
+		if replayTurnID == "" {
+			continue
+		}
+		if _, seen := userTexts[replayTurnID]; !seen {
+			order = append(order, replayTurnID)
+			userTexts[replayTurnID] = nil
+		}
+		switch event.Kind {
+		case ports.ChatEventTurnStarted, ports.ChatEventTurnCompleted:
+		case ports.ChatEventUserMessageCompleted:
+			userTexts[replayTurnID] = append(userTexts[replayTurnID], event.Text)
+		default:
+			hasContent[replayTurnID] = true
+		}
+	}
+
+	type claimKey struct {
+		turn        *nativeHistoryTurn
+		fingerprint string
+	}
+	claimed := make(map[claimKey]int)
+	claim := func(candidate *nativeHistoryTurn, text string) bool {
+		key := claimKey{candidate, nativeHistoryFingerprintForHarness(index.harness, domain.MessageRoleUser, text)}
+		available := candidate.steers[key.fingerprint]
+		if candidate.text != "" &&
+			key.fingerprint == nativeHistoryFingerprintForHarness(index.harness, domain.MessageRoleUser, candidate.text) {
+			available++
+		}
+		if claimed[key] >= available {
+			return false
+		}
+		claimed[key]++
+		return true
+	}
+	owners := make([]*nativeHistoryTurn, len(order))
+	for i, replayTurnID := range order {
+		if owners[i] = mapped[replayTurnID]; owners[i] != nil {
+			for _, text := range userTexts[replayTurnID] {
+				claim(owners[i], text)
+			}
+		}
+	}
+	nearest := func(i, step int) *nativeHistoryTurn {
+		for j := i + step; j >= 0 && j < len(owners); j += step {
+			if owners[j] != nil {
+				return owners[j]
+			}
+		}
+		return nil
+	}
+	attached := make(map[string]*nativeHistoryTurn)
+	for i, replayTurnID := range order {
+		if owners[i] != nil || hasContent[replayTurnID] || len(userTexts[replayTurnID]) != 1 {
+			continue
+		}
+		for _, candidate := range []*nativeHistoryTurn{nearest(i, -1), nearest(i, 1)} {
+			if candidate != nil && claim(candidate, userTexts[replayTurnID][0]) {
+				owners[i] = candidate
+				attached[replayTurnID] = candidate
+				break
+			}
+		}
+	}
+	return attached
 }
 
 // reconcileNativeHistory maps a provider replay onto AO's existing durable
@@ -1774,7 +1873,7 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 		switch item.Type {
 		case "text":
 			if !item.Internal || strings.TrimSpace(item.Text) == "" {
-				return nil, fmt.Errorf("%w: text context must be AO-owned and nonempty", ErrRetryContentInvalid)
+				return nil, fmt.Errorf("%w: text context must be Orchestrator-owned and nonempty", ErrRetryContentInvalid)
 			}
 		case "image":
 			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
@@ -1964,6 +2063,7 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
+		captureChatFault(ctx, err, c.harness, "chat_turn", "send")
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {
@@ -3033,6 +3133,7 @@ func (c *Controller) projectUnit(
 	if err != nil && persistent {
 		c.log.Error("persistent chat projection stopped; provider retained for replay",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "stop")
 		c.mu.Lock()
 		c.preserveProviderOnStop = true
 		c.state = ports.ChatControllerStopped
@@ -3049,6 +3150,7 @@ func (c *Controller) projectUnit(
 		// internally consistent and a later provider replay may retry it.
 		c.log.Error("failed to project chat event",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "")
 	} else if projected {
 		c.afterProject(ctx, event, primaryTurn)
 	}
@@ -3246,7 +3348,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		}
 		state := settledTurnState(event)
 		if err := c.store.SettleTurnWithFailureCode(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, now); err != nil {
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
@@ -3352,6 +3454,10 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if event.Kind == ports.ChatEventActivityCompleted && event.ActivityStatus == domain.ActivityStatusCompleted &&
+			event.ActivityKind == domain.ActivityKindCommand && c.prChanged != nil && commandDetailMayChangePR(event.Detail) {
+			c.prChanged(c.sessionID)
 		}
 		// After the upsert, so the row exists to settle. Only when the provider
 		// actually settled something: an empty settle would erase an accumulation the
@@ -3580,6 +3686,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		message := "provider error"
 		if event.Err != nil {
 			message = event.Err.Error()
+			captureChatFault(ctx, event.Err, c.harness, "chat_provider_error", "")
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
 			if err := c.recordAccount(ctx, ports.ChatAccount{
@@ -3642,6 +3749,8 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+	case ports.ChatEventProviderState:
+		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
@@ -3706,6 +3815,32 @@ func settledTurnState(event ports.ChatEvent) domain.TurnState {
 		return domain.TurnStateFailed
 	}
 	return event.TurnState
+}
+
+// reportProviderState covers work the agent runs on its own between AO turns,
+// such as answering a finished background task. While AO has a turn in flight,
+// the turn events own the activity: a provider idle can lag behind the next
+// turn's start, so it must not end that turn early.
+func (c *Controller) reportProviderState(ctx context.Context, state *ports.ChatThreadState, now time.Time) {
+	if state == nil {
+		return
+	}
+	c.mu.Lock()
+	turnInFlight := c.pendingTurnID != "" || c.dispatchingTurnID != "" || c.compactionPending
+	c.mu.Unlock()
+	if turnInFlight {
+		return
+	}
+	switch state.Status {
+	case domain.ThreadStatusActive:
+		c.reportActivity(ctx, domain.ActivityActive, "chat.provider.running", now)
+	case domain.ThreadStatusIdle:
+		// An open approval or question still waits on the user.
+		if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+			return
+		}
+		c.reportActivity(ctx, domain.ActivityIdle, "chat.provider.idle", now)
+	}
 }
 
 func (c *Controller) reportInteractionResolved(ctx context.Context, event string, now time.Time) {
@@ -4226,4 +4361,16 @@ func (c *Controller) reportActivity(
 		c.log.Debug("chat activity signal rejected",
 			"session", c.sessionID, "event", event, "error", err)
 	}
+}
+
+// commandDetailMayChangePR reads a finished command activity's normalized
+// detail and reports whether the command probably changed a pull request.
+func commandDetailMayChangePR(detail []byte) bool {
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil {
+		return false
+	}
+	return domain.CommandMayChangePR(d.Command)
 }

@@ -1,4 +1,4 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound } from "@/components/app-icons";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -22,7 +22,7 @@ type GitHubTokenFieldProps = {
 	submitLabel: string;
 	submitDisabled?: boolean;
 	/** "ghost" is the muted settings-row action (Save beside a settings field). */
-	submitVariant?: "outline" | "primary" | "ghost";
+	submitVariant?: "secondary" | "primary" | "ghost";
 	showSubmitButton?: boolean;
 	tone?: "default" | "warning";
 	/** Omit the inset card shell (settings rows already provide framing). */

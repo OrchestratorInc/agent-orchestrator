@@ -183,6 +183,15 @@ describe("prStatusRows", () => {
 		expect(card.readiness?.label).toBe("Status unavailable");
 		expect(card.readiness?.detail).toContain("Checks and Commit statuses read access");
 	});
+	it("shows a run cancelled with no replacement as settled, not loading", () => {
+		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [
+			{ name: "lint", status: "cancelled", conclusion: "cancelled" },
+		] } });
+		const card = prCardPresentation(pr);
+		expect(card.statusRows?.find((row) => row.key === "ci")).toMatchObject({ label: "Checks cancelled", breathe: false });
+		expect(card.readiness?.label).toBe("Checks cancelled");
+		expect(prStatusRows(pr).find((row) => row.key === "ci")?.value).toBe("Checks cancelled");
+	});
 	it("shows lost GitHub App access instead of checking merge status", () => {
 		const pr = summary({ mergeability: {
 			state: "unknown", reasons: ["github_access_lost"], prUrl: "https://github.com/acme/repo/pull/7",
@@ -293,6 +302,20 @@ describe("prCardPresentation", () => {
 		);
 
 		expect(presentation.readiness?.label).toBe("Not mergeable yet");
+	});
+
+	it.each([
+		["review_required", "A required review must be completed before this PR can merge."],
+		["approved", "The review requirement is satisfied, but failing checks still block this PR."],
+	] as const)("only says the review is satisfied on a failing %s PR when it is", (decision, detail) => {
+		const presentation = prCardPresentation(
+			summary({
+				ci: { autoInjectCI: true, state: "failing", failingChecks: [] },
+				review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			}),
+		);
+
+		expect(presentation.readiness).toMatchObject({ label: "Not mergeable yet", detail });
 	});
 
 	it.each(["blocked", "unstable"] as const)("does not call a %s PR mergeable", (state) => {

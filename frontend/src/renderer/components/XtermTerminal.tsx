@@ -38,7 +38,7 @@ import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
 import { droppedPathsText } from "../lib/terminal-drop";
-import { LoaderCircle, TriangleAlert } from "lucide-react";
+import { LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import {
@@ -56,9 +56,9 @@ import { leaseWebglRenderer, type WebglLease } from "../lib/terminal-webgl-pool"
 import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
-import { LinkPreviewCard, LinkPreviewCardLoading } from "./LinkPreviewCard";
+import { LinkPreviewHoverCard } from "./LinkPreviewCard";
 import { CloseButton } from "./ui/close-button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
 import {
 	DropdownMenu,
@@ -1469,6 +1469,20 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				rows: Math.max(1, Math.floor((Math.floor(observedBox.height) - paddingY) / cell.height)),
 			};
 		};
+		// The inspector slides open or closed by animating its gap's width, so the
+		// terminal box changes on every frame of that slide. Refitting each frame
+		// reflowed the whole buffer and resized the PTY ~36 times per toggle (each
+		// a SIGWINCH redraw from the agent). Hold the grid while the slide runs and
+		// fit once when it lands; the stable-fit timer is the fallback.
+		const inspectorSliding = () =>
+			host.closest(".session-split")?.querySelector('[data-slot="inspector-gap"][data-motion="animated"]') != null;
+		const settleAfterSlide = (event: TransitionEvent) => {
+			if (event.propertyName !== "width" || fitQuietTimer === null) return;
+			if (!(event.target instanceof Element) || event.target.getAttribute("data-slot") !== "inspector-gap") return;
+			if (!event.target.closest(".session-split")?.contains(host)) return;
+			flushScheduledFit();
+		};
+		document.addEventListener("transitionend", settleAfterSlide);
 		const observer = new ResizeObserver((entries) => {
 			if (disposed) return;
 			// Track the box even while parked, so the stabilizer never proposes
@@ -1489,6 +1503,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				return;
 			}
 			if (observed.width <= 0 || observed.height <= 0) return;
+			if (inspectorSliding()) {
+				scheduleStableFit();
+				return;
+			}
 			const grid = gridFromObservedBox();
 			if (!grid) {
 				scheduleLiveFit();
@@ -1887,6 +1905,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (fitCapTimer !== null) clearTimeout(fitCapTimer);
 			fitSettledListeners.clear();
 			observer.disconnect();
+			document.removeEventListener("transitionend", settleAfterSlide);
 			dragStateObserver.disconnect();
 			synchronizedFrames.dispose();
 			synchronizedCapability.dispose();
@@ -2235,19 +2254,15 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						}}
 					/>
 				</HoverCardTrigger>
-				{linkPreview && !linkPreviewQuery.isError ? (
-					<HoverCardContent
-						collisionPadding={8}
+				{linkPreview ? (
+					<LinkPreviewHoverCard
+						url={linkPreview.url}
+						query={linkPreviewQuery}
+						onBrowserOpen={props.onLinkOpen}
 						portalContainer={contextMenuPortalContainer}
 						onPointerEnter={() => linkPreviewControlsRef.current.cancelHide()}
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
-					>
-						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
-						) : (
-							<LinkPreviewCardLoading />
-						)}
-					</HoverCardContent>
+					/>
 				) : null}
 			</HoverCard>
 		</>
