@@ -1,0 +1,281 @@
+import * as Crypto from "expo-crypto";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AppState } from "react-native";
+import { getAccountAccessToken, loadAccount, onAccountChange, signInToAccount, signOutOfAccount, type Account } from "../account";
+import { clearAccountHosts, syncAccountHosts } from "../accountHosts";
+import { shouldPoll } from "../appStatePoll";
+import { fetch as expoFetch } from "expo/fetch";
+import { collectPages, createCloudClient, type CloudClient } from "./client";
+import { CLOUD_API_BASE_URL } from "./config";
+import { CloudAuthError, cloudErrorMessage } from "./errors";
+import { resolveOrganization } from "./org";
+import { registerCloudPush, unregisterCloudPush } from "./push";
+import type { CloudMe, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession } from "./types";
+
+export type CloudStatus = "loading" | "signed-out" | "connecting" | "ready" | "error";
+
+export type CloudState = {
+	status: CloudStatus;
+	account: Account | null;
+	me: CloudMe | null;
+	org: CloudOrganization | null;
+	/** Why the workspace could not load; null while it is fine. */
+	error: string | null;
+	client: CloudClient;
+	projects: CloudProject[];
+	projectsLoaded: boolean;
+	sessions: CloudSession[];
+	sessionsLoaded: boolean;
+	connections: CloudProviderConnection[];
+	connectionsLoaded: boolean;
+	notificationsUnread: number;
+	/** Harnesses that can start in Chat; the rest start in the terminal. */
+	chatHarnesses: readonly string[];
+	signIn(): Promise<Account | null>;
+	signOut(): Promise<void>;
+	refresh(): Promise<void>;
+	refreshProjects(): Promise<void>;
+	refreshSessions(): Promise<void>;
+	refreshConnections(): Promise<void>;
+	refreshNotifications(): Promise<void>;
+	/** Put a session the phone just created or changed into the list without waiting for the poll. */
+	upsertSession(session: CloudSession): void;
+	/** A cloud screen is on view: poll at the live rate until the returned release runs. */
+	watch(): () => void;
+};
+
+const CloudContext = createContext<CloudState | null>(null);
+
+export function useCloud(): CloudState {
+	const value = useContext(CloudContext);
+	if (!value) throw new Error("useCloud must be used within <CloudProvider>");
+	return value;
+}
+
+// While a cloud screen is open the board is live; otherwise a slow tick keeps
+// the unread badge and the sidebar honest without spending battery.
+const LIVE_POLL_MS = 5_000;
+const IDLE_POLL_MS = 30_000;
+const DEFAULT_CHAT_HARNESSES = ["claude-code", "codex", "cursor"];
+
+export function CloudProvider({ children }: { children: ReactNode }) {
+	const [status, setStatus] = useState<CloudStatus>("loading");
+	const [account, setAccount] = useState<Account | null>(null);
+	const [me, setMe] = useState<CloudMe | null>(null);
+	const [org, setOrg] = useState<CloudOrganization | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [projects, setProjects] = useState<CloudProject[]>([]);
+	const [projectsLoaded, setProjectsLoaded] = useState(false);
+	const [sessions, setSessions] = useState<CloudSession[]>([]);
+	const [sessionsLoaded, setSessionsLoaded] = useState(false);
+	const [connections, setConnections] = useState<CloudProviderConnection[]>([]);
+	const [connectionsLoaded, setConnectionsLoaded] = useState(false);
+	const [notificationsUnread, setNotificationsUnread] = useState(0);
+	const [watchers, setWatchers] = useState(0);
+	// Every async result checks it still belongs to the account and org that asked.
+	const generation = useRef(0);
+	const orgRef = useRef<CloudOrganization | null>(null);
+	orgRef.current = org;
+	const resolveRef = useRef<() => Promise<void>>(async () => {});
+
+	const client = useMemo(() => createCloudClient({
+		baseUrl: CLOUD_API_BASE_URL,
+		getToken: getAccountAccessToken,
+		// The session event stream reads its body as it arrives; uploads send raw bytes.
+		nativeFetch: expoFetch as unknown as typeof fetch,
+		newKey: () => Crypto.randomUUID(),
+		// Membership changed under us: re-resolve the organization.
+		onForbidden: () => { void resolveRef.current(); },
+	}), []);
+
+	const reset = useCallback(() => {
+		generation.current++;
+		setMe(null);
+		setOrg(null);
+		setProjects([]);
+		setProjectsLoaded(false);
+		setSessions([]);
+		setSessionsLoaded(false);
+		setConnections([]);
+		setConnectionsLoaded(false);
+		setNotificationsUnread(0);
+		setError(null);
+	}, []);
+
+	const fail = useCallback((cause: unknown, ownGeneration: number) => {
+		if (ownGeneration !== generation.current) return;
+		if (cause instanceof CloudAuthError) {
+			// The refresh token is gone; the account module already signed out.
+			setError(cloudErrorMessage(cause));
+			setStatus("error");
+			return;
+		}
+		setError(cloudErrorMessage(cause));
+	}, []);
+
+	const refreshProjects = useCallback(async () => {
+		const current = orgRef.current;
+		const own = generation.current;
+		if (!current) return;
+		try {
+			const items = await collectPages((cursor) => client.listProjects(current.id, { cursor }));
+			if (own !== generation.current) return;
+			setProjects(items);
+			setProjectsLoaded(true);
+		} catch (cause) { fail(cause, own); }
+	}, [client, fail]);
+
+	const refreshSessions = useCallback(async () => {
+		const current = orgRef.current;
+		const own = generation.current;
+		if (!current) return;
+		try {
+			const items = await collectPages((cursor) => client.listSessions(current.id, { cursor }), 5);
+			if (own !== generation.current) return;
+			setSessions(items);
+			setSessionsLoaded(true);
+			setError(null);
+		} catch (cause) { fail(cause, own); }
+	}, [client, fail]);
+
+	const refreshConnections = useCallback(async () => {
+		const own = generation.current;
+		if (!orgRef.current) return;
+		try {
+			const { providerConnections } = await client.listProviderConnections();
+			if (own !== generation.current) return;
+			setConnections(providerConnections ?? []);
+			setConnectionsLoaded(true);
+		} catch (cause) { fail(cause, own); }
+	}, [client, fail]);
+
+	const refreshNotifications = useCallback(async () => {
+		const current = orgRef.current;
+		const own = generation.current;
+		if (!current) return;
+		try {
+			const page = await client.listNotifications(current.id, { status: "unread", limit: 1 });
+			if (own !== generation.current) return;
+			setNotificationsUnread(page.unreadCount ?? 0);
+		} catch {
+			// The badge is a convenience; a failed read keeps the last count.
+		}
+	}, [client]);
+
+	const resolve = useCallback(async () => {
+		const own = generation.current;
+		setStatus((previous) => (previous === "ready" ? previous : "connecting"));
+		try {
+			const nextMe = await client.getMe();
+			if (own !== generation.current) return;
+			const nextOrg = await resolveOrganization(client, nextMe);
+			if (own !== generation.current) return;
+			setMe(nextMe);
+			setOrg(nextOrg);
+			orgRef.current = nextOrg;
+			setError(null);
+			setStatus("ready");
+			await Promise.all([refreshProjects(), refreshSessions(), refreshConnections(), refreshNotifications()]);
+			void registerCloudPush(client, { ask: false }).catch(() => {});
+		} catch (cause) {
+			if (own !== generation.current) return;
+			setError(cloudErrorMessage(cause));
+			setStatus("error");
+		}
+	}, [client, refreshConnections, refreshNotifications, refreshProjects, refreshSessions]);
+	resolveRef.current = resolve;
+
+	const adopt = useCallback((next: Account | null) => {
+		reset();
+		setAccount(next);
+		if (!next) {
+			setStatus("signed-out");
+			return;
+		}
+		void resolve();
+	}, [reset, resolve]);
+
+	useEffect(() => {
+		let mounted = true;
+		void loadAccount().then((value) => { if (mounted) adopt(value); }).catch(() => { if (mounted) adopt(null); });
+		const off = onAccountChange((value) => { if (mounted) adopt(value); });
+		return () => { mounted = false; off(); };
+	}, [adopt]);
+
+	// A workspace that failed to load (offline at launch) tries again on its own.
+	useEffect(() => {
+		if (status !== "error" || !account) return;
+		const retry = () => { if (shouldPoll(AppState.currentState)) void resolveRef.current(); };
+		const timer = setInterval(retry, IDLE_POLL_MS);
+		const sub = AppState.addEventListener("change", (next) => { if (shouldPoll(next)) retry(); });
+		return () => { clearInterval(timer); sub.remove(); };
+	}, [account, status]);
+
+	// Poll while the app is in front: fast while a cloud screen watches, slow otherwise.
+	useEffect(() => {
+		if (status !== "ready") return;
+		let timer: ReturnType<typeof setInterval> | undefined;
+		const tick = () => {
+			if (!shouldPoll(AppState.currentState)) return;
+			void refreshSessions();
+			void refreshNotifications();
+		};
+		const start = () => {
+			if (timer) clearInterval(timer);
+			timer = setInterval(tick, watchers > 0 ? LIVE_POLL_MS : IDLE_POLL_MS);
+		};
+		start();
+		const sub = AppState.addEventListener("change", (next) => {
+			if (!shouldPoll(next)) return;
+			tick();
+			start();
+		});
+		return () => { if (timer) clearInterval(timer); sub.remove(); };
+	}, [refreshNotifications, refreshSessions, status, watchers]);
+
+	const refreshSessionsRef = useRef(refreshSessions);
+	refreshSessionsRef.current = refreshSessions;
+	const watch = useCallback(() => {
+		setWatchers((count) => count + 1);
+		void refreshSessionsRef.current();
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			setWatchers((count) => Math.max(0, count - 1));
+		};
+	}, []);
+
+	const signIn = useCallback(async () => {
+		const value = await signInToAccount();
+		// Same account sync Settings runs: machines linked to this account appear too.
+		if (value) void syncAccountHosts(value).catch(() => {});
+		return value;
+	}, []);
+
+	const signOut = useCallback(async () => {
+		if (orgRef.current) await unregisterCloudPush(client);
+		await signOutOfAccount();
+		await clearAccountHosts().catch(() => {});
+	}, []);
+
+	const refresh = useCallback(async () => {
+		if (!orgRef.current) {
+			await resolve();
+			return;
+		}
+		await Promise.all([refreshProjects(), refreshSessions(), refreshConnections(), refreshNotifications()]);
+	}, [refreshConnections, refreshNotifications, refreshProjects, refreshSessions, resolve]);
+
+	const upsertSession = useCallback((session: CloudSession) => {
+		setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+	}, []);
+
+	const value = useMemo<CloudState>(() => ({
+		status, account, me, org, error, client,
+		projects, projectsLoaded, sessions, sessionsLoaded, connections, connectionsLoaded, notificationsUnread,
+		chatHarnesses: me?.chatHarnesses ?? DEFAULT_CHAT_HARNESSES,
+		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, watch,
+	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
+	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;
+}

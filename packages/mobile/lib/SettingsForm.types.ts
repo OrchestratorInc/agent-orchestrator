@@ -30,6 +30,19 @@ export const settingsIcons = {
 	report: { ios: "ladybug", android: "bug_report" },
 	emulateMachines: symbols.devices,
 	feature: { ios: "lightbulb", android: "lightbulb" },
+	// Orchestrator Cloud's page and its coding agents' pages.
+	organization: { ios: "building.2", android: "group" },
+	github: { ios: "chevron.left.forwardslash.chevron.right", android: "code" },
+	credential: { ios: "key", android: "verified_user" },
+	status: symbols.checkCircle,
+	waiting: symbols.history,
+	enterCode: { ios: "keyboard", android: "edit" },
+	copy: symbols.copy,
+	openExternal: symbols.openExternal,
+	refresh: symbols.refresh,
+	add: symbols.add,
+	cancel: symbols.close,
+	remove: symbols.delete,
 } as const satisfies Record<string, { ios: IOSSymbol; android: MaterialDrawableName }>;
 
 export type SettingsIconName = keyof typeof settingsIcons;
@@ -111,6 +124,11 @@ export type SettingsAccountRowProps = {
 export type SettingsStatusRowProps = RowBase & {
 	status: string;
 	tone?: SettingsTone;
+	/**
+	 * Drawn in place of the row's glyph: a React Native image such as a coding
+	 * agent's logo, about the glyph column's size. Leave it out for the glyph.
+	 */
+	leading?: ReactElement;
 	onPress(): void;
 };
 

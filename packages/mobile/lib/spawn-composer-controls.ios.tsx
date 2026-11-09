@@ -122,10 +122,11 @@ export function SpawnComposerControls({
 				<VStack alignment="leading" spacing={space.none} modifiers={[padding({ horizontal: space.xs })]}>
 					<HStack>
 						<Menu
-							label={<SelectorLabel icon={<SelectorGlyph name="laptopcomputer" />} title={hostLabel} />}
+							label={<SelectorLabel icon={<SelectorGlyph name={hostSystemImage(hosts.find((host) => host.id === hostId))} />} title={hostLabel} />}
 							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Run on ${hostLabel}`), accessibilityIdentifier("spawn-host")]}
 						>
-							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
+							{/* Each machine with its glyph, as each project has its folder: a computer, or Cloud's cloud. */}
+							{hosts.map((host) => <Choice key={host.id} label={host.label} systemImage={hostSystemImage(host)} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
 						</Menu>
 						<Spacer minLength={0} />
 					</HStack>
@@ -239,8 +240,12 @@ function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator
 	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "body" })]} />;
 }
 
-function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
-	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
+function hostSystemImage(host?: SpawnComposerOption): "cloud" | "laptopcomputer" {
+	return host?.icon === "cloud" ? "cloud" : "laptopcomputer";
+}
+
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder.badge.plus" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : project?.icon === "folder-plus" ? "folder.badge.plus" : "folder";
 }
 
 const styles = StyleSheet.create({

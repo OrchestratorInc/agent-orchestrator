@@ -135,6 +135,8 @@ export function ChatComposer({
 	onRestoreRequest,
 	openingTurnId,
 	startingAgentName,
+	fileUploads,
+	attachmentsUnavailable,
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
@@ -198,6 +200,15 @@ export function ChatComposer({
 	openingTurnId?: string;
 	/** Set while the session starts, for the placeholder. */
 	startingAgentName?: string;
+	/**
+	 * Files of any type go with the message as uploads, up to this size each,
+	 * instead of being embedded as text: an Orchestrator Cloud session takes
+	 * them that way. A picked file is then sent as a resource with only its
+	 * local `uri`, which the screen reads and uploads when the message is sent.
+	 */
+	fileUploads?: { maxBytes: number };
+	/** Nothing can be attached here (an organization whose plan takes no files): attach stays in place, dimmed. */
+	attachmentsUnavailable?: boolean;
 }) {
 	const t = useTheme();
 	const router = useRouter();
@@ -433,6 +444,7 @@ export function ChatComposer({
 		}
 	};
 	const addFile = async () => {
+		if (fileUploads) return addUploadFile(fileUploads.maxBytes);
 		const key = attachmentKey;
 		setLocalError(undefined);
 		dismissAttachmentNotice();
@@ -448,6 +460,29 @@ export function ChatComposer({
 				const bytes = new TextEncoder().encode(body).byteLength;
 				if (bytes > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is too large to embed. Reference a worktree file with @ instead.`);
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
+			}
+			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
+		} catch (cause) {
+			const notice = userFacingError(cause);
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
+		}
+	};
+
+	// Any file, kept as a local copy and uploaded with the message (see `fileUploads`).
+	const addUploadFile = async (maxBytes: number) => {
+		const key = attachmentKey;
+		setLocalError(undefined);
+		dismissAttachmentNotice();
+		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: "*/*" });
+		if (result.canceled) return;
+		try {
+			const existing = readComposerAttachments(key).items.length;
+			const added: Attachment[] = [];
+			for (const asset of result.assets) {
+				if (existing + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
+				const bytes = asset.size ?? 0;
+				if (bytes > maxBytes) throw new Error(`${asset.name} is larger than ${Math.round(maxBytes / (1 << 20))} MB, the most this session takes.`);
+				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: asset.uri, name: asset.name, mimeType: asset.mimeType || "application/octet-stream" } });
 			}
 			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
 		} catch (cause) {
@@ -510,7 +545,7 @@ export function ChatComposer({
 	>
 		<View style={styles.steerDisc}><AppSymbol name={steer} size={iconSize.sm} color={t.accent} /></View>
 	</Pressable> : null;
-	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
+	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting || Boolean(attachmentsUnavailable)} canAttachFile={Boolean(canEmbedFiles || fileUploads)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
 	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
 	// One round button that follows the prompt, as on the new-task sheet: it
 	// stops the mic while it is open, stops the turn while one runs and nothing

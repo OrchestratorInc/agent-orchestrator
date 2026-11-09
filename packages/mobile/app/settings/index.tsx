@@ -6,9 +6,12 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
-import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
+import { loadAccount, signInToAccount, type Account } from "../../lib/account";
 import { AccountAvatar, accountName } from "../../lib/AccountAvatar";
-import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
+import { syncAccountHosts } from "../../lib/accountHosts";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { CLOUD_APPEARANCE, CLOUD_HOST_ID } from "../../lib/cloud/mapping";
+import { cloudSettingsStatus } from "../../lib/cloud/settingsStatus";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
@@ -83,6 +86,7 @@ export default function SettingsScreen() {
 	const [account, setAccount] = useState<Account | null>(null);
 	const [accountBusy, setAccountBusy] = useState(false);
 	const [accountLoading, setAccountLoading] = useState(true);
+	const cloud = useCloud();
 
 	useFocusEffect(useCallback(() => {
 		let current = true;
@@ -125,8 +129,9 @@ export default function SettingsScreen() {
 
 	function signOut() {
 		setAccountBusy(true);
-		void signOutOfAccount().then(async () => {
-			await clearAccountHosts();
+		// Through Orchestrator Cloud: it stops pushing to this phone before the
+		// account's token goes, then forgets the account's machines.
+		void cloud.signOut().then(async () => {
 			setAccount(null);
 			setPairedHosts(await loadHosts());
 			await reloadConfig();
@@ -217,6 +222,17 @@ export default function SettingsScreen() {
 							value={machineStatus.label}
 							tone={machineStatusTone(machineStatus.tone)}
 							testID="settings-machine-current"
+						/>
+					) : null}
+					{/* Orchestrator Cloud, while signed in: the account's own machine,
+					    after the paired ones and before the actions. Its page holds
+					    the organization, coding agents and GitHub access. */}
+					{account && cloud.status !== "signed-out" ? (
+						<MachineRow
+							host={{ id: CLOUD_HOST_ID, name: "Orchestrator Cloud", appearance: CLOUD_APPEARANCE }}
+							status={cloudSettingsStatus(cloud)}
+							isDefault={false}
+							onPress={() => router.push("/settings/cloud")}
 						/>
 					) : null}
 					{/* The fix for a default machine whose saved address or password

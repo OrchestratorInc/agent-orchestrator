@@ -20,6 +20,7 @@ import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
+import { CloudProvider } from "../lib/cloud/CloudProvider";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
@@ -128,9 +129,12 @@ export default function RootLayout() {
 			<KeyboardProvider>
 				<SafeAreaProvider>
 					<ThemeProvider initial={themeSettings}>
+						{/* Orchestrator Cloud outside the machines' store: the store lists cloud rows beside each machine's. */}
+						<CloudProvider>
 						<AppProvider>
 							<Shell />
 						</AppProvider>
+						</CloudProvider>
 					</ThemeProvider>
 				</SafeAreaProvider>
 			</KeyboardProvider>
@@ -201,6 +205,8 @@ function Shell() {
 				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", ...GLASS_HEADER_OPTIONS }} />
+				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
+				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
@@ -307,6 +313,23 @@ function Shell() {
 						title: "Insert",
 						headerStyle: { backgroundColor: t.bgSurface },
 						contentStyle: { backgroundColor: t.bgSurface },
+					}}
+				/>
+				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
+				    bar, Cancel and Create in it, as the machine-name sheet has. On
+				    Android a page under the stack's top app bar, as manual connect
+				    is: in a form sheet the first tap on a Compose field went to the
+				    sheet, and at full height the sheet ran under the status bar. */}
+				<Stack.Screen
+					name="cloud/new-project"
+					options={Platform.OS === "android" ? {
+						title: "New cloud project",
+						contentStyle: { backgroundColor: t.bgBase },
+					} : {
+						...NAME_SHEET_OPTIONS,
+						title: "New cloud project",
+						headerStyle: { backgroundColor: t.bgBase },
+						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
 				<Stack.Screen

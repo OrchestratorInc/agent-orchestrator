@@ -59,6 +59,8 @@ export type ConversationTurn = {
 export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
 export type ChatExcerpt = { conversationId: string; messageId: string; revision: number; text: string };
 export type ConversationContentSummary = { type: string; text?: string; sourceMessageId?: string; sourceRevision?: number };
+/** A file a message carries as an upload (a cloud session's attachment), not as a worktree path in its text. */
+export type MessageFile = { id: string; name: string; mimeType: string; size: number };
 export type ConversationMessage = {
 	kind: "message";
 	id: string;
@@ -69,6 +71,8 @@ export type ConversationMessage = {
 	origin: "human" | "automation" | "daemon" | "provider";
 	text: string;
 	content?: ConversationContentSummary[];
+	/** Uploaded files the message carries. */
+	files?: MessageFile[];
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
@@ -179,6 +183,8 @@ export type ActivityDetail = {
 	url?: string;
 	elicitationId?: string;
 	decisions?: DecisionOption[];
+	/** What an approval asks to do (a command, a file change, an MCP tool), when the agent says. */
+	subjectKind?: ActivityKind;
 	[key: string]: unknown;
 };
 

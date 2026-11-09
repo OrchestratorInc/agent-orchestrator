@@ -5,20 +5,25 @@ import {
 	accessibilityHidden,
 	background,
 	buttonStyle,
-	defaultScrollAnchor,
+	defaultScrollAnchorForRole,
 	disabled as disabledModifier,
 	font,
 	frame,
 	foregroundStyle,
+	ignoreSafeArea,
 	imageScale,
 	lineLimit,
 	listRowBackground,
+	listRowInsets,
+	listRowSeparator,
 	pickerStyle,
 	scrollContentBackground,
 	tag,
 	tint,
 	type ModifierConfig,
 } from "@expo/ui/swift-ui/modifiers";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { Children, Fragment, isValidElement, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
 import {
 	settingsIcons,
@@ -36,6 +41,7 @@ import {
 	type SettingsToggleRowProps,
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
+import { SYSTEM_GLASS_HEADER } from "./stackScreenOptions";
 import { appFont } from "./swiftUIFont";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { rowIconWidth, space } from "./tokens";
@@ -54,23 +60,35 @@ export { settingsIcons, type SettingsIconName, type SettingsOption, type Setting
 export function SettingsForm({ children, testID }: SettingsFormProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	const headerHeight = useHeaderHeight();
 	return (
 		<Host style={[styles.fill, { backgroundColor: t.bgBase }]} colorScheme={scheme}>
 			<FieldGroup
 				testID={testID}
 				modifiers={[
 					scrollContentBackground("hidden"),
+					// Under iOS 26's clear bar the Form keeps clear of the bar itself,
+					// as the app's other pages under it do (useGlassBarInset), rather
+					// than waiting on the system's inset: measured on an iPhone, a page
+					// pushed from the board's Settings button never received it, so its
+					// first section sat under the title and pulling down sprang back.
+					...(SYSTEM_GLASS_HEADER ? [ignoreSafeArea({ regions: "container", edges: "top" })] : []),
 					// Opens at the top. The Form is laid out under the clear glass bar,
 					// and the bar's inset reaches it after its first layout, which left
 					// the page opening scrolled by the bar's height, its first section
-					// under the title.
-					defaultScrollAnchor("top"),
+					// under the title. Only where it opens: anchored for size changes as
+					// well, each row arriving after it opened (the account, a status,
+					// a machine's Scan new code coming and going as it reconnects)
+					// scrolled the page down by about that row, until the first section
+					// sat under the title and scrolling back up was undone by the next.
+					defaultScrollAnchorForRole("top", "initialOffset"),
 					background(t.bgBase),
 					// Every row's text in the app's family, scaled with Dynamic Type.
 					appFont("body"),
 					foregroundStyle(t.textPrimary),
 				]}
 			>
+				{SYSTEM_GLASS_HEADER ? <BarSpace height={headerHeight + (leadsWithTitle(children) ? TITLED_BAR_SPACE_OFFSET : UNTITLED_BAR_SPACE_OFFSET)} /> : null}
 				{children}
 			</FieldGroup>
 		</Host>
@@ -78,18 +96,69 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 }
 
 /**
+ * The bar space less the Form's own gaps, so the first section sits where the
+ * system's inset put it (measured on an iOS 26 simulator: Account's title at
+ * the bar's foot, Theme's first row 35pt under it). The space is a section of
+ * its own, so the page's first section gets the gap one section leaves before
+ * the next, which is 18pt less for a section with no title than the gap above
+ * a Form's first untitled section.
+ */
+const TITLED_BAR_SPACE_OFFSET = -53;
+const UNTITLED_BAR_SPACE_OFFSET = -35;
+
+/** Whether the page opens with a titled section (a SettingsSection's `title`). */
+function leadsWithTitle(children: ReactNode): boolean {
+	for (const child of Children.toArray(children)) {
+		if (!isValidElement(child)) continue;
+		const props = child.props as { title?: unknown; children?: ReactNode };
+		if (child.type === Fragment) return leadsWithTitle(props.children);
+		return Boolean(props.title);
+	}
+	return false;
+}
+
+/**
+ * Room for the bar at the top of the Form's scroll content: an invisible row,
+ * so the rows still scroll up under the glass and blur there.
+ */
+function BarSpace({ height }: { height: number }) {
+	return (
+		<Spacer
+			modifiers={[
+				frame({ height: Math.max(0, height) }),
+				listRowBackground("transparent"),
+				listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }),
+				listRowSeparator("hidden"),
+				accessibilityHidden(true),
+			]}
+		/>
+	);
+}
+
+/**
  * The title and footer are footnote text drawn here, not the Form's own header
  * text, which would pick up the Form's body font. The title keeps VoiceOver's
  * heading trait.
+ *
+ * The footer slot is always mounted, as `FormSection`'s is: @expo/ui builds a
+ * different SwiftUI Section with and without a footer, so a footer that came
+ * and went rebuilt the section's fields, and the one being typed in lost focus
+ * and the keyboard (#7906). An empty footer draws nothing.
  */
 export function SettingsSection({ title, footer, children, testID, modifiers }: SettingsSectionProps & { modifiers?: ModifierConfig[] }) {
 	return (
 		<FieldGroup.Section testID={testID} modifiers={modifiers}>
 			{title ? <FieldGroup.SectionHeader><SectionText header>{title}</SectionText></FieldGroup.SectionHeader> : null}
 			{children}
-			{footer ? <FieldGroup.SectionFooter><SectionText>{footer}</SectionText></FieldGroup.SectionFooter> : null}
+			<FieldGroup.SectionFooter><SectionFooterText>{footer}</SectionFooterText></FieldGroup.SectionFooter>
 		</FieldGroup.Section>
 	);
+}
+
+/** A section's footer text, or nothing: the element stays so its slot does. */
+function SectionFooterText({ children }: { children?: string }) {
+	if (!children) return null;
+	return <SectionText>{children}</SectionText>;
 }
 
 function SectionText({ children, header = false }: { children: string; header?: boolean }) {
@@ -211,14 +280,14 @@ export function SettingsAccountRow({ name, email, avatar, loading = false, testI
 }
 
 /** A link row with its live status under the name, behind a dot in its tone. */
-export function SettingsStatusRow({ icon, label, status, tone, onPress, testID }: SettingsStatusRowProps) {
+export function SettingsStatusRow({ icon, label, status, tone, leading, onPress, testID }: SettingsStatusRowProps) {
 	const t = useTheme();
 	return (
 		<ListItem
 			onPress={onPress}
 			testID={testID}
 			modifiers={[buttonStyle("automatic"), ...rowModifiers(t)]}
-			leading={<RowIcon icon={icon} />}
+			leading={leading ? <RNHostView matchContents>{leading}</RNHostView> : <RowIcon icon={icon} />}
 			supportingText={
 				<HStack spacing={space.xs}>
 					<Image systemName="circle.fill" color={settingsStatusDotColor(t, tone)} modifiers={[font({ textStyle: "caption2" }), imageScale("small"), accessibilityHidden(true)]} />

@@ -1,0 +1,289 @@
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { StyleSheet, View } from "react-native";
+import { AgentLogo } from "../../../lib/AgentLogo";
+import { agentConnection, agentConnectionState, CLOUD_AGENT_LABELS, CLOUD_AGENTS, credentialTypeLabel, type CloudAgent } from "../../../lib/cloud/agents";
+import type { CloudClient } from "../../../lib/cloud/client";
+import { CloudSignIn } from "../../../lib/cloud/components";
+import { useCloud } from "../../../lib/cloud/CloudProvider";
+import { CloudError, cloudErrorMessage } from "../../../lib/cloud/errors";
+import { installGitHubApp } from "../../../lib/cloud/githubInstall";
+import type { CloudGitHubInstallation, CloudProviderConnection } from "../../../lib/cloud/types";
+import { haptics } from "../../../lib/haptics";
+import { SettingsButtonRow, SettingsForm, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsForm";
+import { Spinner } from "../../../lib/Spinner";
+import { useTheme } from "../../../lib/ThemeProvider";
+import { rowIconWidth } from "../../../lib/tokens";
+import { Button, EmptyState } from "../../../lib/ui";
+import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
+
+export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
+
+/** An agent's logo stands in the glyph column, so its name lines up with the other rows' titles. */
+const AGENT_LOGO_SIZE = rowIconWidth;
+
+const AGENTS_FOOTER =
+	"Cloud sessions run each agent with your own subscription or API key. Orchestrator Cloud checks it with the provider, stores it encrypted, and shares it across your devices: an agent connected on the desktop works here too.";
+
+/** A coding agent's line under its name. */
+function agentStatus(connections: readonly CloudProviderConnection[], loaded: boolean, failed: boolean, agent: CloudAgent): { label: string; tone: SettingsTone } {
+	if (!loaded) return failed ? { label: "Couldn't check", tone: "bad" } : { label: "Checking…", tone: "default" };
+	switch (agentConnectionState(connections, agent)) {
+		case "connected": {
+			const how = credentialTypeLabel(agentConnection(connections, agent));
+			return { label: how ? `Connected · ${how}` : "Connected", tone: "good" };
+		}
+		case "invalid":
+			return { label: "Sign in again", tone: "bad" };
+		case "pending":
+			return { label: "Checking…", tone: "default" };
+		default:
+			return { label: "Not connected", tone: "default" };
+	}
+}
+
+/** The person's role in the organization, as a word: "owner" reads "Owner". */
+function roleLabel(role: string | undefined): string | undefined {
+	const trimmed = role?.trim();
+	return trimmed ? trimmed[0].toUpperCase() + trimmed.slice(1).replace(/_/g, " ") : undefined;
+}
+
+/** An installation's line: what the app can reach, or why it can't. */
+function installationStatus(installation: CloudGitHubInstallation): { value: string; tone: SettingsTone } {
+	if (installation.status === "suspended") return { value: "Suspended on GitHub", tone: "bad" };
+	if (installation.syncStatus === "failed") return { value: "Couldn't sync", tone: "bad" };
+	return { value: installation.repositorySelection === "all" ? "All repositories" : "Selected repositories", tone: "default" };
+}
+
+type GitHubAccess =
+	| { kind: "loading" }
+	/** This deployment runs without the GitHub App. */
+	| { kind: "unavailable" }
+	| { kind: "failed"; message: string }
+	| { kind: "ready"; installations: CloudGitHubInstallation[] };
+
+/**
+ * The organization's Orchestrator GitHub App installations, and the two things
+ * done with them here: install it or add repositories on GitHub, and sync what
+ * GitHub granted. The control plane owns the app; the phone only opens its
+ * install page and waits for the installation to change.
+ */
+function useGitHubAccess(client: CloudClient, orgId: string | undefined) {
+	const [access, setAccess] = useState<GitHubAccess>({ kind: "loading" });
+	const [connecting, setConnecting] = useState(false);
+	const [syncing, setSyncing] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
+
+	const load = useCallback(async () => {
+		if (!orgId) return;
+		try {
+			const { installations } = await client.listGitHubInstallations(orgId);
+			if (mounted.current) setAccess({ kind: "ready", installations });
+		} catch (cause) {
+			if (!mounted.current) return;
+			// The GitHub App only exists on deployments that configure it.
+			if (cause instanceof CloudError && cause.status === 404) setAccess({ kind: "unavailable" });
+			// A failed refresh keeps what the page already shows.
+			else setAccess((current) => (current.kind === "ready" ? current : { kind: "failed", message: cloudErrorMessage(cause) }));
+		}
+	}, [client, orgId]);
+
+	const retry = useCallback(() => {
+		setAccess({ kind: "loading" });
+		void load();
+	}, [load]);
+
+	const installations = access.kind === "ready" ? access.installations : [];
+
+	/** Open GitHub's install page, signed in, then wait for the new or updated installation. */
+	const connect = async () => {
+		if (!orgId || connecting) return;
+		setConnecting(true);
+		setError(null);
+		try {
+			await installGitHubApp(client, orgId, installations, () => mounted.current);
+			if (mounted.current) await load();
+		} catch (cause) {
+			if (!mounted.current) return;
+			haptics.error();
+			setError(cloudErrorMessage(cause));
+		} finally {
+			if (mounted.current) setConnecting(false);
+		}
+	};
+
+	/** Ask the control plane to read the installations' repositories from GitHub again. */
+	const sync = async () => {
+		if (!orgId || syncing) return;
+		setSyncing(true);
+		setError(null);
+		try {
+			await Promise.all(installations.filter((item) => item.status === "active").map((item) => client.syncGitHubInstallation(orgId, item.id)));
+			await load();
+			haptics.success();
+		} catch (cause) {
+			if (!mounted.current) return;
+			haptics.error();
+			setError(cloudErrorMessage(cause));
+		} finally {
+			if (mounted.current) setSyncing(false);
+		}
+	};
+
+	return { access, connecting, syncing, error, load, retry, connect, sync };
+}
+
+/**
+ * Orchestrator Cloud's page, opened from its row in Settings' machine list:
+ * the organization it works in, the coding agents it can run with the
+ * person's own credentials, and the repositories it can reach on GitHub.
+ * Signing in and out stays in Settings' Account section.
+ */
+export default function CloudSettingsScreen() {
+	const t = useTheme();
+	const router = useRouter();
+	const glassInset = useGlassBarInset();
+	const { status, org, error, client, connections, connectionsLoaded, refresh, refreshConnections } = useCloud();
+	const github = useGitHubAccess(client, org?.id);
+	const [retrying, setRetrying] = useState(false);
+	const { load: loadGitHub } = github;
+
+	// Read again on every return, so an agent connected on its page, or on
+	// another device, shows at once.
+	useFocusEffect(useCallback(() => {
+		void refreshConnections();
+		void loadGitHub();
+	}, [loadGitHub, refreshConnections]));
+
+	if (status === "signed-out") {
+		return <View style={styles.fill}><CloudSignIn /></View>;
+	}
+	if (status === "error") {
+		return (
+			<View style={[styles.fill, styles.center, { backgroundColor: t.bgBase, paddingTop: glassInset }]}>
+				<EmptyState
+					icon="error"
+					title="Can't reach Orchestrator Cloud"
+					message={error ?? "Try again in a moment."}
+					action={<Button title="Retry" icon="refresh" loading={retrying} onPress={() => { setRetrying(true); void refresh().finally(() => setRetrying(false)); }} />}
+				/>
+			</View>
+		);
+	}
+	if (status !== "ready" || !org) {
+		return (
+			<View style={[styles.fill, styles.center, { backgroundColor: t.bgBase }]}>
+				<Spinner size="large" accessibilityLabel="Loading Orchestrator Cloud" />
+			</View>
+		);
+	}
+
+	const role = roleLabel(org.role);
+	return (
+		<View style={[styles.fill, { backgroundColor: t.bgBase }]}>
+			<SettingsForm testID="cloud-settings-form">
+				<SettingsSection title="Organization" footer="Cloud projects and sessions belong to this organization.">
+					<SettingsValueRow icon="organization" label={org.displayName} value={role} testID="cloud-settings-organization" />
+				</SettingsSection>
+
+				<SettingsSection title="Coding agents" footer={!connectionsLoaded && error ? `${AGENTS_FOOTER}\n\n${error}` : AGENTS_FOOTER}>
+					{CLOUD_AGENTS.map((agent) => {
+						const line = agentStatus(connections, connectionsLoaded, Boolean(error), agent);
+						return (
+							<SettingsStatusRow
+								key={agent}
+								icon="terminal"
+								leading={<AgentLogo harness={agent} size={AGENT_LOGO_SIZE} />}
+								label={CLOUD_AGENT_LABELS[agent]}
+								status={line.label}
+								tone={line.tone}
+								onPress={() => router.push({ pathname: "/settings/cloud/agent/[agent]", params: { agent } })}
+								testID={`cloud-settings-agent-${agent}`}
+							/>
+						);
+					})}
+				</SettingsSection>
+
+				{githubSection(github)}
+
+				<SettingsSection footer="From a repository the GitHub App can reach, or an empty folder.">
+					<SettingsButtonRow icon="add" label="New cloud project" onPress={() => router.push("/cloud/new-project")} testID="cloud-settings-new-project" />
+				</SettingsSection>
+			</SettingsForm>
+		</View>
+	);
+}
+
+/**
+ * GitHub access, or nothing on a deployment without the GitHub App. Placed as
+ * the section itself rather than a component that may draw nothing, so the
+ * form never holds an empty slot.
+ */
+function githubSection({ access, connecting, syncing, error, retry, connect, sync }: ReturnType<typeof useGitHubAccess>): ReactElement | null {
+	if (access.kind === "unavailable") return null;
+	if (access.kind === "loading") {
+		return (
+			<SettingsSection title="GitHub">
+				<SettingsValueRow icon="github" label="GitHub App" loading testID="cloud-settings-github-loading" />
+			</SettingsSection>
+		);
+	}
+	if (access.kind === "failed") {
+		return (
+			<SettingsSection title="GitHub" footer={access.message}>
+				<SettingsButtonRow icon="refresh" label="Check GitHub access again" onPress={retry} testID="cloud-settings-github-retry" />
+			</SettingsSection>
+		);
+	}
+	// A removed installation is gone from GitHub; nothing to say about it.
+	const listed = access.installations.filter((item) => item.status !== "removed");
+	const installed = listed.some((item) => item.status === "active");
+	const footer = installed
+		? "Agents work in the repositories the Orchestrator GitHub App can reach. Add or remove repositories on GitHub; you'll come back here when you're done."
+		: "Install the Orchestrator GitHub App on the repositories agents should work in. You'll come back here when you're done.";
+	return (
+		<SettingsSection title="GitHub" footer={error ?? footer}>
+			{listed.map((installation) => {
+				const line = installationStatus(installation);
+				return (
+					<SettingsValueRow
+						key={installation.id}
+						icon="github"
+						label={installation.accountLogin}
+						value={line.value}
+						tone={line.tone}
+						testID={`cloud-settings-github-${installation.id}`}
+					/>
+				);
+			})}
+			<SettingsButtonRow
+				icon={installed ? "openExternal" : "github"}
+				label={connecting ? "Waiting for GitHub…" : installed ? "Add repositories on GitHub" : "Connect GitHub"}
+				loading={connecting}
+				disabled={syncing}
+				onPress={() => void connect()}
+				testID="cloud-settings-github-connect"
+			/>
+			{installed ? (
+				<SettingsButtonRow
+					icon="refresh"
+					label="Refresh repositories"
+					loading={syncing}
+					disabled={connecting}
+					onPress={() => void sync()}
+					testID="cloud-settings-github-sync"
+				/>
+			) : null}
+		</SettingsSection>
+	);
+}
+
+const styles = StyleSheet.create({
+	fill: { flex: 1 },
+	center: { alignItems: "center", justifyContent: "center" },
+});

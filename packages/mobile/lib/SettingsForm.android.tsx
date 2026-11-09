@@ -297,11 +297,12 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 }
 
 /** A link row with its live status under the name, behind a dot in its tone. */
-export function SettingsStatusRow({ icon, label, status, tone, onPress, testID }: SettingsStatusRowProps) {
+export function SettingsStatusRow({ icon, label, status, tone, leading, onPress, testID }: SettingsStatusRowProps) {
 	const t = useTheme();
 	return (
 		<Row
 			icon={icon}
+			leading={leading ? <RNHostView matchContents>{leading}</RNHostView> : undefined}
 			label={label}
 			supporting={
 				<ComposeRow horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center">

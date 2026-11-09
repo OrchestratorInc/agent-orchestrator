@@ -20,6 +20,8 @@ const fixtures = vi.hoisted(() => {
 		// expo-router's router is one object for the app's lifetime.
 		router: { push, navigate },
 		configured: true,
+		connection: "open" as "open" | "closed",
+		cloud: null as null | { hostId: string; name: string; appearance: { symbol: string }; connection: "open"; projects: []; sessions: []; orchestrators: [] },
 		notificationsUnread: 0,
 		theme: new Proxy({}, { get: (_, key) => `#${String(key)}` }),
 	};
@@ -69,8 +71,9 @@ vi.mock("./machine-menu-image", async (importOriginal) => {
 vi.mock("./worker-environment-filter", () => ({ WorkerEnvironmentFilter: "WorkerEnvironmentFilter" }));
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ status: "signed-out", notificationsUnread: 0, sessionsLoaded: false, watch: () => () => {} }) }));
 vi.mock("./store", () => ({ useApp: () => ({
-	configured: fixtures.configured, configResolved: true, connection: "open", loading: false, error: null,
+	configured: fixtures.configured, configResolved: true, connection: fixtures.connection, loading: false, error: null, cloud: fixtures.cloud,
 	config: { hostId: "mac" },
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: fixtures.projects,
@@ -178,6 +181,8 @@ function project(id: string, name: string, hostId: string, hostName: string): Ho
 beforeEach(() => {
 	fixtures.platform = "ios";
 	fixtures.configured = true;
+	fixtures.connection = "open";
+	fixtures.cloud = null;
 	fixtures.notificationsUnread = 0;
 	fixtures.projects = [];
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -343,6 +348,45 @@ describe("Workers spawn action", () => {
 		expect(fab.props.label).toBe("New task");
 		act(() => fab.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
+	});
+
+	// With the default machine offline and nothing else connected, New task
+	// opens on Orchestrator Cloud rather than on a machine it cannot reach.
+	it("starts on Orchestrator Cloud when no machine is connected and Cloud is signed in", () => {
+		fixtures.connection = "closed";
+		for (const host of fixtures.hostStates) Object.assign(host, { connection: "closed", loading: false, error: "Host is unreachable" });
+		act(() => { renderer = create(<FleetScreen />); });
+		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
+		act(() => renderer.unmount());
+
+		fixtures.cloud = { hostId: "orchestrator-cloud", name: "Cloud", appearance: { symbol: "cloud" }, connection: "open", projects: [], sessions: [], orchestrators: [] };
+		act(() => { renderer = create(<FleetScreen />); });
+		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "orchestrator-cloud" } });
+	});
+
+	// One way to start a task at a time: the idle state has New agent, so the
+	// floating New task waits for a worker to show; an empty filtered board has no
+	// button of its own, so it keeps the floating one.
+	it("leaves the floating New task out while the idle state offers New agent", () => {
+		fixtures.platform = "android";
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac", connection: "open", error: null, sessions: [] })];
+		act(() => { renderer = create(<FleetScreen />); });
+		const list = () => renderer.root.findByType("WorkerBoardList" as never);
+		act(() => list().props.onEmptyChange(true));
+		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(0);
+		act(() => list().props.onEmptyChange(false));
+		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(1);
+	});
+
+	it("keeps the floating New task on a filtered board with no workers, whose empty state has no button", () => {
+		fixtures.platform = "android";
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
+		act(() => { renderer = create(<FleetScreen />); });
+		choose(filterMenu(), "Game · Windows");
+		act(() => renderer.root.findByType("WorkerBoardList" as never).props.onEmptyChange(true));
+		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(1);
 	});
 
 	it("carries the project filter into the spawn sheet", () => {

@@ -1,10 +1,14 @@
-import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import { AddFab } from "../../../lib/AddFab";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import { useCloud } from "../../../lib/cloud/CloudProvider";
+import { useTabBarInset } from "../../../lib/useTabBarInset";
+import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { boardTitle } from "../../../lib/board-tabs";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
-import { useLargeTitle } from "../../../lib/largeTitle";
+import { TitleActionButton, useInlineLargeTitle } from "../../../lib/inlineLargeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
@@ -33,26 +37,42 @@ export default function ProjectsScreen() {
 		error,
 		allProjects,
 		hostStates,
+		cloud,
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
-	const largeTitle = useLargeTitle(boardTitle("(projects)"));
+	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded } = useCloud();
+	const cloudReady = Boolean(cloud) && cloudProjectsLoaded;
+	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
+	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
+	const fab = useFabExpanded();
+	const tabBarInset = useTabBarInset();
+	// A cloud project starts from a GitHub repository, here or from New task.
+	const newCloudProject = useCallback(() => router.push("/cloud/new-project"), [router]);
+	// On iOS, New cloud project sits at the end of the page's own title line, so
+	// the bar keeps the board's items as they are; Android adds from its
+	// floating button.
+	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
+		onScroll: fab.onScroll,
+		action: cloud ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
+	});
 	const tabBar = useTabBarFrost();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
 		: Boolean(error);
-	const unreadCount = hostStates.length > 1
+	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
-		: notificationsUnread;
+		: notificationsUnread) + (cloud ? cloudUnread : 0);
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	// One list of rows, no status headers: each row already says how its
 	// orchestrator is doing. The sections' order is kept, so projects that need
 	// attention still come first.
+	// Orchestrator Cloud's projects sit beside each machine's, marked by the cloud environment.
 	const rows = useMemo(
-		() => hostedProjectSections(hostStates).flatMap((section) => section.data),
-		[hostStates],
+		() => hostedProjectSections(cloud ? [...hostStates, cloud] : hostStates).flatMap((section) => section.data),
+		[cloud, hostStates],
 	);
 	const failure = useBoardFailure();
 
@@ -73,7 +93,7 @@ export default function ProjectsScreen() {
 		router.push({ pathname: "/project/[id]", params: { id: row.project.id, hostId } });
 	};
 
-	if (!configured && hostStates.length === 0) {
+	if (!configured && hostStates.length === 0 && !cloud && !cloudPending) {
 		return (
 			<View style={styles.screen}>
 				<TabPageScroll>
@@ -93,7 +113,7 @@ export default function ProjectsScreen() {
 
 	return (
 		<View style={styles.screen}>
-			{fleetLoading && allProjects.length === 0 ? (
+			{(fleetLoading || cloudPending) && allProjects.length === 0 && !cloudReady ? (
 				<TabPageScroll>
 					{largeTitle.header}
 					{staleBanner}
@@ -116,13 +136,13 @@ export default function ProjectsScreen() {
 						<ProjectCard
 							row={item}
 							busy={busyProjects.has(hostedProjectKey(item.project))}
-							showMachine={hostStates.length > 1}
+							showMachine={hostStates.length + (cloud ? 1 : 0) > 1}
 							onOpenProject={openProject}
 							onOrchestrator={openOrchestrator}
 						/>
 					)}
 					ListEmptyComponent={
-						fleetError ? (
+						fleetError && !cloud ? (
 							<EmptyState
 								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
@@ -130,7 +150,12 @@ export default function ProjectsScreen() {
 								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
 							/>
 						) : (
-							<EmptyState icon="folder" title="No projects" message="Add a project in Orchestrator to get started." />
+							<EmptyState
+								icon="folder"
+								title="No projects"
+								message={cloud ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
+								action={cloud ? <Button title="New cloud project" icon="cloud" onPress={newCloudProject} /> : undefined}
+							/>
 						)
 					}
 				/>
@@ -138,6 +163,8 @@ export default function ProjectsScreen() {
 			<BoardHeaderItems unread={unreadCount} />
 			{largeTitle.edge}
 			{tabBar.frost}
+			{/* iOS adds from the title line; Android's create action is the floating button. */}
+			{cloud ? <AddFab expanded={fab.expanded} label="New project" onPress={newCloudProject} bottomInset={tabBarInset + tabBar.inset} testID="new-cloud-project" /> : null}
 		</View>
 	);
 }
