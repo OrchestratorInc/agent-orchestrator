@@ -270,7 +270,9 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, o
 		<Popover open={open} onOpenChange={setOpen}>
 			{trigger}
 			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-3" data-browser-native-overlay="true">
-				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
+				{/* Mounted with the popover, not with `open`: the frame stays up for its exit
+				    animation, and the content must fade out with it rather than vanish first. */}
+				<SharePanel file={file} name={name} onClose={() => setOpen(false)} />
 			</PopoverContent>
 		</Popover>
 	);
