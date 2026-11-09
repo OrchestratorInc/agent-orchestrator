@@ -36,7 +36,7 @@ import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
-import { controllerStoppedBanner, errorBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
@@ -655,7 +655,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
 	const brokenServers = brokenMcpServers(snapshot);
 	// Once per run of the session, like the desktop: a restart starts its tool servers again.
-	const mcpNoticeKey = `${currentHostId ?? ""}:${session.id}:${"createdAt" in session ? session.createdAt ?? "" : ""}`;
+	const noticeKey = mcpNoticeKey(currentHostId, session.id, "createdAt" in session ? session.createdAt : undefined);
 	const rolledBack = snapshot.turns.filter((turn) => turn.rolledBack).length;
 	const quota = quotaWarning(snapshot.rateLimits);
 	const compactSupported = can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
@@ -798,7 +798,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		    out of the padded root above and rides the keyboard by a transform: the
 		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
 		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
-			{switchCardShown ? null : <McpServerNotice key={mcpNoticeKey} noticeKey={mcpNoticeKey} servers={brokenServers} visible={chatOnScreen} />}
+			{switchCardShown ? null : <McpServerNotice key={noticeKey} noticeKey={noticeKey} servers={brokenServers} visible={chatOnScreen} />}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controllerStoppedBanner, errorBanner, mcpNoticeText, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, mcpNoticeText, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
 
 describe("conversation banners", () => {
 	it("says which tool servers did not start in the desktop's words", () => {
@@ -9,6 +9,14 @@ describe("conversation banners", () => {
 		])).toBe("Canva, Posthog didn’t start. Continuing without them.");
 		expect(mcpNoticeText([{ name: "notion", status: "failed" }])).toBe("Notion didn’t start. Continuing without it.");
 		expect(mcpNoticeText([])).toBeUndefined();
+	});
+
+	it("gives each run of a session its own tool-server note", () => {
+		const first = mcpNoticeKey("h_1", "ao-1", "2026-11-09T10:00:00Z");
+		expect(mcpNoticeKey("h_1", "ao-1", "2026-11-09T10:00:00Z")).toBe(first);
+		expect(mcpNoticeKey("h_1", "ao-1", "2026-11-09T11:00:00Z")).not.toBe(first);
+		expect(mcpNoticeKey("h_2", "ao-1", "2026-11-09T10:00:00Z")).not.toBe(first);
+		expect(mcpNoticeKey(undefined, "ao-1", undefined)).toBe(":ao-1:");
 	});
 
 	it("brings a closed banner back only when what it reports changes", () => {
