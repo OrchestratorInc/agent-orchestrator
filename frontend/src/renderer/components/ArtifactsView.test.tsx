@@ -317,6 +317,13 @@ describe("ArtifactsView", () => {
 		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
 	});
 
+	it("offers Share on a Scratchpad file, which belongs to the Scratchpad workspace", async () => {
+		renderView();
+		await userEvent.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
+		const dialog = screen.getByRole("dialog", { name: "caching-options.md" });
+		expect(await within(dialog).findByRole("button", { name: "Share: caching-options.md" })).toBeInTheDocument();
+	});
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();
@@ -604,7 +611,7 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
-		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
+		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toBeInTheDocument();
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
 		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();

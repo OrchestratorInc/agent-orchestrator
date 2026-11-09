@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "@/components/app-icons";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -74,6 +74,7 @@ export function ArtifactActionsMenu({
 	hostId,
 	session,
 	iconOnly = false,
+	verticalDots = false,
 	variant = "default",
 	onEdit,
 	pinInMenu = false,
@@ -90,6 +91,8 @@ export function ArtifactActionsMenu({
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
+	/** Draws the icon-only trigger as a vertical ellipsis. */
+	verticalDots?: boolean;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;
 	pinInMenu?: boolean;
@@ -219,7 +222,7 @@ export function ArtifactActionsMenu({
 				type="button"
 				variant={iconOnly ? "quiet" : "ghost"}
 			>
-				{iconOnly ? <Ellipsis aria-hidden="true" className="size-icon-sm" /> : (
+				{iconOnly ? (verticalDots ? <MoreVertical aria-hidden="true" className="size-icon-sm" /> : <Ellipsis aria-hidden="true" className="size-icon-sm" />) : (
 					<>
 						<span className="truncate">{artifact.name}</span>
 						<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0 text-muted-foreground" />

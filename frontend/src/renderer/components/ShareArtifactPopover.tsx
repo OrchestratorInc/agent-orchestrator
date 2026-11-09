@@ -110,7 +110,7 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
  * published, copy the link, unpublish it, or republish a file that changed
  * since. For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const available = useShareAvailable();
@@ -121,14 +121,21 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
 			disabled={video}
-			size="sm"
+			size={iconOnly ? "icon-sm" : "sm"}
 			type="button"
 			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{t("artifacts.share.menu")}
+			{iconOnly ? null : t("artifacts.share.menu")}
 		</Button>
 	);
+	const popoverTrigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
+	const trigger = iconOnly ? (
+		<Tooltip>
+			<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
+			<TooltipContent side="bottom">{t("artifacts.share.menu")}</TooltipContent>
+		</Tooltip>
+	) : popoverTrigger;
 	// Not offered where the control plane does not serve share links.
 	if (!available) return null;
 	if (video) {
@@ -144,7 +151,7 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{button}</PopoverTrigger>
+			{trigger}
 			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
