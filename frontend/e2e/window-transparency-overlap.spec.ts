@@ -26,7 +26,15 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 	}));
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
-	const before = await surface.screenshot({ animations: "disabled" });
+	let before = await surface.screenshot({ animations: "disabled" });
+	// Opening the archive mounts cards before its final paint has settled.
+	// Establish a stable baseline before changing the content underneath it.
+	await expect.poll(async () => {
+		const next = await surface.screenshot({ animations: "disabled" });
+		const stable = before.equals(next);
+		before = next;
+		return stable;
+	}, { message: "surface paint settles before testing occlusion" }).toBe(true);
 	await underneath.evaluateAll((elements) => {
 		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
 	});
