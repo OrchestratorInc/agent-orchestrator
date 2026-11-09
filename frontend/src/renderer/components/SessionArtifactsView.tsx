@@ -483,7 +483,7 @@ function ArtifactViewerBody({
 						artifactRoot={artifactRoot}
 						cloud={cloud}
 						onAccessRefused={onAccessRefused}
-						feedbackRequestKey={feedbackRequestKey}
+						feedbackRequestKey={showingPage ? undefined : feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
 						path={artifact.path}
@@ -500,7 +500,18 @@ function ArtifactViewerBody({
 				</div>}
 				{showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
-						<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						<ArtifactPageFeedback
+							feedbackRequestKey={feedbackRequestKey}
+							hostId={hostId}
+							menuActions={menuActions}
+							name={artifact.name}
+							onFeedbackRequestConsumed={onFeedbackRequestConsumed}
+							path={artifact.path}
+							sendMessage={sendMessage}
+							sessionId={sessionId}
+						>
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						</ArtifactPageFeedback>
 					</ArtifactZoomContext.Provider>
 				) : null}
 				{previewing ? (
@@ -526,10 +537,56 @@ function ArtifactViewerBody({
 }
 
 /**
- * A cloud session's HTML artifact with whole-file feedback for its worker.
- * The framed page is in another origin, so feedback is on the file, not a
- * selection in it.
+ * A rendered page with whole-file feedback for its worker, for an HTML
+ * artifact shown as its page. The framed page is in another origin, so
+ * feedback is on the file, not a selection in it.
  */
+function ArtifactPageFeedback({
+	children,
+	feedbackRequestKey,
+	hostId,
+	menuActions,
+	name,
+	onFeedbackRequestConsumed,
+	path,
+	sendMessage,
+	sessionId,
+}: {
+	children: ReactNode;
+	feedbackRequestKey?: number;
+	hostId?: string;
+	/** The header's file menu, which takes the feedback action. */
+	menuActions: ArtifactMenuActions;
+	name: string;
+	onFeedbackRequestConsumed?: (key: number) => void;
+	path: string;
+	/** Sends feedback to the worker; without it feedback goes through the daemon. */
+	sendMessage?: (message: string) => Promise<void>;
+	sessionId: string;
+}) {
+	const { t } = useTranslation();
+	const annotation = useFileAnnotation(sessionId, { hostId, source: name, sendMessage });
+	const begin = annotation.begin;
+	useEffect(() => {
+		if (feedbackRequestKey === undefined) return;
+		begin({ path, side: "file", surface: "focused" });
+		onFeedbackRequestConsumed?.(feedbackRequestKey);
+	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
+	const feedbackLabel = t("files.addFeedback");
+	useLayoutEffect(() => {
+		menuActions.current = [{ id: "feedback", label: feedbackLabel, icon: <MessageSquarePlus aria-hidden="true" />, onSelect: () => begin({ path, side: "file", surface: "focused" }) }];
+		return () => { menuActions.current = []; };
+	}, [begin, feedbackLabel, menuActions, path]);
+	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
+	return (
+		<div className="flex h-full min-h-0 flex-col">
+			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
+			<div className="relative min-h-0 flex-1 overflow-hidden">{children}</div>
+		</div>
+	);
+}
+
+/** A cloud session's HTML artifact, framed from the control plane. */
 function CloudHtmlArtifactView({
 	artifact,
 	feedbackRequestKey,
@@ -553,31 +610,21 @@ function CloudHtmlArtifactView({
 	sessionId: string;
 	url: string;
 }) {
-	const { t } = useTranslation();
-	const annotation = useFileAnnotation(sessionId, { source: artifact.name, sendMessage });
-	const begin = annotation.begin;
-	const path = artifact.path;
 	// The page is in the control plane's opaque origin, so the frame itself
 	// zooms: from the viewer's buttons and shortcuts, not a pinch inside it.
 	const { zoom } = useArtifactZoomTarget();
-	useEffect(() => {
-		if (feedbackRequestKey === undefined) return;
-		begin({ path, side: "file", surface: "focused" });
-		onFeedbackRequestConsumed?.(feedbackRequestKey);
-	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
-	const feedbackLabel = t("files.addFeedback");
-	useLayoutEffect(() => {
-		menuActions.current = [{ id: "feedback", label: feedbackLabel, icon: <MessageSquarePlus aria-hidden="true" />, onSelect: () => begin({ path, side: "file", surface: "focused" }) }];
-		return () => { menuActions.current = []; };
-	}, [begin, feedbackLabel, menuActions, path]);
-	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
-			<div className="relative min-h-0 flex-1 overflow-hidden">
-				<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} zoom={zoom} />
-			</div>
-		</div>
+		<ArtifactPageFeedback
+			feedbackRequestKey={feedbackRequestKey}
+			menuActions={menuActions}
+			name={artifact.name}
+			onFeedbackRequestConsumed={onFeedbackRequestConsumed}
+			path={artifact.path}
+			sendMessage={sendMessage}
+			sessionId={sessionId}
+		>
+			<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} zoom={zoom} />
+		</ArtifactPageFeedback>
 	);
 }
 
