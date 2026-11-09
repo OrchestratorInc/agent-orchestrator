@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_MENU_ACTION_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { AoBridge } from "./preload";
 
 const electronMocks = vi.hoisted(() => {
@@ -36,6 +37,7 @@ await import("./preload");
 // is the always-on buffering listener preload.ts registers at module load,
 // not the per-call listener onOpenFolderPath registers when invoked.
 const openFolderPathBufferListener = electronMocks.listeners.get("app:openFolderPath");
+const sessionDeepLinkBufferListener = electronMocks.listeners.get(OPEN_SESSION_DEEP_LINK_CHANNEL);
 const telemetryPolicyBroadcastListener = electronMocks.listeners.get("telemetry:policyChanged");
 const rendererQueuePurgeRequestListener = electronMocks.listeners.get("telemetry:clearRendererQueues");
 
@@ -74,6 +76,65 @@ describe("preload repository branch bridge", () => {
 		await expect(exposedBridge().app.getRepositoryBranch("/repo/project")).resolves.toBe("main");
 
 		expect(electronMocks.invoke).toHaveBeenCalledWith("app:getRepositoryBranch", "/repo/project");
+	});
+});
+
+describe("preload session deep link bridge", () => {
+	it("delivers a deep link sent after subscription", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+
+		expect(listener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+		dispose();
+	});
+
+	it("buffers a deep link that arrives before ShellLayout subscribes", () => {
+		// Mirrors the cold-start race: main flushes on renderer ready (a child
+		// effect) before ShellLayout's parent effect has subscribed.
+		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		expect(listener).toHaveBeenCalledTimes(1);
+		expect(listener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+
+		// The buffer is drained, not replayed on later resubscription.
+		const lateListener = vi.fn();
+		const lateDispose = exposedBridge().app.onOpenSessionDeepLink(lateListener);
+		expect(lateListener).not.toHaveBeenCalled();
+		lateDispose();
+		dispose();
+	});
+
+	it("ignores malformed deep-link payloads", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		sessionDeepLinkBufferListener?.({}, { projectId: 7, sessionId: "sess-9" });
+		sessionDeepLinkBufferListener?.({}, "sess-9");
+		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "" });
+
+		expect(listener).not.toHaveBeenCalled();
+		dispose();
+	});
+
+	it("buffers a deep link that arrives between disposal and resubscription", () => {
+		// Same semantics as onOpenFolderPath: disposal is a temporary
+		// unsubscribe (effect cleanup/re-subscribe), so nothing is lost.
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+		dispose();
+
+		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+		expect(listener).not.toHaveBeenCalled();
+
+		const reListener = vi.fn();
+		const reDispose = exposedBridge().app.onOpenSessionDeepLink(reListener);
+		expect(reListener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+		reDispose();
 	});
 });
 

@@ -846,6 +846,7 @@
 	"daemon.title.notConfigured": "Демон Orchestrator не настроен",
 	"daemon.title.notReady": "Демон Orchestrator ещё не готов",
 	"daemon.title.unreachable": "Демон Orchestrator недоступен",
+	"deepLink.sessionNotFound": "Сессия не найдена",
 	"editor.open": "Открыть",
 	"editor.opening": "Открытие…",
 	"editor.preparingWorkspace": "Подготовка рабочего пространства…",

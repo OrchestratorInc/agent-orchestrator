@@ -72,6 +72,7 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
+import type { SessionDeepLinkTarget } from "../../shared/deep-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
@@ -1410,6 +1411,43 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			)),
 		[queryClient],
 	);
+
+	// ao-app://sessions/{projectId}/{sessionId} deep links from external tools.
+	// Validate against the loaded workspace lists so a stale link focuses the
+	// app with a quiet toast instead of navigating to a wrong session. A
+	// cold-start link is flushed as soon as the shell mounts, before the
+	// workspace query has data — hold it until the first page lands.
+	const pendingSessionDeepLinkRef = useRef<SessionDeepLinkTarget | null>(null);
+	const handleSessionDeepLink = useCallback(
+		(target: SessionDeepLinkTarget) => {
+			const findIn = (workspaces: WorkspaceSummary[]) =>
+				workspaces.find((workspace) => workspace.id === target.projectId
+					&& workspace.sessions.some((session) => session.id === target.sessionId));
+			const workspace = findIn(workspacesRef.current) ?? findIn(remoteWorkspacesRef.current);
+			if (!workspace) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionNotFound"));
+				return;
+			}
+			void navigate(sessionNavigateTarget(target.projectId, target.sessionId, workspace.hostId));
+		},
+		[navigate, t],
+	);
+	useEffect(() => {
+		return aoBridge.app.onOpenSessionDeepLink((target) => {
+			if (workspaceQuery.isPending) {
+				pendingSessionDeepLinkRef.current = target;
+				return;
+			}
+			handleSessionDeepLink(target);
+		});
+	}, [handleSessionDeepLink, workspaceQuery.isPending]);
+	useEffect(() => {
+		if (workspaceQuery.isPending) return;
+		const pending = pendingSessionDeepLinkRef.current;
+		if (!pending) return;
+		pendingSessionDeepLinkRef.current = null;
+		handleSessionDeepLink(pending);
+	}, [handleSessionDeepLink, workspaceQuery.isPending]);
 
 	useEffect(() => {
 		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));

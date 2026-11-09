@@ -168,6 +168,7 @@ vi.mock("../lib/bridge", () => ({
 			onShortcut: shellMocks.onShortcut,
 			getPathForFile: shellMocks.getPathForFile,
 			onOpenFolderPath: shellMocks.onOpenFolderPath,
+			onOpenSessionDeepLink: () => () => {},
 		},
 		keybindings: {
 			get: shellMocks.getKeybindings,

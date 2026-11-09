@@ -30,6 +30,7 @@ import {
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
 import type { DictationEvent } from "./shared/dictation";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, type SessionDeepLinkTarget } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -178,6 +179,26 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 	}
 });
 
+// A session deep link (ao-app://sessions/…) flushed by main on renderer ready
+// races the same way as the folder path above: the readiness ping comes from a
+// child effect, before ShellLayout subscribes. Same dispatcher-and-buffer.
+let bufferedSessionDeepLink: SessionDeepLinkTarget | null = null;
+let activeSessionDeepLinkListener: ((target: SessionDeepLinkTarget) => void) | null = null;
+function isSessionDeepLinkTarget(value: unknown): value is SessionDeepLinkTarget {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const candidate = value as Record<string, unknown>;
+	return typeof candidate.projectId === "string" && candidate.projectId.length > 0
+		&& typeof candidate.sessionId === "string" && candidate.sessionId.length > 0;
+}
+ipcRenderer.on(OPEN_SESSION_DEEP_LINK_CHANNEL, (_event, target: unknown) => {
+	if (!isSessionDeepLinkTarget(target)) return;
+	if (activeSessionDeepLinkListener) {
+		activeSessionDeepLinkListener(target);
+	} else {
+		bufferedSessionDeepLink = target;
+	}
+});
+
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
@@ -271,6 +292,19 @@ const api = {
 			}
 			return () => {
 				if (activeOpenFolderPathListener === listener) activeOpenFolderPathListener = null;
+			};
+		},
+		// Fired by the main process for ao-app://sessions/{projectId}/{sessionId}
+		// deep links from external tools; the shell validates and navigates.
+		onOpenSessionDeepLink: (listener: (target: SessionDeepLinkTarget) => void) => {
+			activeSessionDeepLinkListener = listener;
+			if (bufferedSessionDeepLink) {
+				const target = bufferedSessionDeepLink;
+				bufferedSessionDeepLink = null;
+				listener(target);
+			}
+			return () => {
+				if (activeSessionDeepLinkListener === listener) activeSessionDeepLinkListener = null;
 			};
 		},
 		// Fired by the main process when the app-level new-session shortcut

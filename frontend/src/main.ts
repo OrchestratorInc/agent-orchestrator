@@ -118,6 +118,7 @@ import {
 	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, parseSessionDeepLink, type SessionDeepLinkTarget } from "./shared/deep-links";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
@@ -410,6 +411,10 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // whose renderer isn't mounted yet. Flushed once the shell signals readiness
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
+// Session deep link (ao-app://sessions/…) that arrived before the shell was
+// mounted (cold-start argv or early open-url). Flushed on the same
+// TRAY_RENDERER_READY_CHANNEL handshake as pendingFolderPath.
+let pendingSessionDeepLink: SessionDeepLinkTarget | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
@@ -3924,6 +3929,11 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 		event.sender.send(OPEN_FOLDER_PATH_CHANNEL, pendingFolderPath);
 		pendingFolderPath = null;
 	}
+
+	if (pendingSessionDeepLink && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SESSION_DEEP_LINK_CHANNEL, pendingSessionDeepLink);
+		pendingSessionDeepLink = null;
+	}
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
@@ -4036,6 +4046,21 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	// the plan when it mounts.
 	if (isBillingDeepLink(url)) {
 		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		return;
+	}
+	// ao-app://sessions/{projectId}/{sessionId} from external tools: hand the
+	// decoded target to the shell, which validates it against its workspace
+	// list and navigates (toast when the session is gone). Queue it while the
+	// renderer is still mounting (cold start) — flushed on renderer ready,
+	// same handshake as pendingFolderPath below.
+	const sessionTarget = parseSessionDeepLink(url);
+	if (sessionTarget) {
+		const contents = getShellWebContents();
+		if (contents && !contents.isLoading()) {
+			contents.send(OPEN_SESSION_DEEP_LINK_CHANNEL, sessionTarget);
+		} else {
+			pendingSessionDeepLink = sessionTarget;
+		}
 		return;
 	}
 	try {

@@ -844,6 +844,7 @@
 	"daemon.title.notConfigured": "Le daemon Orchestrator n'est pas configuré",
 	"daemon.title.notReady": "Le daemon Orchestrator n'est pas encore prêt",
 	"daemon.title.unreachable": "Le daemon Orchestrator est inaccessible",
+	"deepLink.sessionNotFound": "Session introuvable",
 	"editor.open": "Ouvrir",
 	"editor.opening": "Ouverture…",
 	"editor.preparingWorkspace": "Préparation de l’espace de travail…",
