@@ -128,8 +128,17 @@ export function ArtifactsView() {
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
-	// A selected file deleted elsewhere drops out as the list refreshes. The
+	// A selected file deleted elsewhere leaves the selection as the list
+	// refreshes, so a later file at the same path starts unselected. The
+	// check runs against every artifact, not the filtered cards: the
 	// selection outlives the filters, so the confirmation names every file.
+	useEffect(() => {
+		const present = new Set(groups.flatMap((group) => group.rows.map(artifactKey)));
+		setSelectedIds((current) => {
+			const kept = [...current].filter((id) => present.has(id));
+			return kept.length === current.size ? current : new Set(kept);
+		});
+	}, [groups]);
 	const selectedRows = useMemo(
 		() => groups.flatMap((group) => group.rows).filter((row) => selectedIds.has(artifactKey(row))),
 		[groups, selectedIds],

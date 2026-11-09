@@ -342,6 +342,30 @@ describe("ArtifactsView", () => {
 		expect(screen.getByText("0 selected")).toBeInTheDocument();
 	});
 
+	it("drops a selected artifact deleted elsewhere, so a new file at its path starts unselected", async () => {
+		const user = userEvent.setup();
+		const { refresh } = renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		// The selection outlives the filters.
+		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "caching");
+		await user.clear(screen.getByRole("searchbox", { name: "Search artifacts" }));
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+
+		const [project, scratchpad] = withArtifacts;
+		mocks.workspaces = [{ ...project!, sessions: [project!.sessions[0]!, session("ao-2", "Review pricing", [])] }, scratchpad!];
+		refresh();
+		await waitFor(() => expect(screen.getByText("1 selected")).toBeInTheDocument());
+
+		mocks.workspaces = withArtifacts;
+		refresh();
+		for (const box of screen.getAllByRole("checkbox", { name: "Select pricing.md" })) expect(box).not.toBeChecked();
+		expect(screen.getByText("1 selected")).toBeInTheDocument();
+		expect(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]).toBeChecked();
+	});
+
 	it("keeps the artifacts that failed to delete selected and says why", async () => {
 		const user = userEvent.setup();
 		mocks.del.mockImplementation(async (_path: string, { params }: { params: { path: { sessionId: string } } }) => (
