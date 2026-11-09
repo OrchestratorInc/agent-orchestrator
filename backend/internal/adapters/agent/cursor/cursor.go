@@ -155,11 +155,17 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
+var _ = binaryutil.RegisterSpec("cursor", binaryutil.BinarySpec{Label: "cursor", Names: []string{"cursor-agent"}, WinNames: []string{"cursor-agent.exe", "cursor-agent.cmd", "cursor-agent"}})
+
 // ResolveCursorBinary returns the path to the cursor-agent binary on this
 // machine, searching PATH then a handful of well-known install locations.
 // Returns "cursor-agent" as a last-ditch fallback so callers see a clear
 // "command not found" rather than an empty argv.
 func ResolveCursorBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "cursor"); selected {
+		return path, err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

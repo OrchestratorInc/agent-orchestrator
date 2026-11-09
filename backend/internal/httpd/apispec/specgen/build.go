@@ -164,6 +164,9 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersAgentExecutableScanRequest":                "AgentExecutableScanRequest",
+	"ControllersAgentExecutableCandidate":                  "AgentExecutableCandidate",
+	"ControllersAgentExecutableScanResponse":               "AgentExecutableScanResponse",
 	"ControllersWorkflowProviderProfilesResponse":          "WorkflowProviderProfilesResponse",
 	"PortsProviderProfileChoice":                           "ProviderProfileChoice",
 	"WorkflowReplanInput":                                  "WorkflowReplanInput",
@@ -2594,6 +2597,18 @@ func agentOperations() []operation {
 			summary: "Refresh the cached local agent adapter catalog",
 			resps: []respUnit{
 				{http.StatusOK, controllers.RefreshAgentsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/executables/scan", id: "scanAgentExecutables", tag: "agents",
+			summary:    "Scan a chosen directory for harness CLI executables",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    controllers.AgentExecutableScanRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.AgentExecutableScanResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

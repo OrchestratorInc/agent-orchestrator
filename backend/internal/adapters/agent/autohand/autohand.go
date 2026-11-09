@@ -183,7 +183,7 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	}
 }
 
-var autohandBinarySpec = binaryutil.BinarySpec{
+var autohandBinarySpec = binaryutil.RegisterSpec("autohand", binaryutil.BinarySpec{
 	Label:         "autohand",
 	Names:         []string{"autohand"},
 	WinNames:      []string{"autohand.cmd", "autohand.exe", "autohand"},
@@ -195,7 +195,7 @@ var autohandBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "autohand.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".local", "bin", "autohand.exe"}},
 	},
-}
+})
 
 // ResolveAutohandBinary returns the path to the autohand binary, or a wrapped
 // ports.ErrAgentBinaryNotFound when it is absent.

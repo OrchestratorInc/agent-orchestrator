@@ -163,7 +163,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-var ampBinarySpec = binaryutil.BinarySpec{
+var ampBinarySpec = binaryutil.RegisterSpec("amp", binaryutil.BinarySpec{
 	Label:         "amp",
 	Names:         []string{"amp"},
 	WinNames:      []string{"amp.cmd", "amp.exe", "amp"},
@@ -174,7 +174,7 @@ var ampBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "amp.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "amp.exe"}},
 	},
-}
+})
 
 // ResolveAmpBinary finds the `amp` binary, searching PATH then common install
 // locations. It returns a wrapped ports.ErrAgentBinaryNotFound when Amp is absent.

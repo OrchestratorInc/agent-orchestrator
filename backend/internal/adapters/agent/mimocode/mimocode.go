@@ -142,7 +142,7 @@ func mimoAgentName(sessionID string) string {
 	return "ao-" + name
 }
 
-var mimoBinarySpec = binaryutil.BinarySpec{
+var mimoBinarySpec = binaryutil.RegisterSpec("mimo-code", binaryutil.BinarySpec{
 	Label:         "mimo",
 	Names:         []string{"mimo"},
 	WinNames:      []string{"mimo.cmd", "mimo.exe", "mimo"},
@@ -153,7 +153,7 @@ var mimoBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "mimo.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "mimo.exe"}},
 	},
-}
+})
 
 // ResolveMiMoCodeBinary locates the user-installed MiMo Code executable.
 func ResolveMiMoCodeBinary(ctx context.Context) (string, error) {

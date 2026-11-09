@@ -175,7 +175,7 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	}
 }
 
-var piBinarySpec = binaryutil.BinarySpec{
+var piBinarySpec = binaryutil.RegisterSpec("pi", binaryutil.BinarySpec{
 	Label:         "pi",
 	Names:         []string{"pi"},
 	WinNames:      []string{"pi.cmd", "pi.exe", "pi"},
@@ -186,7 +186,7 @@ var piBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "pi.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "pi.exe"}},
 	},
-}
+})
 
 // ResolvePiBinary finds the `pi` binary, searching PATH then common install
 // locations. It returns a wrapped ports.ErrAgentBinaryNotFound when Pi is absent.

@@ -26,7 +26,7 @@ import (
 
 const adapterID = "agy"
 
-var agyBinarySpec = binaryutil.BinarySpec{
+var agyBinarySpec = binaryutil.RegisterSpec("agy", binaryutil.BinarySpec{
 	Label:         "agy",
 	Names:         []string{"agy"},
 	WinNames:      []string{"agy.cmd", "agy.exe", "agy"},
@@ -38,7 +38,7 @@ var agyBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "agy.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".cargo", "bin", "agy.exe"}},
 	},
-}
+})
 
 // Plugin is the Agy agent adapter. It is safe for concurrent use; the binary
 // path is resolved once and cached under binaryMu.

@@ -171,7 +171,7 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 // AO emits no approval flag and defers every mode to the user's Auggie config.
 // There is therefore no appendApprovalFlags helper for this adapter.
 
-var auggieBinarySpec = binaryutil.BinarySpec{
+var auggieBinarySpec = binaryutil.RegisterSpec("auggie", binaryutil.BinarySpec{
 	Label:         "auggie",
 	Names:         []string{"auggie"},
 	WinNames:      []string{"auggie.cmd", "auggie.exe", "auggie"},
@@ -182,7 +182,7 @@ var auggieBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "auggie.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "auggie.exe"}},
 	},
-}
+})
 
 // ResolveAuggieBinary finds the `auggie` binary, searching PATH then common
 // install locations. It returns a wrapped ports.ErrAgentBinaryNotFound when

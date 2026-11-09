@@ -106,12 +106,12 @@ func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.S
 	return info, ok, nil
 }
 
-var binarySpec = binaryutil.BinarySpec{
+var binarySpec = binaryutil.RegisterSpec("gemini", binaryutil.BinarySpec{
 	Label: "gemini", Names: []string{"gemini"}, WinNames: []string{"gemini.cmd", "gemini.exe", "gemini"},
 	UnixPaths:     []string{"/opt/homebrew/bin/gemini", "/usr/local/bin/gemini"},
 	UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("gemini"), NodeManaged: true,
 	WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinAppData, Parts: []string{"npm", "gemini.cmd"}}},
-}
+})
 
 // ResolveBinary finds Gemini and verifies its minimum supported version.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {

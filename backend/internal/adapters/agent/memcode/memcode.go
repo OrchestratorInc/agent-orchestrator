@@ -38,14 +38,14 @@ func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "memcode", Name: "memcode", Description: "Official memcode terminal sessions", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
-var binarySpec = binaryutil.BinarySpec{Label: "memcode", Names: []string{"memcode"}, WinNames: []string{"memcode.exe"}, UnixHomePaths: [][]string{{".local", "bin", "memcode"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
+var binarySpec = binaryutil.RegisterSpec("memcode", binaryutil.BinarySpec{Label: "memcode", Names: []string{"memcode"}, WinNames: []string{"memcode.exe"}, UnixHomePaths: [][]string{{".local", "bin", "memcode"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	cmd := process.CommandContext(ctx, path, "--version")
 	cmd.Env = append(os.Environ(), "MEMCODE_AUTO_UPDATE=off")
 	b, err := cmd.CombinedOutput()
 	return err == nil && strings.Contains(string(b), "memcode")
-}}
+}})
 
 // ResolveBinary implements the native TUI adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {

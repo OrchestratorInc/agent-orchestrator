@@ -192,7 +192,7 @@ func (p *Plugin) EmitsSubmitActivity() bool { return true }
 // safe pre/post correlation AO requires for automated permission handling.
 func (p *Plugin) EmitsBlockedActivity() bool { return false }
 
-var primeAgentBinarySpec = binaryutil.BinarySpec{
+var primeAgentBinarySpec = binaryutil.RegisterSpec("prime-agent", binaryutil.BinarySpec{
 	Label:         "prime-agent",
 	Names:         []string{"prime-agent"},
 	WinNames:      []string{"prime-agent.cmd", "prime-agent.exe", "prime-agent"},
@@ -203,7 +203,7 @@ var primeAgentBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "prime-agent.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "prime-agent.exe"}},
 	},
-}
+})
 
 // ResolvePrimeAgentBinary finds Prime Agent on PATH or in the existing set of
 // supported Node-managed global binary locations.

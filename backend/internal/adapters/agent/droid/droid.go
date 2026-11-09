@@ -276,7 +276,7 @@ func sanitizeSessionID(id string) string {
 	return b.String()
 }
 
-var droidBinarySpec = binaryutil.BinarySpec{
+var droidBinarySpec = binaryutil.RegisterSpec("droid", binaryutil.BinarySpec{
 	Label:         "droid",
 	Names:         []string{"droid"},
 	WinNames:      []string{"droid.cmd", "droid.exe", "droid"},
@@ -289,7 +289,7 @@ var droidBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinHome, Parts: []string{".local", "bin", "droid.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".factory", "bin", "droid.exe"}},
 	},
-}
+})
 
 // ResolveDroidBinary returns the path to the droid binary, or a wrapped
 // ports.ErrAgentBinaryNotFound when it is absent.

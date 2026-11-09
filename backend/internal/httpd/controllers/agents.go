@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -40,6 +41,32 @@ func (c *AgentsController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/probe", c.probe)
 	r.Get("/agents/{agent}/models", c.models)
 	r.Post("/agents/{agent}/models/refresh", c.refreshModels)
+	r.Post("/agents/{agent}/executables/scan", c.scanExecutables)
+}
+
+// scanExecutables 在选中的主机查找 CLI，不改变运行中的会话或已保存的默认入口。
+func (c *AgentsController) scanExecutables(w http.ResponseWriter, r *http.Request) {
+	scanner, ok := c.Catalog.(interface {
+		ScanExecutables(context.Context, string, string) (binaryutil.ExecutableScan, error)
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/executables/scan")
+		return
+	}
+	var req AgentExecutableScanRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	result, err := scanner.ScanExecutables(r.Context(), chi.URLParam(r, "agent"), req.Directory)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := AgentExecutableScanResponse{Directory: result.Directory, Candidates: make([]AgentExecutableCandidate, 0, len(result.Candidates)), Truncated: result.Truncated}
+	for _, candidate := range result.Candidates {
+		out.Candidates = append(out.Candidates, AgentExecutableCandidate(candidate))
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *AgentsController) readiness(w http.ResponseWriter, r *http.Request) {

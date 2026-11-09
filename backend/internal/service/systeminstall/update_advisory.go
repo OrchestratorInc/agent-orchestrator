@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 )
 
 // UpdateStatus describes observed version availability, not whether AO knows
@@ -204,6 +206,22 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, err
 	}
 	if s.verifier == nil {
+		return advisory, nil
+	}
+	if selected := binaryutil.SelectedPath(string(target)); selected != "" {
+		advisory.BinaryPath = selected
+		advisory.Source = "external"
+		verified, err := s.verifier.Verify(ctx, target)
+		if err != nil {
+			advisory.probeFailed = true
+			return advisory, nil //nolint:nilerr // 探测失败保留外部入口和未知状态，供界面显示与后续重试。
+		}
+		advisory.binaryIdentity = identifyBinary(verified.ResolvedPath)
+		if version, ok := versionSchemeFor(target).find(installedVersionText(target, verified.ResolvedPath, verified.Output)); ok {
+			advisory.CurrentVersion = version.display
+		} else {
+			advisory.Reason = UpdateReasonVersionUnparseable
+		}
 		return advisory, nil
 	}
 	var plans []Plan
@@ -483,4 +501,13 @@ func (s *Service) forgetReplacedBinary(target Target) {
 		delete(s.updateAdvisories, target)
 		delete(s.derivedOwners, target)
 	}
+}
+
+// InvalidateExecutable 使切换前的在途版本探测不能覆盖新入口的缓存。
+func (s *Service) InvalidateExecutable(target Target) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.updateAdvisories, target)
+	delete(s.updateAdvisoryCalls, target)
+	delete(s.derivedOwners, target)
 }

@@ -389,7 +389,7 @@ func resolveRestoreSystemPrompt(ctx context.Context, cfg ports.RestoreConfig) (s
 	return cfg.SystemPrompt, nil
 }
 
-var kimchiBinarySpec = binaryutil.BinarySpec{
+var kimchiBinarySpec = binaryutil.RegisterSpec("kimchi", binaryutil.BinarySpec{
 	Label:         "kimchi",
 	Names:         []string{"kimchi"},
 	WinNames:      []string{"kimchi.cmd", "kimchi.exe", "kimchi"},
@@ -400,7 +400,7 @@ var kimchiBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "kimchi.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "kimchi.exe"}},
 	},
-}
+})
 
 // ResolveKimchiBinary locates the kimchi executable on the system.
 func ResolveKimchiBinary(ctx context.Context) (string, error) {

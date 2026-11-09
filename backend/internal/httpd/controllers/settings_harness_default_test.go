@@ -23,15 +23,25 @@ func (s *harnessDefaultSettingsService) Get(context.Context) (settingssvc.Snapsh
 	return settingssvc.Snapshot{HarnessDefaults: s.defaults}, nil
 }
 
-func (s *harnessDefaultSettingsService) SetHarnessDefault(_ context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (settingssvc.Snapshot, error) {
+func (s *harnessDefaultSettingsService) PatchHarnessDefault(_ context.Context, agent domain.AgentHarness, patch settingssvc.HarnessDefaultPatch) (settingssvc.Snapshot, error) {
 	if agent != domain.HarnessCodex {
 		return settingssvc.Snapshot{}, settingssvc.ErrUnknownHarness
+	}
+	value := s.defaults[string(agent)]
+	if patch.DisabledModels != nil {
+		value.DisabledModels = *patch.DisabledModels
+	}
+	if patch.ExecutableDirectory != nil {
+		value.ExecutableDirectory = *patch.ExecutableDirectory
+	}
+	if patch.ExecutablePath != nil {
+		value.ExecutablePath = *patch.ExecutablePath
 	}
 	s.defaults[string(agent)] = value
 	return settingssvc.Snapshot{HarnessDefaults: s.defaults}, nil
 }
 
-func TestSettingsHarnessDefaultPatchRequiresDisabledModels(t *testing.T) {
+func TestSettingsHarnessDefaultPatchRequiresPreference(t *testing.T) {
 	svc := &harnessDefaultSettingsService{defaults: map[string]domain.HarnessDefault{}}
 	c := &SettingsController{Svc: svc}
 	patch := func(agent, body string) int {
@@ -55,5 +65,18 @@ func TestSettingsHarnessDefaultPatchRequiresDisabledModels(t *testing.T) {
 	want := domain.HarnessDefault{DisabledModels: []string{"gpt-5", "gpt-5-mini"}}
 	if got := svc.defaults["codex"]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("after disabled models = %+v", got)
+	}
+	if code := patch("codex", `{"executableDirectory":"/desktop","executablePath":"/desktop/codex"}`); code != http.StatusOK {
+		t.Fatalf("CLI-only patch status=%d", code)
+	}
+	want.ExecutableDirectory, want.ExecutablePath = "/desktop", "/desktop/codex"
+	if got := svc.defaults["codex"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CLI patch lost omitted model fields: %+v", got)
+	}
+	if code := patch("codex", `{"executableDirectory":"","executablePath":""}`); code != http.StatusOK {
+		t.Fatalf("reset CLI status=%d", code)
+	}
+	if got := svc.defaults["codex"]; got.ExecutablePath != "" || !reflect.DeepEqual(got.DisabledModels, want.DisabledModels) {
+		t.Fatalf("reset lost model fields: %+v", got)
 	}
 }

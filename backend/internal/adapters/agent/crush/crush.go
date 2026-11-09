@@ -174,7 +174,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-var crushBinarySpec = binaryutil.BinarySpec{
+var crushBinarySpec = binaryutil.RegisterSpec("crush", binaryutil.BinarySpec{
 	Label:         "crush",
 	Names:         []string{"crush"},
 	WinNames:      []string{"crush.cmd", "crush.exe", "crush"},
@@ -186,7 +186,7 @@ var crushBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "crush.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".cargo", "bin", "crush.exe"}},
 	},
-}
+})
 
 // ResolveCrushBinary returns the path to the crush binary on this machine,
 // searching PATH then a handful of well-known install locations. It returns a

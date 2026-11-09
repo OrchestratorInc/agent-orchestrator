@@ -100,6 +100,51 @@ paths:
         to it skips it
       tags:
       - conversations
+  /api/v1/agents/{agent}/executables/scan:
+    post:
+      operationId: scanAgentExecutables
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentExecutableScanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentExecutableScanResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Scan a chosen directory for harness CLI executables
+      tags:
+      - agents
   /api/v1/agents/{agent}/install:
     get:
       operationId: getAgentInstallStatus
@@ -18160,6 +18205,45 @@ components:
         permissions:
           type: string
       type: object
+    AgentExecutableCandidate:
+      properties:
+        error:
+          type: string
+        path:
+          type: string
+        source:
+          enum:
+          - directory
+          - desktop
+          type: string
+        version:
+          type: string
+      required:
+      - path
+      - source
+      type: object
+    AgentExecutableScanRequest:
+      properties:
+        directory:
+          type: string
+      required:
+      - directory
+      type: object
+    AgentExecutableScanResponse:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/AgentExecutableCandidate'
+          type: array
+        directory:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - directory
+      - candidates
+      - truncated
+      type: object
     AgentInfo:
       properties:
         authStatus:
@@ -22995,6 +23079,10 @@ components:
             type: string
           maxItems: 20000
           type: array
+        executableDirectory:
+          type: string
+        executablePath:
+          type: string
       type: object
     IdentityResponse:
       properties:
@@ -28470,8 +28558,14 @@ components:
           type:
           - "null"
           - array
-      required:
-      - disabledModels
+        executableDirectory:
+          type:
+          - "null"
+          - string
+        executablePath:
+          type:
+          - "null"
+          - string
       type: object
     UpdateProjectSettingsInput:
       properties:

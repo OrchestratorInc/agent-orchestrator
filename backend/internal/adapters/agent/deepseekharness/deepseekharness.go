@@ -225,7 +225,7 @@ func headlessTask(prompt, standing string) (string, error) {
 		strings.TrimSpace(standing) + "\n</ao_standing_instructions>\n\nTask:\n" + prompt, nil
 }
 
-var deepseekBinarySpec = binaryutil.BinarySpec{
+var deepseekBinarySpec = binaryutil.RegisterSpec("deepseek-harness", binaryutil.BinarySpec{
 	Label:         "dsh",
 	Names:         []string{"dsh"},
 	WinNames:      []string{"dsh.cmd", "dsh.exe", "dsh"},
@@ -236,7 +236,7 @@ var deepseekBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "dsh.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "dsh.exe"}},
 	},
-}
+})
 
 // ResolveDeepSeekBinary finds the `dsh` binary, searching PATH then common
 // install locations. It returns a wrapped ports.ErrAgentBinaryNotFound when

@@ -3665,11 +3665,33 @@ type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
 }
 
-// UpdateHarnessDefaultRequest replaces one harness's picker preference.
+// UpdateHarnessDefaultRequest 只更新提交的偏好字段，空路径恢复自动检测。
 type UpdateHarnessDefaultRequest struct {
 	// DisabledModels lists the model ids (each up to 256 characters) clients
 	// should leave out of their pickers. An empty list offers every catalog model.
-	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
+	DisabledModels      *[]string `json:"disabledModels,omitempty" maxItems:"20000"`
+	ExecutableDirectory *string   `json:"executableDirectory,omitempty"`
+	ExecutablePath      *string   `json:"executablePath,omitempty"`
+}
+
+// AgentExecutableScanRequest 指定要在 daemon 主机上扫描的安装目录。
+type AgentExecutableScanRequest struct {
+	Directory string `json:"directory" required:"true"`
+}
+
+// AgentExecutableCandidate 保留版本探测错误，不将找到文件误报为可用。
+type AgentExecutableCandidate struct {
+	Path    string `json:"path"`
+	Source  string `json:"source" enum:"directory,desktop"`
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// AgentExecutableScanResponse 返回用户显式选择前的候选列表。
+type AgentExecutableScanResponse struct {
+	Directory  string                     `json:"directory"`
+	Candidates []AgentExecutableCandidate `json:"candidates"`
+	Truncated  bool                       `json:"truncated"`
 }
 
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.

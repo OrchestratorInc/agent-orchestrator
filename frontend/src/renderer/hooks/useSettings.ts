@@ -10,10 +10,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import { LOCAL_HOST } from "../lib/hosts";
 import type { SessionMode } from "../types/workspace";
+import { agentAuthPlansQueryKeyForHost } from "./useAgentAuth";
+import { invalidateAgentModelCatalogs } from "./useAgentModelsQuery";
+import { agentReadinessQueryKeyForHost } from "./useAgentReadinessQuery";
+import { installerQueryKeyForHost } from "./useHarnessUpdates";
 
-/** `disabledModels` lists the models pickers leave out; empty or unset means every catalog model. */
-export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels">;
+/** 守护进程保存模型筛选和 CLI 来源，空路径表示自动检测。 */
+export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels" | "executableDirectory" | "executablePath">;
 
 export const settingsQueryKey = ["settings"] as const;
 
@@ -114,24 +119,33 @@ export function useUpdateSessionInterface() {
 	};
 }
 
-/** Saves which models one harness offers without replacing other harnesses' entries. */
+/** 仅更新指定主机的 Harness 设置；切换 CLI 后重新读取依赖其版本和凭据的状态。 */
 export function useUpdateHarnessDefault(hostId?: string) {
 	const queryClient = useQueryClient();
 	const key = hostId ? ["settings", hostId] : settingsQueryKey;
 	const mutation = useMutation({
-		mutationFn: async ({ agentId, disabledModels }: { agentId: string; disabledModels: string[] }) => {
+		mutationFn: async ({ agentId, ...body }: HarnessDefault & { agentId: string }) => {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).PATCH("/api/v1/settings/harness-defaults/{agent}", {
-				params: { path: { agent: agentId } }, body: { disabledModels },
+				params: { path: { agent: agentId } }, body,
 			});
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: async (data) => {
+		onSuccess: async (data, changes) => {
 			queryClient.setQueryData<Settings>(key, (current) => current ? { ...current, harnessDefaults: data?.harnessDefaults ?? {} } : current);
-			await queryClient.invalidateQueries({ queryKey: key, exact: true });
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: key, exact: true }),
+				...(changes.executablePath !== undefined ? [
+					queryClient.invalidateQueries({ queryKey: agentReadinessQueryKeyForHost(hostId), exact: true }),
+					queryClient.invalidateQueries({ queryKey: agentAuthPlansQueryKeyForHost(hostId), exact: true }),
+					queryClient.invalidateQueries({ queryKey: installerQueryKeyForHost(hostId), exact: true }),
+					queryClient.invalidateQueries({ queryKey: ["agent-update-advisory", hostId ?? LOCAL_HOST, changes.agentId], exact: true }),
+					invalidateAgentModelCatalogs(queryClient, changes.agentId, hostId),
+				] : []),
+			]);
 		},
 	});
-	return { update: mutation.mutateAsync, error: mutation.error ? apiErrorMessage(mutation.error) : undefined };
+	return { update: mutation.mutateAsync, saving: mutation.isPending, error: mutation.error ? apiErrorMessage(mutation.error) : undefined };
 }
 
 export function useUpdateVersionRefresh() {

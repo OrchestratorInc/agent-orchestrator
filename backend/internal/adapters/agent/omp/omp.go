@@ -192,7 +192,7 @@ func appendSystemPrompt(cmd *[]string, inline, file string) error {
 	return nil
 }
 
-var ompBinarySpec = binaryutil.BinarySpec{
+var ompBinarySpec = binaryutil.RegisterSpec("omp", binaryutil.BinarySpec{
 	Label:         "omp",
 	Names:         []string{"omp"},
 	WinNames:      []string{"omp.cmd", "omp.exe", "omp"},
@@ -203,7 +203,7 @@ var ompBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "omp.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "omp.exe"}},
 	},
-}
+})
 
 // ResolveOMPBinary finds the `omp` binary, searching PATH then common install
 // locations. It returns a wrapped ports.ErrAgentBinaryNotFound when OMP is

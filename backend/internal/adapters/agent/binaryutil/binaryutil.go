@@ -28,6 +28,9 @@ import (
 // bases (APPDATA, LOCALAPPDATA, home) that are unset simply skip their
 // candidates.
 type BinarySpec struct {
+	// Harness 将显式入口与适配器绑定，防止同名 CLI 的不同协议版本互相覆盖。
+	Harness string
+
 	// Label prefixes the ErrAgentBinaryNotFound error, e.g. "claude".
 	Label string
 
@@ -86,6 +89,9 @@ type WinPath struct {
 func ResolveBinary(ctx context.Context, spec BinarySpec) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if path, selected, err := SelectedBinary(ctx, spec.Harness); selected {
+		return path, err
 	}
 
 	names := spec.Names

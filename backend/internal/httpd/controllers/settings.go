@@ -17,7 +17,7 @@ import (
 type SettingsService interface {
 	Get(ctx context.Context) (settingssvc.Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
-	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (settingssvc.Snapshot, error)
+	PatchHarnessDefault(ctx context.Context, agent domain.AgentHarness, value settingssvc.HarnessDefaultPatch) (settingssvc.Snapshot, error)
 	SetChatHibernationEnabled(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetComputerUse(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
@@ -208,12 +208,14 @@ func (c *SettingsController) setHarnessDefault(w http.ResponseWriter, r *http.Re
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.DisabledModels == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "disabledModels is required; use an empty list to offer every model", nil)
+	if req.DisabledModels == nil && req.ExecutableDirectory == nil && req.ExecutablePath == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "At least one harness preference is required", nil)
 		return
 	}
 	agent := domain.AgentHarness(chi.URLParam(r, "agent"))
-	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, domain.HarnessDefault{DisabledModels: *req.DisabledModels})
+	snapshot, err := c.Svc.PatchHarnessDefault(r.Context(), agent, settingssvc.HarnessDefaultPatch{
+		DisabledModels: req.DisabledModels, ExecutableDirectory: req.ExecutableDirectory, ExecutablePath: req.ExecutablePath,
+	})
 	if errors.Is(err, settingssvc.ErrUnknownHarness) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "HARNESS_NOT_FOUND", err.Error(), nil)
 		return

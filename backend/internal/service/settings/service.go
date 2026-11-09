@@ -9,8 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -96,11 +96,14 @@ type ChatCapability interface {
 
 // Service reads and writes preferences.
 type Service struct {
-	store           Store
-	chat            ChatCapability
-	offering        Offering
-	now             func() time.Time
-	chatHibernation atomic.Bool
+	harnessMu         sync.Mutex
+	executableChanged func(domain.AgentHarness)
+	executableGuard   func(context.Context, domain.AgentHarness) (func(), error)
+	store             Store
+	chat              ChatCapability
+	offering          Offering
+	now               func() time.Time
+	chatHibernation   atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
@@ -313,16 +316,5 @@ var ErrUnknownHarness = errors.New("unknown harness")
 // store writes only that harness's entry, so concurrent saves for other
 // harnesses are kept.
 func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
-	if !slices.Contains(domain.AllHarnesses, agent) {
-		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)
-	}
-	disabled, ok := normalizeDisabledModels(value.DisabledModels)
-	if !ok {
-		return Snapshot{}, fmt.Errorf("%w: disabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxDisabledModels)
-	}
-	value.DisabledModels = disabled
-	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
-		return Snapshot{}, err
-	}
-	return s.Get(ctx)
+	return s.PatchHarnessDefault(ctx, agent, HarnessDefaultPatch{DisabledModels: &value.DisabledModels})
 }

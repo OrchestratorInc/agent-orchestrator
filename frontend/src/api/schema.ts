@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/executables/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scan a chosen directory for harness CLI executables */
+        post: operations["scanAgentExecutables"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -5581,6 +5598,21 @@ export interface components {
             model?: string;
             permissions?: string;
         };
+        AgentExecutableCandidate: {
+            error?: string;
+            path: string;
+            /** @enum {string} */
+            source: "directory" | "desktop";
+            version?: string;
+        };
+        AgentExecutableScanRequest: {
+            directory: string;
+        };
+        AgentExecutableScanResponse: {
+            candidates: components["schemas"]["AgentExecutableCandidate"][];
+            directory: string;
+            truncated: boolean;
+        };
         AgentInfo: {
             /**
              * @description Auth probe result. authorized means a provider round-trip accepted the credential; configured means a credential exists locally but was never validated, and must not be presented as ready; spawn remains the authoritative validation point.
@@ -7381,6 +7413,8 @@ export interface components {
         };
         HarnessDefault: {
             disabledModels?: string[];
+            executableDirectory?: string;
+            executablePath?: string;
         };
         IdentityResponse: {
             apiVersion: number;
@@ -9519,7 +9553,9 @@ export interface components {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
-            disabledModels: null | string[];
+            disabledModels?: null | string[];
+            executableDirectory?: null | string;
+            executablePath?: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -10470,6 +10506,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrewarmChatAgentResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanAgentExecutables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentExecutableScanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExecutableScanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */

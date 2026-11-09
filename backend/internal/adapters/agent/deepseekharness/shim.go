@@ -183,6 +183,10 @@ func npmShimProgramFromTokens(dir string, tokens []string, interpreter string) (
 		}
 		return npmShimProgram{UsesInterpreter: true, Target: target}, true
 	}
+	// 原生 launcher 自带参数时必须完整保留；Desktop 还需要同次启动的环境变量。
+	if len(tokens) != 1 {
+		return npmShimProgram{}, false
+	}
 	target := expandShimPath(tokens[0], dir)
 	if target == "" {
 		return npmShimProgram{}, false

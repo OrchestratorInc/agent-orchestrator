@@ -9,11 +9,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var fxBinarySpec = binaryutil.BinarySpec{
+var fxBinarySpec = binaryutil.RegisterSpec("fx", binaryutil.BinarySpec{
 	Label:         "fx",
 	Names:         []string{"fx"},
 	UnixHomePaths: [][]string{{".local", "bin", "fx"}},
-}
+})
 
 // ResolveFXBinary finds fx on PATH or at ~/.local/bin/fx.
 func ResolveFXBinary(ctx context.Context) (string, error) {

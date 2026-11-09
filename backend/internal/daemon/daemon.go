@@ -390,6 +390,10 @@ func Run(buildVersion string) error {
 		func() time.Time { return time.Now().UTC() },
 	)
 
+	if err := settingsSvc.LoadHarnessExecutables(ctx); err != nil {
+		return fmt.Errorf("load harness executables: %w", err)
+	}
+
 	// Chat service. The driver registry is the capability gate: a harness with no
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
@@ -821,6 +825,13 @@ func Run(buildVersion string) error {
 		reviewers,
 		pluginBinaryCache{harness: domain.HarnessCodex, plugin: codexModelPlugin},
 	}
+	settingsSvc.SetHarnessExecutableGuard(systemInstall.BeginExecutableChange)
+	settingsSvc.SetHarnessExecutableChanged(func(harness domain.AgentHarness) {
+		invalidateHarnessBinary(agentSvc, string(harness), binaryCaches...)
+		agentSvc.InvalidateAgentAuthentication(string(harness))
+		systemInstall.InvalidateExecutable(systeminstall.Target(harness))
+		agentSvc.RecheckAgent(string(harness))
+	})
 	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {
 		if harness, ok := installedAgentHarness(target); ok {
 			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
@@ -1722,10 +1733,10 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	claudePlugin := claudecodeagent.New()
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
-			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
+			Binary: func(ctx context.Context) (string, error) { return claudecodeagent.New().ResolveBinary(ctx) }, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
 			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
 		},
-		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
+		&agentaccount.Codex{Binary: func(ctx context.Context) (string, error) { return codexagent.New().ResolveBinary(ctx) }, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 }

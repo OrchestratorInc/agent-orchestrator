@@ -84,8 +84,19 @@ func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "hermes", Name: "Hermes Agent", Description: "Official Nous Research Hermes Agent interactive terminal; native approvals and exact session restore.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
+var _ = binaryutil.RegisterSpec("hermes", binaryutil.BinarySpec{Label: "hermes", Names: []string{"hermes"}, WinNames: []string{"hermes.exe", "hermes.cmd", "hermes"}, ValidateIdentity: func(ctx context.Context, path string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ok, _, _ := probeNativeVersion(probeCtx, path)
+	return ok
+}})
+
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "hermes"); selected {
+		return path, err
+	}
+
 	timedOut := false
 	var unconfirmed []string
 	validate := func(ctx context.Context, path string) bool {

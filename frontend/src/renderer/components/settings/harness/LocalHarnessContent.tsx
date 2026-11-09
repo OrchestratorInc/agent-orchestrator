@@ -52,6 +52,7 @@ import { HarnessAccountTab } from "./HarnessAccountTab";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
+import { HarnessExecutablePanel } from "./HarnessExecutablePanel";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
@@ -882,6 +883,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								/>
 							</TabsContent>
 							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
+								<div className="mb-6">
+									<HarnessExecutablePanel agentId={selectedDetails.agentId} hostId={hostId} executable={selectedDetails.advisory?.binaryPath || selectedDetails.job?.expectedDestination} version={selectedDetails.currentVersion} busy={selectedDetails.busy} />
+								</div>
 								<HarnessHealthTab
 									details={selectedDetails}
 									checking={checkingAuth.includes(selectedDetails.agentId) || agents.isFetching || Boolean(selectedDetails.advisoryQuery?.isFetching)}

@@ -33,7 +33,6 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 		: details.authSummary;
 	// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 	const credential = detectedCredential(details, t);
-	const executable = advisory?.binaryPath || details.job?.expectedDestination;
 	const hasDetails = Boolean((isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
 	return <div className="flex flex-col gap-6">
 		{updateError ? <p role="alert" className="break-words text-xs text-error">{updateError}</p> : null}
@@ -43,9 +42,6 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 			</HarnessDetailRow>
 			{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")}>
 				<HarnessStateText tone={authTone}>{authLabel}</HarnessStateText>
-			</HarnessDetailRow> : null}
-			{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
-				<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>
 			</HarnessDetailRow> : null}
 			{isInstalled && credential ? <HarnessDetailRow label={t("settings.harness.health.detectedCredential")}>
 				<span className="min-w-0 break-all font-mono text-xs text-settings-label">{credential}</span>

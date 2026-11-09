@@ -290,7 +290,7 @@ func kilocodeAOAgentName(sessionID string) string {
 	return "ao-" + name
 }
 
-var kilocodeBinarySpec = binaryutil.BinarySpec{
+var kilocodeBinarySpec = binaryutil.RegisterSpec("kilocode", binaryutil.BinarySpec{
 	Label:         "kilocode",
 	Names:         []string{"kilo", "kilocode"},
 	WinNames:      []string{"kilo.cmd", "kilo.exe", "kilo", "kilocode.cmd", "kilocode.exe", "kilocode"},
@@ -303,7 +303,7 @@ var kilocodeBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "kilocode.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "kilocode.exe"}},
 	},
-}
+})
 
 // ResolveKilocodeBinary returns the path to the kilocode binary, or a wrapped
 // ports.ErrAgentBinaryNotFound when it is absent.

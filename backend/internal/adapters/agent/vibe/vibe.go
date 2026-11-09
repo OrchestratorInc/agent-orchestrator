@@ -333,7 +333,7 @@ func vibeTOMLBasicString(s string) (string, error) {
 	return b.String(), nil
 }
 
-var vibeBinarySpec = binaryutil.BinarySpec{
+var vibeBinarySpec = binaryutil.RegisterSpec("vibe", binaryutil.BinarySpec{
 	Label:         "vibe",
 	Names:         []string{"vibe"},
 	WinNames:      []string{"vibe.exe", "vibe.cmd", "vibe"},
@@ -343,7 +343,7 @@ var vibeBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"Python", "Scripts", "vibe.exe"}},
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"uv", "tools", "mistral-vibe", "Scripts", "vibe.exe"}},
 	},
-}
+})
 
 // ResolveVibeBinary finds the `vibe` binary, searching PATH then common install
 // locations. It returns a wrapped ports.ErrAgentBinaryNotFound when Vibe is absent.

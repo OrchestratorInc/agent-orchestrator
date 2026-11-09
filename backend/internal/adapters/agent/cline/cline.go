@@ -232,7 +232,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-var clineBinarySpec = binaryutil.BinarySpec{
+var clineBinarySpec = binaryutil.RegisterSpec("cline", binaryutil.BinarySpec{
 	Label:         "cline",
 	Names:         []string{"cline"},
 	WinNames:      []string{"cline.cmd", "cline.exe", "cline"},
@@ -243,7 +243,7 @@ var clineBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "cline.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "cline.exe"}},
 	},
-}
+})
 
 // ResolveClineBinary returns the path to the cline binary on this machine,
 // searching PATH then a handful of well-known install locations (Homebrew, npm

@@ -34,7 +34,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var grokBinarySpec = binaryutil.BinarySpec{
+var grokBinarySpec = binaryutil.RegisterSpec("grok", binaryutil.BinarySpec{
 	Label:         "grok",
 	Names:         []string{"grok"},
 	WinNames:      []string{"grok.cmd", "grok.exe", "grok"},
@@ -46,7 +46,7 @@ var grokBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "grok.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".grok", "bin", "grok.exe"}},
 	},
-}
+})
 
 const (
 	grokClaudeSettingsDirName  = ".claude"

@@ -16,6 +16,18 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+// OpenCode 的两个 Harness 共用命令名，但各自保留主版本身份门禁。
+func init() {
+	for major, harness := range map[int]string{1: "opencode", 2: "opencode-v2"} {
+		binaryutil.RegisterSpec(harness, binaryutil.BinarySpec{Label: harness, Names: []string{"opencode", "opencode-v2"}, WinNames: []string{"opencode.exe", "opencode.cmd", "opencode", "opencode-v2.exe", "opencode-v2.cmd"}, ValidateIdentity: func(ctx context.Context, path string) bool {
+			probeCtx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+			defer cancel()
+			_, err := probeBinaryMajor(probeCtx, path, major)
+			return err == nil
+		}})
+	}
+}
+
 var versionPattern = regexp.MustCompile(`^(?:opencode\s+)?v?([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
 
 var versionProbeTimeout = 10 * time.Second
@@ -94,6 +106,14 @@ func linkedByHomebrewV2(path string) bool {
 // when none match, a classified version mismatch takes precedence over generic
 // shim failures so readiness can provide actionable guidance.
 func ResolveBinaryForMajor(ctx context.Context, major int) (string, error) {
+	harness := "opencode"
+	if major == 2 {
+		harness = "opencode-v2"
+	}
+	if path, selected, err := binaryutil.SelectedBinary(ctx, harness); selected {
+		return path, err
+	}
+
 	probeCtx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
 	candidates, err := BinaryCandidates(probeCtx)

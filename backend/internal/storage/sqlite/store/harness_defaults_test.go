@@ -45,4 +45,14 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 	if reset.DefaultSessionMode != initial.DefaultSessionMode || reset.VersionRefresh != initial.VersionRefresh {
 		t.Fatal("harness defaults changed unrelated settings")
 	}
+	// 只有 CLI 字段时仍必须保留 JSON 条目，不能被空模型筛选误判为恢复默认。
+	cli := domain.HarnessDefault{ExecutableDirectory: "/desktop", ExecutablePath: "/desktop/bin/dsh"}
+	if err := s.SetHarnessDefault(ctx, domain.HarnessDeepSeek, cli, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := s.GetAppSettings(ctx)
+	if err != nil || persisted.HarnessDefaults[string(domain.HarnessDeepSeek)].ExecutablePath != cli.ExecutablePath ||
+		persisted.HarnessDefaults[string(domain.HarnessDeepSeek)].ExecutableDirectory != cli.ExecutableDirectory {
+		t.Fatalf("CLI-only preference lost: %+v, %v", persisted.HarnessDefaults, err)
+	}
 }

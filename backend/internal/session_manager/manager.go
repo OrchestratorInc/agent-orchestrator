@@ -1533,6 +1533,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		launchCfg.Prompt = ""
 	}
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	if err == nil {
+		argv, err = prepareAgentCommand(ctx, agent, argv, env)
+	}
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnLaunchCommand, err)
@@ -3744,6 +3747,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("launch command", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+	}
+	argv, err = prepareAgentCommand(ctx, agent, argv, env)
+	if err != nil {
+		m.cleanupSystemPromptDir(rec.ID)
+		return RestoreResult{}, relaunchFailed("launch command", err)
 	}
 	if requireNativeHistory && !forceFresh && mode != RestoreModeNative {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -7488,4 +7496,12 @@ func (m *Manager) logRelaunchFailure(operation string, id domain.SessionID, err 
 	if errors.As(err, &relaunchErr) {
 		m.logger.Warn(operation+": relaunch failed", "sessionID", id, "step", relaunchErr.Step, "error", err)
 	}
+}
+
+// prepareAgentCommand 在启动前同时规范化命令与环境，恢复会话复用同一厂商入口规则。
+func prepareAgentCommand(ctx context.Context, agent ports.Agent, argv []string, env map[string]string) ([]string, error) {
+	if preparer, ok := agent.(ports.AgentCommandPreparer); ok {
+		return preparer.PrepareCommand(ctx, argv, env)
+	}
+	return argv, nil
 }

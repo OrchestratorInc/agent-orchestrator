@@ -20,6 +20,13 @@ func New() *Reviewer {
 	return &Reviewer{agent: workermuse.New()}
 }
 
+// InvalidateBinaryResolution 使独立 reviewer 插件在 CLI 切换后使用新的入口。
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 // Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerMuse

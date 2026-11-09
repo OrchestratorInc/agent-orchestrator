@@ -146,9 +146,16 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 			for key, value := range overrides {
 				env[key] = value
 			}
+			argv := append([]string{binary}, args...)
+			if preparer, ok := plugin.(ports.AgentCommandPreparer); ok {
+				argv, err = preparer.PrepareCommand(ctx, argv, env)
+				if err != nil {
+					return acpdriver.Launch{}, err
+				}
+			}
 			return acpdriver.Launch{
-				Command: binary,
-				Args:    append([]string(nil), args...),
+				Command: argv[0],
+				Args:    argv[1:],
 				Env:     env,
 			}, nil
 		},

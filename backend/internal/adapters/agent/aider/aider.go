@@ -141,10 +141,16 @@ func appendApprovalFlags(cmd *[]string, mode ports.PermissionMode) {
 	}
 }
 
+var _ = binaryutil.RegisterSpec("aider", binaryutil.BinarySpec{Label: "aider", Names: []string{"aider"}, WinNames: []string{"aider.exe", "aider.cmd", "aider"}})
+
 // ResolveAiderBinary finds the `aider` binary, searching PATH then common
 // install locations. It returns "aider" as a last resort so callers get the
 // shell's normal command-not-found behavior if Aider is absent.
 func ResolveAiderBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "aider"); selected {
+		return path, err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

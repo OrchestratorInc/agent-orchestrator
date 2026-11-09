@@ -393,9 +393,18 @@ func codexAuthStatusFromOutput(out []byte) (ports.AgentAuthStatus, bool) {
 	return ports.AgentAuthStatusUnknown, false
 }
 
+var _ = binaryutil.RegisterSpec("codex", binaryutil.BinarySpec{Label: "codex", Names: []string{"codex"}, WinNames: []string{"codex.exe", "codex.cmd", "codex"}})
+
 // ResolveCodexBinary returns the path to the codex binary on this machine,
 // searching platform-specific well-known install locations and PATH.
 func ResolveCodexBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "codex"); selected {
+		if err != nil {
+			return "", err
+		}
+		return resolveNativeWindowsCodex(path, runtime.GOOS), nil
+	}
+
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

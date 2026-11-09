@@ -14,8 +14,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -183,10 +181,11 @@ func appendApprovalFlags(cmd *[]string, mode ports.PermissionMode) {
 	}
 }
 
-var museBinarySpec = binaryutil.BinarySpec{
-	Label:    "muse",
-	Names:    []string{"muse"},
-	WinNames: []string{"muse.exe", "muse.cmd", "muse"},
+var museBinarySpec = binaryutil.RegisterSpec("muse", binaryutil.BinarySpec{
+	Label:            "muse",
+	ValidateIdentity: isOfficialMuseBinary,
+	Names:            []string{"muse"},
+	WinNames:         []string{"muse.exe", "muse.cmd", "muse"},
 	UnixPaths: []string{
 		"/usr/local/bin/muse",
 		"/opt/homebrew/bin/muse",
@@ -198,7 +197,7 @@ var museBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "muse.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "muse.exe"}},
 	},
-}
+})
 
 // ResolveMuseBinary finds the official Meta Muse Code launcher. The `muse`
 // command name is shared by unrelated tools, so a version-signature check keeps
@@ -207,33 +206,10 @@ func ResolveMuseBinary(ctx context.Context) (string, error) {
 	return resolveMuseBinary(ctx, museBinarySpec)
 }
 
+// resolveMuseBinary 统一校验同名工具身份，显式选择不再进入系统目录回退。
 func resolveMuseBinary(ctx context.Context, spec binaryutil.BinarySpec) (string, error) {
-	first, err := binaryutil.ResolveBinary(ctx, spec)
-	if err != nil {
-		return "", err
-	}
-
-	candidates := append([]string{first}, museCanonicalBinaryCandidates(spec)...)
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		if isOfficialMuseBinary(ctx, candidate) {
-			return candidate, nil
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("%s: %w", spec.Label, ports.ErrAgentBinaryNotFound)
+	spec.ValidateIdentity = isOfficialMuseBinary
+	return binaryutil.ResolveBinary(ctx, spec)
 }
 
 func isOfficialMuseBinary(ctx context.Context, binary string) bool {
@@ -244,21 +220,6 @@ func isOfficialMuseBinary(ctx context.Context, binary string) bool {
 		return false
 	}
 	return strings.HasPrefix(strings.TrimSpace(string(out)), "Muse Code ")
-}
-
-func museCanonicalBinaryCandidates(spec binaryutil.BinarySpec) []string {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	candidates := append([]string(nil), spec.UnixPaths...)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return candidates
-	}
-	for _, parts := range spec.UnixHomePaths {
-		candidates = append(candidates, filepath.Join(append([]string{home}, parts...)...))
-	}
-	return candidates
 }
 
 func (p *Plugin) museBinary(ctx context.Context) (string, error) {

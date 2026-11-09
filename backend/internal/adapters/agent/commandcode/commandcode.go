@@ -33,7 +33,7 @@ import (
 
 const adapterID = "command-code"
 
-var commandCodeBinarySpec = binaryutil.BinarySpec{
+var commandCodeBinarySpec = binaryutil.RegisterSpec("command-code", binaryutil.BinarySpec{
 	Label:         "command-code",
 	Names:         []string{"cmd", "command-code"},
 	WinNames:      []string{"cmdc.cmd", "cmdc.exe", "cmdc", "command-code.cmd", "command-code.exe", "command-code"},
@@ -46,7 +46,7 @@ var commandCodeBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "command-code.cmd"}},
 		{Base: binaryutil.WinHome, Parts: []string{".commandcode", "bin", "cmdc.exe"}},
 	},
-}
+})
 
 // Plugin is the Command Code agent adapter.
 type Plugin struct {

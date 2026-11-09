@@ -154,7 +154,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-var codewhaleBinarySpec = binaryutil.BinarySpec{
+var codewhaleBinarySpec = binaryutil.RegisterSpec("codewhale", binaryutil.BinarySpec{
 	Label:     "codewhale",
 	Names:     []string{"codewhale", "codew"},
 	WinNames:  []string{"codewhale.exe", "codewhale.cmd", "codew.exe", "codew.cmd", "codewhale", "codew"},
@@ -171,7 +171,7 @@ var codewhaleBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinHome, Parts: []string{".cargo", "bin", "codewhale.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".cargo", "bin", "codew.exe"}},
 	},
-}
+})
 
 // ResolveCodewhaleBinary finds Codewhale on PATH or in its common native
 // installer locations.

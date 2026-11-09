@@ -541,7 +541,7 @@ func SessionUUID(aoSessionID string) string {
 
 // claudeBinarySpec locates the claude binary: PATH first, then the native
 // installer's locations, npm global, Homebrew, and the claude-managed dir.
-var claudeBinarySpec = binaryutil.BinarySpec{
+var claudeBinarySpec = binaryutil.RegisterSpec("claude-code", binaryutil.BinarySpec{
 	Label:         "claude",
 	Names:         []string{"claude"},
 	WinNames:      []string{"claude.exe", "claude.cmd", "claude"},
@@ -553,7 +553,7 @@ var claudeBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "claude.exe"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "claude.cmd"}},
 	},
-}
+})
 
 // ResolveClaudeBinary returns the path to the claude binary, or a wrapped
 // ports.ErrAgentBinaryNotFound when it is absent.

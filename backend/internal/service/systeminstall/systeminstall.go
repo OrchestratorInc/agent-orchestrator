@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -948,6 +949,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		// holdOtherHarnesses reserves under, so exactly one of them proceeds.
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
+	}
+	// 无门禁的首次安装可能在选择 CLI 前已经完成规划，登记任务时再次拒绝旧计划。
+	if !plan.Unsupported && binaryutil.SelectedPath(string(target)) != "" {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("%w: selected CLI is externally managed", ErrInstallOwner)
 	}
 	previous, hadPrevious := s.jobs[target]
 	status := StatusInstalling

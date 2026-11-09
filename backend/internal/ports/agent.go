@@ -237,6 +237,12 @@ type AgentBinaryResolver interface {
 	ResolveBinary(ctx context.Context) (path string, err error)
 }
 
+// AgentCommandPreparer 将厂商 launcher 转为等价的直接调用，同时保留该调用需要的环境。
+// TUI 与 Chat 必须在 argv 和 env 仍属于同次启动时执行，避免路径切换造成环境错配。
+type AgentCommandPreparer interface {
+	PrepareCommand(ctx context.Context, argv []string, env map[string]string) ([]string, error)
+}
+
 // AgentRuntimeLaunchEnv augments a terminal launch after its generation has
 // been assigned. Native reporters can then carry that generation in their
 // own protocol identity. Implementations only modify the supplied environment.

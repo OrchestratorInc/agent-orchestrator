@@ -179,7 +179,7 @@ func appendTask(cmd *[]string, prompt string) {
 // binarySpec locates the openhands binary. Both `uv tool install openhands`
 // and the standalone install script place it in ~/.local/bin (the script
 // prefers /usr/local/bin when writable).
-var binarySpec = binaryutil.BinarySpec{
+var binarySpec = binaryutil.RegisterSpec("openhands", binaryutil.BinarySpec{
 	Label:         "openhands",
 	Names:         []string{"openhands"},
 	WinNames:      []string{"openhands.exe"},
@@ -188,7 +188,7 @@ var binarySpec = binaryutil.BinarySpec{
 	WinPaths: []binaryutil.WinPath{
 		{Base: binaryutil.WinHome, Parts: []string{".local", "bin", "openhands.exe"}},
 	},
-}
+})
 
 // ResolveBinary finds the openhands binary. It deliberately does not start the
 // CLI: readiness checks bound resolution to a couple of seconds, and a Python

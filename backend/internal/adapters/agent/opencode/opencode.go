@@ -621,6 +621,10 @@ func opencodeAOAgentName(sessionID string) string {
 // searching PATH then a handful of well-known install locations (the install
 // script's ~/.opencode/bin, Homebrew, npm global).
 func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "opencode"); selected {
+		return path, err
+	}
+
 	candidates, err := BinaryCandidates(ctx)
 	if err != nil {
 		return "", err

@@ -690,7 +690,13 @@ func (s *Service) requeueCatalog(projectID string, catalog ports.AgentModelCatal
 	catalog.WarningCode = ""
 	catalog.LastSuccessAt = nil
 	catalog.RetryAt = nil
-	_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
+	// 失效代次高于在途探测；等待旧探测的调用者随后会为新入口重新发现。
+	key := catalog.AgentID + "\x00" + projectID
+	s.modelCallMu.Lock()
+	defer s.modelCallMu.Unlock()
+	generation := max(s.modelGeneration[key]+1, time.Now().UTC().UnixNano())
+	s.modelGeneration[key] = generation
+	_ = s.saveCatalog(s.ctx, projectID, catalog, generation, 0)
 }
 
 func (s *Service) coalesceModelLoad(
@@ -711,6 +717,12 @@ func (s *Service) coalesceModelLoad(
 		s.modelCallMu.Unlock()
 		select {
 		case <-active.done:
+			s.modelCallMu.Lock()
+			invalidated := active.generation < s.modelGeneration[key]
+			s.modelCallMu.Unlock()
+			if invalidated {
+				return s.coalesceModelLoad(ctx, agentID, projectID, mode)
+			}
 			return active.catalog, active.err
 		case <-ctx.Done():
 			return ports.AgentModelCatalog{}, ctx.Err()

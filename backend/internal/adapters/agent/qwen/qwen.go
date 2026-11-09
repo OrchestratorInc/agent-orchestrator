@@ -294,7 +294,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-var qwenBinarySpec = binaryutil.BinarySpec{
+var qwenBinarySpec = binaryutil.RegisterSpec("qwen", binaryutil.BinarySpec{
 	Label:         "qwen",
 	Names:         []string{"qwen"},
 	WinNames:      []string{"qwen.cmd", "qwen.exe", "qwen"},
@@ -305,7 +305,7 @@ var qwenBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "qwen.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "qwen.exe"}},
 	},
-}
+})
 
 // ResolveQwenBinary returns the path to the qwen binary, or a wrapped
 // ports.ErrAgentBinaryNotFound when it is absent.

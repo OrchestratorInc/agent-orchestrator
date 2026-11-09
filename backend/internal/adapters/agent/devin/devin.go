@@ -35,7 +35,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var devinBinarySpec = binaryutil.BinarySpec{
+var devinBinarySpec = binaryutil.RegisterSpec("devin", binaryutil.BinarySpec{
 	Label:         "devin",
 	Names:         []string{"devin"},
 	WinNames:      []string{"devin.cmd", "devin.exe", "devin"},
@@ -45,7 +45,7 @@ var devinBinarySpec = binaryutil.BinarySpec{
 	WinPaths: []binaryutil.WinPath{
 		{Base: binaryutil.WinHome, Parts: []string{".devin", "bin", "devin.exe"}},
 	},
-}
+})
 
 // Plugin is the Devin for Terminal agent adapter.
 type Plugin struct {

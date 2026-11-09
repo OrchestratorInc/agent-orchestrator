@@ -174,6 +174,8 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
+var _ = binaryutil.RegisterSpec("copilot", binaryutil.BinarySpec{Label: "copilot", Names: []string{"copilot"}, WinNames: []string{"copilot.cmd", "copilot.exe", "copilot"}, ValidateIdentity: func(_ context.Context, path string) bool { return !isVSCodeCopilotLauncher(path) }})
+
 // ResolveCopilotBinary returns the path to the copilot binary on this machine,
 // searching PATH then a handful of well-known install locations (npm global,
 // Homebrew). When the resolved path is the npm-loader shim, the platform-native
@@ -182,6 +184,16 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 //
 // VS Code's launcher is never an answer: see isVSCodeCopilotLauncher.
 func ResolveCopilotBinary(ctx context.Context) (string, error) {
+	if path, selected, err := binaryutil.SelectedBinary(ctx, "copilot"); selected {
+		if err != nil {
+			return "", err
+		}
+		if native := copilotNativeBinaryForLoader(path); native != "" {
+			return native, nil
+		}
+		return path, nil
+	}
+
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

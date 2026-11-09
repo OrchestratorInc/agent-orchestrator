@@ -177,7 +177,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-var kiroBinarySpec = binaryutil.BinarySpec{
+var kiroBinarySpec = binaryutil.RegisterSpec("kiro", binaryutil.BinarySpec{
 	Label:         "kiro",
 	Names:         []string{"kiro-cli"},
 	WinNames:      []string{"kiro-cli.cmd", "kiro-cli.exe", "kiro-cli"},
@@ -192,7 +192,7 @@ var kiroBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "kiro-cli.exe"}},
 		{Base: binaryutil.WinHome, Parts: []string{".kiro", "bin", "kiro-cli.exe"}},
 	},
-}
+})
 
 // ResolveKiroBinary returns the path to the kiro-cli binary on this machine,
 // searching PATH then a handful of well-known install locations. It returns a

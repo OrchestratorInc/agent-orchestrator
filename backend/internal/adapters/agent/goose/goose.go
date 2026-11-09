@@ -75,6 +75,7 @@ func runGooseIdentityCommand(ctx context.Context, binary string, args ...string)
 // explicit resolution refreshes it.
 type Plugin struct {
 	agentbase.Base
+	resolutionMu       sync.Mutex
 	binaryMu           sync.Mutex
 	resolvedBinary     string
 	resolvedBinaryInfo os.FileInfo
@@ -278,7 +279,7 @@ func gooseMode(mode ports.PermissionMode) string {
 
 // gooseBinarySpec locates the goose binary: PATH first, then the install
 // script's ~/.local/bin, Homebrew, Cargo, and npm global locations.
-var gooseBinarySpec = binaryutil.BinarySpec{
+var gooseBinarySpec = binaryutil.RegisterSpec("goose", binaryutil.BinarySpec{
 	Label:         "goose",
 	Names:         []string{"goose"},
 	WinNames:      []string{"goose.exe"},
@@ -291,7 +292,7 @@ var gooseBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinHome, Parts: []string{".cargo", "bin", "goose.exe"}},
 	},
 	ValidateIdentity: isOfficialGooseBinary,
-}
+})
 
 // ResolveGooseBinary returns the path to the official Block Goose binary, or a
 // wrapped ports.ErrAgentBinaryNotFound when no candidate passes identity
@@ -355,14 +356,5 @@ func (p *Plugin) gooseBinary(ctx context.Context) (string, error) {
 		return cached, nil
 	}
 
-	binary, err := ResolveGooseBinary(ctx)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	p.cacheGooseBinary(binary)
-	return binary, nil
+	return p.ResolveBinary(ctx)
 }

@@ -14,6 +14,9 @@ import (
 // plugin. It is the normal readiness/explicit-refresh path, not the cached
 // startup presence shortcut.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	// 身份探测与失效串行，避免旧探测在切换 CLI 后把旧路径写回缓存。
+	p.resolutionMu.Lock()
+	defer p.resolutionMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -109,7 +112,7 @@ func cachedGooseBinaryStillValid(path string, cachedInfo os.FileInfo) bool {
 // InvalidateBinaryResolution forgets the cached executable path, so the next
 // launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
-	p.binaryMu.Lock()
-	p.resolvedBinary = ""
-	p.binaryMu.Unlock()
+	p.resolutionMu.Lock()
+	defer p.resolutionMu.Unlock()
+	p.clearGooseBinary()
 }

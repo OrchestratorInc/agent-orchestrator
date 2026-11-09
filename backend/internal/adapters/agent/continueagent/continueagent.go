@@ -46,7 +46,7 @@ const (
 	continueHookTimeout            = 30
 )
 
-var continueBinarySpec = binaryutil.BinarySpec{
+var continueBinarySpec = binaryutil.RegisterSpec("continue", binaryutil.BinarySpec{
 	Label:         "cn",
 	Names:         []string{"cn"},
 	WinNames:      []string{"cn.cmd", "cn.exe", "cn"},
@@ -57,7 +57,7 @@ var continueBinarySpec = binaryutil.BinarySpec{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "cn.cmd"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "cn.exe"}},
 	},
-}
+})
 
 var continueSessionStartMatcher = "startup|resume|clear|compact"
 

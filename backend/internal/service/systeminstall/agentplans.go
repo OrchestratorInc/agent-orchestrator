@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -54,6 +55,10 @@ var agentDocumentationURLs = map[Target]string{
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
+	if binaryutil.SelectedPath(string(target)) != "" {
+		return []Plan{manualPlan(target, "This CLI is selected from an external directory. Update it with its own installer, or restore automatic detection in Harness settings.", agentDocumentationURLs[target])}
+	}
+
 	var plans []Plan
 	switch target {
 	case TargetClaudeCode:
