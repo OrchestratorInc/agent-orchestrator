@@ -427,6 +427,7 @@ describe("patchClaudeContextWindowProbe", () => {
 		const cases = [
 			[async () => { throw new Error("closed"); }, [200000, false]],
 			[async () => ({ rawMaxTokens: 0 }), [200000, false]],
+			[async () => ({}), [200000, false]],
 			[async () => ({ rawMaxTokens: 200000 }), [200000, true]],
 			[racing({ contextWindowSize: 900000, contextWindowAuthoritative: true }), [900000, true]],
 			[racing({ contextWindowSize: 150000, models: { currentModelId: "claude-haiku-5-5" } }), [150000, false]],
