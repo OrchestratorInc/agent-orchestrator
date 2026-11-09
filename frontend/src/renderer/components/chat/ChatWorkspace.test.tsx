@@ -1488,6 +1488,32 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText(/Only one React copy exists/)).toBeInTheDocument();
 	});
 
+	it("keeps a completed turn's reasoning summary under Worked for", async () => {
+		const user = userEvent.setup();
+		const turnId = "settled-turn-thought";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "ready" },
+			latestSequence: 4,
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:01:48Z" }],
+			items: [
+				{ kind: "message", id: "prompt", turnId, sequence: 1, revision: 0, role: "user", origin: "human", text: "Solve the puzzle", streaming: false, createdAt: at },
+				{ kind: "activity", id: "thought", turnId, sequence: 2, revision: 1, activityKind: "reasoning", status: "completed", summary: "Reasoning", detail: { text: "The labels are all wrong, so start with the mixed box." }, createdAt: at },
+				{ kind: "activity", id: "empty-thought", turnId, sequence: 3, revision: 1, activityKind: "reasoning", status: "completed", summary: "Reasoning", detail: { text: "" }, createdAt: at },
+				{ kind: "message", id: "reply", turnId, sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Open the mixed box.", streaming: false, createdAt: at },
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+		const worked = screen.getByRole("button", { name: /Worked for 48s/ });
+		expect(worked).toHaveAttribute("aria-expanded", "false");
+		await user.click(worked);
+		expect(screen.getByText("The labels are all wrong, so start with the mixed box.")).toBeVisible();
+		expect(screen.getAllByText("Thought")).toHaveLength(1);
+		expect(screen.getByText("Open the mixed box.")).toBeVisible();
+	});
+
 	it("gives the step back its row once it finishes", () => {
 		const turnId = "live-turn-finished-step";
 		const at = "2026-08-11T10:01:00Z";

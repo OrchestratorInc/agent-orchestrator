@@ -2282,15 +2282,15 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
 /**
  * What belongs in a conversation, as opposed to what the provider happens to emit.
  *
- * Two kinds are dropped:
+ * Some provider rows are hidden or deduplicated:
  *
  *   - usage. The daemon now projects it as current state on the snapshot rather
  *     than as a timeline entry, so this filter is a guard for conversations
  *     recorded by an older build whose usage rows are still on disk. Rendering one
  *     row per report is what buried the actual conversation; it lives in the
  *     header meter instead.
- *   - reasoning. Providers can emit one per tool call and they usually carry no
- *     readable body, so they are internal signal rather than conversation chrome.
+ *   - reasoning while a turn runs. The live row shows its newest thought. Once
+ *     the turn settles, summaries with text belong under "Worked for".
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2313,12 +2313,17 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 			.filter((item) => item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending")
 			.map((item) => item.turnId),
 	);
+	const settledTurns = new Set(
+		snapshot.turns.filter((turn) => turn.state !== "queued" && turn.state !== "running").map((turn) => turn.id),
+	);
 	return snapshot.items.filter((item) => {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "plan" && item.detail?.superseded) return false;
-		if (item.activityKind === "reasoning") return false;
+		if (item.activityKind === "reasoning") {
+			return Boolean(item.turnId && settledTurns.has(item.turnId) && !item.detail?.parentProviderItemId && reasoningText(item));
+		}
 		// The page an html_render call shows is its own row right after it.
 		if (isShownAORender(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
