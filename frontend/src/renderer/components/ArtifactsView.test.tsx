@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	post: vi.fn(),
 	get: vi.fn(),
+	del: vi.fn(),
 	capture: vi.fn(),
 	deleteCloudArtifact: vi.fn(),
 	refreshCloudAccess: vi.fn(),
@@ -71,7 +72,7 @@ vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: mock
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
-	apiClient: { POST: mocks.post, GET: mocks.get },
+	apiClient: { POST: mocks.post, GET: mocks.get, DELETE: mocks.del },
 }));
 vi.mock("../lib/telemetry", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/telemetry")>(),
@@ -176,6 +177,7 @@ describe("ArtifactsView", () => {
 		mocks.navigate.mockReset();
 		mocks.post.mockReset();
 		mocks.get.mockReset();
+		mocks.del.mockReset().mockResolvedValue({ data: undefined, error: undefined });
 		mocks.capture.mockReset();
 		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
 		mocks.artifactFileChanges.mockReset();
@@ -285,6 +287,97 @@ describe("ArtifactsView", () => {
 		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "notes.md"));
 	});
 
+
+	it("selects artifacts one by one and deletes them together after confirming", async () => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["ao-2", "pricing.md"])] });
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+		// Selecting hides each card's own actions and stops the card from opening a preview.
+		expect(screen.queryByRole("button", { name: /^More actions/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "New artifact" })).not.toBeInTheDocument();
+
+		// The same file shows in Pinned, Recent and its project; one checkbox is checked in all of them.
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		for (const box of screen.getAllByRole("checkbox", { name: "Select pricing.md" })) expect(box).toBeChecked();
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		const dialog = screen.getByRole("dialog", { name: "Delete 2 artifacts?" });
+		expect(within(dialog).getByRole("list", { name: "Selected artifacts" })).toHaveTextContent("pricing.mdcaching-options.md");
+		await user.click(within(dialog).getByRole("button", { name: "Delete 2 artifacts" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(mocks.del).toHaveBeenCalledTimes(2);
+		expect(mocks.del).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "ao-2" }, query: { path: "pricing.md" } } });
+		expect(mocks.del).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "standalone-1" }, query: { path: "caching-options.md" } } });
+		expect(useArtifactsViewStore.getState().pinnedArtifactIds).toEqual([]);
+		expect(screen.getByRole("button", { name: "Select" })).toBeInTheDocument();
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+	});
+
+	it("selects every visible artifact, then leaves selection with Cancel or Escape", async () => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ view: "list" });
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("3 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Deselect all" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+	});
+
+	it("keeps the artifacts that failed to delete selected and says why", async () => {
+		const user = userEvent.setup();
+		mocks.del.mockImplementation(async (_path: string, { params }: { params: { path: { sessionId: string } } }) => (
+			params.path.sessionId === "ao-2" ? { error: { error: { code: "internal", message: "disk is read-only" } } } : { data: undefined }
+		));
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 2 artifacts" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Delete 1 artifact?" });
+		expect(within(dialog).getByText(/^Couldn't delete 1 of 2: /)).toBeInTheDocument();
+		expect(within(dialog).getByRole("list", { name: "Selected artifacts" })).toHaveTextContent("pricing.md");
+	});
+
+	it("does not let another member's cloud artifacts be selected", async () => {
+		const user = userEvent.setup();
+		const mine = session("cloud-1", "My notes", [{ name: "mine.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		mine.cloud = { orgId: "org-1", createdByUserId: "me-1" };
+		const theirs = session("cloud-2", "Their notes", [{ name: "theirs.md", updatedAt: "2026-10-10T10:00:00Z" }]);
+		theirs.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [mine, theirs] }];
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByRole("checkbox", { name: "Select theirs.md" })).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("1 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 1 artifact" }));
+		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledTimes(1));
+		expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "mine.md");
+	});
 
 	it.each(["html", "markdown"] as const)("previews a cloud %s artifact using cloud access", async (kind) => {
 		const name = kind === "html" ? "report.html" : "notes.md";

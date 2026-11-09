@@ -1,14 +1,20 @@
 import { BrowserIcon } from "./icons";
-import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "@/components/app-icons";
+import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, ListChecks, Loader2, Pin, Plus, Search, Trash2 } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
-import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
+import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import {
+	artifactChangeError,
 	artifactCount,
 	artifactKey,
+	canChangeSessionArtifacts,
 	filterArtifactGroups,
 	groupArtifactsByProject,
 	type ArtifactRow,
@@ -21,10 +27,12 @@ import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile } from "./ShareArtifactPopover";
-import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
+import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -42,6 +50,8 @@ import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
 const MAX_LIVE_PREVIEWS = 4;
+/** How many selected names the bulk delete confirmation lists before "+N more". */
+const MAX_CONFIRM_NAMES = 5;
 
 /**
  * Every artifact agents have written, grouped by project: on this machine, and
@@ -110,6 +120,93 @@ export function ArtifactsView() {
 		return owners;
 	}, [cards, pinnedCards, showProjectSections, visibleGroups]);
 	const createArtifact = useCreateArtifactSession();
+	const queryClient = useQueryClient();
+	const { client: cloudClient } = useCloudCp(cloudArtifacts);
+	const cloudUserId = useCloudMeUserId(cloudArtifacts);
+	// Another member's cloud session files are view only, so they cannot be selected.
+	const deleteBlockedReason = (row: ArtifactRow) => canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
+	const [selecting, setSelecting] = useState(false);
+	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+	// A selected file deleted elsewhere drops out as the list refreshes. The
+	// selection outlives the filters, so the confirmation names every file.
+	const selectedRows = useMemo(
+		() => groups.flatMap((group) => group.rows).filter((row) => selectedIds.has(artifactKey(row))),
+		[groups, selectedIds],
+	);
+	const selectableVisibleIds = cards.filter(({ row }) => !deleteBlockedReason(row)).map(({ row }) => artifactKey(row));
+	const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selectedIds.has(id));
+	const toggleSelected = (id: string) => setSelectedIds((current) => {
+		const next = new Set(current);
+		if (!next.delete(id)) next.add(id);
+		return next;
+	});
+	const toggleAllVisible = () => setSelectedIds((current) => {
+		const next = new Set(current);
+		for (const id of selectableVisibleIds) {
+			if (allVisibleSelected) next.delete(id);
+			else next.add(id);
+		}
+		return next;
+	});
+	const stopSelecting = () => {
+		setSelecting(false);
+		setSelectedIds(new Set());
+	};
+	// Each file is deleted on its own; the ones that fail stay selected so
+	// the person can retry them.
+	const bulkDelete = useMutation({
+		mutationFn: async (rows: readonly ArtifactRow[]) => {
+			const results = await Promise.allSettled(rows.map((row) => row.cloud
+				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
+				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId })));
+			const deleted = rows.filter((_, index) => results[index]?.status === "fulfilled").map(artifactKey);
+			const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+			const { unpinArtifact } = useArtifactsViewStore.getState();
+			for (const id of deleted) unpinArtifact(id);
+			setSelectedIds((current) => new Set([...current].filter((id) => !deleted.includes(id))));
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				...(rows.some((row) => row.cloud) ? [queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey })] : []),
+			]);
+			if (failures.length > 0) {
+				const reason = failures[0];
+				throw new Error(t("artifacts.bulkDeleteFailed", {
+					failed: failures.length,
+					total: rows.length,
+					message: reason instanceof Error ? reason.message : String(reason),
+				}));
+			}
+		},
+		onSuccess: () => {
+			setConfirmingBulkDelete(false);
+			stopSelecting();
+		},
+	});
+	const confirmBulkDelete = () => {
+		bulkDelete.reset();
+		setConfirmingBulkDelete(true);
+	};
+	useEffect(() => {
+		if (!selecting || confirmingBulkDelete) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || event.defaultPrevented) return;
+			setSelecting(false);
+			setSelectedIds(new Set());
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [selecting, confirmingBulkDelete]);
+	const selectionFor = (row: ArtifactRow): ArtifactCardSelection | undefined => {
+		if (!selecting) return undefined;
+		const id = artifactKey(row);
+		return {
+			selected: selectedIds.has(id),
+			disabledReason: deleteBlockedReason(row),
+			label: t("artifacts.selectArtifact", { name: row.name }),
+			onToggle: () => toggleSelected(id),
+		};
+	};
 	const clearFilters = () => {
 		setQuery("");
 		setProjectId("");
@@ -171,16 +268,40 @@ export function ArtifactsView() {
 									</Tooltip>
 								))}
 							</div>
+							{selecting ? (
+								<div role="group" aria-label={t("artifacts.selection")} className="inline-flex shrink-0 items-center gap-1">
+									<span aria-live="polite" className="px-1 text-control tabular-nums text-muted-foreground">
+										{t("artifacts.selectedCount", { count: selectedRows.length })}
+									</span>
+									<Button type="button" size="sm" variant="quiet" disabled={selectableVisibleIds.length === 0} onClick={toggleAllVisible}>
+										{t(allVisibleSelected ? "artifacts.deselectAll" : "artifacts.selectAll")}
+									</Button>
+									<Button type="button" size="sm" variant="destructive" disabled={selectedRows.length === 0} onClick={confirmBulkDelete}>
+										<Trash2 aria-hidden="true" className="size-icon-sm" />
+										{t("artifacts.deleteSelected")}
+									</Button>
+									<Button type="button" size="sm" variant="quiet" onClick={stopSelecting}>
+										{t("artifacts.cancelSelection")}
+									</Button>
+								</div>
+							) : (
+								<Button type="button" size="sm" variant="quiet" onClick={() => setSelecting(true)}>
+									<ListChecks aria-hidden="true" className="size-icon-sm" />
+									{t("artifacts.select")}
+								</Button>
+							)}
 							</>
 						) : null}
-						<CreateArtifactMenu
-							workspaces={workspaces ?? []}
-							create={createArtifact.create}
-							pending={createArtifact.pending}
-							label="new"
-							align="end"
-							localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
-						/>
+						{selecting && hasArtifacts ? null : (
+							<CreateArtifactMenu
+								workspaces={workspaces ?? []}
+								create={createArtifact.create}
+								pending={createArtifact.pending}
+								label="new"
+								align="end"
+								localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+							/>
+						)}
 					</>
 				}
 			/>
@@ -205,12 +326,12 @@ export function ArtifactsView() {
 								<div>
 									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
-											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} />
+											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} selection={selectionFor(row)} />
 										))}
 									</ArtifactSection> : null}
 									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
-											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} />
+											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} selection={selectionFor(row)} />
 										))}
 									</ArtifactSection> : null}
 									{visibleGroups.map((group) => {
@@ -226,7 +347,7 @@ export function ArtifactsView() {
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
-													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} previewLive={livePreviewSections.get(artifactKey(row)) === `project:${group.id}`} onPreview={openPreview} />
+													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} previewLive={livePreviewSections.get(artifactKey(row)) === `project:${group.id}`} onPreview={openPreview} selection={selectionFor(row)} />
 												))}
 											</ArtifactSection>
 										);
@@ -240,6 +361,24 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
+			<ConfirmDialog
+				busy={bulkDelete.isPending}
+				confirmLabel={t("artifacts.bulkDeleteConfirm", { count: selectedRows.length })}
+				description={t("artifacts.bulkDeleteDescription")}
+				destructive
+				error={bulkDelete.error?.message ?? null}
+				onConfirm={() => bulkDelete.mutate(selectedRows)}
+				onOpenChange={setConfirmingBulkDelete}
+				open={confirmingBulkDelete}
+				title={t("artifacts.bulkDeleteTitle", { count: selectedRows.length })}
+			>
+				<ul aria-label={t("artifacts.selection")} className="space-y-0.5 text-control text-foreground">
+					{selectedRows.slice(0, MAX_CONFIRM_NAMES).map((row) => <li key={artifactKey(row)} className="truncate">{row.name}</li>)}
+					{selectedRows.length > MAX_CONFIRM_NAMES ? (
+						<li className="text-muted-foreground">{t("artifacts.bulkDeleteMore", { count: selectedRows.length - MAX_CONFIRM_NAMES })}</li>
+					) : null}
+				</ul>
+			</ConfirmDialog>
 			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
@@ -292,7 +431,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	);
 }
 
-function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
+function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -310,13 +449,31 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 	};
 
 	if (view === "list") {
+		const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 		return (
 			<li>
-				<div className="group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent">
+				<div className={cn(
+					"group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent",
+					selection?.selected && "ring-2 ring-primary",
+				)}>
+					{selection ? (
+						<Checkbox
+							aria-label={selection.label}
+							checked={selection.selected}
+							className="relative z-[2]"
+							disabled={Boolean(selection.disabledReason)}
+							onCheckedChange={toggle}
+							title={selection.disabledReason}
+						/>
+					) : null}
 					<Pressable
-						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
-						onClick={open}
-						title={`${row.sessionTitle} · ${row.path}`}
+						className={cn(
+							"flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60",
+							selection?.disabledReason && "cursor-not-allowed",
+						)}
+						onClick={selection ? toggle : open}
+						title={selection?.disabledReason ?? `${row.sessionTitle} · ${row.path}`}
+						{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}
 					>
 						<KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="relative z-[1] min-w-0 shrink truncate text-control font-medium text-foreground">{row.name}</span>
@@ -324,7 +481,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 						</span>
 					</Pressable>
-					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
+					{selection ? null : <div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
@@ -335,7 +492,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
 						/>
-					</div>
+					</div>}
 					<time dateTime={row.updatedAt} className="pointer-events-none relative z-[1] w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 						{formatTimeCompact(row.updatedAt)}
 					</time>
@@ -350,7 +507,8 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			previewLive={previewLive}
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
-			actions={
+			selection={selection}
+			actions={selection ? null : (
 				<ArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
@@ -361,7 +519,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
 				/>
-			}
+			)}
 		/>
 	);
 }

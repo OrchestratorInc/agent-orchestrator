@@ -3,26 +3,44 @@ import { File, FileText } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
+import { cn } from "../lib/utils";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import { Checkbox } from "./ui/checkbox";
 import { Pressable } from "./ui/pressable";
 
-export function ArtifactGalleryCard({ row, context, onPreview, actions, previewLive = true }: {
+/**
+ * While the page is selecting, the card toggles its checkbox instead of
+ * opening a preview. The checkbox is the control keyboard and screen-reader
+ * users reach; the card is a larger target for the pointer.
+ */
+export type ArtifactCardSelection = {
+	selected: boolean;
+	/** Set when this person may not delete the file, with why. */
+	disabledReason?: string;
+	label: string;
+	onToggle: () => void;
+};
+
+export function ArtifactGalleryCard({ row, context, onPreview, actions, previewLive = true, selection }: {
 	row: ArtifactRow;
 	context: string;
 	onPreview: () => void;
 	actions: ReactNode;
 	previewLive?: boolean;
+	selection?: ArtifactCardSelection;
 }) {
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
+	const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 	return (
-		<li className="group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10">
+		<li className={cn("group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10", selection?.selected && "ring-2 ring-primary")}>
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
 				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
 			</span>
 			<Pressable
-				className="block w-full overflow-hidden rounded-md hover:bg-accent"
-				onClick={onPreview}
-				title={`${row.sessionTitle} · ${row.path}`}
+				className={cn("block w-full overflow-hidden rounded-md hover:bg-accent", selection?.disabledReason && "cursor-not-allowed hover:bg-transparent")}
+				onClick={selection ? toggle : onPreview}
+				title={selection?.disabledReason ?? `${row.sessionTitle} · ${row.path}`}
+				{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}
 			>
 				<span className="relative block aspect-[16/9] border-b border-border bg-[var(--solid-muted,var(--muted))]" />
 				<span className="block space-y-1 px-3 py-2.5">
@@ -36,6 +54,16 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 					</span>
 				</span>
 			</Pressable>
+			{selection ? (
+				<Checkbox
+					aria-label={selection.label}
+					checked={selection.selected}
+					className="absolute left-2 top-2 z-[2] size-5 bg-background"
+					disabled={Boolean(selection.disabledReason)}
+					onCheckedChange={toggle}
+					title={selection.disabledReason}
+				/>
+			) : null}
 			<div className="absolute right-2 top-2 z-[2] flex items-center gap-1">{actions}</div>
 		</li>
 	);
