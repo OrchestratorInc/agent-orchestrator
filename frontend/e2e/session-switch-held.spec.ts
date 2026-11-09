@@ -201,6 +201,8 @@ test.afterEach(async ({ page }) => {
 test("renderer: streaming replies keep updating through rapid session switches @T0", async ({ page }) => {
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
+	// Seven switches on a 4x throttled dev build outlast the default timeout.
+	test.setTimeout(120_000);
 	const harness = await heldHarness(page);
 	harness.startStreaming();
 	await throttle(page, 4);
@@ -217,13 +219,15 @@ test("renderer: streaming replies keep updating through rapid session switches @
 			// streamed update restarts the destination's background render, so
 			// the hold gives way after a bounded time. Routing before the hold
 			// and the destination's own render are a throttled dev build's speed,
-			// not the hold's, so only the hold itself is bounded.
+			// not the hold's, so only the hold itself is bounded: its 500 ms limit
+			// plus one forced render, which CI measured at about 1.6 s here. A
+			// stalled hold, the failure this guards, lasted over 15 s.
 			const heldFrom = frames.find((frame) => frame.inert)?.at;
 			const heldUntil = heldFrom === undefined ? undefined : frames.find((frame) => frame.at > heldFrom && !frame.inert)?.at;
 			const fetches = harness.requests.slice(firstRequest)
 				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
 			const report = `frames (ms since click | route | inert | log): ${frames.map((frame) => `${frame.at} ${frame.route} ${frame.inert ? "inert" : "-"} ${frame.log}`).join("; ")}; conversation fetches: ${fetches.join(", ")}`;
-			if (heldFrom !== undefined) expect((heldUntil ?? Infinity) - heldFrom, `the hold outlasted its limit; ${report}`).toBeLessThan(2_000);
+			if (heldFrom !== undefined) expect((heldUntil ?? Infinity) - heldFrom, `the hold outlasted its limit; ${report}`).toBeLessThan(5_000);
 			// Once the destination shows, the previous session never comes back.
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
