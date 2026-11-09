@@ -2062,9 +2062,12 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(dock.getByRole("button", { name: "Continue" }));
 		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 		expect(onDecide).not.toHaveBeenCalled();
-		input.status = "resolved";
-		input.inputResponse = { action: "accept", content: { first_value: "Native" } };
-		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
+		const resolved = structuredClone(snapshot);
+		const answered = resolved.items.find((item) => item.id === "input-1");
+		if (!answered || answered.kind !== "activity") throw new Error("missing resolved input activity");
+		answered.status = "resolved";
+		answered.inputResponse = { action: "accept", content: { first_value: "Native" } };
+		rerender(<ChatWorkspace snapshot={resolved} onResolveInput={onResolveInput} />);
 		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
 		const history = within(screen.getByRole("region", { name: "Agent question history" }));
 		expect(history.getByText("Which direction should we take?")).toBeVisible();
@@ -5529,7 +5532,7 @@ describe("ChatWorkspace message actions", () => {
 				},
 			],
 		};
-		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
+		const view = render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
 
 		expect(screen.getByText("2 / 3")).toBeVisible();
 		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
@@ -5539,6 +5542,14 @@ describe("ChatWorkspace message actions", () => {
 			}),
 		);
 		expect(onActivateBranch).toHaveBeenCalledWith("branch-previous");
+		view.rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("2 / 3")).toBeVisible();
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, branchPoints: [{
+			turnId: "turn-1", position: 3, total: 4, previousBranchId: "branch-new-previous", nextBranchId: "branch-new-next",
+		}] }} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("3 / 4")).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Previous conversation branch" }));
+		expect(onActivateBranch).toHaveBeenLastCalledWith("branch-new-previous");
 	});
 
 	it("does not label a provider-native branch as exact context", () => {
