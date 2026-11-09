@@ -3026,22 +3026,15 @@ html.sidebar-reordering * {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* The parent reserves one compact footprint; the expanded dock floats above it. */
+/* The dock stays in the composer column's flow, so opening it shortens the
+   transcript instead of floating over its last rows (its fill is translucent
+   on a clear window, so anything under it would show through). */
 .cursor-chat-composer-queue {
 	--queue-dock-header-height: 2rem;
 	--queue-dock-row-height: 2.5rem;
 	--queue-dock-collapsed-height: calc(var(--queue-dock-header-height) + var(--queue-dock-row-height));
 	position: relative;
-	height: var(--queue-dock-collapsed-height);
-	min-height: var(--queue-dock-collapsed-height);
 	flex-shrink: 0;
-}
-
-.cursor-chat-composer-queue .queue-dock {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
 }
 
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
