@@ -576,6 +576,9 @@ func (s *Store) CreateAndActivateConversationBranch(
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
+		if err := adoptSessionAdmissionGeneration(ctx, q, sessionID, generation, now); err != nil {
+			return fmt.Errorf("move session execution admission: %w", err)
+		}
 		return nil
 	})
 }
@@ -600,6 +603,11 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 		}
 		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
 			return fmt.Errorf("update switched session: %w", err)
+		}
+		// The new controller generation must reach the execution slot in this same
+		// transaction; otherwise the next relaunch is refused by admission.
+		if err := adoptSessionAdmissionGeneration(ctx, q, rec.ID, generation, rec.UpdatedAt); err != nil {
+			return fmt.Errorf("move session execution admission: %w", err)
 		}
 		if err := q.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
 			Model: nullableString(settings.Model), ReasoningEffort: nullableString(settings.ReasoningEffort),
@@ -1105,6 +1113,11 @@ func (s *Store) ActivateConversationBranch(
 		}
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
+		}
+		// Branch activation publishes a new controller generation too; the
+		// execution slot has to follow it or the next relaunch is refused.
+		if err := adoptSessionAdmissionGeneration(ctx, q, sessionID, generation, now); err != nil {
+			return fmt.Errorf("move session execution admission: %w", err)
 		}
 		return nil
 	})

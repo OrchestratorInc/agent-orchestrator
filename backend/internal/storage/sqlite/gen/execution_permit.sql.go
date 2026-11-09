@@ -73,6 +73,39 @@ func (q *Queries) AcceptSessionRestart(ctx context.Context, arg AcceptSessionRes
 	return result.RowsAffected()
 }
 
+const acceptStaleSessionRestart = `-- name: AcceptStaleSessionRestart :execrows
+UPDATE scheduler_admissions SET controller_generation=?1,state='active',revision=revision+1,updated_at=?2
+WHERE id=?3 AND revision=?4 AND state IN ('active','uncertain')
+AND owner_id=?5 AND epoch=?6
+`
+
+type AcceptStaleSessionRestartParams struct {
+	Generation string
+	Now        time.Time
+	ID         string
+	Revision   int64
+	OwnerID    string
+	Epoch      int64
+}
+
+// An already-terminated session has no unpublished controller, so a slot still
+// naming another generation is provably stale; this is the only path allowed to
+// revive an uncertain slot, and it never applies to a live session.
+func (q *Queries) AcceptStaleSessionRestart(ctx context.Context, arg AcceptStaleSessionRestartParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acceptStaleSessionRestart,
+		arg.Generation,
+		arg.Now,
+		arg.ID,
+		arg.Revision,
+		arg.OwnerID,
+		arg.Epoch,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countSessionAdmissionHistory = `-- name: CountSessionAdmissionHistory :one
 SELECT count(*) FROM scheduler_admissions WHERE session_id=?
 `

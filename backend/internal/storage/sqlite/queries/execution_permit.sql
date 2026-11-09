@@ -39,6 +39,14 @@ UPDATE scheduler_admissions SET controller_generation=sqlc.arg(generation),revis
 WHERE id=sqlc.arg(id) AND revision=sqlc.arg(revision) AND state='active'
 AND owner_id=sqlc.arg(owner_id) AND epoch=sqlc.arg(epoch);
 
+-- An already-terminated session has no unpublished controller, so a slot still
+-- naming another generation is provably stale; this is the only path allowed to
+-- revive an uncertain slot, and it never applies to a live session.
+-- name: AcceptStaleSessionRestart :execrows
+UPDATE scheduler_admissions SET controller_generation=sqlc.arg(generation),state='active',revision=revision+1,updated_at=sqlc.arg(now)
+WHERE id=sqlc.arg(id) AND revision=sqlc.arg(revision) AND state IN ('active','uncertain')
+AND owner_id=sqlc.arg(owner_id) AND epoch=sqlc.arg(epoch);
+
 -- name: ReleaseDeletedSessionAdmissions :exec
 UPDATE scheduler_admissions SET state='released',revision=revision+1,updated_at=CURRENT_TIMESTAMP
 WHERE session_id=? AND state<>'released';

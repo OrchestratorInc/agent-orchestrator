@@ -39,7 +39,14 @@ func (s *Store) AdmitSessionRestart(ctx context.Context, expected domain.Session
 				return err
 			}
 			// 接受后 Session 尚未发布新代际代表在途或 UNKNOWN，不能再启动。
-			if ad.State != domain.AdmissionActive || ad.ControllerGeneration != "" && ad.ControllerGeneration != oldGeneration || oldGeneration == "" && !transitionGap {
+			// 例外：已终止的普通 Session 没有在途控制器，槽里残留的旧代际（Provider 切换
+			// 曾漏同步，或恢复把槽放成 uncertain）必然过期，允许本次重启接管；否则该
+			// 会话会永远以 "step: execution admission" 拒绝恢复。工作流槽仍走 Attempt 栅栏。
+			staleAfterTermination := rec.IsTerminated && ad.AttemptID == "" &&
+				(ad.State == domain.AdmissionActive || ad.State == domain.AdmissionUncertain) &&
+				ad.ControllerGeneration != "" && ad.ControllerGeneration != oldGeneration
+			if !staleAfterTermination &&
+				(ad.State != domain.AdmissionActive || ad.ControllerGeneration != "" && ad.ControllerGeneration != oldGeneration || oldGeneration == "" && !transitionGap) {
 				return domain.ErrSchedulerAdmissionConflict
 			}
 			if ad.AttemptID != "" {
@@ -50,6 +57,13 @@ func (s *Store) AdmitSessionRestart(ctx context.Context, expected domain.Session
 				return domain.ErrSchedulerFence
 			}
 			if err := schedulerFence(ctx, q, ad.Fence, evidence.Now, true); err != nil {
+				return err
+			}
+			if staleAfterTermination {
+				n, err := q.AcceptStaleSessionRestart(ctx, gen.AcceptStaleSessionRestartParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.Fence.OwnerID, Epoch: ad.Fence.Epoch, Generation: generation, Now: evidence.Now.UTC()})
+				if err == nil && n != 1 {
+					return domain.ErrSchedulerAdmissionConflict
+				}
 				return err
 			}
 			n, err := q.AcceptSessionRestart(ctx, gen.AcceptSessionRestartParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.Fence.OwnerID, Epoch: ad.Fence.Epoch, Generation: generation, Now: evidence.Now.UTC()})
@@ -111,6 +125,34 @@ func resetControllerEpochAdmission(ctx context.Context, q *gen.Queries, id domai
 	}
 	_, err = q.AcceptSessionRestart(ctx, gen.AcceptSessionRestartParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.OwnerID, Epoch: ad.Epoch, Now: now.UTC()})
 	return err
+}
+
+// adoptSessionAdmissionGeneration 让普通 Chat 的执行槽跟随同一事务里发布的
+// Controller 代际。Provider 切换只写 sessions.controller_generation；不同步时下一次
+// 恢复准入会以 ErrSchedulerAdmissionConflict 拒绝重启（"step: execution admission"），
+// 会话从此无法恢复。已绑定 Attempt 或非 active 的槽不属于这里，仍由工作流准入结算。
+func adoptSessionAdmissionGeneration(ctx context.Context, q *gen.Queries, id domain.SessionID, generation string, now time.Time) error {
+	if generation == "" {
+		return nil
+	}
+	ad, err := q.GetOccupiedSessionAdmission(ctx, schedulerString(string(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ad.AttemptID.Valid || ad.State != domain.AdmissionActive || ad.ControllerGeneration == generation {
+		return nil
+	}
+	n, err := q.AcceptSessionRestart(ctx, gen.AcceptSessionRestartParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.OwnerID, Epoch: ad.Epoch, Generation: generation, Now: now.UTC()})
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return domain.ErrSchedulerAdmissionConflict
+	}
+	return nil
 }
 
 // releaseDeletedSessionAdmission 只在同事务持久终止且代际一致时释放槽；未知费用继续保留。
