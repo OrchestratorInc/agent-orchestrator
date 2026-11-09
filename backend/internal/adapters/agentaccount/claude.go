@@ -170,7 +170,11 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		if line.Response.Subtype != "success" {
 			return domain.AgentAccountLimits{}, fmt.Errorf("claude get_usage: %s", strings.TrimSpace(line.Response.Error))
 		}
-		return line.Response.Response.limits(time.Now().UTC()), nil
+		body := line.Response.Response
+		if body.RateLimitsAvailable && body.RateLimits == nil {
+			return domain.AgentAccountLimits{}, errors.New("claude could not fetch its usage limits")
+		}
+		return body.limits(time.Now().UTC()), nil
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.AgentAccountLimits{}, err
@@ -184,7 +188,8 @@ type claudeUsageWindow struct {
 }
 
 type claudeUsageBody struct {
-	RateLimits *struct {
+	RateLimitsAvailable bool `json:"rate_limits_available"`
+	RateLimits          *struct {
 		FiveHour    *claudeUsageWindow `json:"five_hour"`
 		SevenDay    *claudeUsageWindow `json:"seven_day"`
 		Opus        *claudeUsageWindow `json:"seven_day_opus"`
