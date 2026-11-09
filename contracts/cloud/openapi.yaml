@@ -7827,6 +7827,10 @@ components:
             the bytes; each part is checked against its own SHA-256.
         project:
           type: string
+          description: >-
+            With feature and name, the document the file is. On an update it
+            is optional: when sent, the link follows a file moved to another
+            document, as one moved to another folder.
         feature:
           type: string
         shareId:

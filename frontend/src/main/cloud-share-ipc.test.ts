@@ -185,9 +185,9 @@ describe("cloudShare IPC", () => {
 		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string };
 		const result = await invoke("cloudShare:publish", { ...file, fingerprint: changed.fingerprint, shareId: SHARE_ID });
 		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		// An update names the link alone, not a document.
-		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID });
-		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).not.toHaveProperty("project");
+		// An update names the link, and where the file is now, so the link
+		// follows a file moved to another folder.
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID, project: "proj-1", feature: "sess-1/docs" });
 		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: changed.fingerprint, fingerprint: changed.fingerprint });
 	});
 
