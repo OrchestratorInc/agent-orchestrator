@@ -54,6 +54,27 @@ function select(host: HTMLElement, from: Element, to: Element, endOffset: number
 
 const rowAt = (host: HTMLElement, column: number, index: number) => host.shadowRoot!.querySelectorAll("[data-content]")[column].children[index];
 
+function selectRange(host: HTMLElement, anchorNode: Node, anchorOffset: number, focusNode: Node, focusOffset: number) {
+	const selection = {
+		anchorNode: anchorNode as Node | null, anchorOffset,
+		focusNode: focusNode as Node | null, focusOffset,
+		setBaseAndExtent: vi.fn((anchorNode: Node, anchorOffset: number, focusNode: Node, focusOffset: number): void => {
+			Object.assign(selection, { anchorNode, anchorOffset, focusNode, focusOffset });
+		}),
+		removeAllRanges: vi.fn((): void => {
+			Object.assign(selection, { anchorNode: null, anchorOffset: 0, focusNode: null, focusOffset: 0 });
+		}),
+	};
+	Object.assign(host.shadowRoot!, { getSelection: () => selection });
+	return selection;
+}
+
+function rebuild(host: HTMLElement) {
+	for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+		column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
+	}
+}
+
 describe("readCodeSelection", () => {
 	it("reads a unified diff's selected rows with both line numbers and their sides", () => {
 		const host = surface([{ rows: [[4, "context", "const a = 1;", 4], [5, "change-deletion", "old();"], [5, "change-addition", "next();"], [8, "context", "done();", 7]] }]);
@@ -100,12 +121,48 @@ describe("readCodeSelection", () => {
 });
 
 describe("restoreCodeSelection", () => {
-	const rebuild = (host: HTMLElement) => {
-		// The viewer's redraws swap every row for a fresh copy of the same content.
-		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
-			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+	it.each([undefined, "deletions", "additions"] as const)("restores whole-line boundaries in either direction (%s column)", side => {
+		for (const backward of [false, true]) {
+			const host = surface([{ side, rows: [[1, "context", "one\n", 1], [2, "context", " \t\r\n", 2], [3, "context", "three\n", 3]] }]);
+			const start = rowAt(host, 0, 0).firstChild!;
+			const end = rowAt(host, 0, 2).firstChild!;
+			selectRange(host, backward ? end : start, 0, backward ? start : end, 0);
+			const captured = readCodeSelection(host)!;
+			expect(captured.range).toMatchObject({ start: 1, end: 2 });
+			rebuild(host);
+			expect(restoreCodeSelection(host, captured.snapshot)).toBe(true);
+			const restored = readCodeSelection(host)!;
+			expect(restored.textRange!.toString()).toBe("one\n \t\r\n");
+			expect(codeReference("file.txt", restored, side !== undefined).lines.map(row => row.text)).toEqual(["one", " \t"]);
+			host.remove();
 		}
-	};
+	});
+
+	it.each([false, true])("preserves element endpoints across retokenization (backward: %s)", backward => {
+		const host = surface([{ rows: [[1, "context", "", 1]] }]);
+		const row = rowAt(host, 0, 0);
+		row.innerHTML = "<span>α😀</span><span><b> \tβeta</b></span>";
+		const start = row;
+		const end = row.lastChild!.firstChild!;
+		selectRange(host, backward ? end : start, 1, backward ? start : end, 1);
+		const captured = readCodeSelection(host)!;
+		expect(captured.textRange!.toString()).toBe(" \tβeta");
+		rebuild(host);
+		// Identical code, now tokenized into a different number of spans.
+		rowAt(host, 0, 0).innerHTML = "<span>α</span><span>😀 \t</span><span>βeta</span>";
+		expect(restoreCodeSelection(host, captured.snapshot)).toBe(true);
+		expect(readCodeSelection(host)!.textRange!.toString()).toBe(" \tβeta");
+	});
+
+	it("restores a partial single-line selection at the same characters", () => {
+		const host = surface([{ rows: [[1, "context", "before α😀 after\n", 1]] }]);
+		const text = rowAt(host, 0, 0).firstChild!;
+		selectRange(host, text, 7, text, 10);
+		const captured = readCodeSelection(host)!;
+		rebuild(host);
+		expect(restoreCodeSelection(host, captured.snapshot)).toBe(true);
+		expect(readCodeSelection(host)!.textRange!.toString()).toBe("α😀");
+	});
 
 	it("puts a selection back onto rebuilt rows at the same characters", () => {
 		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2], [3, "context", "three", 3]] }]);

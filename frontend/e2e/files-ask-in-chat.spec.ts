@@ -475,6 +475,37 @@ test.describe("Add to chat from highlighted code", () => {
 		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 3, endLine: 6 });
 	});
 
+	test("whole-line boundaries survive repeated redraws without attaching the following line", { tag: "@P0" }, async ({ page }) => {
+		const { sentToChat } = await openChatSession(page);
+		await row(page, REVIEW, 2).evaluate(element => {
+			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+			const root = element.getRootNode() as ShadowRoot & { getSelection: () => Selection };
+			const end = root.querySelector('[data-line="4"][data-line-type]')!;
+			root.getSelection().setBaseAndExtent(element, 0, end, 0);
+			document.dispatchEvent(new Event("selectionchange"));
+		});
+		await expect(askButton(page)).toBeVisible();
+		for (let redraw = 0; redraw < 2; redraw++) {
+			await page.locator(`${REVIEW} diffs-container`).first().evaluate(async host => {
+				for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+					column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
+				}
+				await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			});
+			await expect.poll(() => row(page, REVIEW, 2).evaluate(element =>
+				(element.getRootNode() as ShadowRoot & { getSelection: () => Selection }).getSelection().toString(),
+			)).toBe("  step(2);\n  step(3);\n");
+			await expect(askButton(page)).toBeVisible();
+		}
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await page.keyboard.type("explain these two lines");
+		await page.keyboard.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 3 });
+		expect(sentToChat[0].fileReferences[0].lines.map(line => line.text)).toEqual(["  step(2);", "  step(3);"]);
+	});
+
 	test("a plain click in the code shows no button", async ({ page }) => {
 		await openChatSession(page);
 		await row(page, REVIEW, 3).click({ position: { x: 40, y: 8 } });

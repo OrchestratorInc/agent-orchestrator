@@ -90,17 +90,12 @@ function selectionRange(selection: Selection): Range | null {
 // Character offset of node:offset within its row's text, across the token
 // spans syntax highlighting splits a line into.
 function textOffsetIn(row: Element, node: Node, offset: number): number {
-	let total = 0;
-	const walk = (current: Node): boolean => {
-		if (current === node) {
-			total += offset;
-			return true;
-		}
-		if (current.nodeType === Node.TEXT_NODE) total += current.textContent?.length ?? 0;
-		for (const child of current.childNodes) if (walk(child)) return true;
-		return false;
-	};
-	return walk(row) ? total : 0;
+	// Element offsets count children, not characters. A Range also handles
+	// those boundaries when syntax highlighting splits the text into spans.
+	const preceding = document.createRange();
+	preceding.setStart(row, 0);
+	preceding.setEnd(node, offset);
+	return preceding.toString().length;
 }
 
 // The inverse: the text node carrying the offset-th character of a row. A line
@@ -206,6 +201,9 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const to = candidates.indexOf(focus);
 	if (from < 0 || to < 0) return null;
 	const elements = candidates.slice(Math.min(from, to), Math.max(from, to) + 1);
+	// Restoration needs both native endpoints, including a final row whose
+	// start bounds the selection but whose code is not part of the attachment.
+	const texts = elements.map(element => normalizeCodeRowText(element.textContent ?? ""));
 	// A drag that ends at the very start of a line selects none of it, as in an
 	// editor: leave that line out.
 	const end = elements[elements.length - 1];
@@ -235,7 +233,7 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 			// The anchor/focus rows were validated above, so their ends resolve.
 			anchor: selectionEnd(selection.anchorNode!, selection.anchorOffset)!,
 			focus: selectionEnd(selection.focusNode!, selection.focusOffset)!,
-			texts: elements.map(element => normalizeCodeRowText(element.textContent ?? "")),
+			texts,
 		},
 	};
 }
