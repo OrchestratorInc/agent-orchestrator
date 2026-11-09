@@ -653,7 +653,7 @@
 	"createProject.cloudDisplayName": "プロジェクト名",
 	"createProject.cloudDisplayNameRequired": "プロジェクト名を入力してください。",
 	"createProject.cloudInvalidUrl": "https のリポジトリ URL を入力してください。",
-	"createProject.cloudTitle": "新しいクラウドプロジェクト",
+	"createProject.cloudTitle": "クラウドプロジェクトを作成",
 	"createProject.cloudWorkspaceConnecting": "クラウドワークスペースに接続しています...",
 	"createProject.couldNotAdd": "プロジェクトを追加できませんでした",
 	"createProject.couldNotLoadAgents": "エージェントカタログを読み込めませんでした。",

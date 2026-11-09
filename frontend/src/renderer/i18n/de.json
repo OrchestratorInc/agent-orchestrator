@@ -653,7 +653,7 @@
 	"createProject.cloudDisplayName": "Projektname",
 	"createProject.cloudDisplayNameRequired": "Gib einen Projektnamen an.",
 	"createProject.cloudInvalidUrl": "Gib eine https-Repository-URL ein.",
-	"createProject.cloudTitle": "Neues Cloud-Projekt",
+	"createProject.cloudTitle": "Cloud-Projekt erstellen",
 	"createProject.cloudWorkspaceConnecting": "Verbindung zum Cloud-Workspace wird hergestellt...",
 	"createProject.couldNotAdd": "Projekt konnte nicht hinzugefügt werden",
 	"createProject.couldNotLoadAgents": "Agentenkatalog konnte nicht geladen werden.",

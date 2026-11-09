@@ -653,7 +653,7 @@
 	"createProject.cloudDisplayName": "프로젝트 이름",
 	"createProject.cloudDisplayNameRequired": "프로젝트 이름을 입력하세요.",
 	"createProject.cloudInvalidUrl": "https 리포지토리 URL을 입력하세요.",
-	"createProject.cloudTitle": "새 클라우드 프로젝트",
+	"createProject.cloudTitle": "클라우드 프로젝트 만들기",
 	"createProject.cloudWorkspaceConnecting": "클라우드 워크스페이스에 연결하는 중...",
 	"createProject.couldNotAdd": "프로젝트를 추가할 수 없습니다",
 	"createProject.couldNotLoadAgents": "에이전트 카탈로그를 불러올 수 없습니다.",

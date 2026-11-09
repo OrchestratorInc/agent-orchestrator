@@ -37,7 +37,7 @@ import { useEdgeFadeRef } from "../hooks/useEdgeFade";
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
  *   filled button / accent pill / bordered card.
  * - Primary actions are always a 2×2 grid. The fourth cell is the
- *   standalone-agent action, or Clone to the cloud when Developer Mode and
+ *   standalone-agent action, or Create a cloud project when Developer Mode and
  *   Cloud are both enabled (standalone stays reachable from the sidebar's
  *   Scratchpad "+"). Never add a fifth row. Connect Mobile is settings-only.
  * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a

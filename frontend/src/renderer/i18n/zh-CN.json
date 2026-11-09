@@ -653,7 +653,7 @@
 	"createProject.cloudDisplayName": "项目名称",
 	"createProject.cloudDisplayNameRequired": "请输入项目名称。",
 	"createProject.cloudInvalidUrl": "请输入 https 仓库 URL。",
-	"createProject.cloudTitle": "新建云端项目",
+	"createProject.cloudTitle": "创建云端项目",
 	"createProject.cloudWorkspaceConnecting": "正在连接云端工作区...",
 	"createProject.couldNotAdd": "无法添加项目",
 	"createProject.couldNotLoadAgents": "无法加载代理目录。",

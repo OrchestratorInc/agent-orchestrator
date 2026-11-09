@@ -141,7 +141,7 @@ Pilotez depuis votre téléphone les agents qui tournent sur votre ordinateur. I
 
 ### Cloud Agents
 
-Exécutez des workers dans des espaces de travail hébergés plutôt que sur votre machine. Choisissez **Clone to the cloud** puis un dépôt GitHub pour commencer.
+Exécutez des workers dans des espaces de travail hébergés plutôt que sur votre machine. Choisissez **Create a cloud project** puis un dépôt GitHub pour commencer.
 
 - **Toujours actif.** Les tâches continuent, même ordinateur portable fermé.
 - **Suivi en direct.** Ouvrez le chat, les fichiers et le terminal depuis l'application de bureau.

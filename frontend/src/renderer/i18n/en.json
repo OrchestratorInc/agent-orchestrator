@@ -650,7 +650,7 @@
 	"createProject.cloudDisplayName": "Project name",
 	"createProject.cloudDisplayNameRequired": "Enter a project name.",
 	"createProject.cloudInvalidUrl": "Enter an https repository URL.",
-	"createProject.cloudTitle": "Clone to the cloud",
+	"createProject.cloudTitle": "Create a cloud project",
 	"createProject.cloudWorkspaceConnecting": "Connecting to your cloud workspace...",
 	"createProject.couldNotAdd": "Could not add project",
 	"createProject.couldNotLoadAgents": "Could not load agent catalog.",
