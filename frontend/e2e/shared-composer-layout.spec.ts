@@ -11,8 +11,11 @@ for (const width of [960, 390]) {
 	const form = page.locator("form.cursor-chat-composer");
 	const draft = page.getByRole("region", { name: "Alice Example's draft" });
 	await expect(draft).toContainText("Keep this live draft fully visible");
-	const [q, n, d, f] = await Promise.all([queue.boundingBox(), notice.boundingBox(), draft.boundingBox(), form.boundingBox()]);
-	expect(q && n && d && f).toBeTruthy();
+	const slot = page.getByTestId("queued-composer-dock");
+	const [q, n, d, f, s] = await Promise.all([queue.boundingBox(), notice.boundingBox(), draft.boundingBox(), form.boundingBox(), slot.boundingBox()]);
+	expect(q && n && d && f && s).toBeTruthy();
+	// The open queue fills its own slot instead of floating over the transcript above it.
+	expect(q!.y).toBeGreaterThanOrEqual(s!.y - 1);
 	expect(q!.y + q!.height).toBeLessThanOrEqual(n!.y + 1);
 	expect(n!.y + n!.height).toBeLessThanOrEqual(f!.y + 1);
 	expect(d!.y).toBeGreaterThanOrEqual(n!.y);
