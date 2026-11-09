@@ -26,7 +26,10 @@ import (
 
 const postHogBufferSize = 128
 const maxCommandShapeLength = 48
-const remoteTelemetrySchemaVersion = 2
+
+// 3 marks the {product}.{object}.{verb} names: legacy clients sent ao.cli.invoked
+// and ao.app.active without a version, and 2 used the ao.v2.* names.
+const remoteTelemetrySchemaVersion = 3
 
 // legacyEventNames lists the names an event was exported under before the
 // {product}.{object}.{past_tense_verb} rename. Export uses the current name only;

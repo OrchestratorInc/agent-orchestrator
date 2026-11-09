@@ -801,8 +801,13 @@ Event names follow `{product}.{object}.{past_tense_verb}`, where the product is
 Rollups stay under `ao.usage.*`. Which process sent an event is the `client`
 and `surface` properties, and the schema is `telemetry_schema_version`; neither
 is part of the name. Desktop, CLI and phone activity use `ao.app.active`,
-`ao.cli.active` and `mobile.app.active`, each at most once per UTC day; add
-them together for total active users.
+`ao.cli.active` and `mobile.app.active`, each at most once per UTC day. For
+total active users, count distinct people across the three, not the sum of
+events: someone active on two surfaces on the same day is one user. The current
+names carry `telemetry_schema_version = 3`; legacy clients sent
+`ao.cli.invoked` and `ao.app.active` under the same names without a version, so
+filter on the version when reading those two. See
+[PostHog cost controls](posthog-cost-controls.md) for the ingestion rules.
 
 Events were renamed in this release. A kill-switch entry in
 `AO_TELEMETRY_DISABLED_EVENTS` written against an old name still silences the

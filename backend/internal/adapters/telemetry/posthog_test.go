@@ -444,8 +444,8 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 		if _, ok := props["legacy_event_name"]; ok {
 			t.Fatalf("legacy_event_name = %#v, want absent after the rename", props["legacy_event_name"])
 		}
-		if props["telemetry_schema_version"] != float64(2) {
-			t.Fatalf("telemetry_schema_version = %#v, want 2", props["telemetry_schema_version"])
+		if props["telemetry_schema_version"] != float64(3) {
+			t.Fatalf("telemetry_schema_version = %#v, want 3", props["telemetry_schema_version"])
 		}
 		if props["channel"] != "cli" || props["command"] != "spawn" || props["command_path"] != "ao spawn" {
 			t.Fatalf("sanitized properties = %#v, want active CLI metadata", props)

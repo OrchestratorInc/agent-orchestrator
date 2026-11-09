@@ -360,13 +360,13 @@ describe("telemetry sanitizers", () => {
 			app_version: "1.2.3-nightly.20260707",
 			ao_version: "1.2.3-nightly.20260707",
 			platform: "linux",
-			telemetry_schema_version: 2,
+			telemetry_schema_version: 3,
 		});
 		expect(buildTelemetryContext("", "darwin")).toMatchObject({
 			app_version: "unknown",
 			ao_version: "unknown",
 			platform: "darwin",
-			telemetry_schema_version: 2,
+			telemetry_schema_version: 3,
 		});
 	});
 
