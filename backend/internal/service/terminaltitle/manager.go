@@ -89,15 +89,19 @@ func (m *Manager) Run(ctx context.Context) {
 		m.reconcile(ctx)
 		select {
 		case <-ctx.Done():
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			for key, w := range m.watches {
-				m.stopLocked(ctx, w)
-				delete(m.watches, key)
-			}
+			m.stopAll(ctx)
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+func (m *Manager) stopAll(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, w := range m.watches {
+		m.stopLocked(ctx, w)
+		delete(m.watches, key)
 	}
 }
 

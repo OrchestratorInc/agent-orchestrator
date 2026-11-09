@@ -765,7 +765,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	return shellTerminalFromRecord(rec), nil
 }
 
-var defaultShellTerminalTitle = regexp.MustCompile(`^Terminal( [0-9]+)?$`)
+var defaultShellTerminalTitle = regexp.MustCompile(`^Terminal( \d+)?$`)
 
 // nextShellTerminalTitle assigns a name at creation time. It never depends on
 // a tab's current UI position, so closing or reordering another tab cannot

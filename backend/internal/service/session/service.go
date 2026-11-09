@@ -199,14 +199,14 @@ type outputTypeReconciler interface {
 	ReconcileSessionOutputType(ctx context.Context, id domain.SessionID) error
 }
 
-// Service is the controller-facing session service. It delegates command-side
-// session operations to the internal sessionmanager.Manager and owns read-model
-// assembly, including user-facing display status derivation.
 // terminalTitleSource reads the titles terminal programs last set.
 type terminalTitleSource interface {
 	ListSessionTerminalTitles(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]string, error)
 }
 
+// Service is the controller-facing session service. It delegates command-side
+// session operations to the internal sessionmanager.Manager and owns read-model
+// assembly, including user-facing display status derivation.
 type Service struct {
 	manager             commander
 	terminalTitles      terminalTitleSource
@@ -1677,7 +1677,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.

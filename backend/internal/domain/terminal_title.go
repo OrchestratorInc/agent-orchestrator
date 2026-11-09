@@ -31,7 +31,7 @@ func NormalizeTerminalTitle(raw string) string {
 		return r
 	}, strings.ToValidUTF8(raw, ""))
 	title = strings.TrimLeftFunc(title, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.Is(unicode.So, r) || r == '︎' || r == '️'
+		return unicode.IsSpace(r) || unicode.Is(unicode.So, r) || r == '\ufe0e' || r == '\ufe0f'
 	})
 	title = strings.Join(strings.Fields(title), " ")
 	if runes := []rune(title); len(runes) > MaxTerminalTitleRunes {
@@ -41,8 +41,8 @@ func NormalizeTerminalTitle(raw string) string {
 }
 
 func isBidiControl(r rune) bool {
-	return r == '؜' || r == '‎' || r == '‏' ||
-		(r >= '‪' && r <= '‮') || (r >= '⁦' && r <= '⁩')
+	return r == '\u061c' || r == '\u200e' || r == '\u200f' ||
+		(r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
 }
 
 // genericTerminalTitles are the names programs emit when they have nothing to

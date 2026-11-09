@@ -66,6 +66,8 @@ export function ShellTerminalTab({
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
 	const title = shell.terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
+	// An agent's name is display only, so renaming starts from the real title.
+	const renameBase = shell.terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -79,7 +81,7 @@ export function ShellTerminalTab({
 
 	const beginEdit = () => {
 		if (!canEdit || isEditing) return;
-		setDraft(title);
+		setDraft(renameBase);
 		setIsEditing(true);
 	};
 
@@ -118,13 +120,13 @@ export function ShellTerminalTab({
 		if (!isEditing) return;
 		setIsEditing(false);
 		const next = draft.trim();
-		// Compared with what the tab shows: confirming unchanged must not pin it.
-		if (next && next !== title) onRename?.(next);
+		// Confirming unchanged must not pin a program's title as the tab's name.
+		if (next && next !== renameBase) onRename?.(next);
 	};
 
 	const cancel = () => {
 		setIsEditing(false);
-		setDraft(title);
+		setDraft(renameBase);
 	};
 
 	const closeControl = {
@@ -185,7 +187,7 @@ export function ShellTerminalTab({
 					}}
 					buttonRef={ref}
 					editingContent={editingContent}
-						editingValue={draft}
+					editingValue={draft}
 					icon={
 						agent ? (
 							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
