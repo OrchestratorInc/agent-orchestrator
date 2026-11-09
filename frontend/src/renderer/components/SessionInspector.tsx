@@ -267,8 +267,9 @@ export const SessionInspector = memo(function SessionInspector({
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The tab is contextual: an artifact click opens it; leaving it hides it.
-			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
+			// Artifacts shows whenever the session lists files, or while an artifact
+			// link waits for the list to refresh.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
