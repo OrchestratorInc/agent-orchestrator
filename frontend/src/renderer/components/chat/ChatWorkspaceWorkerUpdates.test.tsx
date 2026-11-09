@@ -261,7 +261,7 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
-	it("collapses reports sent with a human message into one line under it that keeps needs-you visible", async () => {
+	it("draws nothing for reports sent with a human message", () => {
 		const envelope = [
 			"Reports since your previous turn:", "",
 			"[needs_input] [iOS pages](ao://sessions/proj/proj-286)", "Tunnel or loopback?", "",
@@ -273,14 +273,10 @@ describe("orchestrator worker updates", () => {
 		};
 		renderOrchestrator([human, reply("t1", 2, "Both moved.")]);
 
-		const line = screen.getByRole("button", { name: /^2 Agent Reports/ });
-		expect(line).toHaveTextContent("1 needs you");
-		expect(line).not.toHaveTextContent("sent with this message");
+		expect(screen.getByText("How is it going?")).toBeInTheDocument();
+		expect(screen.queryByTestId("worker-reports")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
-		// The line sits under the message it travelled with, not above it.
-		expect(screen.getByText("How is it going?").compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		await userEvent.click(line);
-		expect(screen.getAllByTestId("worker-update")).toHaveLength(2);
+		expect(screen.queryByText(/iOS pages/)).not.toBeInTheDocument();
 	});
 
 	it("keeps reports a worker's steer carried under that steer after the turn settles", async () => {
@@ -318,14 +314,8 @@ describe("orchestrator worker updates", () => {
 	});
 
 	it("draws one logo per sender on the reports line", () => {
-		const envelope = ["Reports since your previous turn:", "",
-			...[1, 2, 3, 4].flatMap((n) => [`[done] [Menus](ao://sessions/proj/proj-285)`, `Step ${n}.`, ""]),
-		].join("\n");
-		const human: ConversationMessage = {
-			kind: "message", id: "t1-human", turnId: "t1", sequence: 10, revision: 0, role: "user", origin: "human",
-			streaming: false, createdAt: at(1), text: `Status?\n\n<ao-worker-reports>\n${envelope}\n</ao-worker-reports>`,
-		};
-		renderOrchestrator([human, reply("t1", 2, "Noted.")]);
+		const entries = [1, 2, 3, 4].map((n) => `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${n}.`).join("\n\n");
+		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Noted.")]);
 		const line = screen.getByRole("button", { name: /^4 Agent Reports/ });
 		expect(line.querySelectorAll("[data-report-logo]")).toHaveLength(1);
 		expect(line).not.toHaveTextContent("...");
