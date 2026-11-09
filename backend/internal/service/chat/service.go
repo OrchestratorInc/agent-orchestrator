@@ -53,6 +53,8 @@ type SessionReader interface {
 
 // Service owns the live Chat controllers.
 type Service struct {
+	findMu                 sync.Mutex
+	findCache              map[string]cachedFind
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader

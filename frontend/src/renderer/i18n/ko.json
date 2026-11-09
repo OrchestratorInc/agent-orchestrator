@@ -4060,5 +4060,20 @@
 	"teams.accessVia": "{{access}} · {{team}} 통해",
 	"teams.sharedToastViaTeam": "{{name}}님이 {{thing}}을(를) {{team}}과(와) 공유했습니다",
 	"teams.sharedToastWithYou": "{{name}}님이 {{thing}}을(를) 나와 공유했습니다",
-	"teams.open": "열기"
+	"teams.open": "열기",
+	"shortcut.find-in-chat": "채팅에서 찾기",
+	"chat.find.incomplete": "검색 미완료",
+	"chat.find.gap": "중간 메시지는 로드되지 않았습니다",
+	"chat.find.historyUnavailable": "기록을 사용할 수 없습니다.",
+	"chat.find.resultChanged": "이 결과가 변경되었습니다. 다시 검색하세요.",
+	"chat.find.transportUnavailable": "이 채팅 연결에서는 전체 기록 검색을 사용할 수 없습니다.",
+	"chat.find.queryTooLong": "검색어는 512자까지 입력할 수 있습니다.",
+	"chat.find.searchUnavailable": "이 채팅에서는 전체 기록 검색을 사용할 수 없습니다.",
+	"chat.find.activeChanged": "선택한 일치 항목이 변경되어 가장 가까운 항목으로 이동했습니다.",
+	"chat.find.searchFailed": "전체 기록을 검색하지 못했습니다. 다시 시도하세요.",
+	"chat.find.resultsChanged": "결과가 변경되어 일치 항목을 업데이트하는 중입니다.",
+	"chat.find.nextFailed": "다음 일치 항목을 불러오지 못했습니다.",
+	"chat.find.wrappedFirst": "첫 번째 일치 항목으로 돌아왔습니다.",
+	"chat.find.wrappedLast": "마지막 일치 항목으로 돌아왔습니다.",
+	"chat.find.notRevealed": "이 일치 항목을 표시하지 못했습니다. 다시 검색하세요."
 }

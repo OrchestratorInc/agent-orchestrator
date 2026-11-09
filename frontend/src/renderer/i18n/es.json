@@ -4148,5 +4148,20 @@
 	"teams.accessVia": "{{access}} · a través de {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} compartió {{thing}} con {{team}}",
 	"teams.sharedToastWithYou": "{{name}} compartió {{thing}} contigo",
-	"teams.open": "Abrir"
+	"teams.open": "Abrir",
+	"shortcut.find-in-chat": "Buscar en el chat",
+	"chat.find.incomplete": "Búsqueda incompleta",
+	"chat.find.gap": "Los mensajes intermedios no están cargados",
+	"chat.find.historyUnavailable": "El historial no está disponible.",
+	"chat.find.resultChanged": "Este resultado ha cambiado. Repite la búsqueda.",
+	"chat.find.transportUnavailable": "La búsqueda en todo el historial no está disponible para esta conexión de chat.",
+	"chat.find.queryTooLong": "La búsqueda admite hasta 512 caracteres.",
+	"chat.find.searchUnavailable": "La búsqueda en todo el historial no está disponible para este chat.",
+	"chat.find.activeChanged": "La coincidencia activa cambió. Se pasó a la coincidencia disponible más cercana.",
+	"chat.find.searchFailed": "No se pudo buscar en todo el historial. Reintenta.",
+	"chat.find.resultsChanged": "Los resultados cambiaron. Actualizando coincidencias.",
+	"chat.find.nextFailed": "No se pudieron cargar las siguientes coincidencias.",
+	"chat.find.wrappedFirst": "Se volvió a la primera coincidencia.",
+	"chat.find.wrappedLast": "Se volvió a la última coincidencia.",
+	"chat.find.notRevealed": "No se pudo mostrar esta coincidencia. Repite la búsqueda."
 }
