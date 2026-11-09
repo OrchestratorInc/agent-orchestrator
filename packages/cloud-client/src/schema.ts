@@ -2493,6 +2493,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/push-devices/{installId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Registers this app install's Expo push token, so the account's new
+         *     cloud notifications reach the phone as pushes, or replaces the
+         *     install's earlier registration. Registrations follow the account, not
+         *     an organization; an account keeps its 20 most recent. A token already
+         *     registered under another account or install moves to this one. A
+         *     deployment that does not send pushes still accepts registrations.
+         *      */
+        put: operations["putPushDevice"];
+        post?: never;
+        /** @description Stops pushes to this app install, as on sign-out. Removing an install
+         *     that is not registered also succeeds.
+         *      */
+        delete: operations["deletePushDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/remote-hosts/{hostId}/address": {
         parameters: {
             query?: never;
@@ -2569,6 +2598,14 @@ export interface components {
             token: string;
             /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
             hostKey?: string;
+        };
+        PutPushDeviceInput: {
+            /** @description The Expo push token the app minted. */
+            token: string;
+            /** @enum {string} */
+            platform: "ios" | "android";
+            /** @description The phone's name, shown wherever the account lists its devices. */
+            deviceName?: string;
         };
         RemoteHostAddress: {
             /**
@@ -5185,6 +5222,8 @@ export interface components {
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
+        /** @description The app install's stable identifier. */
+        PushInstallId: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -9374,6 +9413,58 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putPushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutPushDeviceInput"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `validation_error`: the token is not an Expo push token, the platform is unknown, or the device name is too long. */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deletePushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or was not registered. */
             204: {
                 headers: {
                     [name: string]: unknown;
