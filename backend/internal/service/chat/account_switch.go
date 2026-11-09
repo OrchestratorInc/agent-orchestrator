@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -13,11 +12,6 @@ import (
 // AccountSwitchedEvent marks, on a turn an account move stopped, the account
 // the conversation continues on.
 const AccountSwitchedEvent = "account.switched"
-
-const (
-	accountMoveQueueWait = 20 * time.Second
-	accountMoveQueuePoll = 100 * time.Millisecond
-)
 
 type activeTransitionReader interface {
 	GetActiveSessionInterfaceTransition(context.Context, domain.SessionID) (domain.SessionInterfaceTransition, bool, error)
@@ -30,38 +24,10 @@ func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.Sessi
 	}
 	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
 	if err != nil {
-		s.log.Warn("chat start: read account move", "session", id, "error", err)
+		s.log.Warn("chat: read account move", "session", id, "error", err)
 		return false
 	}
 	return active && move.AccountMoveAwaitsTarget()
-}
-
-func (s *Service) awaitAccountMoveQueue(ctx context.Context, id domain.SessionID) (bool, error) {
-	reader, ok := s.store.(activeTransitionReader)
-	if !ok {
-		return false, nil
-	}
-	deadline := time.NewTimer(accountMoveQueueWait)
-	defer deadline.Stop()
-	for {
-		move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
-		if err != nil {
-			return false, err
-		}
-		if !active || !move.AccountMove() {
-			return false, nil
-		}
-		if move.AccountMoveAwaitsTarget() {
-			return true, nil
-		}
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-deadline.C:
-			return false, nil
-		case <-time.After(accountMoveQueuePoll):
-		}
-	}
 }
 
 // MarkAccountSwitch records that the turn the session's account move stopped

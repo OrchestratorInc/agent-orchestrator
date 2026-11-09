@@ -1369,12 +1369,8 @@ func (s *Service) Send(
 			return domain.ConversationTurn{}, err
 		}
 	}
-	behindAccountMove := false
-	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
-		if behindAccountMove, err = s.awaitAccountMoveQueue(ctx, id); err != nil {
-			return domain.ConversationTurn{}, err
-		}
-	}
+	behindAccountMove := !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil &&
+		s.accountMoveAwaitingTarget(ctx, id)
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
 		if controller, controllerErr := s.Controller(id); controllerErr == nil {
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {

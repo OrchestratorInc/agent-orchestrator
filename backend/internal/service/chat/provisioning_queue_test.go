@@ -236,20 +236,44 @@ func TestSendWithoutControllerStillRefusedWhenNotProvisioning(t *testing.T) {
 	}
 }
 
+func startAccountMove(t *testing.T, st *sqlite.Store, id domain.SessionID, phase domain.SessionInterfaceTransitionPhase) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, created, err := st.CreateSessionInterfaceTransition(context.Background(), domain.SessionInterfaceTransition{
+		ID: "move-1", SessionID: id, SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeChat,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: phase, SourceAccountID: "old-account", TargetAccountID: "new-account", CreatedAt: now, UpdatedAt: now,
+	}); err != nil || !created {
+		t.Fatalf("create account move: created=%v err=%v", created, err)
+	}
+}
+
+func TestSendWhileAccountMoveDrainsIsRefusedWithoutQueueing(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionReady)
+	svc := provisioningService(t, st)
+	startAccountMove(t, st, id, domain.SessionInterfaceTransitionDraining)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "sent while the turn drains", Origin: domain.MessageOriginHuman})
+	if !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("send while the old agent drains = %v, want an immediate ErrNoController", err)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 0 {
+		t.Fatalf("turns = %+v, want nothing queued for the old agent", snapshot.Turns)
+	}
+}
+
 func TestSendDuringAccountMoveQueuesForTheNewAgent(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionReady)
 	svc := provisioningService(t, st)
 	ctx := context.Background()
 	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
-	now := time.Now().UTC()
-	if _, created, err := st.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
-		ID: "move-1", SessionID: id, SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeChat,
-		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
-		Phase:           domain.SessionInterfaceTransitionSourceStopped,
-		SourceAccountID: "old-account", TargetAccountID: "new-account", CreatedAt: now, UpdatedAt: now,
-	}); err != nil || !created {
-		t.Fatalf("create account move: created=%v err=%v", created, err)
-	}
+	startAccountMove(t, st, id, domain.SessionInterfaceTransitionSourceStopped)
 
 	turn, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "sent during the move", Origin: domain.MessageOriginHuman})
 	if err != nil || turn.State != domain.TurnStateQueued {
