@@ -2790,6 +2790,25 @@ describe("ChatWorkspace timeline", () => {
 		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
 	});
 
+	it("opens a chat whose history is still being read as one with messages, not as a new chat", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} historyPending />);
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+		expect(screen.getByText("Restoring your conversation")).toBeInTheDocument();
+		// Typing doesn't wait for the history.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+		// The history fades in when it arrives.
+		view.rerender(<ChatWorkspace snapshot={loaded} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+		view.unmount();
+		// Read and empty, it is a new chat after all.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+	});
+
 	it("keeps the composer quiet while leaving chat for the terminal", () => {
 		render(
 			<ChatWorkspace

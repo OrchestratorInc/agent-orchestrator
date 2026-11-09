@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -34,9 +34,8 @@ import {
 	Info,
 	Play,
 	Loader2,
-	SearchCheck,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
@@ -122,37 +121,12 @@ const VIEW_DEFS: {
 	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
-	{
-		id: "summary",
-		labelKey: "inspector.summary",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<line x1="8" y1="7" x2="20" y2="7" />
-				<line x1="8" y1="12" x2="20" y2="12" />
-				<line x1="8" y1="17" x2="16" y2="17" />
-				<circle cx="4" cy="7" r="1" />
-				<circle cx="4" cy="12" r="1" />
-				<circle cx="4" cy="17" r="1" />
-			</svg>
-		),
-	},
-	{
-		id: "reviews",
-		labelKey: "inspector.reviewTab",
-		icon: <SearchCheck aria-hidden="true" />,
-	},
-	{
-		id: "browser",
-		labelKey: "inspector.browser",
-		icon: <BrowserIcon aria-hidden="true" />,
-	},
-	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{
-		id: "files",
-		labelKey: "inspector.files",
-		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
-	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
+	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
+	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
+	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
+	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -163,10 +137,10 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
-	browserOnly = false,
+	orchestrator = false,
 	session,
 	hostId: hostIdProp,
 	onOpenReviewerTerminal,
@@ -187,7 +161,8 @@ export const SessionInspector = memo(function SessionInspector({
 	view: viewProp,
 	onViewChange,
 }: {
-	browserOnly?: boolean;
+	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
+	orchestrator?: boolean;
 	session?: WorkspaceSession;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -212,7 +187,6 @@ export const SessionInspector = memo(function SessionInspector({
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
-	const onlyBrowser = browserOnly;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -224,7 +198,7 @@ export const SessionInspector = memo(function SessionInspector({
 	);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -263,20 +237,22 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
+		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The tab is contextual: an artifact click opens it; leaving it hides it.
-			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+			// Artifacts shows whenever the session lists files, or while an artifact
+			// link waits for the list to refresh.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -357,6 +333,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							orchestrator={orchestrator}
 							session={session}
 						/>
 					) : undefined
@@ -391,6 +368,7 @@ const SummaryView = memo(function SummaryView({
 	hostId,
 	onOpenFiles,
 	onOpenReviews,
+	orchestrator,
 	session,
 }: {
 	canOpenReviews: boolean;
@@ -398,6 +376,7 @@ const SummaryView = memo(function SummaryView({
 	hostId?: string;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
+	orchestrator: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -475,7 +454,7 @@ const SummaryView = memo(function SummaryView({
 				) : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={
+			branch={orchestrator ? undefined : (
 				<SessionBranchSummary
 					hostId={hostId}
 					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
@@ -503,7 +482,7 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 					title={prSectionTitle}
 				/>
-			}
+			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -1045,7 +1024,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -2583,7 +2562,7 @@ function ReviewPanel({
 										onClick={onCloudInstallHarness}
 										size="sm"
 										type="button"
-										variant="outline"
+										variant="secondary"
 									>
 										{isInstallingCloudHarness ? "Installing…" : "Install"}
 									</Button>
@@ -2834,7 +2813,7 @@ function BrowserView({
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
 				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
 					<p className="text-md-sm text-muted-foreground">{t("inspector.browserInCenter")}</p>
-					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="outline">
+					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="secondary">
 						{t("inspector.returnToPanel")}
 					</Button>
 				</div>
@@ -2872,7 +2851,7 @@ function FilesView({ filesView, onOpenFiles }: { filesView?: ReactNode; onOpenFi
 		<div role="tabpanel">
 			<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 px-5 py-10 text-center")}>
 				<p className="text-md-sm text-muted-foreground">{t("inspector.filesUnavailable")}</p>
-				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="outline">
+				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="secondary">
 					{t("inspector.openFiles")}
 				</Button>
 			</div>

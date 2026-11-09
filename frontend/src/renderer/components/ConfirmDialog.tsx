@@ -36,10 +36,6 @@ type ConfirmDialogProps = {
 	onOpenChange: (open: boolean) => void;
 };
 
-// Shared confirmation modal styled exactly like the settings dialogs — same
-// frame, header typography, and footer buttons via the shared
-// settingsDialog* class constants. Destructive confirms fill
-// with the deep danger-strong token instead of the settings accent.
 export function ConfirmDialog({
 	open,
 	title,
@@ -60,11 +56,6 @@ export function ConfirmDialog({
 	const cancelRef = useRef<HTMLButtonElement>(null);
 	const confirmRef = useRef<HTMLButtonElement>(null);
 
-	// Sized for a two-line prompt, not a settings form: the shared settings
-	// frame (575px, 38px footer pills) reads oversized around one question, so
-	// the confirm narrows the dialog and compacts the buttons while keeping the
-	// settings family's colors, borders, and typography.
-	const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 	return (
 		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
@@ -122,7 +113,7 @@ export function ConfirmDialog({
 
 				<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
 					<DialogClose asChild>
-						<Button ref={cancelRef} type="button" variant="footer" className={compactButtonClass} disabled={busy}>
+						<Button ref={cancelRef} type="button" variant="secondary" disabled={busy}>
 							{cancelLabel ?? t("confirm.cancel")}
 						</Button>
 					</DialogClose>
@@ -130,8 +121,7 @@ export function ConfirmDialog({
 						ref={confirmRef}
 						aria-label={confirmAriaLabel}
 						type="button"
-						variant={destructive ? "footer-destructive" : "footer-primary"}
-						className={compactButtonClass}
+						variant={destructive ? "destructive" : "primary"}
 						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>

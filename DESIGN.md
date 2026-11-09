@@ -25,7 +25,7 @@ Use these files to inspect the approved references. They show current behavior a
 | --- | --- |
 | App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [page topbar](frontend/src/renderer/components/PageTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
 | Home landing | [HomePage](frontend/src/renderer/components/HomePage.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
-| Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [topbar button](frontend/src/renderer/components/TopbarButton.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
+| Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [Button](frontend/src/renderer/components/ui/button.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Shell resize grips | [ResizeHandle](frontend/src/renderer/components/ResizeHandle.tsx), [useResizable](frontend/src/renderer/hooks/useResizable.ts) |
 | Tokens, themes, typography | [tokens](frontend/src/styles/tokens.css), [renderer semantic styles](frontend/src/renderer/styles.css), [docs tokens](frontend/src/docs/src/styles/tokens.css) |
 | Tooltips, icons, buttons | [Tooltip](frontend/src/renderer/components/ui/tooltip.tsx), [Button](frontend/src/renderer/components/ui/button.tsx), [icon usage](frontend/src/renderer/components/icons.tsx) |
@@ -94,7 +94,7 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 - **Home:** intentionally minimal. It introduces the next meaningful action, not a fake dashboard.
   - One centered column (`max-w-[640px]`); no decorative upward translate.
-  - "Star us" is a quiet text link with dashed underline on hover — never a TopbarButton, accent pill, or bordered card.
+  - "Star us" is a quiet text link with dashed underline on hover — never a filled button, accent pill, or bordered card.
   - Primary actions are a 2×2 grid; standalone agent is a grid cell (Clone to the cloud takes that cell when Developer Mode and Cloud are on), never a full-width extra row. Card labels follow verb + source: Clone a repo, Open a local folder, Open a workspace, Clone to the cloud, Start a standalone agent. Connect Mobile stays in settings — not on home.
   - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash. On home the pill fills with `bg-card` so a hovered row matches the action cards.
 - **Board:** the operational overview. Each lane has a semantic reason to exist and derived status determines placement.
@@ -239,7 +239,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - `--radius-xs` and `--radius-sm` suit tiny controls; `--radius-md` suits buttons and inputs; `--radius-lg` is the maximum routine component radius.
 - `--radius-panel` is reserved for route-level framed surfaces and larger dialogs.
 - `--radius-full` is only for avatars, dots, and intentional pills.
-- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. They are subtle, short-range, and neutral. No permanent card shadows, glow, or decorative drop shadow.
+- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. Filled buttons use inset shading only. No permanent card shadows, glow, or decorative drop shadow.
 - Focus is not decoration: use the semantic focus ring/outline with sufficient contrast. Never remove it or replace it with a barely visible background shift.
 - Avoid cards inside cards. If hierarchy is weak, fix spacing, typography, or surface contrast before adding another border.
 
@@ -248,14 +248,17 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 ### Buttons
 
 - One clear primary action per focused region. It uses accent fill or strong foreground contrast.
+- Primary and accent labels use medium (500). Filled buttons choose black or white text with the selected 22% lighter bias against their resting fill and keep that text color on hover and press; primary/accent theme tokens provide the same selection for older browsers. This is a visual preference, not a guarantee of minimum WCAG contrast.
 - Secondary actions use a quiet surface; tertiary actions are text/icon controls. An outline is a contrast fallback, not the default secondary-button style.
 - Icon-only buttons require an accessible label and tooltip when their meaning is not universally obvious.
 - Destructive actions require destructive color and confirmation when the operation is difficult to reverse.
+- Destructive color is shared across palettes: Gruvbox red, `#fb4934` in dark mode and `#9d0006` in light mode.
 - Disabled states explain why when the missing prerequisite is not obvious.
 - Every action is a `Button` (`components/ui/button.tsx`); never a raw `<button>` outside `components/ui/`. Rows, cards, tabs and disclosure toggles use `Pressable` (`components/ui/pressable.tsx`); a dialog ✕ uses `CloseButton`.
-- Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `footer*` (settings and modal footers), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
+- Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
 - Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active="true"`, not from swapping variants. Tabs keep `role="tab"` + `aria-selected` and add `data-active` for the look.
-- No press motion: buttons, rows and controls never scale or shift when clicked.
+- Topbars, settings, and modal footers use the same `Button` variants as the rest of the app. Topbar icons use `quiet` with `size="icon-sm"`; there is no separate topbar button family.
+- Filled buttons adapt daisyUI's inset highlight and shaded edge, with no outer shadow or glow. Pressing deepens the background without moving the button. Toggle/open states keep that pressed surface. Buttons, rows, and other controls never scale or shift on press.
 
 ### Tooltips and iconography
 
@@ -269,6 +272,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 
 - Labels precede inputs. Placeholder text is an example, never the sole label.
 - Validation appears close to the field and uses both wording and semantic color.
+- Select/dropdown triggers use the secondary button inset surface; chat composer selectors use the ghost hover pill. Switches use inset track/thumb shading, background-only press feedback, and a sliding thumb with reduced-motion support.
 - A select/dropdown trigger is one compact control: selected value first, chevron second; it should not add a second visible label when the surrounding field label already establishes meaning.
 - Dropdown content is a single elevated surface with a quiet edge, consistent item height, clear selected/focus state, and dividers only between meaningful groups. Never make each option a separately bordered mini-card.
 - Settings and New Task selectors use the same shared menu/select primitive and option rhythm. Model, agent, mode, and settings choices must not invent bespoke pills or popovers.

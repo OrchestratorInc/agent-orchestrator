@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { Search } from "@/components/app-icons";
 import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";

@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Plus, X } from "@/components/app-icons";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -141,7 +141,7 @@ export function CloudAdditionalReposEditor({
 					</Button>
 				</div>
 			))}
-			<Button ref={addButtonRef} type="button" variant="outline" size="sm" disabled={!canAdd} onClick={add}>
+			<Button ref={addButtonRef} type="button" variant="secondary" size="sm" disabled={!canAdd} onClick={add}>
 				<Plus aria-hidden="true" className="size-icon-sm" />
 				{t("cloudRepos.add", { defaultValue: "Add a repository" })}
 			</Button>

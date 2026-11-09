@@ -152,7 +152,7 @@ describe("SessionInterfaceSwitchButton", () => {
 		const { onClick } = renderSwitchButton(target);
 
 		const button = screen.getByRole("button", { name: label });
-		expect(button.classList.contains("topbar-control--icon")).toBe(true);
+		expect(button.classList.contains("size-control-md")).toBe(true);
 		expect(button.textContent).toBe("");
 		expect(button.querySelector(iconSelector)).not.toBeNull();
 		fireEvent.click(button);

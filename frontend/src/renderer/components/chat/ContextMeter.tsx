@@ -13,7 +13,7 @@
  * required, which matters for something glanced at rather than studied.
  */
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";

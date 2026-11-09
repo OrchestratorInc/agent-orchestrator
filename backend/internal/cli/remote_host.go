@@ -12,12 +12,15 @@ import (
 // remoteHostStatus mirrors the small part of the loopback mobile status API
 // needed to pair another client with a headless daemon.
 type remoteHostStatus struct {
-	Enabled       bool   `json:"enabled"`
-	LoopbackOnly  bool   `json:"loopbackOnly"`
-	AccountLinked bool   `json:"accountLinked"`
-	HostID        string `json:"hostId"`
-	Password      string `json:"password"`
-	Tunnel        struct {
+	Enabled       bool `json:"enabled"`
+	LoopbackOnly  bool `json:"loopbackOnly"`
+	AccountLinked bool `json:"accountLinked"`
+	// AccountLinkRefused: AO Cloud refused the machine's address under its
+	// account token, so the account's devices may not list it.
+	AccountLinkRefused bool   `json:"accountLinkRefused"`
+	HostID             string `json:"hostId"`
+	Password           string `json:"password"`
+	Tunnel             struct {
 		Supported  bool   `json:"supported"`
 		Installing bool   `json:"installing"`
 		Running    bool   `json:"running"`
@@ -76,7 +79,11 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					return err
 				}
 				if status.AccountLinked {
-					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Linked to an Orchestrator account: its signed-in devices list this machine."); err != nil {
+					message := "Linked to an Orchestrator account: its signed-in devices list this machine."
+					if status.AccountLinkRefused {
+						message = "Orchestrator Cloud refuses this machine's account link, so your devices may not list it. Run `ao remote-host link` again."
+					}
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
 						return err
 					}
 				}
@@ -97,7 +104,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					message := "Fixed address: it stays the same after restarts."
 					if !status.Tunnel.Fixed {
 						message = "Quick tunnel: the address changes on restart and has no uptime guarantee."
-						if !status.AccountLinked {
+						if !status.AccountLinked || status.AccountLinkRefused {
 							message += " Run `ao remote-host link` to add this machine to your Orchestrator account, which gives it a fixed address when the account has one free."
 						}
 					}

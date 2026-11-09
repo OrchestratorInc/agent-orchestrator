@@ -30,7 +30,8 @@ function useCloudLinkSource(_hostId: string): SessionLinkSource {
 	}, [org?.id, projects.data, sessions.data]);
 	return {
 		ready: orgReady && Boolean(org?.id) && projects.isSuccess && sessions.isSuccess,
-		isLoading: !orgReady || projects.isLoading || sessions.isLoading,
+		// Signed out means the source is absent, not that it is on its way.
+		isLoading: orgReady && (projects.isLoading || sessions.isLoading),
 		isError: projects.isError || sessions.isError,
 		workspaces,
 	};
@@ -45,7 +46,8 @@ function useRemoteLinkSource(hostId: string): SessionLinkSource {
 	);
 	return {
 		ready: state?.status === "success",
-		isLoading: state === undefined || state.status === "pending",
+		// A host with no running query never settles on its own, so only a live fetch counts as loading.
+		isLoading: state?.status === "pending" && state.fetchStatus !== "idle",
 		isError: state?.status === "error",
 		workspaces: state?.data ?? [],
 	};

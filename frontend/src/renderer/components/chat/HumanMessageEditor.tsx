@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Loader2, X } from "lucide-react";
+import { ArrowUp, Loader2, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { ConversationContentSummary } from "../../types/conversation";
 import { Button } from "../ui/button";
@@ -116,7 +116,7 @@ export function HumanMessageEditor({
 				<Button
 					type="button"
 					size="sm"
-					variant="outline"
+					variant="secondary"
 					onClick={onAbandonRecovery}
 				>
 					{t("chat.edit.abandonRecovery")}

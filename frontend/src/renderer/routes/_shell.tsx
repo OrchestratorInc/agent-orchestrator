@@ -5,7 +5,7 @@ import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
@@ -86,6 +86,7 @@ import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
@@ -264,6 +265,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator,
 	startingSteps,
 	startingCoderWorkspaceUrl,
+	startingHarness,
 }: {
 	isSessionRoute: boolean;
 	isHomeRoute: boolean;
@@ -273,9 +275,10 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator: boolean;
 	startingSteps?: WorkspaceSession["provisionSteps"];
 	startingCoderWorkspaceUrl?: string;
+	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
+	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
@@ -1289,6 +1292,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
+	// The shell is mounted on every route, so these menu items always apply.
+	useAppMenuAvailable("new-session", true);
+	useAppMenuAvailable("toggle-sidebar", true);
+	useAppMenuAvailable("history-back", true);
+	useAppMenuAvailable("history-forward", true);
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1570,6 +1578,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
+								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
 							/>
 							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
 								canGoBack: !isHomeRoute && router.history.canGoBack(),

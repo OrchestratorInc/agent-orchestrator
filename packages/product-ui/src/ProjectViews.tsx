@@ -296,19 +296,16 @@ export type ProjectSetupAlert = {
 };
 
 export function ProjectSetupFormView({
+	actions,
 	agentControls,
 	agents,
 	alert,
 	canSubmit,
 	intakeControl,
-	isBusy,
-	onCancel,
 	onSubmit,
 	setupNotice,
-	submitLabel,
-	submitClassName,
-	cancelLabel,
 }: {
+	actions: ReactNode;
 	agentControls: { worker: ReactNode; orchestrator: ReactNode };
 	agents: {
 		cacheMessage?: string;
@@ -322,13 +319,8 @@ export function ProjectSetupFormView({
 	alert?: ProjectSetupAlert | null;
 	canSubmit: boolean;
 	intakeControl: ReactNode;
-	isBusy: boolean;
-	onCancel: () => void;
 	onSubmit: () => void;
 	setupNotice?: { message: string; warning?: string | null } | null;
-	submitLabel: string;
-	submitClassName?: string;
-	cancelLabel?: string;
 }) {
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
@@ -406,28 +398,7 @@ export function ProjectSetupFormView({
 				</div>
 			)}
 
-			<div className="flex items-center justify-end gap-3 pt-1">
-				{cancelLabel ? (
-					<button
-						className="settings-footer-button disabled:pointer-events-none disabled:opacity-50"
-						type="button"
-						disabled={isBusy}
-						onClick={onCancel}
-					>
-						{cancelLabel}
-					</button>
-				) : null}
-				<button
-					className={cn(
-						"settings-footer-button settings-footer-button-primary disabled:pointer-events-none disabled:opacity-50",
-						submitClassName,
-					)}
-					type="submit"
-					disabled={!canSubmit}
-				>
-					{submitLabel}
-				</button>
-			</div>
+			<div className="flex items-center justify-end gap-3 pt-1">{actions}</div>
 		</form>
 	);
 }

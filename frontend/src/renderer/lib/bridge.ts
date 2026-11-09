@@ -47,6 +47,8 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {

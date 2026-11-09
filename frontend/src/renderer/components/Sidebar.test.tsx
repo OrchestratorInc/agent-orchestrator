@@ -2874,7 +2874,7 @@ describe("Sidebar", () => {
 		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
 		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
-		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
+		expect(sessionDot("review task")).toHaveClass("icon-circle-alert", "text-status-in-review");
 		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
 		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
 		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
@@ -2951,11 +2951,11 @@ describe("Sidebar", () => {
 			}],
 		});
 		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder-open")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder-open")).toBeInTheDocument();
 		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
 	it("replaces the folder with a warning when a collapsed project needs attention", () => {
@@ -2964,8 +2964,8 @@ describe("Sidebar", () => {
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("lucide-circle-alert", "text-destructive");
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).not.toBeInTheDocument();
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("icon-circle-alert", "text-destructive");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
@@ -2975,7 +2975,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [{ ...session, status }] }],
 		});
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
-		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 	});
 
 	it("shows a first-letter tile for a project without a repository avatar", () => {
@@ -2983,7 +2983,7 @@ describe("Sidebar", () => {
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [] }] });
 		const icon = document.querySelector("[data-project-folder-icon]");
 		expect(icon).toHaveTextContent("P");
-		expect(icon?.querySelector(".lucide-folder")).not.toBeInTheDocument();
+		expect(icon?.querySelector(".icon-folder")).not.toBeInTheDocument();
 	});
 
 	it("previews the board card to the right of a hovered session row", async () => {
@@ -3433,7 +3433,7 @@ describe("Sidebar", () => {
 
 		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
 		const archiveButton = within(row).getByLabelText("Archive session");
-		expect(archiveButton.querySelector("svg")).toHaveClass("lucide-archive");
+		expect(archiveButton.querySelector("svg")).toHaveClass("icon-archive");
 
 		fireEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();

@@ -451,12 +451,12 @@ describe("send keys", () => {
 	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
-		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
+		expect(send).toHaveClass("rounded-full", "button-raised", "[--button-color:var(--primary)]", "text-primary-foreground");
 		expect(send).toBeDisabled();
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
+		expect(send).toHaveClass("rounded-full", "button-raised", "[--button-color:var(--primary)]", "text-primary-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {
