@@ -13,7 +13,7 @@ import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -21,6 +21,8 @@ import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
+import { useChatSessionId } from "./chat-image-source";
+import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
@@ -74,7 +76,7 @@ import {
 	User,
 	Wrench,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 
 /** The mark beside a command, tool or file-edit step, by what the step did. */
 const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
@@ -122,6 +124,7 @@ import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
+import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
@@ -139,7 +142,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, fileBasename, thoughtHeadline, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, thoughtHeadline, type CommandStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -980,7 +983,6 @@ export function HumanMessage({
 	onEdit,
 	editing = false,
 	editText,
-	editReconstructedContext = false,
 	onEditStart,
 	onEditDraftChange,
 	onEditCancel,
@@ -1008,7 +1010,6 @@ export function HumanMessage({
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
-	editReconstructedContext?: boolean;
 	onEditStart?: () => void;
 	onEditDraftChange?: (text: string) => void;
 	onEditCancel?: () => void;
@@ -1054,7 +1055,6 @@ export function HumanMessage({
 					recoveryLabel={editRecoveryLabel}
 					sendBlocked={editSendBlocked}
 					busy={editBusy}
-					reconstructedContext={editReconstructedContext}
 					error={editError}
 					onDraftChange={onEditDraftChange}
 					onCancel={() => onEditCancel?.()}
@@ -1282,8 +1282,10 @@ export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return thoughtHeadline(reasoningText(activity)) ?? "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
 	if (activity.activityKind === "mcp_tool") {
+		const ao = aoToolView(activity);
+		if (ao) return ao.label;
 		const step = activityToolStep(activity);
-		if (!step) return activity.summary.trim() || "Using a tool";
+		if (!step) return mcpToolName(activity).tool.trim() || "Using a tool";
 		const verb = stepInProgress(activity) ? step.live : step.done;
 		return step.target ? `${verb} ${step.target}` : verb;
 	}
@@ -1306,6 +1308,18 @@ export function stepInProgress(activity: ConversationActivity): boolean {
  * output the reader opened to follow stays open where it lands.
  */
 export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
+
+/**
+ * Which form of a step's label to show. In progress reads in the present tense, and
+ * so does a step that failed or stopped when its past tense would claim the result:
+ * "Deleting build  failed", not "Deleted build  failed". "Ran tests  exit 1" is true
+ * as it stands. `step` is absent for a file edit, whose past tense always claims it.
+ */
+function stepTense(activity: ConversationActivity, step?: CommandStep): "live" | "done" {
+	if (stepInProgress(activity)) return "live";
+	const unfinished = activity.status === "failed" || activity.status === "cancelled" || activity.status === "recovered";
+	return unfinished && !(step && pastTenseHoldsOnFailure(step)) ? "live" : "done";
+}
 
 /**
  * A provider retry, split for display: the attempt count up front and the reason
@@ -1749,7 +1763,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<span className="shrink-0 text-muted-foreground">
-							{stepInProgress(activity)
+							{stepTense(activity) === "live"
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
 								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
@@ -1908,6 +1922,9 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
  * edit, or a tool call. Other kinds keep their row.
  */
 export function isLiveStepKind(activity: ConversationActivity): boolean {
+	// AO's own tools answer the agent, so their row opens only onto what a reader can
+	// use. The live row would open onto the raw answer.
+	if (aoToolView(activity)) return false;
 	return (
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
@@ -1931,10 +1948,10 @@ function liveStepHasDetail(activity: ConversationActivity): boolean {
 export const LiveThoughtTexts = createContext<Readonly<Record<string, string>>>({});
 
 /** The step's details, opened from the live row: what its own row would open onto, or the whole thought. */
-function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
+const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
 	if (activity.activityKind === "reasoning") return <LiveThoughtBody activity={activity} />;
 	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
-}
+});
 
 function LiveThoughtBody({ activity }: { activity: ConversationActivity }) {
 	const text = useContext(LiveThoughtTexts)[activity.id] ?? reasoningText(activity) ?? "";
@@ -2067,11 +2084,25 @@ function CommandOutput({
 }) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
+	const hostId = useContext(ChatHostId);
+	const sessionId = useChatSessionId();
+	// A remote page carries only the head and tail of a long output; outputBytes is its full size.
+	const cutBytes = typeof detail?.outputBytes === "number" ? detail.outputBytes : undefined;
+	const [whole, setWhole] = useState<{ revision: number; output?: string; loading?: boolean }>();
+	const wholeOutput = whole?.revision === activity.revision ? whole.output : undefined;
+	const showWhole = () => {
+		if (!sessionId) return;
+		const revision = activity.revision;
+		setWhole({ revision, loading: true });
+		fetchActivityOutput(sessionId, hostId, activity.sequence, activity.id)
+			.then((output) => setWhole({ revision, output }))
+			.catch(() => setWhole(undefined));
+	};
 	// Older ACP-backed conversations may contain the provider's structured
 	// rawOutput even though AO's view model promises a string. New events are
 	// normalized at the adapter boundary; this compatibility read keeps those
 	// already-durable rows from taking down the entire session surface.
-	const raw = commandOutputText(detail?.output as unknown);
+	const raw = commandOutputText((wholeOutput ?? detail?.output) as unknown);
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
@@ -2113,6 +2144,16 @@ function CommandOutput({
 					Showing the end of this large output.
 				</p>
 			) : null}
+			{cutBytes !== undefined && wholeOutput === undefined && sessionId ? (
+				<button
+					type="button"
+					disabled={whole?.revision === activity.revision && whole.loading}
+					onClick={showWhole}
+					className="self-start px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+				>
+					{whole?.revision === activity.revision && whole.loading ? "Loading the whole output…" : `Show the whole output (${Math.ceil(cutBytes / 1024)} KB)`}
+				</button>
+			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in
@@ -2147,11 +2188,11 @@ function commandOutputText(raw: unknown): string {
  * without a natural split keeps its whole label.
  */
 function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
-	const tense = stepInProgress(activity) ? "live" : "done";
 	if (activity.activityKind === "command") {
 		const step = activityCommandStep(activity);
-		return { label: step[tense], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
+		return { label: step[stepTense(activity, step)], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
 	}
+	const tense = stepTense(activity);
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
 		const status = files[0]!.status ?? "modified";
@@ -2425,6 +2466,12 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
+	const aoView = aoToolView(activity);
+	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} />;
+	return <GenericMcpToolRow activity={activity} />;
+}
+
+function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
 	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
@@ -2438,12 +2485,12 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
 	const StepMark = step ? stepIcon[step.icon] : undefined;
-	const tool = step ? (stepInProgress(activity) ? step.live : step.done) : detail?.toolName ?? activity.summary;
-	const server = detail?.server ?? detail?.namespace;
+	const name = mcpToolName(activity);
+	const tool = step ? step[stepTense(activity, step)] : name.tool;
 	const sourceLabel = step
 		? undefined
-		: server
-			? `MCP · ${server}`
+		: name.server
+			? `· ${name.server}`
 			: detail?.progress
 				? lastLine(detail.progress)
 				: undefined;
@@ -2532,7 +2579,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 function mcpToolHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
 	return Boolean(
-		detail?.arguments !== undefined ||
+		mcpToolArguments(activity) !== undefined ||
 		detail?.result !== undefined ||
 		detail?.content !== undefined ||
 		detail?.error ||
@@ -2543,6 +2590,7 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 /** What a tool call opens onto: its error, arguments, result, content and progress. */
 function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
+	const args = mcpToolArguments(activity);
 	return (
 		<div className="flex flex-col gap-2 pb-2.5">
 			{detail?.error ? (
@@ -2550,9 +2598,7 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 					{detail.error}
 				</p>
 			) : null}
-			{detail?.arguments !== undefined ? (
-				<JsonPayload label="Arguments" value={detail.arguments} />
-			) : null}
+			{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
 			{detail?.result !== undefined ? (
 				<JsonPayload label="Result" value={detail.result} />
 			) : null}
@@ -2567,6 +2613,86 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 					</pre>
 				</div>
 			) : null}
+		</div>
+	);
+}
+
+/**
+ * A call to one of AO's own tools, told in the user's words: what was done, and
+ * what went wrong when something did. The tool's answer is written for the agent,
+ * so it is never shown as is.
+ */
+function AOToolRow({ view }: { view: AOToolView }) {
+	const [open, setOpen] = useState(false);
+	const reducedMotion = useReducedMotion();
+	const failed = view.state === "failed";
+	const hasBody = Boolean((failed && view.error) || view.lines?.length || view.text);
+
+	return (
+		<div className="min-w-0 max-w-full">
+			<Pressable
+				onClick={() => setOpen((prev) => !prev)}
+				disabled={!hasBody}
+				aria-expanded={hasBody ? open : undefined}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
+			>
+				<strong
+					className={cn(
+						"activity-row-label min-w-0 truncate text-xs font-normal",
+						failed ? "text-destructive" : "text-muted-foreground",
+					)}
+					title={view.label}
+				>
+					<span>{view.label}</span>
+				</strong>
+				{view.note ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-warning">{view.note}</span>
+				) : null}
+				{view.state === "running" ? (
+					<Loader2 aria-label="running" className="size-3 shrink-0 animate-spin text-muted-foreground/60" />
+				) : hasBody ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
+					/>
+				) : null}
+			</Pressable>
+
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex flex-col gap-1 pb-2.5">
+							{failed && view.error ? (
+								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
+									{view.error}
+								</p>
+							) : null}
+							{view.lines?.map((line, index) => (
+								<p
+									key={`${index}:${line.text}`}
+									className={cn(
+										"whitespace-pre-wrap break-words text-xs leading-relaxed",
+										line.tone === "error" ? "text-destructive" : "text-muted-foreground",
+									)}
+								>
+									{line.text}
+								</p>
+							))}
+							{view.text ? (
+								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+									{view.text}
+								</pre>
+							) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }

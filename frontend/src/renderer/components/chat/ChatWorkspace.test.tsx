@@ -964,7 +964,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(onSessionRenamed).not.toHaveBeenCalled();
 	});
@@ -2598,6 +2598,61 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("offers Restore, not Resume, on a terminated session", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={restore}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		// Archiving is a normal end, not a failure.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Session terminated")).toBeInTheDocument();
+		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
+		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		// A shell here would open in the project root once the worktree is gone.
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Restore session" }));
+		expect(restore).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the composer locked while a terminated session restores", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={vi.fn()}
+				resumingAgent
+			/>,
+		);
+
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		// A message sent now would reach a session the daemon still calls terminated.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("does not wait for a reconnect on a terminated session", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+	});
+
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
 		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
 		const view = render(
@@ -2717,6 +2772,24 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	// A worker started by `ao spawn` has no local echo or opening time in this
+	// renderer: the daemon's provisioning state and queued brief alone must read
+	// as starting, never as an empty chat whose controller stopped.
+	it("shows a CLI-spawned worker as starting from the daemon's state alone", () => {
+		render(
+			<ChatWorkspace
+				snapshot={startingSnapshot("queued")}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
+		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		expect(screen.queryByText("What do you want to work on?")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
 	});
 
 	it("localizes the startup composer queue hint", async () => {
@@ -3131,6 +3204,25 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("opens a chat whose history is still being read as one with messages, not as a new chat", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} historyPending />);
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+		expect(screen.getByText("Restoring your conversation")).toBeInTheDocument();
+		// Typing doesn't wait for the history.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+		// The history fades in when it arrives.
+		view.rerender(<ChatWorkspace snapshot={loaded} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+		view.unmount();
+		// Read and empty, it is a new chat after all.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, lastUserMessageAt: undefined }} />);
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
 	});
 
 	it("keeps the composer quiet while leaving chat for the terminal", () => {
@@ -4218,7 +4310,7 @@ describe("ChatWorkspace message actions", () => {
 		});
 		expect(editButtons).toHaveLength(1);
 		await user.click(editButtons[0]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 
 		const editor = screen.getByRole("textbox", { name: "Edit message" });
 		await user.clear(editor);
@@ -4282,13 +4374,13 @@ describe("ChatWorkspace message actions", () => {
 
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(2);
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		const disclosure = screen.getByText(/Reconstructed context:/);
-		expect(disclosure).toHaveTextContent(
-			"Reconstructed context: text messages will be replayed into a new agent session. Tool calls, approvals, and workspace history will not be replayed; current worktree files stay as they are.",
+		const branchNote = screen.getByText(/Starts a new conversation branch/);
+		expect(branchNote).toHaveTextContent(
+			"Starts a new conversation branch. Files stay as they are.",
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveAttribute(
 			"aria-describedby",
-			disclosure.id,
+			branchNote.id,
 		);
 	});
 
@@ -4316,7 +4408,7 @@ describe("ChatWorkspace message actions", () => {
 
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(2);
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("requires a prior visible provider turn before offering a native historical fork", () => {
@@ -4339,7 +4431,7 @@ describe("ChatWorkspace message actions", () => {
 		expect(screen.getAllByRole("button", { name: "Edit user message" })).toHaveLength(1);
 	});
 
-	it("does not warn about reconstruction when a native fork anchor is visible", async () => {
+	it("shows the same branch note when a native fork anchor is visible", async () => {
 		const user = userEvent.setup();
 		render(
 			<ChatWorkspace
@@ -4353,7 +4445,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[1]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("keeps reconstructed ancestor prompts editable when their provider ids belong to the source scope", () => {
@@ -4393,7 +4485,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 
 		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[0]!);
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("uses the durable native anchor when its prompt is on an older page", async () => {
@@ -4415,7 +4507,7 @@ describe("ChatWorkspace message actions", () => {
 		});
 		expect(editButtons).toHaveLength(1);
 		await user.click(editButtons[0]!);
-		expect(screen.queryByText(/Reconstructed context:/)).not.toBeInTheDocument();
+		expect(screen.getByText(/Starts a new conversation branch/)).toBeVisible();
 	});
 
 	it("restores the latest composer text after the same session fully remounts", async () => {
@@ -4647,21 +4739,21 @@ describe("ChatWorkspace message actions", () => {
 		const composer = screen.getByLabelText("Message the agent");
 		await typeInLexicalEditor(composer, "retry this exact draft");
 		fireEvent.keyDown(composer, { key: "Enter" });
-		await screen.findByText(/delivery wasn’t confirmed/);
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
 		const firstClientMessageId = onSend.mock.calls[0]?.[2];
 		expect(firstClientMessageId).toEqual(expect.any(String));
 		firstView.unmount();
 
 		const retryView = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
 		const restored = screen.getByLabelText("Message the agent");
-		expect(restored).toHaveTextContent("retry this exact draft");
-		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		expect(restored).toHaveTextContent("");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		expect(onSend.mock.calls[1]?.[2]).toBe(firstClientMessageId);
-		await waitFor(() =>
-			expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(""),
-		);
-		await waitFor(() => expect(restored).toHaveTextContent(""));
+		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).unsent).toBeUndefined());
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+		expect(readChatSessionDraft(snapshot.sessionId).composer.delivery).toBeUndefined();
 		retryView.unmount();
 
 		render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
@@ -5343,7 +5435,7 @@ describe("ChatWorkspace message actions", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("keep this draft");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
+		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -5358,7 +5450,6 @@ describe("ChatWorkspace message actions", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("keep this draft");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
-		expect(screen.getByText(/Reconstructed context:/)).toBeVisible();
 
 		// An ambiguous provider failure can durably activate the replacement branch.
 		// Keep its journal actionable when that branch refetch arrives: the user still
@@ -5447,7 +5538,7 @@ describe("ChatWorkspace message actions", () => {
 		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
 
 		expect(screen.getByText("2 / 3")).toBeVisible();
-		expect(screen.queryByText(/Reconstructed context/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
 		await user.click(
 			screen.getByRole("button", {
 				name: "Previous conversation branch",
@@ -5952,6 +6043,16 @@ describe("ChatWorkspace shell tabs", () => {
 		);
 		act(() => [...previousTabListeners][0]?.());
 		expect(onSelectChat).toHaveBeenCalledOnce();
+	});
+
+	it("leaves tab shortcuts to the owning strip when the chat header is hidden", () => {
+		const view = render(<ChatWorkspace hideHeader snapshot={idleSnapshot()} />);
+		expect(previousTabListeners.size).toBe(0);
+		expect(nextTabListeners.size).toBe(0);
+		expect(closeShellTerminalListeners.size).toBe(0);
+		expect(closeShellTerminalShortcutStates).toEqual([]);
+		view.unmount();
+		expect(closeShellTerminalShortcutStates).toEqual([]);
 	});
 
 	it("enables the close-shell shortcut and closes the active shell tab", () => {

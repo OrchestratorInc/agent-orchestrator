@@ -111,6 +111,72 @@ func TestSignInRequiredCatalogCarriesAuthCode(t *testing.T) {
 	}
 }
 
+func TestSignedOutSavedAccountKeepsCatalogUntilSignIn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cached    bool
+		firstRead bool
+	}{
+		{name: "queued catalog", cached: true},
+		{name: "uncached revalidation"},
+		{name: "uncached picker read", firstRead: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cache := &fakeModelCache{}
+			svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, successfulModelDiscoverer())
+			wantModels := []ports.AgentModelInfo{}
+			if tc.cached {
+				initial, err := svc.RevalidateModels(ctx, "claude-code", "")
+				if err != nil || len(initial.Models) != 1 {
+					t.Fatalf("initial catalog = %#v, error = %v", initial, err)
+				}
+				wantModels = initial.Models
+				svc.requeueCatalog("", initial)
+			}
+			svc.SetSavedDefaultLaunchEnv(func(context.Context, domain.AgentHarness) (map[string]string, error) {
+				return nil, fmt.Errorf("saved account: %w", ports.ErrAgentAccountDefaultUnusable)
+			})
+
+			var catalog ports.AgentModelCatalog
+			var err error
+			if tc.firstRead {
+				catalog, err = svc.Models(ctx, "claude-code", "", false)
+			} else {
+				catalog, err = svc.RevalidateModels(ctx, "claude-code", "")
+			}
+			if err != nil {
+				t.Fatalf("signed-out account returned an error instead of a catalog: %v", err)
+			}
+			if !reflect.DeepEqual(catalog.Models, wantModels) || catalog.WarningCode != ports.ModelCatalogWarningAuthRequired || catalog.Warning == "" {
+				t.Fatalf("catalog = %#v, want the saved models with a sign-in warning", catalog)
+			}
+			if catalog.RefreshState != "idle" || catalog.RefreshError != "" || catalog.RetryAt != nil || catalog.RefreshRecommended || catalog.Stale {
+				t.Fatalf("signed-out catalog is still loading or retrying: %#v", catalog)
+			}
+			if !tc.cached && (!catalog.AllowCustom || catalog.SelectionMode != ports.ModelSelectionText) {
+				t.Fatalf("uncached catalog lost manual model entry: %#v", catalog)
+			}
+			assertIdleWithoutRetries(t, cache, "claude-code")
+			read, err := svc.Models(ctx, "claude-code", "", false)
+			if err != nil || !reflect.DeepEqual(read.Models, wantModels) || read.WarningCode != ports.ModelCatalogWarningAuthRequired || read.RefreshState != "idle" {
+				t.Fatalf("cache-first read = %#v, error = %v; want the persisted sign-in state", read, err)
+			}
+		})
+	}
+}
+
+func TestSavedAccountLookupErrorStillFailsModelRevalidation(t *testing.T) {
+	want := errors.New("account store unavailable")
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, successfulModelDiscoverer())
+	svc.SetSavedDefaultLaunchEnv(func(context.Context, domain.AgentHarness) (map[string]string, error) {
+		return nil, want
+	})
+	if _, err := svc.RevalidateModels(context.Background(), "claude-code", ""); !errors.Is(err, want) {
+		t.Fatalf("account lookup error = %v, want %v", err, want)
+	}
+}
+
 // After a login, the cached rejection must disappear immediately instead of
 // lingering until the background rediscovery finishes.
 func TestInvalidateModelCatalogsClearsAuthWarningAndRediscovers(t *testing.T) {

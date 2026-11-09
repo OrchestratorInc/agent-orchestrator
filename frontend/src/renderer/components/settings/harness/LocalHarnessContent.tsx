@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
@@ -68,7 +68,7 @@ const AUTH_VERIFY_RETRY_MS = 1_500;
 
 function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
 	if (workflow.action === "logout") return status === "unauthorized";
-	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code"));
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
 }
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
@@ -627,14 +627,15 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
 	// Reads the accounts again, so the CLI login's row shows a sign-in that just
-	// changed, and returns whether that login is signed in.
+	// changed, and returns whether the CLI is logged in by any method, an API
+	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
 		const provider = hostId ? null : agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
 		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
 		if (!accounts) return undefined;
 		queryClient.setQueryData(agentAccountsQueryKey, accounts);
-		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
@@ -643,11 +644,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		setAuthWorkflow(authWorkflowRef.current);
 		const signingIn = workflow.action !== "logout";
 		const ownRow = cliLoginOnOwnRow(workflow.agentId);
-		let cliSignedIn: boolean | undefined;
+		let cliLoggedIn: boolean | undefined;
 		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
 			if (ownRow) {
-				cliSignedIn = await refreshCliLogin(workflow.agentId);
-				return cliSignedIn === signingIn;
+				cliLoggedIn = await refreshCliLogin(workflow.agentId);
+				return cliLoggedIn === signingIn;
 			}
 			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		};
@@ -660,7 +661,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		const signedOut = ownRow ? cliLoggedIn === false : result?.agent?.authStatus === "unauthorized";
 		if (done) {
 			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
@@ -777,8 +778,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
-						const cliSignedIn = await refreshCliLogin(agentId);
-						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") return true;
+						const cliLoggedIn = await refreshCliLogin(agentId);
+						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
 					}
 					return false;
 				}}
@@ -864,11 +865,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
+								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										strokeWidth={1.75}
 										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
 										role="img"
 									/>

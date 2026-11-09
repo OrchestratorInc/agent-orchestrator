@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
@@ -133,7 +133,6 @@ function QueuedMessageRowContent({
 			<Circle
 				aria-hidden="true"
 				className="size-3 shrink-0 text-muted-foreground/60"
-				strokeWidth={1.5}
 			/>
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
@@ -178,7 +177,7 @@ function QueuedMessageRowContent({
 						title="Steer into running turn"
 					>
 						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
-							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" />
 						</span>
 						Steer
 					</Button>
@@ -193,7 +192,7 @@ function QueuedMessageRowContent({
 						aria-label="Edit queued message"
 						title="Edit"
 					>
-						<Pencil aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+						<Pencil aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
 				{onCancelQueuedTurn ? (
@@ -208,7 +207,7 @@ function QueuedMessageRowContent({
 						aria-label="Delete queued message"
 						title="Delete"
 					>
-						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
 				{reorderEnabled ? (
@@ -220,7 +219,7 @@ function QueuedMessageRowContent({
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
-						<GripVertical aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+						<GripVertical aria-hidden="true" className="size-3.5 shrink-0" />
 					</Pressable>
 				) : null}
 			</div>

@@ -540,8 +540,8 @@ describe("ActivityRow command labels", () => {
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
 		// One small mark for what the step did, not the bordered rows' icon column.
-		expect(container.querySelector(".lucide-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
-		expect(container.querySelector(".lucide-square-terminal")).toBeNull();
+		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
+		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
 		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
 	});

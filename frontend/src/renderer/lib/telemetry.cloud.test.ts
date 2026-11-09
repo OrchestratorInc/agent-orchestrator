@@ -54,6 +54,17 @@ describe("cloud funnel event allowlist", () => {
 		});
 	});
 
+	it("keeps only a well-formed website visitor id on the visit link event", async () => {
+		const event = "ao.renderer.cloud_web_visitor_link_requested";
+		const visitor = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
+		expect(await sanitizeRendererProperties(event, { website_distinct_id: visitor, email: "a@b.c", user_id: "user_A" })).toEqual({
+			website_distinct_id: visitor,
+		});
+		for (const invalid of ["", "has space", "/Users/me/secret", "a".repeat(201), "undefined", 7, null]) {
+			expect(await sanitizeRendererProperties(event, { website_distinct_id: invalid })).toEqual({});
+		}
+	});
+
 	it("tags every event and exception with the hashed cloud org, kind and billing mode", async () => {
 		setCloudTelemetryContext({ orgId: "22222222-2222-2222-2222-222222222222", orgKind: "b2c", billingMode: "self_serve" });
 		// The org id is hashed asynchronously; under a loaded suite one tick is not enough.

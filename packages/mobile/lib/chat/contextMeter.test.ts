@@ -25,6 +25,10 @@ describe("contextMeterModel", () => {
 		expect(model?.label).toBe("70% context");
 	});
 
+	it("gives the meter a value screen readers can read", () => {
+		expect(contextMeterModel(usage(83), false)?.accessibilityValue).toEqual({ min: 0, max: 100, now: 83, text: "83% used" });
+	});
+
 	it("escalates to critical at 90%", () => {
 		expect(contextMeterModel(usage(90), false)?.severity).toBe("critical");
 		expect(contextMeterModel(usage(97), false)?.severity).toBe("critical");

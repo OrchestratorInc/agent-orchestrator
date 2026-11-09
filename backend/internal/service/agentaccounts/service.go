@@ -125,9 +125,12 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
+	// LoggedIn is any login the CLI launches with as this account, an API key
+	// included; a folder signed in as another login is not.
+	LoggedIn    bool
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
@@ -156,6 +159,7 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		view := AccountView{Account: account, Default: def == account.ID}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -343,6 +347,19 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 		identity.Email = account.Email
 	}
 	return identity, true
+}
+
+// DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
+func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return nil, nil
+	}
+	account, err := s.newSessionAccount(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.providers[p].LaunchEnv(account.Home), nil
 }
 
 // SetDefaultChanged late-binds what must hear that the account new sessions of

@@ -1,5 +1,5 @@
 import type { ConversationActivity } from "../../types/conversation";
-import { binaryName, commandProgram, READ_PROGRAMS, SEARCH_PROGRAMS } from "./activity-step";
+import { binaryName, commandIntent, READ_PROGRAMS, SEARCH_PROGRAMS } from "./activity-step";
 
 /** The user-facing category of a shell command in the chat timeline. */
 export type CommandCategory = "read" | "search" | "vcs" | "run";
@@ -24,10 +24,14 @@ const VCS = new Set(["git", "gh"]);
 /**
  * Classify mechanics by intent so the timeline says what happened, not which binary
  * ran. The program is the one the row's own label is named by, past `cd dir &&`,
- * env assignments and wrappers, so the row and its group's header agree.
+ * env assignments and wrappers, so the row and its group's header agree: `cat > a`
+ * is named as a write, so it does not count as a read.
  */
 export function commandCategory(text: string): CommandCategory {
-	const binary = commandProgram(text) ?? "";
+	// Codex reports a web search as a command with only this summary.
+	if (/^Searched the web\b/.test(text)) return "search";
+	const { program: binary = "", writes } = commandIntent(text);
+	if (writes) return "run";
 	if (READ_PROGRAMS.has(binary)) return "read";
 	if (SEARCH_PROGRAMS.has(binary)) return "search";
 	if (VCS.has(binary)) return "vcs";

@@ -18,8 +18,8 @@ type FakeOptions = {
 	refused?: string[];
 	/** The height the page needs; 412 unless set. */
 	contentHeight?: number;
-	/** The first capture is still the frame from before the resize. */
-	staleFirstCapture?: boolean;
+	/** How many frames after the resize are still the size from before it. */
+	staleFrames?: number;
 	/** PNG bytes per pixel of the captured image, to make large screenshots. */
 	pngBytesPerPixel?: number;
 	/** Requests the page makes while it loads; the session's guard decides each. */
@@ -34,10 +34,16 @@ type FakeOptions = {
 function fakes(options: FakeOptions = {}) {
 	const events: string[] = [];
 	const listeners = new Map<string, (...args: unknown[]) => void>();
-	const paintListeners: Array<() => void> = [];
+	const paintListeners: Array<(...args: unknown[]) => void> = [];
+	let staleFrames = options.staleFrames ?? 0;
+	// A paint carries the whole frame, the way Electron's offscreen paint event does.
 	const paint = () => {
 		events.push("paint");
-		for (const listener of paintListeners.splice(0)) listener();
+		const stale = staleFrames > 0;
+		if (stale) staleFrames--;
+		const [width, height] = stale ? created : options.emptyImage ? [0, 0] : target;
+		const frame = image([width!, height!]);
+		for (const listener of paintListeners.splice(0)) listener({}, { x: 0, y: 0, width, height }, frame);
 	};
 	const permissionRequest = vi.fn();
 	const cancelled: Record<string, boolean> = {};
@@ -52,7 +58,7 @@ function fakes(options: FakeOptions = {}) {
 		setWindowOpenHandler: vi.fn(),
 		setWebRTCIPHandlingPolicy: vi.fn(),
 		on: (event: string, listener: (...args: unknown[]) => void) => listeners.set(event, listener),
-		once: (event: string, listener: () => void) => {
+		once: (event: string, listener: (...args: unknown[]) => void) => {
 			if (event === "paint") paintListeners.push(listener);
 		},
 		loadURL: vi.fn(async () => {
@@ -81,15 +87,17 @@ function fakes(options: FakeOptions = {}) {
 			}
 			return Promise.resolve(undefined);
 		}),
-		// An offscreen page repaints on invalidate(); manualPaint holds that frame back.
+		// Electron 44's offscreen invalidate() re-sends the last frame before it
+		// returns; manualPaint holds that frame back.
 		invalidate: vi.fn(() => {
 			events.push("invalidate");
-			if (!options.manualPaint) queueMicrotask(paint);
+			if (!options.manualPaint) paint();
 		}),
+		// What Electron 44 does for an offscreen window whose compositor has no
+		// frame at the new size yet, which is every check's case.
 		capturePage: vi.fn(async () => {
 			events.push("capture");
-			const stale = options.staleFirstCapture && contents.capturePage.mock.calls.length === 1;
-			return image(stale ? created : options.emptyImage ? [0, 0] : target);
+			throw new Error("UnknownVizError");
 		}),
 	};
 	const image = ([width, height]: number[]): Record<string, unknown> => ({
@@ -214,15 +222,29 @@ describe("checkRender", () => {
 		expect(vi.mocked(allowRenderPage).mock.results.at(-1)?.value).toHaveBeenCalledTimes(1);
 	});
 
-	it("captures only once the page has painted at the measured size", async () => {
+	it("takes the screenshot from the frame painted at the measured size", async () => {
 		const f = fakes({ manualPaint: true });
 		const result = checkRender(f as never, { url, width: 390 });
 		await vi.waitFor(() => expect(f.contents.invalidate).toHaveBeenCalled());
 		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(f.contents.capturePage).not.toHaveBeenCalled();
 		f.paint();
 		await expect(result).resolves.toMatchObject({ data: png, height: 412 });
-		expect(f.events).toEqual(["resize 390x412", "invalidate", "paint", "capture"]);
+		expect(f.events).toEqual(["resize 390x412", "invalidate", "paint"]);
+	});
+
+	// Regression: on Electron 44 every check, even of a one-line page, failed
+	// with UnknownVizError from capturePage().
+	it("passes a trivial page without capturePage(), which Electron 44 rejects for an offscreen window", async () => {
+		const f = fakes({ contentHeight: 18 });
+		await expect(checkRender(f as never, { url, width: 720 })).resolves.toMatchObject({
+			data: png,
+			width: 720,
+			height: 18,
+			imageWidth: 720,
+			imageHeight: 18,
+			contentHeight: 18,
+		});
+		expect(f.contents.capturePage).not.toHaveBeenCalled();
 	});
 
 	it("caps the captured height at 2000 px", async () => {
@@ -232,18 +254,42 @@ describe("checkRender", () => {
 	});
 
 	it("fails on an empty capture instead of returning a blank image", async () => {
-		const f = fakes({ emptyImage: true });
-		await expect(checkRender(f as never, { url, width: 720 })).rejects.toMatchObject({
-			code: "BROWSER_COMMAND_FAILED",
-			message: expect.stringMatching(/empty/),
-		});
-		expect(f.window.destroy).toHaveBeenCalled();
+		vi.useFakeTimers();
+		try {
+			const f = fakes({ emptyImage: true });
+			const rejected = expect(checkRender(f as never, { url, width: 720 })).rejects.toMatchObject({
+				code: "BROWSER_COMMAND_FAILED",
+				message: expect.stringMatching(/empty/),
+			});
+			await vi.advanceTimersByTimeAsync(1_500);
+			await rejected;
+			expect(f.window.destroy).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
-	it("captures again when the first frame is still the size from before the resize", async () => {
-		const f = fakes({ staleFirstCapture: true });
+	it("waits a frame at a time until a frame is the size from after the resize", async () => {
+		const f = fakes({ staleFrames: 3 });
 		await expect(checkRender(f as never, { url, width: 390 })).resolves.toMatchObject({ imageWidth: 390, imageHeight: 412 });
-		expect(f.contents.capturePage).toHaveBeenCalledTimes(2);
+		expect(f.events.filter((event) => event === "paint")).toHaveLength(4);
+	});
+
+	it("fails with the frame's size when no frame reaches the page's size within a second", async () => {
+		vi.useFakeTimers();
+		try {
+			const f = fakes({ staleFrames: Number.POSITIVE_INFINITY });
+			const result = checkRender(f as never, { url, width: 390 });
+			const rejected = expect(result).rejects.toMatchObject({
+				code: "BROWSER_COMMAND_FAILED",
+				message: "render check captured 390x800, not the 390x412 page",
+			});
+			await vi.advanceTimersByTimeAsync(1_500);
+			await rejected;
+			expect(f.window.destroy).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("scales a screenshot too large to hand back until it fits, and says so", async () => {

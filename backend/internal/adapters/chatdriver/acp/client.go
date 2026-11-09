@@ -613,6 +613,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		}
 	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	case claudeSDKMessageMethod:
+		err = c.handleClaudeSDKMessage(params)
 	default:
 		return false
 	}
@@ -620,6 +622,60 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		c.log.Error("failed to handle ACP notification", "method", method, "err", err)
 	}
 	return true
+}
+
+// claudeSDKMessageMethod carries the raw Claude Agent SDK messages a session
+// asked for with _meta.claudeCode.emitRawSDKMessages.
+const claudeSDKMessageMethod = "_claude/sdkMessage"
+
+// handleClaudeSDKMessage reports the SDK's running and idle states. Claude Code
+// starts cycles on its own after an AO turn, for example to answer a finished
+// background task, and those cycles have no ACP prompt, so no turn events.
+func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
+	var payload struct {
+		SessionID string `json:"sessionId"`
+		Message   struct {
+			Type    string `json:"type"`
+			Subtype string `json:"subtype"`
+			State   string `json:"state"`
+		} `json:"message"`
+		Meta map[string]any `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return err
+	}
+	if payload.Message.Type != "system" || payload.Message.Subtype != "session_state_changed" {
+		return nil
+	}
+	var status domain.ThreadStatus
+	switch payload.Message.State {
+	case "running":
+		status = domain.ThreadStatusActive
+	case "idle":
+		status = domain.ThreadStatusIdle
+	default:
+		// requires_action: the approval or input request already reports it.
+		return nil
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+	if sessionID == "" || payload.SessionID != sessionID {
+		return nil
+	}
+	// Only the live state means anything; history replay must not carry one.
+	c.historyMu.Lock()
+	loadingHistory := c.history != nil
+	c.historyMu.Unlock()
+	if loadingHistory {
+		return nil
+	}
+	event := ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: status}}
+	if eventID := stableACPEventID(payload.Meta); eventID != "" {
+		event.ProviderEventID = eventID + ":0"
+	}
+	c.emit(event)
+	return nil
 }
 
 // processUpdate runs the full ACP -> AO normalization for one update: live
@@ -743,6 +799,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
 				emit(event)
 			}
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -1237,6 +1294,34 @@ func (c *conversation) sessionFailureEvent(
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
+}
+
+// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
+// OpenCode ends a failed compaction with a normal end_turn, so this update is the
+// only sign that the history was left as it was.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
+	compaction := nestedMap(meta, "opencode/compaction")
+	if compaction == nil {
+		return
+	}
+	failure := ""
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+	case "failed":
+		failure, _ = nestedMap(compaction, "error")["message"].(string)
+		if failure = strings.TrimSpace(failure); failure == "" {
+			failure = "Compaction failed"
+		}
+	default:
+		// OpenCode only sends the three statuses above. Leave the recorded
+		// outcome alone rather than guess what a new one means.
+		return
+	}
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+	}
+	c.mu.Unlock()
 }
 
 func sessionFailure(meta map[string]any) map[string]any {

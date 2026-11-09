@@ -1,12 +1,13 @@
 import type { ConversationActivity } from "../../types/conversation";
+import { mcpToolName } from "../../lib/mcp-tool";
 
 /**
  * How a shell command or an agent's built-in tool reads in the chat: what it did,
  * in the words a person would use, instead of one "Ran command" for everything.
  *
  * This only names the step. Which rows group together is decided by
- * `commandCategory` in activity-command.ts, from the same program a row is named
- * by (`commandProgram`), so a row and the header above it agree.
+ * `commandCategory` in activity-command.ts, from the same segment a row is named
+ * by (`commandIntent`), so a row and the header above it agree.
  */
 
 /** The mark beside a step. The renderer maps each one to a Lucide icon. */
@@ -81,7 +82,7 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
  */
 export function activityToolStep(activity: ConversationActivity): CommandStep | undefined {
 	const detail = activity.detail;
-	if (!detail || detail.server || detail.namespace) return undefined;
+	if (!detail || mcpToolName(activity).server) return undefined;
 	const input = (key: string): string | undefined => {
 		const value = isRecord(detail.input) ? detail.input[key] : undefined;
 		return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -155,7 +156,7 @@ export function thoughtHeadline(text: string | undefined): string | undefined {
  */
 export function isExploratoryTool(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
-	if (activity.activityKind !== "mcp_tool" || !detail || detail.server || detail.namespace) return false;
+	if (activity.activityKind !== "mcp_tool" || !detail || mcpToolName(activity).server) return false;
 	return detail.toolKind === "read" || detail.toolKind === "search" || detail.toolKind === "fetch";
 }
 
@@ -178,6 +179,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Whether a step's past tense only says it was tried ("Ran tests", "Read a.ts"),
+ * which stays true when it fails. "Deleted build" does not: beside "failed" it
+ * claims something that did not happen.
+ */
+export function pastTenseHoldsOnFailure(step: Pick<CommandStep, "done">): boolean {
+	return /^(?:Ran|Read|Viewed|Checked(?! out)|Listed|Searched|Found|Fetched|Waited|Type-checked|Called)\b/.test(step.done);
+}
+
 /** Name one shell command line. Anything unrecognized becomes "Ran <program>". */
 export function describeCommandStep(command: string): CommandStep {
 	const step = describeKnownCommand(command);
@@ -190,7 +200,7 @@ type Segment = { binary: string; binaryPath: string; args: string[]; writeTarget
 
 function describeKnownCommand(command: string): CommandStep | undefined {
 	const segments = commandSegments(command);
-	const segment = segments[0];
+	const segment = workSegment(segments);
 	if (!segment) return undefined;
 	// `sed -n 1,80p a.ts && sed -n 1,80p b.ts` reads two files, not one.
 	if (segments.length > 1 && segments.every(isPlainRead)) {
@@ -468,9 +478,11 @@ function gitStep(args: string[]): CommandStep {
 		case "switch": {
 			const created = flagValue(subArgs, ["-b", "-B", "-c", "-C", "--create"]);
 			if (created) return { done: "Created branch", live: "Creating branch", target: created, icon: "git" };
-			if (subArgs.includes("--")) {
-				const file = subArgs[subArgs.indexOf("--") + 1];
-				return { done: "Restored", live: "Restoring", ...(file ? fileTarget(file) : {}), icon: "git" };
+			// `git checkout .` and `git checkout -- a.ts` put files back; neither switches.
+			if (subArgs.includes("--") || target === "." || target?.startsWith("./")) {
+				const file = subArgs.includes("--") ? subArgs[subArgs.indexOf("--") + 1] : target;
+				if (!file || file === ".") return { done: "Restored files", live: "Restoring files", icon: "git" };
+				return { done: "Restored", live: "Restoring", ...fileTarget(file), icon: "git" };
 			}
 			return { done: "Switched to", live: "Switching to", target, icon: "git" };
 		}
@@ -485,11 +497,11 @@ function gitStep(args: string[]): CommandStep {
 		case "fetch":
 			return { done: "Fetched updates", live: "Fetching updates", icon: "git" };
 		case "merge":
-			return { done: "Merged", live: "Merging", target, icon: "git" };
+			return resumedStep(subArgs, "merge") ?? { done: "Merged", live: "Merging", target, icon: "git" };
 		case "rebase":
-			return { done: "Rebased", live: "Rebasing", target, icon: "git" };
+			return resumedStep(subArgs, "rebase") ?? { done: "Rebased", live: "Rebasing", target, icon: "git" };
 		case "stash":
-			return { done: "Stashed changes", live: "Stashing changes", icon: "git" };
+			return stashStep(subArgs[0]);
 		case "restore":
 			return { done: "Restored", live: "Restoring", ...(target ? fileTarget(target) : {}), icon: "git" };
 		case "reset":
@@ -502,6 +514,31 @@ function gitStep(args: string[]): CommandStep {
 			// The repository was read in some other way: rev-parse, remote, ls-files…
 			return { done: "Checked repository", live: "Checking repository", icon: "git" };
 	}
+}
+
+/** `git stash` does something different for each action, and only the default stashes. */
+function stashStep(action: string | undefined): CommandStep {
+	switch (action) {
+		case "list":
+			return { done: "Listed stashes", live: "Listing stashes", icon: "git" };
+		case "show":
+			return { done: "Viewed stash", live: "Viewing stash", icon: "git" };
+		case "pop":
+		case "apply":
+			return { done: "Restored stash", live: "Restoring stash", icon: "git" };
+		case "drop":
+		case "clear":
+			return { done: "Dropped stash", live: "Dropping stash", icon: "git" };
+		default:
+			return { done: "Stashed changes", live: "Stashing changes", icon: "git" };
+	}
+}
+
+/** `git merge --abort`, `git rebase --continue`: picking up one already under way. */
+function resumedStep(args: string[], what: "merge" | "rebase"): CommandStep | undefined {
+	if (args.includes("--abort")) return { done: `Aborted ${what}`, live: `Aborting ${what}`, icon: "git" };
+	if (args.includes("--continue")) return { done: `Continued ${what}`, live: `Continuing ${what}`, icon: "git" };
+	return undefined;
 }
 
 function ghStep(args: string[]): CommandStep {
@@ -522,8 +559,13 @@ function ghStep(args: string[]): CommandStep {
 				return { done: "Opened a pull request", live: "Opening a pull request", icon: "pr" };
 			case "checks":
 				return { done: "Checked CI", live: "Checking CI", target: ref, icon: "check" };
-			case "comment":
 			case "review":
+				if (args.includes("--approve") || args.includes("-a")) return { done: "Approved PR", live: "Approving PR", target: ref, icon: "pr" };
+				if (args.includes("--request-changes") || args.includes("-r")) {
+					return { done: "Requested changes on PR", live: "Requesting changes on PR", target: ref, icon: "pr" };
+				}
+				return { done: "Commented on PR", live: "Commenting on PR", target: ref, icon: "pr" };
+			case "comment":
 				return { done: "Commented on PR", live: "Commenting on PR", target: ref, icon: "pr" };
 			case "merge":
 				return { done: "Merged PR", live: "Merging PR", target: ref, icon: "pr" };
@@ -743,12 +785,15 @@ function fallbackStep(binary: string): CommandStep {
 // --- parsing -----------------------------------------------------------------
 
 /**
- * The program a command line runs, as its row is named: past `cd dir &&`, env
- * assignments, wrappers and `command -v` checks. Grouping reads the same program
- * (`commandCategory`), so a row and the header above it agree.
+ * What grouping reads of a command line: the program its row is named by, past
+ * `cd dir &&`, env assignments, wrappers and `command -v` checks, and whether that
+ * program writes a file (`cat > a`, `sed -i`), so a row and its header agree.
  */
-export function commandProgram(command: string): string | undefined {
-	return mainSegment(command)?.binary;
+export function commandIntent(command: string): { program?: string; writes: boolean } {
+	const segment = mainSegment(command);
+	if (!segment) return { writes: false };
+	const writes = segment.writeTarget ? WRITERS.has(segment.binary) : segment.binary === "sed" && sedInPlace(segment.args);
+	return { program: segment.binary, writes };
 }
 
 /**
@@ -757,7 +802,23 @@ export function commandProgram(command: string): string | undefined {
  * pipeline (`rg foo | head` is a search).
  */
 function mainSegment(command: string): Segment | undefined {
-	return commandSegments(command)[0];
+	return workSegment(commandSegments(command));
+}
+
+/**
+ * The segment that names a chain. `git add . && git commit && git push` pushed,
+ * and `rm -rf dist && npm run build` built, so the last segment that changes or
+ * runs something names it. One that only looks or reports (a trailing `echo done`
+ * or `git status`) names it only when nothing else in the chain does anything.
+ */
+function workSegment(segments: Segment[]): Segment | undefined {
+	return segments.findLast((segment) => !onlyObserves(segment)) ?? segments[0];
+}
+
+function onlyObserves(segment: Segment): boolean {
+	if (segment.writeTarget) return false;
+	if (segment.binary === "git") return GIT_OBSERVERS.has(stripGitGlobals(segment.args)[0] ?? "");
+	return isPlainRead(segment) || REPORTERS.has(segment.binary) || SEARCH_PROGRAMS.has(segment.binary);
 }
 
 /**
@@ -766,9 +827,11 @@ function mainSegment(command: string): Segment | undefined {
  */
 function commandSegments(command: string): Segment[] {
 	const segments: Segment[] = [];
-	for (const words of splitSegments(tokenize(firstLogicalLine(command)))) {
-		const segment = toSegment(words);
-		if (segment && !NAVIGATION.has(segment.binary) && !SHELL_SYNTAX.has(segment.binary)) segments.push(segment);
+	for (const line of logicalLines(command)) {
+		for (const words of splitSegments(tokenize(line))) {
+			const segment = toSegment(words);
+			if (segment && !NAVIGATION.has(segment.binary) && !SHELL_SYNTAX.has(segment.binary)) segments.push(segment);
+		}
 	}
 	const work = segments.filter((segment) => !isProbe(segment));
 	return work.length > 0 ? work : segments;
@@ -780,19 +843,58 @@ function isProbe(segment: Segment): boolean {
 	return PROBES.has(segment.binary);
 }
 
-/** A heredoc's body is the file's content, not more arguments. */
-function firstLogicalLine(command: string): string {
-	const lines = command.trim().split("\n");
+const HEREDOC_START = /(?<!<)<<(?!<)-?\s*["']?([\w.-]+)["']?/;
+
+/**
+ * The command's lines as the shell reads them. A trailing `\\`, `|` or `&&` carries
+ * on to the next line and so does an open quote, comments go, and a heredoc's body
+ * is the file's content, not more commands.
+ */
+function logicalLines(command: string): string[] {
+	const lines: string[] = [];
 	let line = "";
-	for (const part of lines) {
-		if (part.trimEnd().endsWith("\\")) {
-			line += `${part.trimEnd().slice(0, -1)} `;
+	let quote: string | undefined;
+	let heredoc: string | undefined;
+	for (const part of command.trim().split("\n")) {
+		if (heredoc !== undefined) {
+			if (part.trim() === heredoc) heredoc = undefined;
 			continue;
 		}
-		line += part;
-		break;
+		const scanned = scanLine(part, quote);
+		quote = scanned.quote;
+		heredoc = HEREDOC_START.exec(scanned.text)?.[1];
+		const text = scanned.text.trimEnd();
+		if (quote) line += `${scanned.text} `;
+		else if (text.endsWith("\\")) line += `${text.slice(0, -1)} `;
+		else if (/(?:&&|\|)$/.test(text)) line += `${text} `;
+		else {
+			line += text;
+			if (line.trim()) lines.push(line);
+			line = "";
+		}
 	}
-	return line;
+	if (line.trim()) lines.push(line);
+	return lines;
+}
+
+/** One physical line without its comment, and the quote still open at its end. */
+function scanLine(text: string, open: string | undefined): { text: string; quote: string | undefined } {
+	let quote = open;
+	for (let i = 0; i < text.length; i += 1) {
+		const char = text[i]!;
+		if (quote === "'") {
+			if (char === "'") quote = undefined;
+		} else if (char === "\\") {
+			i += 1;
+		} else if (quote === '"') {
+			if (char === '"') quote = undefined;
+		} else if (char === '"' || char === "'") {
+			quote = char;
+		} else if (char === "#" && (i === 0 || /\s/.test(text[i - 1]!))) {
+			return { text: text.slice(0, i), quote };
+		}
+	}
+	return { text, quote };
 }
 
 type Word = { text: string; operator?: boolean; quoted?: boolean };
@@ -801,9 +903,10 @@ const OPERATORS = new Set(["&&", "||", "|", ";", "&", "(", ")"]);
 
 function tokenize(line: string): Word[] {
 	const words: Word[] = [];
-	// A word runs until whitespace or an operator; quoted text stays in one word, and
-	// `2>&1` stays whole so its `&` is not read as "run in the background".
-	for (const raw of line.match(/&&|\|\||[|;&()]|(?:"(?:\\.|[^"\\])*"|'[^']*'|>&\d*|[^\s|;&()"'])+/g) ?? []) {
+	// A word runs until whitespace or an operator; quoted text and `$(...)` stay in one
+	// word, and `2>&1` and `&>` stay whole so their `&` is not read as "run in the
+	// background".
+	for (const raw of line.match(/&&|\|\||&>>?|[|;&()]|(?:"(?:\\.|[^"\\])*"|'[^']*'|\$\((?:[^()]|\([^()]*\))*\)|>&\d*|[^\s|;&()"'])+/g) ?? []) {
 		if (OPERATORS.has(raw)) words.push({ text: raw, operator: true });
 		// A word that opens with a quote is literal text: `">"` is a pattern, not a redirect.
 		else words.push({ text: unquote(raw), quoted: /^["']/.test(raw) });
@@ -815,10 +918,13 @@ function splitSegments(words: Word[]): Word[][] {
 	const segments: Word[][] = [[]];
 	// While in a pipeline: where its first stage is, and the words of the stage after it.
 	let pipeline: { first: number; stage: Word[] } | undefined;
-	// Later stages of a pipeline only shape the first stage's output, except `tee`:
-	// `echo hi | tee notes.md` writes the file, and that is the step.
+	// Later stages of a pipeline only shape the first stage's output, except a `tee`
+	// fed by a program that only produces text: `echo hi | tee notes.md` writes the
+	// file, and that is the step. `npm test | tee log` still ran the tests.
 	const endStage = () => {
-		if (pipeline && toSegment(pipeline.stage)?.binary === "tee") segments[pipeline.first] = pipeline.stage;
+		if (!pipeline || toSegment(pipeline.stage)?.binary !== "tee") return;
+		const first = toSegment(segments[pipeline.first] ?? []);
+		if (first && WRITERS.has(first.binary)) segments[pipeline.first] = pipeline.stage;
 	};
 	for (const word of words) {
 		if (word.operator) {
@@ -1045,6 +1151,9 @@ const WRAPPER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
 	time: new Set(["-f", "-o", "--format", "--output"]),
 };
 const WRITERS = new Set(["cat", "echo", "printf"]);
+// Programs that only report, which never name a chain that does something else.
+const REPORTERS = new Set(["echo", "printf", "sleep", "pwd", "date", "clear", "wait"]);
+const GIT_OBSERVERS = new Set(["status", "log", "diff", "show"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "fish"]);
 const READERS = new Set(["cat", "head", "tail", "nl", "bat", "less", "more", "wc", "jq"]);
 const LISTERS = new Set(["ls", "tree", "eza", "exa", "lsd"]);
@@ -1094,6 +1203,6 @@ const SEARCH_VALUE_FLAGS = new Set([
 	"-M", "--max-columns", "-j", "--threads", "--max-depth", "-d", "--include", "--exclude",
 	"--exclude-dir", "--type-add", "--sort", "--sortr",
 ]);
-const GH_VALUE_FLAGS = new Set(["-R", "--repo", "--json", "-q", "--jq", "-t", "--template", "-L", "--limit", "-s", "--state", "-A", "--author", "-B", "--base", "-H", "--head", "-b", "--body", "--title", "-l", "--label"]);
+const GH_VALUE_FLAGS = new Set(["-R", "--repo", "--json", "-q", "--jq", "-t", "--template", "-L", "--limit", "-s", "--state", "-A", "--author", "-B", "--base", "-H", "--head", "-b", "--body", "--title", "-l", "--label", "-X", "--method", "-f", "--raw-field", "-F", "--field", "--input"]);
 const PACKAGE_MANAGER_VALUE_FLAGS = new Set(["--filter", "-F", "-C", "--dir", "--prefix", "--workspace", "--cwd"]);
 const INTERPRETER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "-W", "-X"]);

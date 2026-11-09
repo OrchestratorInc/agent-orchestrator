@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
-import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
+import { isBrowserArtifactPath } from "../../shared/editor-handoff";
+import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -24,11 +25,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ERROR_CLEAR_MS = 5_000;
 
-function fileManagerName(): string {
+export function fileManagerName(): string {
 	return isMacPlatform() ? "Finder" : isWindowsPlatform() ? "File Explorer" : "File Manager";
 }
 
-function terminalName(): string {
+export function terminalName(): string {
 	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
 }
 
@@ -36,7 +37,9 @@ function terminalName(): string {
  * Copies a cloud session's artifact files to its folder under ~/.ao and opens
  * it in the file manager, or, given `reveal`, copies only that artifact and
  * shows it there: a cloud session's artifacts live in the control plane, so
- * this is the folder a local session's "Show in" opens.
+ * this is the folder a local session's "Show in" opens. With `browser`, it
+ * copies them all, so a page's own files load, and opens `reveal` in the
+ * default browser.
  */
 export async function openCloudArtifactsFolder(
 	client: CloudCpClient,
@@ -44,9 +47,10 @@ export async function openCloudArtifactsFolder(
 	orgId: string,
 	sessionId: string,
 	reveal?: Pick<SessionArtifact, "path" | "updatedAt">,
+	browser = false,
 ): Promise<void> {
 	const [files, access] = await Promise.all([
-		reveal ? [reveal] : client.listSessionArtifacts(orgId, sessionId).then(({ artifacts }) => artifacts),
+		reveal && !browser ? [reveal] : client.listSessionArtifacts(orgId, sessionId).then(({ artifacts }) => artifacts),
 		client.createSessionArtifactAccess(orgId, sessionId),
 	]);
 	const root = `${baseUrl.replace(/\/+$/, "")}${access.filesPrefix}`;
@@ -54,6 +58,7 @@ export async function openCloudArtifactsFolder(
 		sessionId,
 		files: files.map((file) => ({ path: file.path, url: cloudArtifactFileUrl(root, file.path, file.updatedAt) })),
 		reveal: reveal?.path,
+		...(browser ? { open: "browser" as const } : {}),
 	});
 }
 
@@ -99,6 +104,7 @@ export function ArtifactActionsMenu({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const open = useOpenSessionArtifacts();
+	const browser = useOpenArtifactInBrowser();
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -130,9 +136,32 @@ export function ArtifactActionsMenu({
 		setConfirmingDelete(true);
 	};
 	const reveal = (targetId: OpenArtifactsTargetId) => {
+		browser.reset();
 		setCopyError("");
 		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
 	};
+	// The main process resolves the path inside the session's artifact
+	// directory; a cloud session's file opens from its copy under ~/.ao.
+	// A cloud open copies the session's files first; one at a time.
+	const [cloudBrowserOpening, setCloudBrowserOpening] = useState(false);
+	const openInBrowser = async () => {
+		open.reset();
+		setCopyError("");
+		if (!session.cloud) {
+			browser.mutate({ sessionId: session.id, path: artifact.path });
+			return;
+		}
+		setCloudBrowserOpening(true);
+		try {
+			await openCloudArtifactsFolder(cloudClient, cloudBaseUrl, session.cloud.orgId, session.id, artifact, true);
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setCloudBrowserOpening(false);
+		}
+	};
+	const browserOpening = browser.isPending || cloudBrowserOpening;
+	const browserReadable = isBrowserArtifactPath(artifact.path);
 	const revealCloud = async () => {
 		open.reset();
 		setCopyError("");
@@ -168,16 +197,18 @@ export function ArtifactActionsMenu({
 	};
 	const copyable = owner && !fileMediaKind(artifact.path);
 
-	const error = open.error?.message || copyError;
+	const error = open.error?.message || browser.error?.message || copyError;
 	const resetOpen = open.reset;
+	const resetBrowser = browser.reset;
 	useEffect(() => {
 		if (!error) return;
 		const timer = setTimeout(() => {
 			resetOpen();
+			resetBrowser();
 			setCopyError("");
 		}, ERROR_CLEAR_MS);
 		return () => clearTimeout(timer);
-	}, [error, resetOpen]);
+	}, [error, resetBrowser, resetOpen]);
 	const menuTrigger = (
 		<DropdownMenuTrigger asChild>
 			<Button
@@ -254,8 +285,8 @@ export function ArtifactActionsMenu({
 				
 				) : menuTrigger}
 				<DropdownMenuContent align={iconOnly ? "end" : "start"} className="min-w-44" data-browser-native-overlay="true">
+					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
-					{children ? <DropdownMenuSeparator /> : null}
 					{onTogglePin || onOpenInSession ? (
 						<>
 							{onTogglePin ? (
@@ -285,6 +316,12 @@ export function ArtifactActionsMenu({
 										<SquareTerminal aria-hidden="true" />
 										{t("artifacts.showIn", { name: terminalName() })}
 									</DropdownMenuItem>
+									{browserReadable ? (
+										<DropdownMenuItem disabled={browserOpening} onSelect={() => void openInBrowser()}>
+											<ExternalLink aria-hidden="true" />
+											{t("artifacts.openInBrowser")}
+										</DropdownMenuItem>
+									) : null}
 									{copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 								</>
 							) : null}
@@ -296,6 +333,12 @@ export function ArtifactActionsMenu({
 								<FolderOpen aria-hidden="true" />
 								{t("artifacts.showIn", { name: fileManagerName() })}
 							</DropdownMenuItem>
+							{!sidebar && browserReadable ? (
+								<DropdownMenuItem disabled={browserOpening} onSelect={() => void openInBrowser()}>
+									<ExternalLink aria-hidden="true" />
+									{t("artifacts.openInBrowser")}
+								</DropdownMenuItem>
+							) : null}
 							{!sidebar ? <DropdownMenuSeparator /> : null}
 						</>
 					) : null}

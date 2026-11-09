@@ -148,7 +148,7 @@ describe("ActivityRun agent built-in tools", () => {
 		await user.click(screen.getByRole("button", { name: /Explored 2 tool calls/i }));
 		expect(await screen.findByRole("button", { name: "Read README.md" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Searched the web for latest stable Node.js version" })).toBeInTheDocument();
-		expect(container.querySelector(".lucide-globe")).toHaveClass("size-3");
+		expect(container.querySelector(".icon-globe")).toHaveClass("size-3");
 		expect(screen.queryByText('"latest stable Node.js version"')).not.toBeInTheDocument();
 	});
 });
