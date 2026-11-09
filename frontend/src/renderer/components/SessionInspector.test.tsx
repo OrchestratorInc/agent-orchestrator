@@ -1240,23 +1240,26 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
-  it("hides the Artifacts tab until an artifact is opened", () => {
+  it("shows the Artifacts tab whenever the session lists artifacts", () => {
     renderWithQuery(<SessionInspector session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByRole("tab", { name: "Artifacts" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("shows the contextual Artifacts tab while active and hides it on leaving", async () => {
+  it("keeps the Artifacts tab after leaving it", async () => {
     vi.stubGlobal("IntersectionObserver", class {
       observe() {}
       unobserve() {}
       disconnect() {}
     });
     const onViewChange = vi.fn();
-    renderWithQuery(<SessionInspector onViewChange={onViewChange} view="artifacts" session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
+    renderWithQuery(<SessionInspector onViewChange={onViewChange} session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
     await userEvent.click(screen.getByRole("tab", { name: "Summary" }));
-    expect(onViewChange).toHaveBeenCalledWith("summary");
+    expect(onViewChange).toHaveBeenLastCalledWith("summary");
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toBeInTheDocument();
   });
 
   it("keeps the Artifacts tab for a requested artifact the session does not list yet", () => {
