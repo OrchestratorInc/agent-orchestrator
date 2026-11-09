@@ -463,6 +463,26 @@ export function clearCloudUser(): void {
  * the next launch chooses an install ID or a fresh anonymous ID from the
  * durable binding state.
  */
+type PostHogFlagControls = Pick<PostHogClient, "set_config" | "opt_out_capturing" | "opt_in_capturing" | "reset" | "reloadFeatureFlags">;
+
+/**
+ * Stops capture and flag requests for an in-session opt-out. reset() reloads
+ * feature flags, and opt_out_capturing does not stop /flags, so flags are
+ * disabled through configuration first.
+ */
+export function stopPostHogForOptOut(client: PostHogFlagControls): void {
+	client.set_config({ advanced_disable_flags: true });
+	client.opt_out_capturing();
+	client.reset();
+}
+
+/** Resumes capture and feature flags after an in-session opt-in. */
+export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
+	client.set_config({ advanced_disable_flags: false });
+	client.opt_in_capturing({ captureEventName: false });
+	client.reloadFeatureFlags();
+}
+
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
@@ -475,19 +495,13 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 		} catch {
 			// Storage is best-effort; capture is already gated on the flag.
 		}
-		if (posthogReady) {
-			// opt_out_capturing does not stop /flags requests; pausing reloads does.
-			posthog.featureFlags?.setReloadingPaused(true);
-			posthog.opt_out_capturing();
-			posthog.reset();
-		}
+		if (posthogReady) stopPostHogForOptOut(posthog);
 		identifiedId = null;
 		identifyCalledFor = null;
 		return;
 	}
 	if (posthogReady) {
-		posthog.opt_in_capturing({ captureEventName: false });
-		posthog.featureFlags?.setReloadingPaused(false);
+		resumePostHogAfterOptIn(posthog);
 		registerBaseProperties();
 	} else {
 		initPromise = null;
@@ -1300,10 +1314,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		// recorder off in the client instead of relying on the project-side
 		// toggle staying off.
 		disable_session_recording: true,
-		// Feature flags load so experiments can target installs. An in-session
-		// analytics opt-out pauses flag reloads (applyAnalyticsOptOut); an
-		// opted-out launch never creates the client. AO ships no surveys.
-		advanced_disable_flags: false,
+		// Feature flags load (the SDK default) so experiments can target
+		// installs. advanced_disable_flags is deliberately left out: an explicit
+		// init value would override the set_config an in-session opt-out uses to
+		// stop /flags (stopPostHogForOptOut). An opted-out launch never creates
+		// the client. AO ships no surveys.
 		disable_surveys: true,
 		// AO owns the stable random installation ID. Memory-only SDK
 		// persistence prevents legacy identified state from replacing it after

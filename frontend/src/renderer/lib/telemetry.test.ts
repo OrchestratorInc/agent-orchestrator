@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
 import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
+	resumePostHogAfterOptIn,
+	stopPostHogForOptOut,
 	buildTelemetryContext,
 	clearCheckUpdateFailures,
 	clearUpdateFailures,
@@ -282,7 +284,8 @@ describe("telemetry sanitizers", () => {
 		// toggle cannot switch it back on for shipped builds.
 		expect(config.disable_session_recording).toBe(true);
 		// Feature flags load (experiments); AO ships no surveys.
-		expect(config.advanced_disable_flags).toBe(false);
+		// Left out so an in-session opt-out can turn flags off through set_config.
+		expect(config).not.toHaveProperty("advanced_disable_flags");
 		expect(config.disable_surveys).toBe(true);
 		// Already-disabled capture paths that would otherwise autocapture volume.
 		expect(config.autocapture).toBe(false);
@@ -978,5 +981,33 @@ describe("route view reservation", () => {
 		expect(reserveRouteViewCapture(storage, "session_detail", new Date("2026-07-12T09:00:00.000Z"))).toBe(false);
 		expect(reserveRouteViewCapture(storage, "project_board", new Date("2026-07-12T09:00:00.000Z"))).toBe(true);
 		expect(reserveRouteViewCapture(storage, "session_detail", new Date("2026-07-13T00:00:00.000Z"))).toBe(true);
+	});
+});
+
+// Uses the real SDK: reset() reloads feature flags, and opt_out_capturing does
+// not stop /flags, so an opt-out has to disable flags through configuration.
+describe("feature flags across an in-session analytics opt-out", () => {
+	it("sends no /flags request after opting out and loads flags again on opt-in", async () => {
+		vi.useFakeTimers();
+		const client = new PostHog();
+		const urls: string[] = [];
+		try {
+			client.init("phc_test", buildPostHogConfig("ins_flags-test"));
+			(client as unknown as { _send_request: (options: { url: string }) => void })._send_request = (options) => {
+				urls.push(options.url);
+			};
+			await vi.advanceTimersByTimeAsync(2_000);
+			urls.length = 0;
+
+			stopPostHogForOptOut(client);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(urls.filter((url) => url.includes("/flags"))).toEqual([]);
+
+			resumePostHogAfterOptIn(client);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(urls.some((url) => url.includes("/flags"))).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
