@@ -83,6 +83,13 @@ if (typeof window !== "undefined") {
 		});
 	}
 
+	// jsdom does not implement Element.scrollTo. Chat find repaints from a
+	// timer, so a test that finishes first would otherwise see an unhandled
+	// "scrollTo is not a function" after it has passed.
+	if (typeof HTMLElement.prototype.scrollTo !== "function") {
+		Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, writable: true, value: () => {} });
+	}
+
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		writable: true,
