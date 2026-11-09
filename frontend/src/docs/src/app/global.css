@@ -33,9 +33,11 @@
     border-radius: 0;
   }
 
+  /* Code on the marketing site's panel color, in a hairline frame. */
   .prose figure.shiki {
-    background: rgb(255 255 255 / 0.04) !important;
-    border: 1px solid rgb(255 255 255 / 0.04) !important;
+    background: oklch(0.175 0.006 257) !important;
+    border: 1px solid rgb(255 255 255 / 0.08) !important;
+    border-radius: 0.75rem !important;
     box-shadow: none !important;
     padding: 0;
   }
@@ -98,11 +100,20 @@
  * accent. Kept here so tokens.css and prose.css stay copies of the site's, and
  * unlayered so it wins over prose.css and fumadocs' own utilities.
  */
+:root {
+  /* The marketing site's frame and hairline. */
+  --docs-panel: oklch(0.175 0.006 257);
+  --docs-line: rgb(255 255 255 / 0.08);
+  --docs-accent: rgb(56 189 248);
+}
+
 .docs-matrix {
   position: fixed;
   inset: 0;
   z-index: -1;
 }
+
+/* ── Page header ─────────────────────────────────────────────────────── */
 
 .docs-title {
   font-size: 2.25rem;
@@ -118,29 +129,241 @@
   }
 }
 
+/* ── Sidebar ─────────────────────────────────────────────────────────── */
+
 #nd-sidebar,
 #nd-sidebar-mobile {
-  background-color: oklch(0.175 0.006 257);
-  border-color: rgb(255 255 255 / 0.08);
+  background-color: var(--docs-panel);
+  border-color: var(--docs-line);
 }
 
+/* Section labels, like the marketing site's feature tags. */
+#nd-sidebar p.inline-flex,
+#nd-sidebar-mobile p.inline-flex {
+  color: rgb(255 255 255 / 0.42);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+#nd-sidebar a[data-active],
+#nd-sidebar-mobile a[data-active],
+#nd-sidebar button[aria-expanded],
+#nd-sidebar-mobile button[aria-expanded] {
+  color: rgb(255 255 255 / 0.62);
+}
+
+#nd-sidebar a[data-active]:hover,
+#nd-sidebar-mobile a[data-active]:hover,
+#nd-sidebar button[aria-expanded]:hover,
+#nd-sidebar-mobile button[aria-expanded]:hover {
+  background-color: rgb(255 255 255 / 0.04);
+  color: var(--foreground);
+}
+
+#nd-sidebar a[data-active="true"],
+#nd-sidebar-mobile a[data-active="true"] {
+  background-color: rgb(255 255 255 / 0.06);
+  color: var(--foreground);
+}
+
+/* The current page carries one sky marker: at the row's edge at the top
+   level, on the folder's guide line when nested. */
+#nd-sidebar a[data-active="true"]::before,
+#nd-sidebar-mobile a[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--docs-accent);
+}
+
+#nd-sidebar a[data-active="true"]:not([class*="before:inset-s"])::before,
+#nd-sidebar-mobile a[data-active="true"]:not([class*="before:inset-s"])::before {
+  left: 0;
+}
+
+/* ── On this page ────────────────────────────────────────────────────── */
+
+#nd-toc a[data-active="true"] {
+  color: var(--foreground);
+}
+
+#nd-toc .bg-fd-primary {
+  background-color: var(--docs-accent);
+}
+
+/* ── Prose ───────────────────────────────────────────────────────────── */
+
 .prose {
+  --tw-prose-body: rgb(255 255 255 / 0.7);
   --tw-prose-links: var(--foreground);
 }
 
-.prose h1,
-.prose h2,
-.prose h3,
+/* Each h2 opens a section, ruled off from the one before. */
+.prose h2 {
+  margin-top: 3.5rem;
+  padding-top: 2.25rem;
+  border-top: 1px solid var(--docs-line);
+  font-size: 1.625rem;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.prose > h2:first-child {
+  margin-top: 0.5rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+.prose h3 {
+  margin-top: 2.25rem;
+  font-size: 1.1875rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
 .prose h4 {
   font-weight: 500;
-  letter-spacing: -0.025em;
+}
+
+.prose strong {
+  font-weight: 500;
+}
+
+.prose li::marker {
+  color: rgb(255 255 255 / 0.35);
 }
 
 .prose a:not(.no-underline) {
   text-decoration-color: rgb(125 211 252 / 0.45);
+  text-underline-offset: 4px;
 }
 
 .prose a:not(.no-underline):hover {
   color: rgb(186 230 253);
   text-decoration-color: rgb(125 211 252);
+}
+
+/* Cards and buttons inside an article are links without the underline. */
+.prose a.no-underline {
+  text-decoration: none;
+}
+
+.prose code:not(pre code) {
+  border: 1px solid rgb(255 255 255 / 0.06);
+  background: rgb(255 255 255 / 0.05);
+  font-size: 0.8125em;
+}
+
+.docs-callout-body > :first-child {
+  margin-top: 0;
+}
+
+.docs-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+.docs-callout-body p {
+  margin-block: 0.5rem;
+}
+
+.docs-callout-body a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: rgb(125 211 252 / 0.45);
+  text-underline-offset: 3px;
+}
+
+.docs-callout-body code {
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  background: rgb(255 255 255 / 0.07);
+  color: rgb(255 255 255 / 0.9);
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+}
+
+/* Tables sit on the panel color in a rounded, ruled frame. */
+.prose table {
+  overflow: hidden;
+  border: 1px solid var(--docs-line);
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 0.75rem;
+  background: var(--docs-panel);
+}
+
+.prose thead {
+  border-bottom: none;
+}
+
+.prose thead th {
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--docs-line);
+  background: transparent;
+  color: rgb(255 255 255 / 0.55);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.prose th,
+.prose td {
+  border-right: none;
+  border-left: none;
+}
+
+.prose td,
+.prose tbody th {
+  padding: 0.7rem 0.9rem;
+  border-top: 1px solid rgb(255 255 255 / 0.06);
+  border-bottom: none;
+}
+
+.prose tbody th {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.prose tbody tr:first-child td,
+.prose tbody tr:first-child th {
+  border-top: none;
+}
+
+/* Numbered steps on a guide line, each number in a small panel chip. */
+.docs-steps {
+  counter-reset: docs-step;
+  margin-left: 0.875rem;
+  padding-left: 1.75rem;
+  border-left: 1px solid var(--docs-line);
+}
+
+.docs-steps > * {
+  position: relative;
+  margin-bottom: 1.75rem;
+}
+
+.docs-steps > *:last-child {
+  margin-bottom: 0;
+}
+
+.docs-steps > *::before {
+  counter-increment: docs-step;
+  content: counter(docs-step);
+  position: absolute;
+  top: 0.1rem;
+  left: -2.6875rem;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 9999px;
+  background: var(--docs-panel);
+  color: rgb(255 255 255 / 0.8);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
