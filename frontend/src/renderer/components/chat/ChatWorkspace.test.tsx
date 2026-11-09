@@ -1184,7 +1184,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(copy.closest("[data-turn-actions]")).not.toHaveTextContent("1m");
 	});
 
-	it("keeps only the run the agent is working in open while the turn runs", () => {
+	it("keeps every run folded while the turn runs", () => {
 		const turnId = "live-turn-runs";
 		const at = "2026-08-11T10:01:00Z";
 		const call = (id: string, sequence: number, summary: string) => ({
@@ -1217,13 +1217,50 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// The current run is open and shows each call; the earlier run is folded to
-		// its summary line.
+		// Both the current run and the earlier one are folded to their summary lines.
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Listed files · Read 1 file$/)).toHaveAttribute("aria-expanded", "false");
-		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getByText("Built project")).toBeInTheDocument();
-		expect(screen.getByText("Ran lint")).toBeInTheDocument();
+		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Built project")).not.toBeInTheDocument();
+		expect(screen.queryByText("Ran lint")).not.toBeInTheDocument();
+	});
+
+	it("keeps a failed call in view after the turn settles and folds its work", () => {
+		const turnId = "settled-turn-failure";
+		const at = "2026-08-11T10:01:00Z";
+		const call = (id: string, sequence: number, activity: Pick<ConversationActivity, "activityKind" | "status" | "summary" | "detail">) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0, createdAt: at, ...activity,
+		});
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 5,
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:01:30Z" }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Look it up",
+					streaming: false, createdAt: at,
+				},
+				call("first", 2, { activityKind: "command", status: "completed", summary: "go build ./...", detail: { command: "go build ./..." } }),
+				{
+					kind: "message", id: "note", turnId, sequence: 3, revision: 0,
+					role: "assistant", origin: "provider", text: "Now the tracker.",
+					streaming: false, createdAt: at,
+				},
+				call("lookup", 4, { activityKind: "mcp_tool", status: "failed", summary: "search_issues", detail: { server: "github", toolName: "search_issues", error: "rate limited" } }),
+				{
+					kind: "message", id: "reply", turnId, sequence: 5, revision: 0,
+					role: "assistant", origin: "provider", text: "The tracker was unavailable.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByRole("button", { name: /Worked for/ })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Built project")).not.toBeInTheDocument();
+		expect(screen.getByText("search_issues")).toBeInTheDocument();
 	});
 
 	it("names the running step once, on the live row under the steps, with the plan under it", async () => {
@@ -1570,6 +1607,18 @@ describe("ChatWorkspace timeline", () => {
 				/>,
 			);
 			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Editing 2 files$/);
+		});
+
+		it("holds a printing step to one line on the live row until the reader opens it", async () => {
+			const user = userEvent.setup();
+			render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running", { output: "compiling" })])} />);
+			const row = screen.getByTestId("live-working-row");
+			expect(row).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByText("compiling")).not.toBeInTheDocument();
+
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+			expect(await screen.findByText("compiling")).toBeInTheDocument();
 		});
 
 		it("keeps a step the reader opened on the live row open once it moves up", async () => {

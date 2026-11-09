@@ -181,6 +181,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
+import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
@@ -5206,9 +5207,6 @@ const TurnGroup = memo(function TurnGroup({
 	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
-	// Only the run the agent is working in stays open while the turn runs; earlier
-	// runs fold to their summary, so a long turn does not keep every call mounted.
-	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
 	const renderRun = (run: TimelineRun) => {
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
@@ -5222,7 +5220,6 @@ const TurnGroup = memo(function TurnGroup({
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
 				activities={activities}
-				live={run.key === liveRunKey}
 			/>
 		);
 	};
@@ -6125,12 +6122,14 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.kind === "single" && isNoticeItem(run.items[0]);
+	return run.items.some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
+	// A run holding a failed call stays out of the fold, so the failure shows under it.
+	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
