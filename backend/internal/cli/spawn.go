@@ -42,19 +42,20 @@ type spawnOptions struct {
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
-	ProjectID       string `json:"projectId,omitempty"`
-	IssueID         string `json:"issueId,omitempty"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	TrackerProvider string `json:"trackerProvider,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	Harness         string `json:"harness,omitempty"`
-	Branch          string `json:"branch,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Effort          string `json:"effort,omitempty"`
-	RequestedOutput string `json:"requestedOutput,omitempty"`
-	DisplayName     string `json:"displayName"`
+	ProjectID           string `json:"projectId,omitempty"`
+	IssueID             string `json:"issueId,omitempty"`
+	ParentSessionID     string `json:"parentSessionId,omitempty"`
+	TrackerProvider     string `json:"trackerProvider,omitempty"`
+	Kind                string `json:"kind,omitempty"`
+	Mode                string `json:"mode,omitempty"`
+	Harness             string `json:"harness,omitempty"`
+	Branch              string `json:"branch,omitempty"`
+	Prompt              string `json:"prompt,omitempty"`
+	Model               string `json:"model,omitempty"`
+	Effort              string `json:"effort,omitempty"`
+	RequestedOutput     string `json:"requestedOutput,omitempty"`
+	DisplayName         string `json:"displayName"`
+	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
 	// Async publishes a Chat session as starting, with its prompt queued, before
 	// the worktree and agent are up, as the desktop's new task does. The CLI
 	// then waits for the start to settle so failures still reach the caller.
@@ -174,20 +175,21 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				}
 			}
 			req := spawnRequest{
-				ProjectID:       opts.project,
-				IssueID:         opts.issue,
-				ParentSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
-				TrackerProvider: opts.trackerProvider,
-				Kind:            opts.kind,
-				Harness:         opts.harness,
-				Mode:            opts.mode,
-				Branch:          opts.branch,
-				Prompt:          opts.prompt,
-				Model:           strings.TrimSpace(opts.model),
-				Effort:          strings.TrimSpace(opts.effort),
-				RequestedOutput: opts.output,
-				DisplayName:     name,
-				Async:           !opts.standalone,
+				ProjectID:           opts.project,
+				IssueID:             opts.issue,
+				ParentSessionID:     strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+				TrackerProvider:     opts.trackerProvider,
+				Kind:                opts.kind,
+				Harness:             opts.harness,
+				Mode:                opts.mode,
+				Branch:              opts.branch,
+				Prompt:              opts.prompt,
+				Model:               strings.TrimSpace(opts.model),
+				Effort:              strings.TrimSpace(opts.effort),
+				RequestedOutput:     opts.output,
+				DisplayName:         name,
+				DisplayNameExplicit: true,
+				Async:               !opts.standalone,
 			}
 			var res spawnResult
 			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {

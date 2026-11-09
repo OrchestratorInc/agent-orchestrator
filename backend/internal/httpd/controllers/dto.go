@@ -600,6 +600,9 @@ type SpawnSessionRequest struct {
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
 	// dialog) may omit it and fall back to the session id in the read model.
 	DisplayName string `json:"displayName,omitempty" maxLength:"100"`
+	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
+	// over a terminal program's title. Omit it for a name derived from the prompt.
+	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -2459,12 +2462,15 @@ type UpdateShellTerminalRequest struct {
 // ShellTerminalResponse is one standalone shell terminal. HandleID is what the
 // client opens on the terminal mux, exactly as it would a session's pane.
 type ShellTerminalResponse struct {
-	HandleID   string    `json:"handleId"`
-	ProjectID  string    `json:"projectId,omitempty"`
-	SessionID  string    `json:"sessionId,omitempty"`
-	WorkingDir string    `json:"workingDir"`
-	Title      string    `json:"title"`
-	CreatedAt  time.Time `json:"createdAt"`
+	HandleID   string `json:"handleId"`
+	ProjectID  string `json:"projectId,omitempty"`
+	SessionID  string `json:"sessionId,omitempty"`
+	WorkingDir string `json:"workingDir"`
+	Title      string `json:"title"`
+	// TerminalTitle is present only when the running program's title should
+	// label the tab instead of Title.
+	TerminalTitle string    `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.

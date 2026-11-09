@@ -5677,6 +5677,7 @@ export interface components {
             statusReadiness: "checking" | "ready" | "unavailable";
             terminalGeneration?: string;
             terminalHandleId?: string;
+            terminalTitle?: string;
             terminateOnPrMerge: boolean;
             /** Format: date-time */
             updatedAt: string;
@@ -7539,6 +7540,7 @@ export interface components {
             handleId: string;
             projectId?: string;
             sessionId?: string;
+            terminalTitle?: string;
             title: string;
             workingDir: string;
         };
@@ -7733,6 +7735,7 @@ export interface components {
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
+            displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";

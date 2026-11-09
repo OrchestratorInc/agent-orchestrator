@@ -9,7 +9,7 @@ import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../sto
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TabContextMenu } from "./TabContextMenu";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
@@ -65,7 +65,7 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const title = agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title;
+	const title = shell.terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -79,7 +79,7 @@ export function ShellTerminalTab({
 
 	const beginEdit = () => {
 		if (!canEdit || isEditing) return;
-		setDraft(shell.title);
+		setDraft(title);
 		setIsEditing(true);
 	};
 
@@ -118,12 +118,13 @@ export function ShellTerminalTab({
 		if (!isEditing) return;
 		setIsEditing(false);
 		const next = draft.trim();
-		if (next && next !== shell.title) onRename?.(next);
+		// Compared with what the tab shows: confirming unchanged must not pin it.
+		if (next && next !== title) onRename?.(next);
 	};
 
 	const cancel = () => {
 		setIsEditing(false);
-		setDraft(shell.title);
+		setDraft(title);
 	};
 
 	const closeControl = {
@@ -145,7 +146,7 @@ export function ShellTerminalTab({
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
-				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+				className={terminalTabRenameInputClassName}
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
@@ -184,6 +185,7 @@ export function ShellTerminalTab({
 					}}
 					buttonRef={ref}
 					editingContent={editingContent}
+						editingValue={draft}
 					icon={
 						agent ? (
 							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
@@ -192,7 +194,7 @@ export function ShellTerminalTab({
 						)
 					}
 					label={title}
-					trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
+					trailing={agent ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 				/>
 			</TabContextMenu>
 		);

@@ -202,8 +202,14 @@ type outputTypeReconciler interface {
 // Service is the controller-facing session service. It delegates command-side
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
+// terminalTitleSource reads the titles terminal programs last set.
+type terminalTitleSource interface {
+	ListSessionTerminalTitles(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]string, error)
+}
+
 type Service struct {
 	manager             commander
+	terminalTitles      terminalTitleSource
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
@@ -342,6 +348,7 @@ func NewWithDeps(d Deps) *Service {
 		backgroundContext = context.Background()
 	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, shareLinks: d.ShareLinks}
+	s.terminalTitles, _ = d.Store.(terminalTitleSource)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -1564,6 +1571,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 			return nil, fmt.Errorf("list workspace cleanup facts: %w", err)
 		}
 	}
+	titles := s.storedTerminalTitles(ctx, ids)
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
@@ -1571,6 +1579,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 		if err != nil {
 			return nil, err
 		}
+		sess.TerminalTitle = presentedTerminalTitle(rec, titles[rec.ID])
 		out = append(out, sess)
 	}
 	if s.statusRecoveryRevision() != recoveryRevision {
@@ -2056,7 +2065,34 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	sess.TerminalTitle = presentedTerminalTitle(rec, s.storedTerminalTitles(ctx, []domain.SessionID{rec.ID})[rec.ID])
+	return sess, nil
+}
+
+// storedTerminalTitles is cosmetic: a failed read falls back to existing labels
+// instead of failing the board.
+func (s *Service) storedTerminalTitles(ctx context.Context, ids []domain.SessionID) map[domain.SessionID]string {
+	if s.terminalTitles == nil {
+		return nil
+	}
+	titles, err := s.terminalTitles.ListSessionTerminalTitles(ctx, ids)
+	if err != nil && s.logger != nil {
+		s.logger.Warn("list terminal titles failed", "err", err)
+	}
+	return titles
+}
+
+// presentedTerminalTitle applies the label precedence: an explicit name wins,
+// then a meaningful program title. The orchestrator keeps its fixed identity.
+func presentedTerminalTitle(rec domain.SessionRecord, stored string) string {
+	if rec.DisplayNameExplicit || rec.Kind == domain.KindOrchestrator || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return ""
+	}
+	return domain.MeaningfulTerminalTitle(stored, rec.Metadata.WorkspacePath)
 }
 
 // currentWorkspaceCleanup is the teardown recorded for an archived session,

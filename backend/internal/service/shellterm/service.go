@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -315,6 +316,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
 			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
 	}
+	// Clients that already show a tab pass its numbered default here.
+	titleExplicit := title != "" && !defaultShellTerminalTitle.MatchString(title)
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -392,7 +395,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: title,
+		workingDir: workingDir, title: title, titleExplicit: titleExplicit,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
 		cols:            in.Cols,
@@ -434,6 +437,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		env:                      in.Env,
 		workingDir:               workingDir,
 		title:                    in.Title,
+		titleExplicit:            true,
 		transient:                true,
 		commandOwner:             in.Owner,
 		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
@@ -677,6 +681,7 @@ type openTerminalConfig struct {
 	sessionID                domain.SessionID
 	workingDir               string
 	title                    string
+	titleExplicit            bool
 	transient                bool
 	commandOwner             string
 	cleanupWorkingDirOnError bool
@@ -734,6 +739,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		SessionID:                 cfg.sessionID,
 		WorkingDir:                cfg.workingDir,
 		Title:                     cfg.title,
+		TitleExplicit:             cfg.titleExplicit,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
 		CommandOwner:              cfg.commandOwner,
@@ -758,6 +764,8 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	}
 	return shellTerminalFromRecord(rec), nil
 }
+
+var defaultShellTerminalTitle = regexp.MustCompile(`^Terminal( [0-9]+)?$`)
 
 // nextShellTerminalTitle assigns a name at creation time. It never depends on
 // a tab's current UI position, so closing or reordering another tab cannot
@@ -1154,13 +1162,18 @@ func newShellTerminalHandleID() (string, error) {
 }
 
 func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
+	terminalTitle := ""
+	if !rec.TitleExplicit {
+		terminalTitle = domain.MeaningfulTerminalTitle(rec.AppTitle, rec.WorkingDir)
+	}
 	return ShellTerminal{
-		HandleID:   rec.HandleID,
-		ProjectID:  rec.ProjectID,
-		SessionID:  rec.SessionID,
-		WorkingDir: rec.WorkingDir,
-		Title:      rec.Title,
-		CreatedAt:  rec.CreatedAt,
+		TerminalTitle: terminalTitle,
+		HandleID:      rec.HandleID,
+		ProjectID:     rec.ProjectID,
+		SessionID:     rec.SessionID,
+		WorkingDir:    rec.WorkingDir,
+		Title:         rec.Title,
+		CreatedAt:     rec.CreatedAt,
 	}
 }
 
