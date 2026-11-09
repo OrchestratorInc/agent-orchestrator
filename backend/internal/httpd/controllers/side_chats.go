@@ -104,7 +104,7 @@ func (c *ConversationsController) sideSnapshot(w http.ResponseWriter, r *http.Re
 		writeSideChatError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SideChatSnapshotResponse{Snapshot: snapshot})
+	envelope.WriteJSON(w, http.StatusOK, SideChatSnapshotResponse{Snapshot: sideSnapshotSummary(snapshot)})
 }
 
 func (c *ConversationsController) streamSideChat(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +179,7 @@ func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *htt
 		writeSideChatError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusAccepted, SideQuestionResponse{Turn: turn})
+	envelope.WriteJSON(w, http.StatusAccepted, SideQuestionResponse{Turn: sideTurnSummary(turn)})
 }
 
 func (c *ConversationsController) editSideQuestion(w http.ResponseWriter, r *http.Request) {

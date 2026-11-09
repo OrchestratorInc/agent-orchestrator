@@ -31,6 +31,8 @@ export interface ChatExcerptSnapshot {
 
 const EXCERPT_TEXT_BYTES = 24 * 1024;
 export const EXCERPT_TURN_BYTES = 16 * 1024;
+export const CLOUD_CHAT_MESSAGE_BYTES = 64 * 1024;
+export const LOCAL_CHAT_MESSAGE_BYTES = 128 * 1024;
 export const utf8Bytes = (text: string) => new TextEncoder().encode(text).length;
 
 export function truncateExcerptUtf8(text: string, bytes: number): string {
@@ -108,7 +110,7 @@ export function formatNumberedAnnotations(refs: readonly { text: string; order?:
 }
 
 /** Budget newly prepared, numbered deliveries; recovered payloads bypass this. */
-export function fitExcerptContext<T extends { text: string; order?: number; conversationId?: string; snapshot?: ChatExcerptSnapshot }>(refs: readonly T[], question: string, limit = 65536, files: readonly ChatFileReference[] = []): T[] {
+export function fitExcerptContext<T extends { text: string; order?: number; conversationId?: string; snapshot?: ChatExcerptSnapshot }>(refs: readonly T[], question: string, limit: number, files: readonly ChatFileReference[] = []): T[] {
 	const result = [...refs];
 	const size = () => utf8Bytes(question + formatNumberedAnnotations(result, files));
 	for (let i = result.length - 1; size() > limit && i >= 0; i--) {

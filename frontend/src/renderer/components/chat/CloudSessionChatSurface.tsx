@@ -1,4 +1,4 @@
-import { EXCERPT_PREAMBLE, isExcerptSnapshot, formatSnapshotExcerpt, formatNumberedAnnotations } from "../../../shared/chat-excerpt";
+import { CLOUD_CHAT_MESSAGE_BYTES, EXCERPT_PREAMBLE, isExcerptSnapshot, formatSnapshotExcerpt, formatNumberedAnnotations } from "../../../shared/chat-excerpt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -634,10 +634,19 @@ export function cloudMessageBody(text: string, display?: { text: string; content
 /** The quoted messages and file captures a Cloud message attaches, as the content blocks a local message keeps for them. */
 export function cloudAnnotationContent(excerpts: readonly ChatDraftExcerptReference[] = [], fileReferences: readonly ChatFileReference[] = []): ConversationContentSummary[] {
 	return [
-		...excerpts.map((excerpt) => ({
-			type: "excerpt", text: excerpt.text, snapshot: excerpt.snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
-			sourceConversationId: excerpt.conversationId, sourceMessageId: excerpt.messageId, sourceRevision: excerpt.revision,
-		})),
+		...excerpts.map((excerpt) => {
+			// Only the display copy drops background context; agent text and retries
+			// still use the complete frozen snapshot.
+			let snapshot = excerpt.snapshot;
+			if (snapshot) {
+				const { turn: _turn, ...displaySnapshot } = snapshot;
+				snapshot = displaySnapshot;
+			}
+			return {
+				type: "excerpt", text: excerpt.text, snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
+				sourceConversationId: excerpt.conversationId, sourceMessageId: excerpt.messageId, sourceRevision: excerpt.revision,
+			};
+		}),
 		...fileReferences.map((reference) => ({ type: "file_reference", fileReference: reference, annotationId: reference.id, annotationOrder: reference.order })),
 	].sort((a, b) => (a.annotationOrder ?? 0) - (b.annotationOrder ?? 0));
 }
@@ -1732,6 +1741,7 @@ export function CloudSessionChatSurface({
 			filePathsTruncated={filesQuery.data?.truncated}
 			onFileQuery={setFileQuery}
 			fileReferenceDelivery="text"
+			messageByteLimit={CLOUD_CHAT_MESSAGE_BYTES}
 			onStageAttachments={stageAttachments}
 			cloudAttachments={stageAttachments ? cloudAttachments : undefined}
 			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {

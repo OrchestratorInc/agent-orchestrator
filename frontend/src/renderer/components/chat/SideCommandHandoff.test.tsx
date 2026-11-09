@@ -65,6 +65,17 @@ it("forwards the captured snapshot when creating a side from a chart-only excerp
 	expect(JSON.parse(drafts.get("destination-1")!).references[0]).toMatchObject(excerpt);
 });
 
+it("accepts a 70 KiB question and captured excerpt when opening another local side", async () => {
+	const hook = await setup();
+	const text = "q".repeat(70 * 1024);
+	const excerpt: ChatDraftExcerptReference = { id: "quote", conversationId: "main", messageId: "answer", revision: 1, text: "quote", role: "assistant" };
+	await act(async () => { await hook.result.current.addReference("source", excerpt); });
+	await act(async () => { await hook.result.current.send("source", `/btw ${text}`); });
+	expect(creations.size).toBe(1);
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({ text, references: [{ text: "quote" }] });
+});
+
 it("reports an oversized recovered draft outside the React state updater", async () => {
 	const hook = await setup();
 	const references = Array.from({ length: 8 }, (_, index): ChatDraftExcerptReference => ({ id: `ref-${index}`, conversationId: "main", messageId: "answer", revision: 1, text: `quote ${index}`, role: "assistant" }));

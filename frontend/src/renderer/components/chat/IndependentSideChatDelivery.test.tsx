@@ -71,6 +71,24 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it.each([70 * 1024, 128 * 1024])("accepts a local plain side question of %i bytes", async (bytes) => {
+		const text = "q".repeat(bytes);
+		const hook = await beginSend(text);
+		expect(post.mock.calls[0][1].body.text).toBe(text);
+		await act(async () => { accept({}); await hook.sending; });
+	});
+
+	it("rejects a local side question above 128 KiB without losing the draft", async () => {
+		const text = "q".repeat(128 * 1024 + 1);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		await act(async () => { await hook.result.current.send("side", text); });
+		expect(post).not.toHaveBeenCalled();
+		expect(hook.result.current.error).toBeDefined();
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true));
+	});
+
 	it("refreshes the accepted title without switching the active sidechat", async () => {
 		let label = "Side Chat";
 		const originalGet = get.getMockImplementation()!;

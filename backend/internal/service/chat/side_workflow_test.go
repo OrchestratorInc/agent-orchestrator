@@ -255,6 +255,67 @@ func TestSideExcerptOnlyFallbackAndFrozenReceipt(t *testing.T) {
 	}
 }
 
+func TestSideCapturedSnapshotsSurviveReadsAndRetry(t *testing.T) {
+	h := newSideWorkflow(t, "revision")
+	ref := h.source(t)
+	ref.ID, ref.Order = "captured", 1
+	ref.Snapshot = &domain.ChatExcerptSnapshot{Version: 1, ReferenceFormat: "numbered-v1", RawText: "**Selected source**", CaptureMode: "exact", SourceTurnID: "captured-turn",
+		Turn: &domain.ChatExcerptTurnSnapshot{ID: "captured-turn", Messages: []domain.ChatExcerptTurnMessage{
+			{Role: "user", Text: "FROZEN_QUESTION"}, {Role: "assistant", Text: "FROZEN_ANSWER"},
+		}}}
+	side := h.side(t, "captured-side", true)
+	h.changed.changed.Store(true)
+	ctx := context.Background()
+	msg := ports.ChatUserMessage{Text: "Explain", ClientMessageID: "captured-receipt", Excerpts: []ports.ChatExcerptReference{ref}}
+	turn, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+	delivered := h.provider(0).sentTexts()[0]
+	for _, part := range []string{"FROZEN_QUESTION", "FROZEN_ANSWER", "**Selected source**", "Selected source"} {
+		if !strings.Contains(delivered, part) {
+			t.Fatalf("provider missed %q: %s", part, delivered)
+		}
+	}
+	for range 2 {
+		snapshot, err := h.svc.SideSnapshot(ctx, testSession, side.ID, time.Time{}, 1)
+		if err != nil || len(snapshot.Turns) != 1 || len(snapshot.Turns[0].References) != 1 {
+			t.Fatalf("snapshot: %+v %v", snapshot, err)
+		}
+		stored, err := json.Marshal(snapshot.Turns[0].References[0].Snapshot)
+		if err != nil || !strings.Contains(string(stored), "FROZEN_ANSWER") {
+			t.Fatalf("durable snapshot lost context: %s %v", stored, err)
+		}
+	}
+	duplicate, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, msg)
+	if err != nil || duplicate.ID != turn.ID || h.provider(0).sendCallCount() != 1 {
+		t.Fatalf("same receipt redelivered: %+v %v", duplicate, err)
+	}
+	changed := ref
+	changedSnapshot := *ref.Snapshot
+	changedTurn := *ref.Snapshot.Turn
+	changedTurn.Messages = []domain.ChatExcerptTurnMessage{{Role: "assistant", Text: "different background"}}
+	changedSnapshot.Turn, changed.Snapshot = &changedTurn, &changedSnapshot
+	conflict := msg
+	conflict.Excerpts = []ports.ChatExcerptReference{changed}
+	if _, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, conflict); !errors.Is(err, chatsvc.ErrSideIdempotencyConflict) {
+		t.Fatalf("changed background accepted under original receipt: %v", err)
+	}
+	h.provider(0).emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateFailed})
+	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Turns[0].State == "failed" })
+	if err := h.svc.RetrySideQuestion(ctx, testSession, side.ID, turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 2 })
+	// The first provider request can include one-time fork setup before the
+	// frozen question. Explicit retry must preserve the question and its context.
+	wantContext := delivered[strings.Index(delivered, "Referenced annotations."):]
+	if retried := h.provider(0).sentTexts()[1]; !strings.HasSuffix(retried, wantContext) {
+		t.Fatalf("explicit retry changed frozen context: %s", retried)
+	}
+}
+
 func TestSideStaleQueuedExcerptsAllowLaterQuestions(t *testing.T) {
 	for _, mode := range []string{"revision", "rollback", "missing pair"} {
 		t.Run(mode, func(t *testing.T) {

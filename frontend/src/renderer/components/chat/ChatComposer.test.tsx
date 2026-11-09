@@ -1,4 +1,5 @@
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
@@ -3271,6 +3272,46 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
+});
+
+it.each([
+	{ destination: "local", messageByteLimit: undefined, accepts: true },
+	{ destination: "cloud", messageByteLimit: CLOUD_CHAT_MESSAGE_BYTES, accepts: false },
+].flatMap(destination => ["excerpt", "file"].map(annotation => ({ ...destination, annotation }))))(
+	"uses the $destination budget for a 70 KiB question with a captured $annotation", async ({ destination, messageByteLimit, accepts, annotation }) => {
+		const sessionId = `budget-${destination}-${annotation}`;
+		const text = "q".repeat(70 * 1024);
+		writeChatComposerText(sessionId, text);
+		if (annotation === "excerpt") writeChatExcerptReferences(sessionId, EXCERPTS);
+		else writeChatFileReferences(sessionId, [captureFileReference({ path: "code.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "code();" }] }, sessionId)]);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} messageByteLimit={messageByteLimit} fileReferencesEnabled />);
+		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
+		if (accepts) {
+			await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+			expect(onSend.mock.calls[0][0]).toBe(text);
+		} else {
+			await screen.findByText(appI18n.t("chat.draft.excerptMessageLimit"));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(text);
+		}
+	},
+);
+
+it("keeps a frozen retry unchanged after the destination budget is lowered", async () => {
+	const sessionId = "budget-frozen-retry";
+	const text = "q".repeat(70 * 1024);
+	writeChatComposerText(sessionId, text);
+	writeChatExcerptReferences(sessionId, EXCERPTS);
+	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: text, requestText: text, attachments: [], excerpts: EXCERPTS, clientMessageId: "frozen-budget-receipt" });
+	const onSend = vi.fn().mockResolvedValue(undefined);
+	const frozen = structuredClone(readChatSessionDraft(sessionId).composer.delivery);
+	render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} messageByteLimit={CLOUD_CHAT_MESSAGE_BYTES} />);
+	await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+	expect(onSend.mock.calls[0][0]).toBe(frozen!.requestText);
+	expect(onSend.mock.calls[0][2]).toBe(frozen!.clientMessageId);
+	expect(onSend.mock.calls[0][4]).toEqual(frozen!.excerpts);
 });
 
 it("keeps cloud captures in shared drafts through reload and retries with the same delivery", async () => {

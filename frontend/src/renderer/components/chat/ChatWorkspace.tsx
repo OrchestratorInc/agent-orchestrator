@@ -431,6 +431,7 @@ export interface ChatWorkspaceProps {
 	excerptsEnabled?: boolean;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
+	messageByteLimit?: number;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
@@ -761,6 +762,7 @@ function ChatWorkspaceContent({
 	excerptsEnabled = false,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
+	messageByteLimit,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -2040,6 +2042,7 @@ function ChatWorkspaceContent({
 										onSend={handleComposerSend}
 						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
+						messageByteLimit={messageByteLimit}
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}

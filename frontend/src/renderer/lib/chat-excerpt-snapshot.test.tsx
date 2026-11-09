@@ -4,7 +4,7 @@ import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { captureExcerptSnapshot, captureExcerptTurn, excerptRenderedText, renderedExcerptRange, upgradeExcerpt } from "./chat-excerpt-snapshot";
 import { codeSourceOffsets } from "./rehype-excerpt-source";
 import * as sourceMapping from "./rehype-excerpt-source";
-import { excerptSizeError, fitExcerptContext, formatSnapshotExcerpt, formatNumberedAnnotations, isExcerptSnapshot, utf8Bytes } from "../../shared/chat-excerpt";
+import { CLOUD_CHAT_MESSAGE_BYTES, LOCAL_CHAT_MESSAGE_BYTES, excerptSizeError, fitExcerptContext, formatSnapshotExcerpt, formatNumberedAnnotations, isExcerptSnapshot, utf8Bytes } from "../../shared/chat-excerpt";
 import { captureFileReference } from "../../shared/chat-file-reference";
 import { renderMermaidDiagram } from "./mermaid-diagram";
 import type { ConversationSnapshot } from "../types/conversation";
@@ -282,6 +282,17 @@ describe("captured chat excerpts", () => {
 		const requiredBytes = utf8Bytes(question + formatNumberedAnnotations(required, [file]));
 		expect(() => fitExcerptContext(required, question, requiredBytes, [file])).not.toThrow();
 		expect(() => fitExcerptContext(required, question, requiredBytes - 1, [file])).toThrow();
+	});
+	it.each([CLOUD_CHAT_MESSAGE_BYTES, LOCAL_CHAT_MESSAGE_BYTES])("accepts exactly %i UTF-8 bytes and rejects one byte more", (limit) => {
+		const ref = { text: "引用", snapshot: { version: 1, rawText: "**引用**", captureMode: "exact" as const } };
+		const file = captureFileReference({ path: "code.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "code();" }] }, "s");
+		for (const [refs, files] of [[[], []], [[ref], []], [[], [file]]] as const) {
+			const available = limit - utf8Bytes(formatNumberedAnnotations(refs, files));
+			const question = "🙂".repeat(Math.floor(available / 4)) + "x".repeat(available % 4);
+			expect(utf8Bytes(question + formatNumberedAnnotations(refs, files))).toBe(limit);
+			expect(() => fitExcerptContext(refs, question, limit, files)).not.toThrow();
+			expect(() => fitExcerptContext(refs, question + "x", limit, files)).toThrow("chat.draft.excerptMessageLimit");
+		}
 	});
 	it("enforces UTF-8 limits, drops only optional context, and upgrades legacy quotes", () => {
 		expect(excerptSizeError([{ text: "é".repeat(13000) }])).toBe("chat.draft.excerptTextLimit");

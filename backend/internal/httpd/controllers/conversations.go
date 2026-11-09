@@ -1514,12 +1514,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			// internal URI in the public content summary.
 			summary.Name = "Chat excerpt"
 			if block.Excerpt != nil {
-				if captured := block.Excerpt.Reference.Snapshot; captured != nil {
-					// Display summaries need navigation metadata, not frozen delivery context.
-					snapshot := *captured
-					snapshot.Turn = nil
-					summary.Snapshot = &snapshot
-				}
+				summary.Snapshot = excerptSnapshotSummary(block.Excerpt.Reference.Snapshot)
 				summary.AnnotationID = block.Excerpt.Reference.ID
 				summary.AnnotationOrder = block.Excerpt.Reference.Order
 				summary.Text = block.Excerpt.SelectedText

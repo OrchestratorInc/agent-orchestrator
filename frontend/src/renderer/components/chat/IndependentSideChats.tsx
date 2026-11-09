@@ -1,4 +1,4 @@
-import { excerptSizeError, fitExcerptContext } from "../../../shared/chat-excerpt";
+import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { apiErrorException } from "../../lib/api-error-exception";
@@ -902,7 +902,7 @@ export function useIndependentSideChats(
 					if (draft.pendingDelivery || (command && text && text !== command.receipt.submitted.text))
 						throw new Error("Retry the original handoff before sending another question.");
 					if (!command) {
-						const submitted = { text, attachments: [...draft.attachments], references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text) };
+						const submitted = { text, attachments: [...draft.attachments], references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text, LOCAL_CHAT_MESSAGE_BYTES) };
 						const parentId = sides.find((side) => side.id === sideId)?.mainConversationId;
 						if (submitted.references.some((ref) => ref.conversationId !== parentId))
 							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
@@ -1029,7 +1029,7 @@ export function useIndependentSideChats(
 							})),
 							clientMessageId,
 							attachments: nativeImages ? imagePayloads : [],
-							references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text).map((ref) => ({
+							references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text, LOCAL_CHAT_MESSAGE_BYTES).map((ref) => ({
 								conversationId: ref.conversationId,
 								messageId: ref.messageId,
 								revision: ref.revision,
