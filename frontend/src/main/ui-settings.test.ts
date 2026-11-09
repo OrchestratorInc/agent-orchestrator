@@ -59,10 +59,29 @@ describe("ui-settings", () => {
 		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
 		await writeUiSettings(dir, { terminalShell: { kind: "git-bash" } });
 		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
 			locale: "ja",
 			soundNotificationsEnabled: false,
 			terminalShell: { kind: "git-bash" },
 		});
+	});
+
+	it("persists the automatic browser policy and defaults invalid values to internal", async () => {
+		await writeUiSettings(dir, { automaticBrowser: "blocked" });
+		expect((await readUiSettings(dir)).automaticBrowser).toBe("blocked");
+		expect(coerceUiSettings({ automaticBrowser: "invalid" }).automaticBrowser).toBe("internal");
+	});
+
+	it("persists the Alt menu preference while preserving other settings", async () => {
+		await writeUiSettings(dir, { locale: "ru", altMenuEnabled: false });
+		await writeUiSettings(dir, { soundNotificationsEnabled: false });
+		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, locale: "ru", altMenuEnabled: false, soundNotificationsEnabled: false });
+	});
+
+	it("preserves browser and Alt menu preferences across independent writes", async () => {
+		await writeUiSettings(dir, { automaticBrowser: "external" });
+		await writeUiSettings(dir, { altMenuEnabled: false });
+		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, automaticBrowser: "external", altMenuEnabled: false });
 	});
 
 	it("atomic write leaves no temp file behind", async () => {

@@ -16,6 +16,7 @@ import type { BrowserTabsState } from "../../main/browser-view-host";
 import type { ObservedBrowserAgentActivity } from "../hooks/useBrowserView";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
@@ -970,6 +971,7 @@ describe("SessionView", () => {
 	}
 
 	beforeEach(() => {
+		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, saving: false, error: false });
 		cloudGateState.cloudEnabled = true;
 		for (const sessionId of ["sess-1", "sess-2", "sess-orch", "sess-cross-project"]) {
 			setChatDraftBoundary(sessionId, "composer", undefined);
@@ -6180,6 +6182,17 @@ describe("SessionView", () => {
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 		expect(browserUnseen("sess-1")).toBe(false);
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["external", "blocked"] as const)("does not reveal the built-in browser for previews in %s mode", (mode) => {
+		useAutomaticBrowserStore.setState({ mode, loaded: true });
+		const worker = workerSession("sess-1");
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		const { rerender } = render(<SessionView sessionId="sess-1" />);
+		worker.previewUrl = "http://localhost:5173/";
+		worker.previewRevision = 1;
+		rerender(<SessionView sessionId="sess-1" />);
+		expect(inspectorOpen("sess-1")).toBe(false);
 	});
 
 	it("opens a collapsed inspector on Browser when a new live preview arrives", () => {

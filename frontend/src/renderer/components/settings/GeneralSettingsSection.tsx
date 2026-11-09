@@ -29,7 +29,27 @@ import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import { isLinuxPlatform, isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import { aoBridge } from "../../lib/bridge";
+
+function AltMenuRow() {
+	const { t } = useTranslation();
+	const [enabled, setEnabled] = useState(true);
+	const [error, setError] = useState(false);
+	useEffect(() => {
+		let active = true;
+		void aoBridge.uiSettings.get().then((settings) => {
+			if (active) setEnabled(settings.altMenuEnabled);
+		}).catch(() => { if (active) setError(true); });
+		return () => { active = false; };
+	}, []);
+	const label = t("settings.altMenu", { defaultValue: "Show menu bar with Alt" });
+	return <SettingsRow label={label} description={error ? t("settings.altMenuSaveFailed", { defaultValue: "Could not save this setting." }) : undefined}>
+		<Switch aria-label={label} checked={enabled} onCheckedChange={(next) => {
+			void aoBridge.uiSettings.set({ altMenuEnabled: next }).then((settings) => { setEnabled(settings.altMenuEnabled); setError(false); }).catch(() => setError(true));
+		}} />
+	</SettingsRow>;
+}
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -434,6 +454,7 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<SettingsSection title={t("settings.navigation")} grouped>
+				{isLinuxPlatform() && <AltMenuRow />}
 				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
 					<Switch
 						aria-label={t("settings.navigationGestures")}

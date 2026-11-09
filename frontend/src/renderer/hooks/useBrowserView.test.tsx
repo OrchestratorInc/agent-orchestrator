@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -229,6 +230,7 @@ function setFullscreenElement(element: Element | null): void {
 
 describe("useBrowserView", () => {
 	afterEach(() => {
+		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, saving: false, error: false });
 		vi.restoreAllMocks();
 		setFullscreenElement(null);
 		document.body.replaceChildren();
@@ -1712,6 +1714,18 @@ describe("useBrowserView", () => {
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
+	});
+
+	it.each(["external", "blocked"] as const)("routes automatic previews in %s mode without navigating the built-in browser", async (mode) => {
+		useAutomaticBrowserStore.setState({ mode, loaded: true });
+		const bridge = setupBridge();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderHook(() => useBrowserView({ sessionId: "policy-session", active: true, poppedOut: false, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		if (mode === "external") await waitFor(() => expect(external).toHaveBeenCalledWith("http://localhost:5173/"));
+		else await act(async () => {});
+		expect(bridge.navigate).not.toHaveBeenCalled();
+		if (mode === "blocked") expect(external).not.toHaveBeenCalled();
 	});
 
 	it("never opens a disconnected remote localhost preview on this machine", async () => {
