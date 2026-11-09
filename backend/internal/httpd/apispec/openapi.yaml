@@ -16326,6 +16326,8 @@ components:
       type: object
     ControllersKillSessionRequest:
       properties:
+        callerSessionId:
+          type: string
         deleteArtifacts:
           type: boolean
       type: object
@@ -19161,6 +19163,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinkRefused:
+          type: boolean
         accountLinked:
           type: boolean
         browserRemoteAccess:
@@ -19196,6 +19200,7 @@ components:
       required:
       - enabled
       - accountLinked
+      - accountLinkRefused
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
@@ -20413,6 +20418,8 @@ components:
           type: string
         rawUrl:
           type: string
+        shareUrl:
+          type: string
         size:
           format: int64
           type: integer
@@ -21125,6 +21132,10 @@ components:
             to the daemon.
           format: date-time
           type: string
+        prMayHaveChanged:
+          description: The finished tool call probably changed the session's pull
+            request (gh pr merge, git push), so AO re-reads it early.
+          type: boolean
         processId:
           description: Process id of the provider process that fired the hook (Claude's
             CLAUDE_PID).
@@ -21943,6 +21954,8 @@ components:
           - auto
           - bypass-permissions
           type: string
+        async:
+          type: boolean
         attachments:
           items:
             $ref: '#/components/schemas/AttachmentInput'

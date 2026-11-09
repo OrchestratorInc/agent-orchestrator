@@ -53,7 +53,7 @@ export type RemotesIpcDeps = {
 };
 
 class LocalIdentityUnavailableError extends ExpectedIpcError {
-	constructor() { super("Local AO identity is unavailable; remote connection is offline"); }
+	constructor() { super("Local Orchestrator identity is unavailable; remote connection is offline"); }
 }
 
 /**
@@ -67,7 +67,7 @@ export function registerRemotesIpc(
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const refuseSelf = (hostId: string | undefined, localHostId: string | null) => {
-		if (localHostId && hostId === localHostId) throw new ExpectedIpcError("This AO installation is already available locally; a remote connection to itself is not allowed.");
+		if (localHostId && hostId === localHostId) throw new ExpectedIpcError("This Orchestrator installation is already available locally; a remote connection to itself is not allowed.");
 	};
 	const requireLocalIdentity = async () => {
 		const hostId = await localIdentity();
@@ -78,7 +78,7 @@ export function registerRemotesIpc(
 		const [currentLocalHostId, currentAccount] = await Promise.all([localIdentity(), accountID()]);
 		if (currentAccount !== account) throw new ExpectedIpcError("Account changed during remote connection.");
 		if (!currentLocalHostId) throw new LocalIdentityUnavailableError();
-		if (currentLocalHostId !== localHostId) throw new ExpectedIpcError("Local AO identity changed; remote connection is offline");
+		if (currentLocalHostId !== localHostId) throw new ExpectedIpcError("Local Orchestrator identity changed; remote connection is offline");
 	};
 	const checkedProbe = async (entry: RemoteEntry, account: string): Promise<RemoteHealth> => {
 		if (!entry.hostId) throw new ExpectedIpcError("remote host must be paired again to record its identity");
@@ -109,7 +109,7 @@ export function registerRemotesIpc(
 	const accountID = async () => {
 		await requireAccount();
 		const id = await getAccountId();
-		if (!id) throw new ExpectedIpcError("Sign in to AO Cloud to use remote hosts.");
+		if (!id) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 		return id;
 	};
 	const owned = async () => {

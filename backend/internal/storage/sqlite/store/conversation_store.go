@@ -1313,8 +1313,17 @@ func (s *Store) appendUserMessage(
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
 		}
-		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
+		if record.IsTerminated {
 			return false, domain.ErrSessionNotProvisioning
+		}
+		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid {
+			move, moveErr := s.qw.GetActiveSessionInterfaceTransition(ctx, session)
+			if moveErr != nil && !errors.Is(moveErr, sql.ErrNoRows) {
+				return false, fmt.Errorf("check account move of %s: %w", session, moveErr)
+			}
+			if moveErr != nil || !transitionRowToDomain(move).AccountMoveAwaitsTarget() {
+				return false, domain.ErrSessionNotProvisioning
+			}
 		}
 		// The caller read the conversation before taking writeMu. An orchestrator's
 		// first controller may have moved the queue out of it since then; a turn
@@ -1674,7 +1683,7 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
-	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", time.Time{}, now)
 }
 
 // SettleTurnWithFailureCode retains a provider-classified cause beside the raw
@@ -1685,6 +1694,7 @@ func (s *Store) SettleTurnWithFailureCode(
 	state domain.TurnState,
 	errMessage string,
 	failureCode domain.ConversationFailureCode,
+	usageLimitResetsAt time.Time,
 	now time.Time,
 ) error {
 	q, unlock := s.conversationWriter(ctx)
@@ -1716,11 +1726,12 @@ func (s *Store) SettleTurnWithFailureCode(
 	}
 
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
-		State:        state,
-		ErrorMessage: errMessage,
-		FailureCode:  string(failureCode),
-		CompletedAt:  sql.NullTime{Time: now, Valid: true},
-		ID:           turn.ID,
+		State:              state,
+		ErrorMessage:       errMessage,
+		FailureCode:        string(failureCode),
+		CompletedAt:        sql.NullTime{Time: now, Valid: true},
+		UsageLimitResetsAt: timeToNullTime(usageLimitResetsAt),
+		ID:                 turn.ID,
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
@@ -3263,6 +3274,40 @@ func (s *Store) UpsertActivity(
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("lookup activity %s: %w", activity.ProviderItemID, err)
+		}
+	}
+
+	// A pending interaction that carries no provider item — an elicited
+	// question — can still be one AO already stored: the chat host replays the
+	// pending request after a reconnect. Refresh that row rather than inserting
+	// a duplicate the (conversation_id, request_id) index would refuse; a failed
+	// insert here is a fatal projection error and would leave the turn running
+	// with no recoverable controller (#7944). Only an in-flight row is
+	// refreshed: a row the user answered stays untouched so a late replay
+	// cannot reopen it, and so does a row a dead controller failed —
+	// settleOrphanedWork fails that question together with its turn, and
+	// revived it would sit pending on a failed turn, where the dock never
+	// shows it.
+	if activity.RequestID != "" {
+		if _, err := q.SelectConversationActivityByRequest(ctx,
+			gen.SelectConversationActivityByRequestParams{
+				ConversationID: conversationID,
+				RequestID:      activity.RequestID,
+			}); err == nil {
+			if settleErr := q.SettleConversationActivityByRequest(ctx,
+				gen.SettleConversationActivityByRequestParams{
+					Status:         activity.Status,
+					Summary:        activity.Summary,
+					DetailJson:     detail,
+					UpdatedAt:      now,
+					ConversationID: conversationID,
+					RequestID:      activity.RequestID,
+				}); settleErr != nil {
+				return fmt.Errorf("settle activity %s: %w", activity.RequestID, settleErr)
+			}
+			return nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("lookup activity %s: %w", activity.RequestID, err)
 		}
 	}
 
@@ -4978,7 +5023,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		if err != nil {
 			return domain.RetryPrompt{}, fmt.Errorf("encode provider inputs %s: %w", turnID, err)
 		}
-		prompt.ProviderInputText = "AO prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
+		prompt.ProviderInputText = "Orchestrator prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
 	}
 	prompt.DeliveryContentJSON = ""
 	if len(content) > 0 {

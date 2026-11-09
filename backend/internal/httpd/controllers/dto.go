@@ -562,6 +562,7 @@ type SessionArtifactView struct {
 	// its files load same-origin there, but the daemon refuses that origin, so
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
+	ShareURL  string `json:"shareUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -627,6 +628,12 @@ type SpawnSessionRequest struct {
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
+	// Async answers as soon as a project Chat session is addressable: the
+	// session reads as provisioning with its prompt queued, and the worktree,
+	// setup and agent start in the background. Clients follow provisionState
+	// to learn whether the start succeeded. Ignored for standalone and TUI
+	// sessions, which always start before the response.
+	Async bool `json:"async,omitempty"`
 }
 
 // AttachmentInput is one file attached to a spawn, delegate, stage, or send
@@ -1291,6 +1298,10 @@ type InterfaceTransitionNoticeAckResponse struct {
 // terminated. Only the archive dialog sets it; the CLI and the reaper never do.
 type KillSessionRequest struct {
 	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+	// CallerSessionID is supplied by `ao session kill` inside an AO session.
+	// The session that spawned the killed one shows the termination in its
+	// chat only when it is the caller.
+	CallerSessionID domain.SessionID `json:"callerSessionId,omitempty"`
 }
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
@@ -1673,6 +1684,7 @@ type SetActivityRequest struct {
 	Entrypoint                   string                              `json:"entrypoint,omitempty" description:"Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook."`
 	ProcessID                    int                                 `json:"processId,omitempty" minimum:"0" description:"Process id of the provider process that fired the hook (Claude's CLAUDE_PID)."`
 	Usage                        *UsageHookMetadata                  `json:"usage,omitempty" description:"Provider transcript metadata used by the local usage pipeline."`
+	PRMayHaveChanged             bool                                `json:"prMayHaveChanged,omitempty" description:"The finished tool call probably changed the session's pull request (gh pr merge, git push), so AO re-reads it early."`
 }
 
 // UsageHookMetadata is the transcript metadata carried by supported Claude
@@ -2719,7 +2731,12 @@ type MobileStatusResponse struct {
 	// whether or not it still lists the machine. Signing in links only a
 	// machine no account holds, so it never moves one to another account or
 	// lists one again that its account removed.
-	AccountLinked       bool `json:"accountLinked"`
+	AccountLinked bool `json:"accountLinked"`
+	// AccountLinkRefused means AO Cloud refused the machine's last address
+	// publish under its current account token: no account lists the link, or
+	// AO Cloud does not accept its credential. Either way the account's
+	// devices may not list the machine, and linking again repairs both.
+	AccountLinkRefused  bool `json:"accountLinkRefused"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`

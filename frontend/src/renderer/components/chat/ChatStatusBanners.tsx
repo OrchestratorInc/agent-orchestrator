@@ -15,7 +15,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "lucide-react";
+import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
@@ -63,7 +63,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="outline" className="shrink-0"
+			<Button type="button" size="sm" variant="secondary" className="shrink-0"
 				onClick={() => openGlobalSettings("harness", {
 					focusAgentId: harness,
 					...(hostId ? { hostId } : {}),
@@ -105,11 +105,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (

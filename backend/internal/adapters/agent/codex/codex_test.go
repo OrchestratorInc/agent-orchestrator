@@ -1214,3 +1214,40 @@ func TestAuthStatusFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 		t.Fatalf("AuthStatus = %q, %v; want authorized", status, err)
 	}
 }
+
+func TestAuthStatusUsesCustomModelProviderKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the codex binary")
+	}
+	binary := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'Not logged in'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	litellm := "model_provider = \"litellm\"\n[model_providers.litellm]\nbase_url = \"http://127.0.0.1:4000/v1\"\nenv_key = \"LITELLM_API_KEY\"\n"
+	tests := []struct {
+		name   string
+		config string
+		key    string
+		want   ports.AgentAuthStatus
+	}{
+		{name: "env key set", config: litellm, key: "sk-test", want: ports.AgentAuthStatusConfigured},
+		{name: "env key unset", config: litellm, want: ports.AgentAuthStatusUnknown},
+		{name: "selected by profile", config: "profile = \"proxy\"\n[profiles.proxy]\nmodel_provider = \"litellm\"\n[model_providers.litellm]\nenv_key = \"LITELLM_API_KEY\"\n", key: "sk-test", want: ports.AgentAuthStatusConfigured},
+		{name: "provider uses OpenAI login", config: litellm + "requires_openai_auth = true\n", key: "sk-test", want: ports.AgentAuthStatusUnauthorized},
+		{name: "OpenAI provider", config: "model = \"gpt-5\"\n", key: "sk-test", want: ports.AgentAuthStatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CODEX_HOME", home)
+			t.Setenv("LITELLM_API_KEY", tt.key)
+			status, err := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background())
+			if err != nil || status != tt.want {
+				t.Fatalf("AuthStatus = %q, %v; want %q", status, err, tt.want)
+			}
+		})
+	}
+}

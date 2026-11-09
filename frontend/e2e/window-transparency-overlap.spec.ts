@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { expect, test, type Locator } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
@@ -17,6 +18,27 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
+// Keep captures in test-results, which CI uploads on failure.
+async function saveCaptures(captures: [name: string, image: Buffer][]) {
+	for (const [name, image] of captures) {
+		const path = test.info().outputPath(`${name}.png`);
+		await writeFile(path, image);
+		await test.info().attach(name, { path, contentType: "image/png" });
+	}
+}
+
+const setVisibility = (underneath: Locator, hidden: boolean) => underneath.evaluateAll((elements, hidden) => {
+	for (const element of elements) {
+		if (hidden) (element as HTMLElement).style.visibility = "hidden";
+		else (element as HTMLElement).style.removeProperty("visibility");
+	}
+}, hidden);
+
+// Bracket the capture with the content hidden between two captures with it
+// shown. If those two differ, the surface changed on its own (still settling
+// after it opened, for example), so the attempt says nothing about what is
+// underneath and is retried. If they match but the hidden capture differs, the
+// content underneath shows through.
 async function expectOccludes(surface: Locator, underneath: Locator, occludes = true) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
@@ -26,43 +48,56 @@ async function expectOccludes(surface: Locator, underneath: Locator, occludes = 
 	}));
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
-	const before = await surface.screenshot({ animations: "disabled" });
 	try {
-		await underneath.evaluateAll((elements) => {
-			for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
-		});
-		const after = await surface.screenshot({ animations: "disabled" });
-		const changedPixels = await surface.evaluate(async (_, images) => {
-			const decode = async (png: string) => {
-				const image = new Image();
-				image.src = `data:image/png;base64,${png}`;
-				await image.decode();
-				const canvas = document.createElement("canvas");
-				canvas.width = image.width; canvas.height = image.height;
-				const context = canvas.getContext("2d")!;
-				context.drawImage(image, 0, 0);
-				return context.getImageData(0, 0, canvas.width, canvas.height);
-			};
-			const [before, after] = await Promise.all([decode(images.before), decode(images.after)]);
-			if (before.width !== after.width || before.height !== after.height) throw new Error("surface dimensions changed");
-			let changed = 0;
-			for (let i = 0; i < before.data.length; i += 4) {
-				// Repainting the hidden layer can change icon/edge antialiasing by
-				// up to 5/255 per channel (under 2%). Every pixel must stay within that tolerance.
-				if ([0, 1, 2, 3].some((channel) => Math.abs(before.data[i + channel] - after.data[i + channel]) > 5)) changed++;
+		const attempts = 5;
+		for (let attempt = 1; attempt <= attempts; attempt++) {
+			const shown = await surface.screenshot({ animations: "disabled" });
+			await setVisibility(underneath, true);
+			const hidden = await surface.screenshot({ animations: "disabled" });
+			await setVisibility(underneath, false);
+			const shownAgain = await surface.screenshot({ animations: "disabled" });
+			const captures: [string, Buffer][] = [
+				["surface-with-content-underneath", shown],
+				["surface-with-content-hidden", hidden],
+				["surface-with-content-underneath-again", shownAgain],
+			];
+			if (shown.equals(shownAgain)) {
+				const changedPixels = await surface.evaluate(async (_, images) => {
+					const decode = async (png: string) => {
+						const image = new Image();
+						image.src = `data:image/png;base64,${png}`;
+						await image.decode();
+						const canvas = document.createElement("canvas");
+						canvas.width = image.width; canvas.height = image.height;
+						const context = canvas.getContext("2d")!;
+						context.drawImage(image, 0, 0);
+						return context.getImageData(0, 0, canvas.width, canvas.height);
+					};
+					const [before, after] = await Promise.all([decode(images.before), decode(images.after)]);
+					if (before.width !== after.width || before.height !== after.height) throw new Error("surface dimensions changed");
+					let changed = 0;
+					for (let i = 0; i < before.data.length; i += 4) {
+						// Repainting the hidden layer can change icon/edge antialiasing by
+						// up to 5/255 per channel (under 2%). Every pixel must stay within that tolerance.
+						if ([0, 1, 2, 3].some((channel) => Math.abs(before.data[i + channel] - after.data[i + channel]) > 5)) changed++;
+					}
+					return changed;
+				}, { before: shown.toString("base64"), after: hidden.toString("base64") });
+				if (occludes && changedPixels) await saveCaptures(captures.slice(0, 2));
+				const drifted = attempt > 1 ? ` (after ${attempt - 1} attempt${attempt > 2 ? "s" : ""} where the surface changed on its own)` : "";
+				if (occludes) expect(changedPixels, `content underneath must not affect the surface's pixels${drifted}`).toBe(0);
+				else expect(changedPixels, "the comparison must detect content when clipping is removed").toBeGreaterThan(0);
+				return;
 			}
-			return changed;
-		}, { before: before.toString("base64"), after: after.toString("base64") });
-		if (occludes && changedPixels) {
-			await test.info().attach("occlusion-before", { body: before, contentType: "image/png" });
-			await test.info().attach("occlusion-after", { body: after, contentType: "image/png" });
+			test.info().annotations.push({ type: "surface changed on its own", description: `attempt ${attempt} of ${attempts}` });
+			if (attempt === attempts) {
+				await saveCaptures(captures);
+				throw new Error(`surface kept changing on its own: the captures before and after hiding the content underneath differed in all ${attempts} attempts`);
+			}
+			await surface.page().waitForTimeout(100);
 		}
-		if (occludes) expect(changedPixels, "content underneath must not affect the surface's pixels").toBe(0);
-		else expect(changedPixels, "the comparison must detect content when clipping is removed").toBeGreaterThan(0);
 	} finally {
-		await underneath.evaluateAll((elements) => {
-			for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
-		});
+		await setVisibility(underneath, false);
 	}
 }
 

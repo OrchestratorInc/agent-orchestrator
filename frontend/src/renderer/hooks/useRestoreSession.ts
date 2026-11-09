@@ -101,7 +101,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 						.show({
 							id: `restore-fallback:${hostId ?? "local"}:${sessionId}:${Date.now()}`,
 							title: "Started from saved prompt",
-							body: "AO could not resume the native agent session, so it started a new conversation from the saved prompt.",
+							body: "Orchestrator could not resume the native agent session, so it started a new conversation from the saved prompt.",
 						})
 						.catch((err) => {
 							console.warn("Unable to show restore fallback notification", err);

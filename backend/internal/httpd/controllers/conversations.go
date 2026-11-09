@@ -1091,7 +1091,7 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri and name are required"}
 		}
 		if resource.URI == ports.ChatInternalReplayResourceURI {
-			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri is reserved for AO internal context"}
+			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri is reserved for Orchestrator internal context"}
 		}
 		kind, text := "resource_link", ""
 		if resource.Text != nil {
