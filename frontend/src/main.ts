@@ -59,6 +59,7 @@ import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
 import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
+import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { readNativeAppIcon } from "./main/native-app-icon";
@@ -184,7 +185,7 @@ import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, remembe
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -2874,6 +2875,7 @@ registerCliLinkIpc({
 const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
 
 registerCliShadowIpc({
+	enabled: () => cliShadowEnabled(process.env, app.isPackaged),
 	shellPath: createCliShadowShellPath({
 		settleStartupProbes: async () => {
 			await ensureShellEnv();
@@ -3277,6 +3279,17 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return;
 	}
 });
+/** The daemon's durable lifetime session count, or null while it is unreachable. */
+async function daemonLifetimeSessions(): Promise<number | null> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return null;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+		const identity = response.ok ? await response.json() as { lifetimeSessions?: unknown } : {};
+		return typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
+	} catch {
+		return null;
+	}
+}
 ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!telemetryPolicyController) return null;
 	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
@@ -3290,17 +3303,19 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		exists: existsSync,
 	});
 	const bootstrap = await buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
-	if (!bootstrap || daemonStatus.state !== "ready" || !daemonStatus.port) return bootstrap;
-	try {
-		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
-		if (!response.ok) return bootstrap;
-		const identity = await response.json() as { lifetimeSessions?: unknown };
-		if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
-			bootstrap.lifetimeSessions = identity.lifetimeSessions;
-		}
-	} catch {
-		// A missing daemon count stays absent.
-	}
+	if (!bootstrap) return bootstrap;
+	const lifetimeSessions = await daemonLifetimeSessions();
+	if (lifetimeSessions !== null) bootstrap.lifetimeSessions = lifetimeSessions;
+	// Start the renderer identified when this desktop is signed in to the same
+	// AO Cloud account the daemon durably recorded, so launch events (active,
+	// loaded, first open) are not sent under a throwaway anonymous ID. Only the
+	// production WorkOS account is identified, as in TelemetryIdentityRuntime.
+	const stored = await readAuthStore(cloudDataDir()).catch(() => null);
+	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
+	// No stored sign-in but a binding left behind: a sign-out the daemon never
+	// heard (it was down, then the app quit). Retire it before anything exports.
+	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
+	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
@@ -3326,6 +3341,21 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	return telemetryIdentity.setCloudUser(userId);
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
+ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+// The renderer claims ao.app.first_opened only when it is about to send it,
+// so an opt-out or a kill-switch entry never spends the one-time marker.
+ipcMain.handle("telemetry:claimFirstOpen", async () => {
+	if (telemetryIdentity.isOptedOut()) return "ineligible";
+	let daysSinceInstall: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(desktopDataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+	} catch {
+		return "ineligible";
+	}
+	const lifetimeSessions = await daemonLifetimeSessions();
+	return claimFirstOpen(desktopDataDir, { daysSinceInstall, lifetimeSessions: lifetimeSessions ?? undefined });
+});
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");
@@ -3952,7 +3982,10 @@ function notifyRenderersOfCloudSession(
 	contents.send("cloud:sessionChanged", account);
 }
 
-installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession);
+// Telemetry's Cloud binding is retired as part of sign-out itself, not only when
+// the renderer later hands the sign-out to the daemon: the app can quit first,
+// and a CLI-started daemon would then restore the departed account.
+installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, () => telemetryIdentity.signOut());
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback

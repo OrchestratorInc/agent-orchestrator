@@ -1,4 +1,5 @@
 import { isMacPlatform } from "../../lib/platform";
+import { clientForSessionHost } from "../../lib/host-clients";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
@@ -20,7 +21,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -1219,9 +1220,400 @@ describe("ChatWorkspace timeline", () => {
 		// The current run is open and shows each call; the earlier run is folded to
 		// its summary line.
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
-		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
+		expect(toggle(/^Listed files · Read 1 file$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getAllByText("Ran command")).toHaveLength(2);
+		expect(screen.getByText("Built project")).toBeInTheDocument();
+		expect(screen.getByText("Ran lint")).toBeInTheDocument();
+	});
+
+	it("names the running step once, on the live row under the steps, with the plan under it", async () => {
+		const user = userEvent.setup();
+		const turnId = "live-turn-plan";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{
+				id: turnId, state: "running", requestedAt: at, startedAt: at,
+				plan: { steps: [
+					{ text: "Build the project", status: "in_progress" },
+					{ text: "Run the tests", status: "pending" },
+				] },
+			}],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "status", turnId, sequence: 2, revision: 0,
+					activityKind: "command", status: "completed", summary: "git status",
+					detail: { command: "git status" }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "running", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const done = screen.getByRole("button", { name: /^Checked git status/ });
+		const live = screen.getByTestId("live-working-row");
+		const plan = screen.getByRole("region", { name: "Agent plan" });
+		// The running step is on the live row only, not also as a row of its own.
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Building project$/);
+		// A dot sits between the step and the turn's timer.
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Building project·\d/);
+		expect(screen.getAllByText("Building project")).toHaveLength(1);
+		expect(done.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(live.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		// The live row opens onto the step's command, as its own row would.
+		expect(live).toHaveAttribute("aria-expanded", "false");
+		await user.click(live);
+		expect(live).toHaveAttribute("aria-expanded", "true");
+		expect(await screen.findByText("go build ./...")).toBeInTheDocument();
+	});
+
+	it("says Thinking beside the loader between steps, but not while it waits on the reader or writes its reply", () => {
+		const turnId = "live-turn-thinking";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const read = {
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision: 0,
+			activityKind: "command" as const, status: "completed" as const, summary: "sed -n '1,40p' README.md",
+			detail: { command: "sed -n '1,40p' README.md" }, createdAt: at,
+		};
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 2,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read],
+		};
+
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+
+		// The finished step keeps its row; the loader row names what comes next.
+		expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument();
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·\d/);
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run go build?",
+							detail: { command: "go build ./..." }, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+
+		// Under the reply it is writing, the timer sits alone too.
+		view.rerender(
+			<ChatWorkspace
+				snapshot={{
+					...snapshot,
+					latestSequence: 3,
+					items: [
+						prompt,
+						read,
+						{
+							kind: "message", id: "reply", turnId, sequence: 3, revision: 0,
+							role: "assistant", origin: "provider", text: "The README covers setup.",
+							streaming: true, createdAt: at,
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+	});
+
+	it("keeps the live row's label mounted when a step it can open takes over from Thinking", () => {
+		const turnId = "live-turn-stable-row";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const snapshot = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot([])} />);
+		const label = screen.getByTestId("live-working-task");
+		expect(label).toHaveTextContent(/^Thinking$/);
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+
+		view.rerender(
+			<ChatWorkspace
+				snapshot={snapshot([
+					{
+						kind: "activity", id: "build", turnId, sequence: 2, revision: 0,
+						activityKind: "command", status: "running", summary: "go build ./...",
+						detail: { command: "go build ./..." }, createdAt: at,
+					},
+				])}
+			/>,
+		);
+		// The row now opens onto the command, and its label updated in place rather
+		// than mounting again (and replaying its entrance).
+		expect(screen.getByTestId("live-working-row")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByTestId("live-working-task")).toBe(label);
+		expect(label).toHaveTextContent(/^Building project$/);
+	});
+
+	it("shows each step on the live row first, then moves it up once it has been seen", async () => {
+		const turnId = "live-turn-claude-steps";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Read the README",
+			streaming: false, createdAt: at,
+		};
+		// Claude Code reports a tool call as pending, then done, with nothing between.
+		const read = (status: "pending" | "completed", revision: number) => ({
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision,
+			activityKind: "mcp_tool" as const, status, summary: "Read README.md (1 - 40)",
+			detail: {
+				protocol: "acp", providerToolName: "Read", toolKind: "read",
+				input: { file_path: "/w/README.md", limit: 40 },
+			} as ConversationActivity["detail"],
+			createdAt: at,
+		});
+		const snapshot = (status: "pending" | "completed", revision: number): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: revision + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read(status, revision)],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot("pending", 0)} />);
+		const task = () => screen.getByTestId("live-working-task");
+		const shimmer = () => task().querySelector(".chat-working-shimmer");
+		// The live row opens too and reads the same once the step is done, so look past it.
+		const listRow = () =>
+			screen.queryAllByRole("button", { name: /^Read README\.md/ }).find((button) => button !== screen.queryByTestId("live-working-row"));
+		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(shimmer()).not.toBeNull();
+		expect(listRow()).toBeUndefined();
+
+		// Done within a blink, it still stays beside the loader for a moment, saying
+		// what it did, without the shimmer that means it is under way...
+		view.rerender(<ChatWorkspace snapshot={snapshot("completed", 1)} />);
+		expect(task()).toHaveTextContent(/^Read README\.md$/);
+		expect(shimmer()).toBeNull();
+		expect(listRow()).toBeUndefined();
+
+		// ...then moves up into the list, and the live row goes back to Thinking.
+		await waitFor(() => expect(listRow()).toBeInTheDocument(), { timeout: 2_000 });
+		expect(task()).toHaveTextContent(/^Thinking$/);
+	});
+
+	it("does not show provider reasoning summaries in the live or settled turn", () => {
+		const turnId = "turn-with-reasoning";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 2,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{ kind: "message", id: "prompt", turnId, sequence: 1, revision: 0, role: "user", origin: "human", text: "Solve the puzzle", streaming: false, createdAt: at },
+				{ kind: "activity", id: "thought", turnId, sequence: 2, revision: 1, activityKind: "reasoning", status: "completed", summary: "Reasoning", detail: { text: "Deriving exact cycle length probability formula" }, createdAt: at },
+			],
+		};
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent("Thinking");
+		expect(screen.queryByText("Deriving exact cycle length probability formula")).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace snapshot={{
+			...snapshot,
+			controller: { state: "ready" },
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:01:04Z" }],
+		}} />);
+		expect(screen.queryByText("Deriving exact cycle length probability formula")).not.toBeInTheDocument();
+	});
+
+	it("gives the step back its row once it finishes", () => {
+		const turnId = "live-turn-finished-step";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 2, revision: 1,
+					activityKind: "command", status: "completed", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+				{
+					kind: "message", id: "thinking", turnId, sequence: 3, revision: 0,
+					role: "assistant", origin: "provider", text: "The build passes.",
+					streaming: true, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByRole("button", { name: /^Built project/ })).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+	});
+
+	describe("a step's tense and its row", () => {
+		const turnId = "live-turn-step-rows";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Tidy the build",
+			streaming: false, createdAt: at,
+		};
+		const live = (items: ConversationSnapshot["items"]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: items.length + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, ...items],
+		});
+		const command = (
+			id: string,
+			sequence: number,
+			text: string,
+			status: ConversationActivity["status"],
+			detail: ConversationActivity["detail"] = {},
+		) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "command" as const, status, summary: text,
+			detail: { command: text, ...detail }, createdAt: at,
+		});
+		const read = (id: string, sequence: number, file: string) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "mcp_tool" as const, status: "pending" as const, summary: `Read ${file}`,
+			detail: { protocol: "acp", providerToolName: "Read", toolKind: "read", input: { file_path: file } } as ConversationActivity["detail"],
+			createdAt: at,
+		});
+
+		it("says a pending step is under way, even while it waits for approval", () => {
+			// Claude Code reports a call as pending until it is done. One waiting on the
+			// reader has not deleted anything yet.
+			const view = render(
+				<ChatWorkspace
+					snapshot={live([
+						command("rm", 2, "rm -rf build", "pending"),
+						{
+							kind: "activity", id: "approve", turnId, sequence: 3, revision: 0,
+							activityKind: "approval", status: "pending", summary: "Run rm -rf build?",
+							detail: { command: "rm -rf build" }, createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByRole("button", { name: /^Deleting build/ })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^Deleted build/ })).toBeNull();
+
+			// Of two reads at once, the newest is on the live row, and the other's own row
+			// says it is still reading.
+			view.rerender(<ChatWorkspace snapshot={live([read("a", 2, "a.ts"), read("b", 3, "b.ts")])} />);
+			expect(screen.getByRole("button", { name: /^Reading a\.ts/ })).toBeInTheDocument();
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Reading b\.ts$/);
+
+			// An edit of several files says so in its own words while it runs.
+			view.rerender(
+				<ChatWorkspace
+					snapshot={live([
+						{
+							kind: "activity", id: "edit", turnId, sequence: 2, revision: 0,
+							activityKind: "file_change", status: "running", summary: "Edited 2 files",
+							detail: {
+								files: [
+									{ path: "src/a.ts", status: "modified", additions: 1, deletions: 0 },
+									{ path: "src/b.ts", status: "modified", additions: 2, deletions: 1 },
+								],
+							},
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Editing 2 files$/);
+		});
+
+		it("keeps a step the reader opened on the live row open once it moves up", async () => {
+			const user = userEvent.setup();
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			const row = screen.getByTestId("live-working-row");
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+
+			view.rerender(
+				<ChatWorkspace snapshot={live([command("test", 2, "npm test", "completed", { output: "42 passed" })])} />,
+			);
+			// Once its moment on the live row is over, its own row is still open on the output.
+			const landed = await waitFor(() => screen.getByRole("button", { name: /^Ran tests/ }), { timeout: 2_000 });
+			expect(landed).toHaveAttribute("aria-expanded", "true");
+			expect(screen.getByText("42 passed")).toBeInTheDocument();
+		});
+
+		it("moves a step that failed straight to its row", () => {
+			const view = render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running")])} />);
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Running tests$/);
+
+			view.rerender(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "failed", { exitCode: 1 })])} />);
+			expect(screen.getByRole("button", { name: /^Ran tests/ })).toHaveTextContent("exit 1");
+			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+		});
+
+		it("keeps each step's own row while the live row shows a retry", () => {
+			render(
+				<ChatWorkspace
+					snapshot={live([
+						command("build", 2, "go build ./...", "running"),
+						{
+							kind: "activity", id: "retry", turnId, sequence: 3, revision: 0,
+							activityKind: "system", status: "running", summary: "Reconnecting to Claude, attempt 2 of 10.",
+							detail: { event: "provider.failure", category: "connection", severity: "warning" },
+							createdAt: at,
+						},
+					])}
+				/>,
+			);
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent("Reconnecting… 2/10");
+			expect(screen.getByRole("button", { name: /^Building project/ })).toBeInTheDocument();
+		});
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
@@ -1671,9 +2063,12 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(dock.getByRole("button", { name: "Continue" }));
 		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 		expect(onDecide).not.toHaveBeenCalled();
-		input.status = "resolved";
-		input.inputResponse = { action: "accept", content: { first_value: "Native" } };
-		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
+		const resolved = structuredClone(snapshot);
+		const answered = resolved.items.find((item) => item.id === "input-1");
+		if (!answered || answered.kind !== "activity") throw new Error("missing resolved input activity");
+		answered.status = "resolved";
+		answered.inputResponse = { action: "accept", content: { first_value: "Native" } };
+		rerender(<ChatWorkspace snapshot={resolved} onResolveInput={onResolveInput} />);
 		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
 		const history = within(screen.getByRole("region", { name: "Agent question history" }));
 		expect(history.getByText("Which direction should we take?")).toBeVisible();
@@ -2991,6 +3386,49 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Latest tall historical prompt")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+	});
+
+	it.each([false, true])("lets the reader scroll away from a find result and navigate again (history window=%s)", async (loadHistory) => {
+		try {
+			stubVirtualTimelineGeometry();
+			vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{ top: 0, bottom: 100 }] as unknown as DOMRectList);
+			vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue({ top: 20, bottom: 30, height: 10 } as DOMRect);
+			const snapshot = chatFixtureLongHistory(100);
+			const prompts = snapshot.items.filter((item): item is ConversationMessage => item.kind === "message" && item.role === "user");
+			prompts[40]!.text = "needle in the middle";
+			prompts[70]!.text = "needle further down";
+			const hits = [prompts[40]!, prompts[70]!].map((message) => ({ messageId: message.id, revision: message.revision, sequence: message.sequence, block: 0, start: 0, end: 6 }));
+			const get = vi.fn(async (path: string) => ({ data: path.endsWith("find-window")
+				? { ...snapshot, controller: "ready", messages: snapshot.items.filter((item) => item.kind === "message"), activities: snapshot.items.filter((item) => item.kind === "activity") }
+				: { conversationId: snapshot.conversationId, transcriptRevision: "find-regression", occurrences: hits, total: 2 }, response: new Response() }));
+			vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+			const visible = loadHistory ? { ...snapshot, hasMoreBefore: true, oldestSequence: prompts[80]!.sequence, turns: snapshot.turns.slice(80), items: snapshot.items.filter((item) => item.sequence >= prompts[80]!.sequence) } : snapshot;
+			render(<ChatWorkspace snapshot={visible} />);
+			const log = screen.getByRole("log");
+			log.focus();
+			fireEvent.keyDown(log, { key: "f", metaKey: true });
+			const input = await screen.findByRole("searchbox");
+			fireEvent.change(input, { target: { value: "needle" } });
+			await screen.findByText("1/2");
+			// jsdom does not emit scroll events for the virtualizer's programmatic writes.
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle in the middle")).toBeInTheDocument(); });
+			log.scrollTop = 0;
+			fireEvent.scroll(log);
+			// Let the virtualizer unmount the result and commit its next visible window.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+			expect(log.scrollTop).toBe(0);
+			expect(screen.queryByText("needle in the middle")).not.toBeInTheDocument();
+			fireEvent.keyDown(input, { key: "Enter" });
+			await screen.findByText("2/2");
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle further down")).toBeInTheDocument(); });
+			fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+			await screen.findByText("1/2");
+			await waitFor(() => { fireEvent.scroll(log); expect(screen.getByText("needle in the middle")).toBeInTheDocument(); });
+			const top = log.scrollTop;
+			fireEvent.keyDown(input, { key: "Escape" });
+			expect(log.scrollTop).toBe(top);
+			expect(get.mock.calls.some(([path]) => path.endsWith("find-window"))).toBe(loadHistory);
+		} finally { vi.restoreAllMocks(); }
 	});
 
 	it("scrolls virtual history, keeps all minimap targets, and returns to the latest turn", async () => {
@@ -5138,7 +5576,7 @@ describe("ChatWorkspace message actions", () => {
 				},
 			],
 		};
-		render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
+		const view = render(<ChatWorkspace snapshot={snapshot} onActivateBranch={onActivateBranch} />);
 
 		expect(screen.getByText("2 / 3")).toBeVisible();
 		expect(screen.queryByText(/Starts a new conversation branch/)).not.toBeInTheDocument();
@@ -5148,6 +5586,14 @@ describe("ChatWorkspace message actions", () => {
 			}),
 		);
 		expect(onActivateBranch).toHaveBeenCalledWith("branch-previous");
+		view.rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("2 / 3")).toBeVisible();
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, branchPoints: [{
+			turnId: "turn-1", position: 3, total: 4, previousBranchId: "branch-new-previous", nextBranchId: "branch-new-next",
+		}] }} onActivateBranch={onActivateBranch} />);
+		expect(screen.getByText("3 / 4")).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Previous conversation branch" }));
+		expect(onActivateBranch).toHaveBeenLastCalledWith("branch-new-previous");
 	});
 
 	it("does not label a provider-native branch as exact context", () => {

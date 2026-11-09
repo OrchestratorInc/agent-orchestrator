@@ -173,6 +173,11 @@ export type WorkspaceSession = {
 	 * "running" on a failed session is the step that failed.
 	 */
 	provisionSteps?: SessionProvisionStep[];
+	/**
+	 * The daemon has a recorded workspace for this session, so workspace reads
+	 * can succeed. Absent from older daemons, which is treated as published.
+	 */
+	workspacePublished?: boolean;
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
@@ -321,10 +326,12 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, for sessions whose output includes artifacts. */
+/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
-	return session.artifactFiles ?? [];
+	return [...(session.artifactFiles ?? [])].sort(
+		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+	);
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {
@@ -404,6 +411,17 @@ export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSes
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
+}
+
+/**
+ * Whether workspace reads can succeed. The daemon reports whether it has a
+ * recorded workspace: an asynchronous start publishes one partway through, a
+ * failed start can keep one, and an agent-only retry reuses it. Until then
+ * every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND. An older
+ * daemon does not report it, so its sessions are treated as published.
+ */
+export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspacePublished">): boolean {
+	return session.workspacePublished !== false;
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {

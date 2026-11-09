@@ -37,6 +37,7 @@ import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
@@ -58,7 +59,7 @@ import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
-	findWorkspaceFilePath,
+	createWorkspaceFileLookup,
 	isAbsoluteFileReference,
 	normalizeWorkspaceFileReference,
 	workspaceFileOpenTarget,
@@ -114,7 +115,8 @@ const OpenChatLink = createContext<{
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
-}>({ workspacePaths: [] });
+	findFile: (reference: string) => string | undefined;
+}>({ workspacePaths: [], findFile: () => undefined });
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
@@ -138,9 +140,16 @@ export function ChatLinkProvider({
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
+	const openLink = useLatestCallback((url: string) => onLinkOpen?.(url));
+	const openFile = useLatestCallback((path: string, line?: number) => line == null ? onFileOpen?.(path) : onFileOpen?.(path, line));
+	const openSession = useLatestCallback((url: string) => onSessionLinkOpen?.(url));
+	const findFile = useMemo(() => createWorkspaceFileLookup(workspacePaths), [workspacePaths]);
+	const canOpenLink = Boolean(onLinkOpen);
+	const canOpenFile = Boolean(onFileOpen);
+	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
-		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
+		() => ({ open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -297,7 +306,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
@@ -360,9 +369,9 @@ function compactEmoji(children: ReactNode): ReactNode {
 
 function MarkdownLink({ href, children, className, menuPath }: { href?: string; children?: ReactNode; className?: string; menuPath?: string }) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
-		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
+		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
@@ -505,8 +514,8 @@ function MermaidFence({ code }: { code: string }) {
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
 function useWorkspaceFile(path: string | undefined) {
-	const { openFile, workspacePaths } = useContext(OpenChatLink);
-	const filePath = path && openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	const { openFile, findFile } = useContext(OpenChatLink);
+	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;
 	const target = workspaceFileOpenTarget(path, filePath);
 	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };
@@ -520,7 +529,7 @@ export function FileReference({ path, line, className, children }: { path: strin
 	const file = useWorkspaceFile(path);
 	if (!file) return <span className={className} title={path}>{children}</span>;
 	return (
-		<Pressable className={className} title={path} onClick={() => file.open(line)}>
+		<Pressable data-chat-find-include="" className={className} title={path} onClick={() => file.open(line)}>
 			{children}
 		</Pressable>
 	);
@@ -567,6 +576,7 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 	return (
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
+				data-chat-find-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
 				className="inline rounded transition-colors hover:bg-interactive-hover"

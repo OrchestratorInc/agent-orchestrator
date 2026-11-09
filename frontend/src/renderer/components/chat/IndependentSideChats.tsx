@@ -1505,6 +1505,7 @@ export function useIndependentSideChats(
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
+				data-chat-find-scope=""
 				aria-label={t("sideChat.sideChats")}
 				className="cursor-chat-surface relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background [font-size:14px]"
 			>
@@ -1537,6 +1538,7 @@ export function useIndependentSideChats(
 									</div>
 								) : null}
 								<Timeline
+									sideChat
 									key={activeId}
 									snapshot={conversation}
 									annotationNavigationRef={timelineNavigationRef}

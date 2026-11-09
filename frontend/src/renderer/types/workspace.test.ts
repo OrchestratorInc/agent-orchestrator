@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
+	sessionWorkspaceReady,
 	attentionZone,
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
@@ -380,6 +381,18 @@ describe("sessionArtifacts", () => {
 		expect(sessionArtifacts(session)).toEqual([artifact({ path: "report.md", kind: "markdown" })]);
 	});
 
+	it("lists the newest artifact first, not alphabetically", () => {
+		const session = sessionWith({
+			outputType: "artifact",
+			artifactFiles: [
+				artifact({ path: "a-old.md", updatedAt: "2026-01-01T00:00:00Z" }),
+				artifact({ path: "z-new.md", updatedAt: "2026-01-03T00:00:00Z" }),
+				artifact({ path: "m-mid.md", updatedAt: "2026-01-02T00:00:00Z" }),
+			],
+		});
+		expect(sessionArtifacts(session).map((file) => file.path)).toEqual(["z-new.md", "m-mid.md", "a-old.md"]);
+	});
+
 	it("is empty when outputType is artifact but artifactFiles is absent", () => {
 		expect(sessionArtifacts(sessionWith({ outputType: "artifact" }))).toEqual([]);
 	});
@@ -411,5 +424,14 @@ describe("attentionZone", () => {
 	it("prioritizes merge as the highest-ROI zone", () => {
 		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
+	});
+});
+
+describe("sessionWorkspaceReady", () => {
+	it("follows the daemon's published workspace, not the start state", () => {
+		expect(sessionWorkspaceReady({ workspacePublished: false })).toBe(false);
+		expect(sessionWorkspaceReady({ workspacePublished: true })).toBe(true);
+		// An older daemon that does not report it.
+		expect(sessionWorkspaceReady({})).toBe(true);
 	});
 });
