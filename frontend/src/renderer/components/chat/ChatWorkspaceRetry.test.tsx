@@ -186,7 +186,7 @@ describe("ChatWorkspace retry", () => {
 			/>,
 		);
 		expect(screen.getByText("This is open elsewhere")).toBeVisible();
-		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. AO checks again every 30 seconds.")).toBeVisible();
+		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. Orchestrator checks again every 30 seconds.")).toBeVisible();
 		const button = screen.getByRole("button", { name: /^Retry$/ });
 		expect(button).toBeEnabled();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -238,7 +238,7 @@ describe("ChatWorkspace retry", () => {
 					resumeOpenElsewhere
 				/>,
 			);
-			expect(screen.getByText("Close it there to continue here. AO checks again every 30 seconds.")).toBeVisible();
+			expect(screen.getByText("Close it there to continue here. Orchestrator checks again every 30 seconds.")).toBeVisible();
 			act(() => vi.advanceTimersByTime(29_000));
 			expect(retry).not.toHaveBeenCalled();
 			act(() => vi.advanceTimersByTime(1_000));

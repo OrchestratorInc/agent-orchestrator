@@ -162,7 +162,7 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 		Env:               maps.Clone(env),
 	})
 	if err != nil {
-		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), agentlaunch.RedactError(err, env))
+		return rec, fmt.Errorf("%w: %w", importNotice("Orchestrator could not prepare this conversation for its workspace. See the Orchestrator daemon log for details."), agentlaunch.RedactError(err, env))
 	}
 	if source.ResumeCwd == launchPath {
 		return rec, nil
