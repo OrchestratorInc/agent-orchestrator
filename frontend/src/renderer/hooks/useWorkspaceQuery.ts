@@ -161,7 +161,7 @@ export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
-const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
+export const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
