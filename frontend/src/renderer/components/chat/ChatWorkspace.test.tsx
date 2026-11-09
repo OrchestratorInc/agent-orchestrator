@@ -1417,19 +1417,22 @@ describe("ChatWorkspace timeline", () => {
 		const view = render(<ChatWorkspace snapshot={snapshot("pending", 0)} />);
 		const task = () => screen.getByTestId("live-working-task");
 		const shimmer = () => task().querySelector(".chat-working-shimmer");
+		// The live row opens too and reads the same once the step is done, so look past it.
+		const listRow = () =>
+			screen.queryAllByRole("button", { name: /^Read README\.md/ }).find((button) => button !== screen.queryByTestId("live-working-row"));
 		expect(task()).toHaveTextContent(/^Reading README\.md$/);
 		expect(shimmer()).not.toBeNull();
-		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+		expect(listRow()).toBeUndefined();
 
 		// Done within a blink, it still stays beside the loader for a moment, saying
 		// what it did, without the shimmer that means it is under way...
 		view.rerender(<ChatWorkspace snapshot={snapshot("completed", 1)} />);
 		expect(task()).toHaveTextContent(/^Read README\.md$/);
 		expect(shimmer()).toBeNull();
-		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+		expect(listRow()).toBeUndefined();
 
 		// ...then moves up into the list, and the live row goes back to Thinking.
-		await waitFor(() => expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument(), { timeout: 2_000 });
+		await waitFor(() => expect(listRow()).toBeInTheDocument(), { timeout: 2_000 });
 		expect(task()).toHaveTextContent(/^Thinking$/);
 	});
 
