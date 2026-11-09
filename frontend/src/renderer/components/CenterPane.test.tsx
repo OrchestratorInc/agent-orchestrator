@@ -497,7 +497,7 @@ describe("CenterPane toolbar session label", () => {
 		renderCenterPane({
 			session: { ...worker, id: "sess-orch", kind: "orchestrator" },
 		});
-		const orchestratorTab = screen.getByRole("tab", { name: "Orchestrator agent · Claude Code · Working" });
+		const orchestratorTab = screen.getByRole("tab", { name: "Orchestrator · Claude Code · Working" });
 		expect(orchestratorTab).toHaveTextContent("Orchestrator");
 		expect(orchestratorTab).not.toHaveTextContent(worker.title);
 		expect(orchestratorTab.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
