@@ -571,7 +571,13 @@ export interface TurnOutcomeRetryControl {
 
 /** Where the user continued a stopped turn: a marker in place of the continue message. */
 export function ContinuedMarker() {
-	return <TwoRowTimelineMarker message="Continued" />;
+	return (
+		// Closer to the stopped turn above and the turn it starts below: the marker joins
+		// them, so it should not sit apart from either.
+		<div className="-mb-1 -mt-2.5">
+			<TwoRowTimelineMarker message="Continued" />
+		</div>
+	);
 }
 
 const TURN_OUTCOME_COPY = {
@@ -649,7 +655,9 @@ export function TurnOutcome({
 	const Icon = copy.icon;
 	const needsDeepSeekKey = state === "failed" && failureCode === "provider_key_missing" && onConfigure;
 	return (
-		<div className="group/message flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
+		// A stopped turn is three short lines, so they sit close: 4px under "Worked for",
+		// as an answer's action row does, not the turn's 10px.
+		<div className="group/message -mt-1.5 flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
 				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>
@@ -682,6 +690,7 @@ export function TurnOutcome({
 				</div>
 			) : null}
 			<TurnActions
+				className={error || needsDeepSeekKey ? undefined : "-mt-1"}
 				retry={retry}
 				copyText={copyText}
 				onRollback={onRollback}
