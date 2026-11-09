@@ -85,7 +85,7 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 			>
 				<AttachmentFileCard name={attachment.fileName} bytes={attachment.size} />
 				<span inert className="pointer-events-none absolute inset-0 flex flex-col overflow-hidden">
-					<PdfPreview firstPageOnly load={load} src={`cloud-attachment:${attachment.id}`} path={attachment.fileName} onError={() => setFailed(true)} />
+					<PdfPreview cover load={load} src={`cloud-attachment:${attachment.id}`} path={attachment.fileName} onError={() => setFailed(true)} />
 				</span>
 				<span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{attachmentTypeLabel(attachment.fileName) ?? "PDF"}</span>
 			</Pressable>

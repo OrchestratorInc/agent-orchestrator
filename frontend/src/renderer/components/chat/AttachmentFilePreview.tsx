@@ -66,7 +66,7 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 		: kind === "video"
 			? <video crossOrigin={mediaCrossOrigin(src)} muted onError={onError} playsInline preload="metadata" src={src} tabIndex={-1} className="size-full object-cover" />
 			: kind === "pdf"
-				? <PdfPreview firstPageOnly onError={onError} path={name} src={src} />
+				? <PdfPreview cover onError={onError} path={name} src={src} />
 				: text
 					? <pre className="m-0 size-full overflow-hidden whitespace-pre-wrap break-words bg-background p-2 font-mono text-micro leading-tight text-foreground">{text}</pre>
 					: null;

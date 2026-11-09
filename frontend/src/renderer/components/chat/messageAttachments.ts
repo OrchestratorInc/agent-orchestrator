@@ -59,7 +59,8 @@ export function formatAttachmentSize(bytes: number): string {
  */
 export const ATTACHMENT_TILE_CLASS = "relative flex h-16 w-32 min-w-0 select-none flex-col justify-between overflow-hidden break-all rounded-md border border-border bg-interactive-hover p-2 text-left text-caption leading-tight text-muted-foreground";
 
-export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-full border border-border px-1.5 text-micro whitespace-nowrap";
+/** A tile's type tag: a tiny control, so slightly rounded rather than a pill (DESIGN.md radius). */
+export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-xs border border-border px-1.5 text-micro whitespace-nowrap";
 
 /** The type pill laid over a preview: solid, so it reads on any frame. */
 export const ATTACHMENT_TILE_OVERLAY_PILL_CLASS = "pointer-events-none absolute bottom-1.5 left-1.5 bg-background text-foreground";
