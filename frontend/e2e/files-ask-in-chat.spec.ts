@@ -564,16 +564,19 @@ test.describe("Add to chat from highlighted code", () => {
 		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 6 });
 	});
 
-	test("a redraw mid-drag keeps the selection", async ({ page }) => {
+	test("a redraw mid-drag keeps the selection when dragging continues", async ({ page }) => {
 		const { sentToChat } = await openChatSession(page);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
 		// Replace every row with a fresh copy WHILE the button is still held, as
 		// the viewer does when a loaded highlighter re-tokenizes or a snapshot lands.
-		await page.locator(`${REVIEW} diffs-container`).first().evaluate((host) => {
+		await page.locator(`${REVIEW} diffs-container`).first().evaluate(async (host) => {
 			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
 			}
+			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 		});
+		const extended = (await row(page, REVIEW, 6).boundingBox())!;
+		await page.mouse.move(extended.x + 60, extended.y + extended.height / 2, { steps: 8 });
 		await page.mouse.up();
 		await expect(askButton(page)).toBeVisible();
 		await page.keyboard.press("ControlOrMeta+L");
@@ -582,7 +585,7 @@ test.describe("Add to chat from highlighted code", () => {
 		await page.keyboard.press("Enter");
 		await expect.poll(() => sentToChat.length).toBe(1);
 		expect(sentToChat[0].text).toBe("why these lines?");
-		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 4 });
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 6 });
 	});
 
 	test("the gutter + still opens the single-line feedback composer, and sits clear of the code and the line number", async ({ page }) => {

@@ -34,10 +34,12 @@ export type SelectionEnd = { column: Element; row: Element; rowIndex: number; of
 
 /**
  * Both ends of a selection, in row-relative coordinates a rebuild can resolve,
- * plus the text of every selected row: a rebuild is only trusted while the
- * whole captured span still reads the same, not just its endpoints.
+ * plus the content and identity of every row between them. Matching text
+ * alone cannot distinguish repeated code at a different line or diff side.
  */
-export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd; texts: Array<string> };
+export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd; rows: SelectionRow[] };
+
+type SelectionRow = { text: string; line: string | null; altLine: string | null; type: string | null; side: "deletions" | "additions" };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
 
@@ -69,6 +71,16 @@ function diffRow(element: Element): DiffRow {
 
 function rowSide(element: Element): "deletions" | "additions" {
 	return element.getAttribute("data-line-type") === "change-deletion" || inDeletionsColumn(element) ? "deletions" : "additions";
+}
+
+function snapshotRow(element: Element): SelectionRow {
+	return {
+		text: normalizeCodeRowText(element.textContent ?? ""),
+		line: element.getAttribute("data-line"),
+		altLine: element.getAttribute("data-alt-line"),
+		type: element.getAttribute("data-line-type"),
+		side: rowSide(element),
+	};
 }
 
 // The selection as a range between its anchor and focus, in document order.
@@ -129,7 +141,7 @@ function selectionEnd(node: Node, offset: number): SelectionEnd | null {
  * on purpose (Escape, a click elsewhere) and must stay cleared.
  *
  * A rebuild is only trusted while the column still has the captured rows: row
- * counts and the text of every row in the captured span must match, so a
+ * counts, identity and text of every row in the captured span must match, so a
  * refresh that inserted, removed, or changed rows refuses to resolve the
  * snapshot onto other code and the selection stays cleared instead.
  */
@@ -156,9 +168,14 @@ export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnaps
 	const rows = [...snapshot.anchor.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
 	const first = Math.min(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
 	const last = Math.max(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
-	if (last - first + 1 !== snapshot.texts.length) return false;
+	if (last - first + 1 !== snapshot.rows.length) return false;
 	for (let index = first; index <= last; index++) {
-		if (normalizeCodeRowText(rows[index]?.textContent ?? "") !== snapshot.texts[index - first]) return false;
+		const row = rows[index];
+		if (!row) return false;
+		const next = snapshotRow(row);
+		const captured = snapshot.rows[index - first];
+		if (next.text !== captured.text || next.line !== captured.line || next.altLine !== captured.altLine
+			|| next.type !== captured.type || next.side !== captured.side) return false;
 	}
 	root.getSelection?.()?.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
 	return true;
@@ -203,7 +220,7 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const elements = candidates.slice(Math.min(from, to), Math.max(from, to) + 1);
 	// Restoration needs both native endpoints, including a final row whose
 	// start bounds the selection but whose code is not part of the attachment.
-	const texts = elements.map(element => normalizeCodeRowText(element.textContent ?? ""));
+	const snapshotRows = elements.map(snapshotRow);
 	// A drag that ends at the very start of a line selects none of it, as in an
 	// editor: leave that line out.
 	const end = elements[elements.length - 1];
@@ -233,7 +250,7 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 			// The anchor/focus rows were validated above, so their ends resolve.
 			anchor: selectionEnd(selection.anchorNode!, selection.anchorOffset)!,
 			focus: selectionEnd(selection.focusNode!, selection.focusOffset)!,
-			texts,
+			rows: snapshotRows,
 		},
 	};
 }

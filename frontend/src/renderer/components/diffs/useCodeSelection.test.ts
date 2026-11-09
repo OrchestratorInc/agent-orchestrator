@@ -278,6 +278,33 @@ describe("restoreCodeSelection", () => {
 		expect(restoreCodeSelection(host, selection.snapshot)).toBe(true);
 		expect(placed).toEqual([[rowAt(host, 0, 1).firstChild, 0, rowAt(host, 0, 2).firstChild, 4]]);
 	});
+
+	it.each([
+		["data-line", "20"], ["data-alt-line", "21"], ["data-line-type", "change-deletion"],
+	])("rejects identical interior text with changed %s", (attribute, value) => {
+		for (const side of [undefined, "deletions", "additions"] as const) {
+			const host = surface([{ side, rows: [[1, "context", "same();", 1], [2, "context", "same();", 2], [3, "context", "same();", 3]] }]);
+			const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 2).firstChild!, 7);
+			const captured = readCodeSelection(host)!;
+			rebuild(host);
+			rowAt(host, 0, 1).setAttribute(attribute, value);
+			expect(restoreCodeSelection(host, captured.snapshot)).toBe(false);
+			expect(native.setBaseAndExtent).not.toHaveBeenCalled();
+			host.remove();
+		}
+	});
+
+	it.each(["deletions", "additions"] as const)("rejects a rebuilt %s column that changed sides", side => {
+		const host = surface([{ side, rows: [[1, "context", "same();", 1], [2, "context", "same();", 2]] }]);
+		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 1).firstChild!, 7);
+		const captured = readCodeSelection(host)!;
+		rebuild(host);
+		const code = rowAt(host, 0, 0).parentElement!.parentElement!;
+		code.removeAttribute(`data-${side}`);
+		code.setAttribute(side === "deletions" ? "data-additions" : "data-deletions", "");
+		expect(restoreCodeSelection(host, captured.snapshot)).toBe(false);
+		expect(native.setBaseAndExtent).not.toHaveBeenCalled();
+	});
 });
 
 describe("codeReference", () => {
@@ -298,6 +325,33 @@ describe("codeReference", () => {
 });
 
 describe("code selection capture scheduling", () => {
+	it("clears a repeated row replaced by a balanced insert/delete without attaching it", () => {
+		const host = surface([{ rows: [[10, "context", "same();", 10], [11, "context", "same();", 11], [12, "context", "tail();", 12]] }]);
+		const native = selectRange(host, rowAt(host, 0, 1).firstChild!, 0, rowAt(host, 0, 1).firstChild!, 7);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const flush = () => act(() => { const next = callback; callback = undefined; next?.(0); });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const ref = { current: container };
+		const deliver = vi.fn();
+		const hook = renderHook(() => useCodeSelection(ref, deliver));
+		flush();
+		expect(hook.result.current.source.get()?.range.start).toBe(11);
+		const column = rowAt(host, 0, 0).parentElement!;
+		const inserted = rowAt(host, 0, 0).cloneNode(true) as Element;
+		inserted.setAttribute("data-line", "9"); inserted.setAttribute("data-alt-line", "9");
+		// Insert line 9 and remove the selected line 11. The same text remains at
+		// index 1, but it is now line 10; total row count has not changed.
+		column.replaceChildren(inserted, column.children[0].cloneNode(true), column.children[2].cloneNode(true));
+		native.removeAllRanges();
+		act(() => fireEvent(document, new Event("selectionchange"))); flush(); flush();
+		expect(hook.result.current.source.get()).toBeNull();
+		expect(native.setBaseAndExtent).not.toHaveBeenCalled();
+		expect(hook.result.current.ask()).toBe(false);
+		expect(deliver).not.toHaveBeenCalled();
+		hook.unmount(); container.remove(); frame.mockRestore();
+	});
+
 	it.each(["dismiss", "ask", "reject", "click-away"] as const)("keeps %s authoritative across an immediate redraw", action => {
 		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
 		const native = selectRange(host, rowAt(host, 0, 0).firstChild!, 0, rowAt(host, 0, 1).firstChild!, 3);
@@ -469,7 +523,7 @@ describe("code selection capture scheduling", () => {
 		expect(fresh).not.toBe(captured);
 		expect(fresh!.textRange!.startContainer).toBe(rowAt(host, 0, 0).firstChild);
 		expect(fresh!.textRange!.startContainer.isConnected).toBe(true);
-		expect(fresh!.snapshot.texts).toEqual(["one", "two"]);
+		expect(fresh!.snapshot.rows.map(row => row.text)).toEqual(["one", "two"]);
 		expect(hook.result.current.ask()).toBe(true);
 		expect(deliver).toHaveBeenCalledExactlyOnceWith(fresh);
 		hook.unmount(); container.remove(); frame.mockRestore();
