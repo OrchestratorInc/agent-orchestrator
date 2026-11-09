@@ -207,16 +207,21 @@ export function describeConnectionFailure(
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
-			// The daemon blocks a network address for one minute after 5 wrong
-			// passwords from it, and clears it automatically. Saying so stops people
-			// from power-cycling things that were never the problem. Other devices on
-			// the same network count too, so this phone's password may be right.
+			// The daemon blocks a source for one minute after 5 wrong passwords from
+			// it, and clears it automatically. Saying so stops people from
+			// power-cycling things that were never the problem. On the LAN and over
+			// Tailscale the source is this phone's own address, so the password it
+			// sent is the cause. Through a tunnel it is the visitor's public IP, which
+			// other devices on the same network share, so this password may be right.
 			return {
 				title: "Too many attempts",
 				icon: "timer",
 				message:
-					"Your machine is pausing connections from this network after too many wrong passwords, " +
-					"possibly from another device on the same network. It clears on its own in about a minute.",
+					isLocalNetworkHost(target.host) || isTailscaleHost(target.host)
+						? "Your machine paused this phone after too many wrong passwords. " +
+							"Check the password, then try again. It clears on its own in about a minute."
+						: "Your machine is pausing connections from this network after too many wrong passwords, " +
+							"possibly from another device on the same network. It clears on its own in about a minute.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":

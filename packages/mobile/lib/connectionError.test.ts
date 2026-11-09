@@ -141,11 +141,20 @@ describe("describeConnectionFailure", () => {
 		expect(describeConnectionFailure("unreachable", target()).title).toContain("offline");
 	});
 
-	it("explains the lockout on a 429, and that it clears itself", () => {
-		const d = describeConnectionFailure("rate-limited", target());
+	// On the LAN listener and over Tailscale the lockout is keyed on the phone's
+	// own address, so only this phone's wrong passwords can cause it.
+	it.each(["192.168.1.5", "100.101.102.103"])("blames this phone's password on a 429 from %s", (host) => {
+		const d = describeConnectionFailure("rate-limited", target({ host }));
 		expect(d.message).toContain("about a minute");
-		// The lockout is per network address, and wrong passwords from any device
-		// on it count, so the copy must not blame this phone's password (#7980).
+		expect(d.message).toMatch(/check the password/i);
+		expect(d.message).not.toMatch(/another device|same network/i);
+	});
+
+	// Through a tunnel every device behind the visitor's public IP shares one
+	// lockout, so this phone's password may be right (#7980).
+	it("points at other devices on the network on a 429 through a tunnel", () => {
+		const d = describeConnectionFailure("rate-limited", target({ host: "build-box.trycloudflare.com", port: "443" }));
+		expect(d.message).toContain("about a minute");
 		expect(d.message).toContain("same network");
 		expect(d.message).not.toMatch(/check the password/i);
 	});
