@@ -660,7 +660,7 @@ describe("SessionInspector PR section", () => {
     expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
     expect(section.getByText("Reported by worker")).toBeInTheDocument();
     expect(section.getByText("External repository")).toBeInTheDocument();
-    expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
+    expect(section.getByRole("button", { name: /Linked for reference.*Orchestrator does not track checks/ })).toBeInTheDocument();
     expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
@@ -1046,7 +1046,7 @@ describe("SessionInspector PR section", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "When disabled, AO keeps this session open after all pull requests merge.",
+        name: "When disabled, Orchestrator keeps this session open after all pull requests merge.",
       }),
     ).toBeInTheDocument();
 
@@ -1804,6 +1804,29 @@ describe("SessionInspector Activity section", () => {
       .getByText("Idle")
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      name: "a standalone session",
+      overrides: { workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+      expected: "Created session",
+    },
+    { name: "a project worker", overrides: { kind: "worker" as const }, expected: "Created workspace" },
+    { name: "an orchestrator", overrides: { kind: "orchestrator" as const }, expected: "Created workspace" },
+  ])("labels $name's creation as $expected", ({ overrides, expected }) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          ...overrides,
+          status: "idle",
+          createdAt: "2026-06-15T09:00:00Z",
+        })}
+      />,
+    );
+
+    expect(activitySection().getByText(expected)).toBeInTheDocument();
+    expect(activitySection().getAllByText(/^Created (session|workspace)$/)).toHaveLength(1);
   });
 
   it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
@@ -2646,7 +2669,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       await screen.findByRole("button", { name: "Run review" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(
       screen.queryByText("Reviews on the pull request"),
     ).not.toBeInTheDocument();
@@ -2661,7 +2684,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       await screen.findByRole("button", { name: "Review latest commit" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(screen.queryByText("Reviewable change 3")).not.toBeInTheDocument();
   });
 
@@ -2953,7 +2976,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     await userEvent.click(await screen.findByRole("button", { name: "Review actions" }));
-    await userEvent.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
 
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
@@ -3134,7 +3157,7 @@ describe("SessionInspector summary reviews", () => {
     ["cancelled", "approved", "Review needed", "Review latest commit"],
     ["running", "approved", "Reviewing...", "Stop review"],
   ] as const)(
-    "keeps the current AO review state clear while the current head is %s",
+    "keeps the current Orchestrator review state clear while the current head is %s",
     async (status, previousVerdict, runLabel, actionLabel) => {
       const current = {
         ...reviewState(
@@ -3285,7 +3308,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       screen.queryByText("Reviews on the pull request"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(
       screen.queryByText("No unresolved threads."),
     ).not.toBeInTheDocument();

@@ -199,11 +199,17 @@ type outputTypeReconciler interface {
 	ReconcileSessionOutputType(ctx context.Context, id domain.SessionID) error
 }
 
+// terminalTitleSource reads the titles terminal programs last set.
+type terminalTitleSource interface {
+	ListSessionTerminalTitles(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]string, error)
+}
+
 // Service is the controller-facing session service. It delegates command-side
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
 	manager             commander
+	terminalTitles      terminalTitleSource
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
@@ -342,6 +348,7 @@ func NewWithDeps(d Deps) *Service {
 		backgroundContext = context.Background()
 	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, shareLinks: d.ShareLinks}
+	s.terminalTitles, _ = d.Store.(terminalTitleSource)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -1593,6 +1600,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 			return nil, fmt.Errorf("list workspace cleanup facts: %w", err)
 		}
 	}
+	titles := s.storedTerminalTitles(ctx, ids)
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
@@ -1600,6 +1608,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 		if err != nil {
 			return nil, err
 		}
+		sess.TerminalTitle = presentedTerminalTitle(rec, titles[rec.ID])
 		out = append(out, sess)
 	}
 	if s.statusRecoveryRevision() != recoveryRevision {
@@ -1697,7 +1706,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1807,7 +1816,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1860,13 +1869,13 @@ func mapSessionError(err error) error {
 			"The session's workspace was never set up; retry its start before switching interfaces", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNotCancellable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOT_CANCELLABLE",
-			"The source controller has already stopped; AO must finish or recover the switch", nil)
+			"The source controller has already stopped; Orchestrator must finish or recover the switch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE",
 			"This interface switch has no failure or recovery notice to acknowledge", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return apierr.Conflict("PROVIDER_HISTORY_RECOVERY_UNAVAILABLE",
-			"Provider history can be used only after AO identifies a legacy text-only mismatch", nil)
+			"Provider history can be used only after Orchestrator identifies a legacy text-only mismatch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceAlreadySelected):
 		return apierr.Conflict("INTERFACE_ALREADY_SELECTED",
 			"The session is already using the requested interface", nil)
@@ -1948,7 +1957,7 @@ func mapSessionError(err error) error {
 		// retry, often with a deadline in the chain, so it is not "momentarily
 		// unavailable".
 		return apierr.Conflict("CHAT_RECOVERY_INCONCLUSIVE",
-			"AO could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
+			"Orchestrator could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverUnavailable):
 		return apierr.Conflict("CHAT_DRIVER_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverIncompatible):
@@ -1957,7 +1966,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
-			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
+			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
@@ -1976,7 +1985,7 @@ func mapSessionError(err error) error {
 		return err
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
-			"AO could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
+			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
 			map[string]any{"step": relaunchErr.Step})
 	default:
 		return err
@@ -2088,7 +2097,34 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	sess.TerminalTitle = presentedTerminalTitle(rec, s.storedTerminalTitles(ctx, []domain.SessionID{rec.ID})[rec.ID])
+	return sess, nil
+}
+
+// storedTerminalTitles is cosmetic: a failed read falls back to existing labels
+// instead of failing the board.
+func (s *Service) storedTerminalTitles(ctx context.Context, ids []domain.SessionID) map[domain.SessionID]string {
+	if s.terminalTitles == nil {
+		return nil
+	}
+	titles, err := s.terminalTitles.ListSessionTerminalTitles(ctx, ids)
+	if err != nil && s.logger != nil {
+		s.logger.Warn("list terminal titles failed", "err", err)
+	}
+	return titles
+}
+
+// presentedTerminalTitle applies the label precedence: an explicit name wins,
+// then a meaningful program title. The orchestrator keeps its fixed identity.
+func presentedTerminalTitle(rec domain.SessionRecord, stored string) string {
+	if rec.DisplayNameExplicit || rec.Kind == domain.KindOrchestrator || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return ""
+	}
+	return domain.MeaningfulTerminalTitle(stored, rec.Metadata.WorkspacePath)
 }
 
 // currentWorkspaceCleanup is the teardown recorded for an archived session,

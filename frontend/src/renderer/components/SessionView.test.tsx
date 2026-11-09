@@ -2627,7 +2627,7 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-2" />);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(
-				`${startupError.message} AO is still retrying.`,
+				`${startupError.message} Orchestrator is still retrying.`,
 			);
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
@@ -4526,7 +4526,7 @@ describe("SessionView", () => {
 			historyPolicy: "strict" as const,
 			phase: "recovery_required" as const,
 			errorCode: "DAEMON_RESTARTED",
-			errorDetail: "AO recovered the session in its last committed mode.",
+			errorDetail: "Orchestrator recovered the session in its last committed mode.",
 			createdAt: "2026-08-12T10:00:00Z",
 			updatedAt: "2026-08-12T10:01:00Z",
 			completedAt: "2026-08-12T10:01:00Z",
@@ -4661,7 +4661,7 @@ describe("SessionView", () => {
 				historyPolicy: "provider_history",
 				phase: "recovery_required",
 				errorCode: "DAEMON_RESTARTED",
-				errorDetail: "AO restored Terminal after the daemon restarted.",
+				errorDetail: "Orchestrator restored Terminal after the daemon restarted.",
 				createdAt: "2026-08-25T09:00:00Z",
 				updatedAt: "2026-08-25T09:00:01Z",
 				completedAt: "2026-08-25T09:00:01Z",
@@ -4713,7 +4713,7 @@ describe("SessionView", () => {
 			workerSession("sess-1").mode = "tui";
 			interfaceTransitionState.startError = startError;
 			const errorDetail =
-				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+				"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. target still running";
 			interfaceTransitionState.status = {
 				supported: true,
 				targetMode: "chat",

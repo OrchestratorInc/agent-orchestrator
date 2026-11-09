@@ -18,7 +18,7 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 		cache: "no-store",
 		signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs),
 	});
-	if (!response.ok) throw new AccountHostSyncError(`AO Cloud host sync failed (${response.status}).`, response.status);
+	if (!response.ok) throw new AccountHostSyncError(`Orchestrator Cloud host sync failed (${response.status}).`, response.status);
 	return response;
 }
 

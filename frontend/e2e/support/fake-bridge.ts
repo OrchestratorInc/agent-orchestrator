@@ -357,6 +357,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 				},
+				cliShadow: {
+					inspect: async () => ({ kind: "unknown" as const }),
+					replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+					reveal: async () => undefined,
+				},
 				updateSettings: {
 					get: async () => currentUpdateSettings,
 					set: async (next: UpdateSettings) => {
@@ -1291,6 +1296,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 					unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
+				},
+				cliShadow: {
+					inspect: async () => ({ kind: "unknown" as const }),
+					replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+					reveal: async () => undefined,
 				},
 				updateSettings: {
 					get: async () => ({

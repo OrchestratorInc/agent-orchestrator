@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
-	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
+	errDrainQuiescenceUnverified = errors.New("the Orchestrator daemon could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
+	errDrainDecisionPending      = errors.New("the Orchestrator daemon found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
 )
 
 // interfaceTransitionStore is optional so the existing narrow Manager Store
@@ -586,7 +586,7 @@ func (m *Manager) runInterfaceTransition(
 	// be proven stopped, do not launch either controller: recovery is safer than
 	// two writers racing on one native conversation.
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
-		detail := "AO could not prove that the old controller stopped. Restart AO to reconcile this session before sending more work: " + err.Error()
+		detail := "Orchestrator could not prove that the old controller stopped. Restart Orchestrator to reconcile this session before sending more work: " + err.Error()
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"SOURCE_STOP_UNCERTAIN", detail)
 		return
@@ -727,6 +727,7 @@ func (m *Manager) runInterfaceTransition(
 		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "durable_completion")
 		return
 	}
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // hermesNativeConversationID reads the native state.db session id the
@@ -1560,6 +1561,7 @@ func (m *Manager) rollbackInterfaceTransition(
 		return
 	}
 	_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code, cause.Error())
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // chatHoldsProviderConversation reports whether the session durably holds a
@@ -1593,7 +1595,7 @@ func (m *Manager) retainUnconfirmedTransitionTarget(transition domain.SessionInt
 	// Keep the durable input fence and startup-recovery record. Terminalizing the
 	// saga would let ordinary restore adopt a target that never passed admission.
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionTargetStarting,
-		"TARGET_STOP_UNCONFIRMED", "AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
+		"TARGET_STOP_UNCONFIRMED", "Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
 		m.logger.Error("interface transition: retain unconfirmed target shutdown", "transition", transition.ID, "error", err)
 		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
 		return fmt.Errorf("persist unconfirmed target for transition %s: %w", transition.ID, err)
@@ -1962,7 +1964,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 				return nil, ctx.Err()
 			}
 		}
-		detail := "The daemon restarted during the interface switch; AO recovered the session from its last committed mode."
+		detail := "The daemon restarted during the interface switch; Orchestrator recovered the session from its last committed mode."
 		if transition.AccountMove() {
 			detail = "The daemon restarted during the account switch; the session stays on its committed account."
 			switch transition.Phase {
@@ -1997,7 +1999,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 						captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 						continue
 					}
-					detail = "The daemon restarted during the account switch; AO stopped the agent and kept the session on its committed account. Resume it to continue."
+					detail = "The daemon restarted during the account switch; Orchestrator stopped the agent and kept the session on its committed account. Resume it to continue."
 				}
 			}
 		} else if (transition.SourceMode == domain.SessionModeTUI && transition.TargetMode == domain.SessionModeChat) ||
@@ -2033,9 +2035,9 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 					return nil, fmt.Errorf("recover transition %s source mode: session changed", transition.ID)
 				}
 				if transition.SourceMode == domain.SessionModeTUI {
-					detail = "The daemon restarted during the interface switch; AO restored Terminal so native history can be replayed safely on retry."
+					detail = "The daemon restarted during the interface switch; Orchestrator restored Terminal so native history can be replayed safely on retry."
 				} else {
-					detail = "The daemon restarted during the interface switch; AO confirmed the failed Terminal controller stopped and restored Chat ownership."
+					detail = "The daemon restarted during the interface switch; Orchestrator confirmed the failed Terminal controller stopped and restored Chat ownership."
 				}
 			}
 		}
@@ -2117,7 +2119,7 @@ func transitionDetail(transition domain.SessionInterfaceTransition, code, detail
 	}
 	switch code {
 	case "DRAIN_QUIESCENCE_UNVERIFIED":
-		return "AO could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
+		return "Orchestrator could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
 	case "DRAIN_DECISION_PENDING":
 		return "The agent is waiting for an answer in the terminal, so it stays on its current account. Answer it, then try again."
 	case "TRANSITION_CANCELLED":

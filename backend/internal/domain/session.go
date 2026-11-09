@@ -327,6 +327,9 @@ type SessionRecord struct {
 	ReviewerConfig    AgentConfig     `json:"reviewerConfig,omitempty"`
 	AutoReviewEnabled bool            `json:"autoReviewEnabled"`
 	DisplayName       string          `json:"displayName,omitempty"`
+	// DisplayNameExplicit marks a name a person or caller chose, which outranks
+	// a terminal program's title. Generated and prompt-derived names do not.
+	DisplayNameExplicit bool `json:"-"`
 	// Mode is the session's currently committed conversation controller. Every
 	// send, restore, kill, and reaper decision dispatches from it. Only the
 	// durable interface-transition coordinator may change it; the daemon default
@@ -598,9 +601,13 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles    []SessionArtifactFile `json:"-"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
+	// TerminalTitle is the title the session's terminal program set, present
+	// only when it should label the session: it is meaningful and no explicit
+	// name outranks it. It never replaces the session's id or stored name.
+	TerminalTitle string                `json:"terminalTitle,omitempty"`
+	ArtifactFiles []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.

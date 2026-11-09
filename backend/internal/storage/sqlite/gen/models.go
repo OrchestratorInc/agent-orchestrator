@@ -764,6 +764,7 @@ type Session struct {
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
+	DisplayNameExplicit              bool
 }
 
 type SessionAgentAccount struct {
@@ -857,6 +858,12 @@ type SessionTelemetry struct {
 	EndClaimed        int64
 }
 
+type SessionTerminalTitle struct {
+	SessionID string
+	Title     string
+	UpdatedAt time.Time
+}
+
 type SessionTerminalTurn struct {
 	ID              int64
 	SessionID       string
@@ -891,6 +898,8 @@ type ShellTerminal struct {
 	Transient                 bool
 	PreviewCapabilityVerifier string
 	CommandOwner              string
+	TitleExplicit             bool
+	AppTitle                  string
 }
 
 type TelemetryEvent struct {

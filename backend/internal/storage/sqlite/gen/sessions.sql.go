@@ -212,7 +212,7 @@ const getSession = `-- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -252,6 +252,7 @@ type GetSessionRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -337,6 +338,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.UpdatedAt,
 		&i.Revision,
 		&i.DisplayName,
+		&i.DisplayNameExplicit,
 		&i.FirstSignalAt,
 		&i.PreviewURL,
 		&i.PreviewRevision,
@@ -404,7 +406,7 @@ const getSessionByAutomationRunID = `-- name: GetSessionByAutomationRunID :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -444,6 +446,7 @@ type GetSessionByAutomationRunIDRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -529,6 +532,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.UpdatedAt,
 		&i.Revision,
 		&i.DisplayName,
+		&i.DisplayNameExplicit,
 		&i.FirstSignalAt,
 		&i.PreviewURL,
 		&i.PreviewRevision,
@@ -619,7 +623,7 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash, import_source
+    client_request_id, client_request_hash, import_source, display_name_explicit
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -627,7 +631,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?
+    ?, ?, ?, ?, ?
 )
 `
 
@@ -696,6 +700,7 @@ type InsertSessionParams struct {
 	ClientRequestID                  string
 	ClientRequestHash                string
 	ImportSource                     string
+	DisplayNameExplicit              bool
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -764,6 +769,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.ClientRequestID,
 		arg.ClientRequestHash,
 		arg.ImportSource,
+		arg.DisplayNameExplicit,
 	)
 	return err
 }
@@ -772,7 +778,7 @@ const listAllSessions = `-- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -812,6 +818,7 @@ type ListAllSessionsRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -903,6 +910,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.UpdatedAt,
 			&i.Revision,
 			&i.DisplayName,
+			&i.DisplayNameExplicit,
 			&i.FirstSignalAt,
 			&i.PreviewURL,
 			&i.PreviewRevision,
@@ -1068,7 +1076,7 @@ const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
@@ -1108,6 +1116,7 @@ type ListSessionsByProjectRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -1199,6 +1208,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.UpdatedAt,
 			&i.Revision,
 			&i.DisplayName,
+			&i.DisplayNameExplicit,
 			&i.FirstSignalAt,
 			&i.PreviewURL,
 			&i.PreviewRevision,
@@ -1457,47 +1467,49 @@ UPDATE sessions SET
     harness = ?3,
     auto_review_enabled = ?4,
     display_name = ?5,
-    activity_state = ?6,
-    activity_last_at = ?7,
+    display_name_explicit = ?6,
+    activity_state = ?7,
+    activity_last_at = ?8,
     is_terminated = 0,
-    session_mode = ?8,
-    model = ?9,
-    effort = ?10,
-    session_permissions = ?11,
-    requested_output = ?12,
-    created_at = ?13,
-    updated_at = ?14,
-    auto_inject_review = ?15,
-    auto_inject_ci = ?16,
-    provision_state = ?17,
+    session_mode = ?9,
+    model = ?10,
+    effort = ?11,
+    session_permissions = ?12,
+    requested_output = ?13,
+    created_at = ?14,
+    updated_at = ?15,
+    auto_inject_review = ?16,
+    auto_inject_ci = ?17,
+    provision_state = ?18,
     provision_error = '',
-    client_request_id = ?18,
-    client_request_hash = ?19,
+    client_request_id = ?19,
+    client_request_hash = ?20,
     is_task_preparation = 0
-WHERE id = ?20 AND is_task_preparation = 1
+WHERE id = ?21 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
-	IssueID            domain.IssueID
-	Kind               domain.SessionKind
-	Harness            domain.AgentHarness
-	AutoReviewEnabled  bool
-	DisplayName        string
-	ActivityState      domain.ActivityState
-	ActivityLastAt     time.Time
-	SessionMode        domain.SessionMode
-	Model              string
-	Effort             string
-	SessionPermissions string
-	RequestedOutput    string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	AutoInjectReview   bool
-	AutoInjectCI       bool
-	ProvisionState     domain.SessionProvisionState
-	ClientRequestID    string
-	ClientRequestHash  string
-	ID                 domain.SessionID
+	IssueID             domain.IssueID
+	Kind                domain.SessionKind
+	Harness             domain.AgentHarness
+	AutoReviewEnabled   bool
+	DisplayName         string
+	DisplayNameExplicit bool
+	ActivityState       domain.ActivityState
+	ActivityLastAt      time.Time
+	SessionMode         domain.SessionMode
+	Model               string
+	Effort              string
+	SessionPermissions  string
+	RequestedOutput     string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	AutoInjectReview    bool
+	AutoInjectCI        bool
+	ProvisionState      domain.SessionProvisionState
+	ClientRequestID     string
+	ClientRequestHash   string
+	ID                  domain.SessionID
 }
 
 // Claim the hidden row without touching branch/workspace facts that may be
@@ -1509,6 +1521,7 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.Harness,
 		arg.AutoReviewEnabled,
 		arg.DisplayName,
+		arg.DisplayNameExplicit,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.SessionMode,
@@ -1593,7 +1606,7 @@ func (q *Queries) RecordSessionLatestUserPrompt(ctx context.Context, arg RecordS
 }
 
 const renameSession = `-- name: RenameSession :execrows
-UPDATE sessions SET display_name = ?, updated_at = ? WHERE id = ?
+UPDATE sessions SET display_name = ?, display_name_explicit = 1, updated_at = ? WHERE id = ?
 `
 
 type RenameSessionParams struct {

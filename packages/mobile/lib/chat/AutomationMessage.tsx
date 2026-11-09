@@ -391,7 +391,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			break;
 		}
 		case "changesRequested":
-			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "AO reviewer"}</Text> requested changes on {prLink}</>;
+			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "Built-in reviewer"}</Text> requested changes on {prLink}</>;
 			detail = automation.body ? <Folded><ChatMarkdown text={safeMarkdown(automation.body)} /></Folded> : null;
 			break;
 		case "mergeConflict":

@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readlink, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import type { CliLinkIo } from "../shared/cli-link";
+import type { CliShadowIo } from "../shared/cli-shadow";
 
 function missing(error: unknown): boolean {
 	return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -72,6 +73,30 @@ export function nodeCliLinkIo(): CliLinkIo {
 			}
 		},
 		version: (executable) => readCliVersion(executable),
+	};
+}
+
+export function nodeCliShadowIo(): CliShadowIo {
+	const io = nodeCliLinkIo();
+	return {
+		...io,
+		async identity(value) {
+			try {
+				const entry = await lstat(value, { bigint: true });
+				const target = await stat(value, { bigint: true });
+				return [entry, target].map((s) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`).join("/");
+			} catch {
+				return null;
+			}
+		},
+		// A shell skips a directory named ao, though it passes an X_OK check.
+		async isExecutableFile(value) {
+			try {
+				return (await stat(value)).isFile() && (await io.canExecute(value));
+			} catch {
+				return false;
+			}
+		},
 	};
 }
 
