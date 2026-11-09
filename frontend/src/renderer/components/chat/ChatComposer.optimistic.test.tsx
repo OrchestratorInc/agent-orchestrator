@@ -251,7 +251,9 @@ describe("optimistic message delivery", () => {
 		await startSend(onSend, "status here");
 		const field = screen.getByLabelText("Message the agent");
 		const strip = await screen.findByTestId("unsent-message-strip");
-		expect(strip).toHaveTextContent("Not sent, retrying…");
+		expect(strip).toHaveTextContent("Waiting for connection…");
+		expect(screen.getByText("Waiting for connection…")).toHaveClass("text-muted-foreground");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(strip).toHaveTextContent("status here");
 		await typeInLexicalEditor(field, "typed during the outage");
 
@@ -269,7 +271,7 @@ describe("optimistic message delivery", () => {
 		expect(flickers).toEqual([]);
 
 		await act(async () => refuse({ code: "CHAT_RESUME_FAILED", message: "Could not resume" }));
-		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).not.toHaveTextContent("retrying"));
+		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("Not sent"));
 		expect(field).toHaveTextContent("typed during the outage");
 		await new Promise((resolve) => setTimeout(resolve, 2_500));
 		expect(onSend).toHaveBeenCalledTimes(3);
@@ -304,7 +306,8 @@ describe("optimistic message delivery", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		// The strip has one slot, so the second send stays in the box and retries from there.
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery?.requestText).toBe("second"));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
+		await waitFor(() => expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
 		online = true;
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 12_000 });

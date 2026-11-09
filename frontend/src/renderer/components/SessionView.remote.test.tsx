@@ -115,15 +115,18 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-const LAST_SAVED_COPY = "Showing the last saved copy until the host connects.";
-
-it("keeps a remote chat readable and locked while its host is away, without falling back to local", async () => {
+it("keeps a remote chat open while its host is away and delivers what was sent once it is back", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const posts: string[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
+		if (path.endsWith("/conversation/messages")) {
+			posts.push(request.url);
+			return Response.json({ state: "accepted", turnId: "turn-1" }, { status: 202 });
+		}
 		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
 		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
 		if (path.endsWith("/conversation")) return Response.json(conversationBody());
@@ -136,16 +139,19 @@ it("keeps a remote chat readable and locked while its host is away, without fall
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
-	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "sent while away");
+	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+	expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(posts).toEqual([]);
 	// The refused read of the outage must not take the chat away while the first read after it runs.
 	await act(async () => { await queryClient.refetchQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error");
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
 	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
-	await waitFor(() => expect(screen.queryByText(LAST_SAVED_COPY)).not.toBeInTheDocument());
+	await waitFor(() => expect(posts).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages"]), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -167,14 +173,13 @@ it("hides the stale stopped-agent banner while the host is away and brings it ba
 	expect(await screen.findByRole("alert")).toHaveTextContent("The agent controller stopped");
 	expect(screen.getByRole("button", { name: "Open shell" })).toBeInTheDocument();
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument());
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-	expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	expect(await screen.findByRole("button", { name: "Open shell" })).toBeInTheDocument();
 });
 
-it("locks the last saved chat when the upstream daemon fails but its proxy remains connected", async () => {
+it("keeps the last saved chat open for messages when the upstream daemon fails but its proxy remains connected", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -198,9 +203,10 @@ it("locks the last saved chat when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	await waitFor(() => expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error"));
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
-	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "still here");
+	expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -625,7 +631,7 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 	await waitFor(() => expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001/new"));
 });
 
-it("reuses a Chat delivery ID when a lost response is retried", async () => {
+it("retries a lost Chat response by itself with the same delivery ID once the host is back", async () => {
 	const deliveryIds: string[] = [];
 	const posts: string[] = [];
 	localGet.mockReset();
@@ -644,7 +650,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 		else if (new URL(request.url).pathname.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (request.url.includes(":4000")) throw new TypeError("response lost after acceptance");
 			status = 202;
 			body = { state: "accepted", turnId: "turn-1" };
 		} else throw new Error(`Unexpected request ${request.url}`);
@@ -660,16 +666,11 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+	expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("Waiting for connection…");
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
-	expect(deliveryIds[1]).toBe(deliveryIds[0]);
-	expect(posts).toEqual([
-		"http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages",
-		"http://127.0.0.1:4002/api/v1/sessions/session-1/conversation/messages",
-	]);
+	await waitFor(() => expect(posts.at(-1)).toBe("http://127.0.0.1:4002/api/v1/sessions/session-1/conversation/messages"), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+	expect(new Set(deliveryIds).size).toBe(1);
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -736,7 +737,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 		if (path.endsWith("/reviews/review-1/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (request.url.includes(":4001")) throw new TypeError("response lost after acceptance");
 			return Response.json({ state: "accepted", turnId: "review-turn" }, { status: 202 });
 		}
 		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
@@ -757,14 +758,9 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	await act(async () => { await disconnectHost("box-b"); });
 	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
-	expect(deliveryIds[1]).toBe(deliveryIds[0]);
-	expect(posts).toEqual([
-		"http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages",
-		"http://127.0.0.1:4002/api/v1/reviews/review-1/conversation/messages",
-	]);
+	await waitFor(() => expect(posts.at(-1)).toBe("http://127.0.0.1:4002/api/v1/reviews/review-1/conversation/messages"), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+	expect(new Set(deliveryIds).size).toBe(1);
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1"))).toBe("local-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-a"))).toBe("box-a-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-b"))).toBeDefined();

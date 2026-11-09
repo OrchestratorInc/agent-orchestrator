@@ -40,7 +40,6 @@ export function UnsentMessageStrip(props:
 	}
 
 	const { text, attachmentCount, sending, retrying = false, retryDisabled, onRetry, onDiscard } = props;
-	// An automatic retry keeps one steady row, during an attempt and between them.
 	const oneShot = sending && !retrying;
 	const preview = text.replace(/\s+/g, " ").trim() || t("chat.unsent.attachmentsOnly");
 	return (
@@ -51,7 +50,7 @@ export function UnsentMessageStrip(props:
 				) : (
 					<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-status-needs-you" />
 				)}
-				<span className={cn("shrink-0 text-xs font-medium", oneShot ? "text-muted-foreground" : "text-status-needs-you")}>
+				<span className={cn("shrink-0 text-xs font-medium", sending || retrying ? "text-muted-foreground" : "text-status-needs-you")}>
 					{t(retrying ? "chat.unsent.retrying" : sending ? "chat.unsent.sending" : "chat.unsent.label")}
 				</span>
 				<p className={cn("min-w-0 flex-1 truncate text-xs leading-relaxed", oneShot ? "text-muted-foreground" : "text-foreground")} title={expanded ? undefined : text}>

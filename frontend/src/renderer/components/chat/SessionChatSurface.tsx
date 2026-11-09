@@ -173,7 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
-	// The host is connecting or unreachable: the chat is its last saved copy, to read only.
+	// The host is connecting or unreachable: the chat is its last saved copy.
 	const hostUnreachable = Boolean(hostId) && !daemonReady;
 	const {
 		snapshot: queriedSnapshot,
@@ -619,7 +619,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
 				newWorkDisabled={newWorkDisabled || hostUnreachable}
-				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
+				sendsWhileAway={hostUnreachable && !newWorkDisabled}
 				savedCopy={hostUnreachable}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
