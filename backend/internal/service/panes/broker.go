@@ -48,6 +48,11 @@ var (
 // DefaultTimeout bounds how long Execute waits for the windows.
 const DefaultTimeout = 8 * time.Second
 
+// MaxLayoutBytes caps one reported layout. A real layout is a few kilobytes;
+// anything larger is not one, and a window must not be able to make the
+// daemon hold an unbounded blob per session.
+const MaxLayoutBytes = 256 << 10
+
 type window struct {
 	send func(Command)
 }
@@ -104,7 +109,7 @@ func (b *Broker) Connect(send func(Command)) *Window {
 // Report records the layout the window shows for a session; a null or empty
 // layout means the window no longer shows it.
 func (h *Window) Report(sessionID string, layout json.RawMessage) {
-	if sessionID == "" {
+	if sessionID == "" || len(layout) > MaxLayoutBytes {
 		return
 	}
 	h.b.mu.Lock()
@@ -177,11 +182,22 @@ func (b *Broker) Execute(ctx context.Context, sessionID, action string, args jso
 	}
 	b.seq++
 	id := "pane-" + strconv.FormatUint(b.seq, 10)
-	p := &pending{waiting: make(map[*window]struct{}, len(b.windows)), done: make(chan Result, 1)}
-	targets := make([]*window, 0, len(b.windows))
-	for w := range b.windows {
+	// The window that last reported the session's layout is the one showing it.
+	// Asking only that window keeps a request from being applied twice when two
+	// windows are open. With no report, every window is asked and each says
+	// whether it shows the session.
+	var targets []*window
+	if current, ok := b.layouts[sessionID]; ok {
+		targets = []*window{current.owner}
+	} else {
+		targets = make([]*window, 0, len(b.windows))
+		for w := range b.windows {
+			targets = append(targets, w)
+		}
+	}
+	p := &pending{waiting: make(map[*window]struct{}, len(targets)), done: make(chan Result, 1)}
+	for _, w := range targets {
 		p.waiting[w] = struct{}{}
-		targets = append(targets, w)
 	}
 	b.pending[id] = p
 	timeout := b.timeout

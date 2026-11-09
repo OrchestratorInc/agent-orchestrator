@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -100,5 +101,40 @@ func TestReportingNullForgetsOnlyThatWindowsLayout(t *testing.T) {
 	second.Report("s-1", nil)
 	if _, ok := b.Layout("s-1"); ok {
 		t.Fatal("layout kept after its window stopped showing the session")
+	}
+}
+
+func TestExecuteAsksOnlyTheWindowShowingTheSession(t *testing.T) {
+	b := NewBroker()
+	asked := map[string]int{}
+	var first, second *Window
+	first = b.Connect(func(cmd Command) {
+		asked["first"]++
+		go first.Resolve(Result{ID: cmd.ID, OK: true})
+	})
+	second = b.Connect(func(cmd Command) {
+		asked["second"]++
+		go second.Resolve(Result{ID: cmd.ID, OK: true})
+	})
+	// Both windows show the session; the one that reported last owns it.
+	first.Report("s-1", json.RawMessage(`{"selected":"a"}`))
+	second.Report("s-1", json.RawMessage(`{"selected":"b"}`))
+	if _, err := b.Execute(context.Background(), "s-1", "split", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if asked["second"] != 1 || asked["first"] != 0 {
+		t.Fatalf("asked = %v, want only the window that reported last", asked)
+	}
+}
+
+func TestReportIgnoresAnOversizedLayout(t *testing.T) {
+	b := NewBroker()
+	w := b.Connect(func(Command) {})
+	w.Report("s-1", json.RawMessage(`{"selected":"a"}`))
+	huge := json.RawMessage(`"` + strings.Repeat("x", MaxLayoutBytes) + `"`)
+	w.Report("s-1", huge)
+	layout, ok := b.Layout("s-1")
+	if !ok || string(layout) != `{"selected":"a"}` {
+		t.Fatalf("layout = %.40s, %v; want the previous one kept", layout, ok)
 	}
 }

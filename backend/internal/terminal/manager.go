@@ -819,6 +819,12 @@ func (c *connState) handleShellAgents(msg clientMsg) {
 // passes on its layout reports and command results.
 func (c *connState) handlePanes(msg clientMsg) {
 	if msg.Type == msgSubscribe {
+		// Only the desktop app's own page drives panes. The terminal socket also
+		// accepts local programs that send no Origin, and those must not be able
+		// to receive pane requests or answer them.
+		if !paneClientAllowed(c.conn) {
+			return
+		}
 		c.mgr.panesMu.Lock()
 		src := c.mgr.panes
 		c.mgr.panesMu.Unlock()
@@ -856,6 +862,13 @@ func (c *connState) handlePanes(msg clientMsg) {
 	case msgResult:
 		conn.Resolve(msg.Result)
 	}
+}
+
+// paneClientAllowed reports whether the connection may use the panes channel:
+// the transport vouches for it by implementing AllowsPanes.
+func paneClientAllowed(conn wsConn) bool {
+	p, ok := conn.(interface{ AllowsPanes() bool })
+	return ok && p.AllowsPanes()
 }
 
 // outQueue is the per-connection write queue. A buffered channel cannot serve

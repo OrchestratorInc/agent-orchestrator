@@ -26,6 +26,13 @@ type fakeConn struct {
 	closed chan struct{}
 }
 
+// AllowsPanes makes the fake a page connection, as the desktop app's is.
+func (f *fakeConn) AllowsPanes() bool { return true }
+
+// plainConn is a connection that does not vouch for itself, like a local
+// program with no Origin: it has only the wsConn methods.
+type plainConn struct{ wsConn }
+
 func newFakeConn() *fakeConn {
 	return &fakeConn{in: make(chan clientMsg, 16), out: make(chan serverMsg, 64), closed: make(chan struct{})}
 }
@@ -839,6 +846,28 @@ func TestServeRelaysPaneCommandsLayoutsAndResults(t *testing.T) {
 		defer src.mu.Unlock()
 		return src.closed == 1
 	})
+}
+
+func TestServeIgnoresPanesFromAConnectionThatIsNotAPage(t *testing.T) {
+	src := &fakePanes{}
+	mgr := NewManager(&fakeSource{}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.SetPanes(src)
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, plainConn{conn})
+
+	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe}
+	conn.in <- clientMsg{Ch: chPanes, Type: msgLayout, SessionID: "s1", Layout: json.RawMessage(`{"selected":"session"}`)}
+	// Frames are handled in order, so the pong means the two above were too.
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if src.connects != 0 || len(src.reports) != 0 {
+		t.Fatalf("connects = %d, reports = %v; a non-page connection must not reach the panes relay", src.connects, src.reports)
+	}
 }
 
 func TestServeSystemPingGetsPong(t *testing.T) {
