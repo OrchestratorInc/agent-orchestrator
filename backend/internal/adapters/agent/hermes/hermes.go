@@ -473,7 +473,7 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 		// checkout with edited tracked files (locales, chrome) still prints
 		// it. Refuse when git reports such edits.
 		if root := launcherSourceRoot(path); root != "" && !sourceUnmodified(ctx, root) {
-			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; AO qualifies only unmodified releases", root), false
+			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; Orchestrator qualifies only unmodified releases", root), false
 		}
 		return true, "", false
 	}
@@ -489,7 +489,7 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	if err != nil {
 		return false, fmt.Sprintf("version probe failed (%v): %q", err, firstLine), false
 	}
-	return false, fmt.Sprintf("version banner %q is not a Hermes release line AO has qualified", firstLine), false
+	return false, fmt.Sprintf("version banner %q is not a Hermes release line Orchestrator has qualified", firstLine), false
 }
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
@@ -760,7 +760,7 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 }
 func validate(cfg ports.LaunchConfig) error {
 	if len(cfg.AllowedTools)+len(cfg.DisallowedTools) > 0 {
-		return fmt.Errorf("hermes: AO tool allow/deny restrictions are unsupported")
+		return fmt.Errorf("hermes: Orchestrator tool allow/deny restrictions are unsupported")
 	}
 	return nil
 }
@@ -1230,7 +1230,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		if bundled = pyStrip(bundled); bundled != "" {
 			path, ok := childPath(bundled)
 			if st, err := os.Stat(path); !ok || err == nil && st.IsDir() {
-				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome AO reads; unset it for AO sessions")
+				return fmt.Errorf("hermes: HERMES_BUNDLED_LOCALES replaces the English terminal chrome Orchestrator reads; unset it for Orchestrator-managed sessions")
 			}
 		}
 	}
@@ -1262,7 +1262,7 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		entries, _ := os.ReadDir(dir)
 		for _, entry := range entries {
 			if englishLocaleFile.MatchString(entry.Name()) && !entry.IsDir() {
-				return fmt.Errorf("hermes: %s rewords the English terminal chrome AO reads; remove or rename it for AO sessions", filepath.Join(dir, entry.Name()))
+				return fmt.Errorf("hermes: %s rewords the English terminal chrome Orchestrator reads; remove or rename it for Orchestrator-managed sessions", filepath.Join(dir, entry.Name()))
 			}
 		}
 	}
@@ -1327,7 +1327,7 @@ func refuseSecretSources(config map[string]any) error {
 			continue
 		}
 		if override, isBool := yaml11Bool(source["override_existing"]); !isBool || override {
-			return fmt.Errorf("hermes: secret source %q may override the language and instructions AO sets; set override_existing: false for it", name)
+			return fmt.Errorf("hermes: secret source %q may override the language and instructions Orchestrator sets; set override_existing: false for it", name)
 		}
 	}
 	return nil
@@ -1344,13 +1344,13 @@ func refuseDotenvOverrides(envFile string) error {
 		}
 		switch key := guardedEnvName(binding.key); key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
-			return fmt.Errorf("hermes: %s in %s would replace AO's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would replace Orchestrator's standing instructions; move it to agent.system_prompt in config.yaml", key, envFile)
 		case "HERMES_LANGUAGE":
-			return fmt.Errorf("hermes: %s in %s would change the terminal chrome AO reads; set display.language in config.yaml instead", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would change the terminal chrome Orchestrator reads; set display.language in config.yaml instead", key, envFile)
 		case "HERMES_BUNDLED_LOCALES":
-			return fmt.Errorf("hermes: %s in %s would replace the English terminal chrome AO reads", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would replace the English terminal chrome Orchestrator reads", key, envFile)
 		case "HERMES_HOME", "HERMES_MANAGED_DIR":
-			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration AO checked; set it in AO's environment instead", key, envFile)
+			return fmt.Errorf("hermes: %s in %s would move Hermes away from the configuration Orchestrator checked; set it in Orchestrator's environment instead", key, envFile)
 		}
 	}
 	return nil
@@ -1578,7 +1578,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	title, err := sessionTitle(cfg.DataDir, cfg.Session.ID)
 	if err != nil {
-		return nil, false, fmt.Errorf("hermes: AO native session title unavailable: %w", err)
+		return nil, false, fmt.Errorf("hermes: Orchestrator native session title unavailable: %w", err)
 	}
 	if _, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title); err != nil {
 		return nil, false, err
@@ -1764,7 +1764,7 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
-		return fmt.Errorf("hermes: ordinary AO sends require the current empty native composer; enter approval decisions directly in the terminal")
+		return fmt.Errorf("hermes: ordinary Orchestrator sends require the current empty native composer; enter approval decisions directly in the terminal")
 	}
 	return nil
 }

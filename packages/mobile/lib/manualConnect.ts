@@ -1,4 +1,5 @@
 import type { ServerConfig } from "./config";
+import { resolveManualAddress } from "./connectionFields";
 import { normalizeServerHost, type Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
 
@@ -97,11 +98,10 @@ export async function persistManualHostEdit(
 ): Promise<Host> {
 	const machineName = name.trim();
 	if (!machineName) throw new Error("Machine name is required");
-	const target = { ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() };
-	if (!target.host) throw new Error("Host is required");
-	if (!/^\d+$/.test(target.httpPort) || Number(target.httpPort) < 1 || Number(target.httpPort) > 65535) {
-		throw new Error("API port must be between 1 and 65535");
-	}
+	if (!normalizeServerHost(cfg.host)) throw new Error("Host is required");
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+	if (!address.ok) throw new Error(address.incomplete ? "API port must be between 1 and 65535" : address.error);
+	const target = { ...cfg, host: address.host, httpPort: address.port };
 
 	const edited = editedManualHost(host, target, machineName, endpointIndex);
 	const before = host.endpoints[endpointIndex];

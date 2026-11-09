@@ -46,7 +46,7 @@ import {
 	User,
 	X,
 	ArrowLeft,
-} from "lucide-react";
+} from "@/components/app-icons";
 import {
 	useCallback,
 	useEffect,
@@ -146,6 +146,7 @@ import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
+import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -156,6 +157,7 @@ import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -1685,6 +1687,12 @@ const ProjectItem = memo(function ProjectItem({
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
+	const orchestratorReply = useOrchestratorReplyState({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		orchestrator,
+		viewing: orchestratorActive,
+	});
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
@@ -1915,7 +1923,7 @@ const ProjectItem = memo(function ProjectItem({
 											)}
 											data-project-chevron-icon=""
 										>
-											<ChevronRight strokeWidth={1.75} />
+											<ChevronRight />
 										</span>
 									</span>
 									{/* Collapsed icon rail: the project icon, with a red badge when a session
@@ -2016,21 +2024,27 @@ const ProjectItem = memo(function ProjectItem({
 														size="icon-xs"
 														variant="quiet"
 														aria-current={orchestratorActive ? "page" : undefined}
-														aria-label={
+														aria-label={orchestratorReplyLabel(
 															orchestrator
 																? t("shell.openProjectOrchestrator", {
 																name: nameWithHost,
 																	})
 																: t("shell.spawnProjectOrchestrator", {
 																name: nameWithHost,
-																	})
-														}
+																	}),
+															orchestratorReply,
+															t,
+														)}
 															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
 															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
 														onClick={() => void openOrchestrator()}
 														type="button"
 													>
-														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
+														<OrchestratorReplyIcon
+															reply={orchestratorReply}
+															strokeWidth={orchestratorActive ? 2.5 : 2}
+															surface="sidebar"
+														/>
 													</Button>
 												</span>
 											</TooltipTrigger>
@@ -2040,7 +2054,7 @@ const ProjectItem = memo(function ProjectItem({
 														: isSpawning
 														? t("shell.spawning")
 														: orchestrator
-															? t("shell.orchestrator")
+															? orchestratorReplyLabel(t("shell.orchestrator"), orchestratorReply, t)
 															: t("shell.spawnOrchestratorLower")}
 											</TooltipContent>
 										</Tooltip>
@@ -3093,7 +3107,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 			<DropdownMenuTrigger asChild>
 				<Pressable
 					aria-label={t("shell.signedInAs", {
-						email: session?.user.email ?? "AO Cloud",
+						email: session?.user.email ?? "Orchestrator Cloud",
 					})}
 					className={FOOTER_NAV_BUTTON_CLASS}
 					tabIndex={tabIndex}
@@ -3129,7 +3143,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 function accountName(user: { displayName?: string; email?: string } | undefined): string {
 	const display = user?.displayName?.trim();
 	if (display && display !== user?.email) return display;
-	return user?.email ?? "AO Cloud";
+	return user?.email ?? "Orchestrator Cloud";
 }
 
 /** The profile picture from the sign-in provider, or the person's initials. */
@@ -3170,7 +3184,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 			<TooltipTrigger asChild>
 				<Pressable
 					aria-label={t("shell.signedInAs", {
-						email: session?.user.email ?? "AO Cloud",
+						email: session?.user.email ?? "Orchestrator Cloud",
 					})}
 					className={FOOTER_RAIL_BUTTON_CLASS}
 					onClick={() => void signOut()}
@@ -3185,7 +3199,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 			</TooltipTrigger>
 			<TooltipContent side="right">
 				{t("shell.signOutWithEmail", {
-					email: session?.user.email ?? "AO Cloud",
+					email: session?.user.email ?? "Orchestrator Cloud",
 				})}
 			</TooltipContent>
 		</Tooltip>
@@ -3610,7 +3624,7 @@ function ProjectIcon({
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {
 		const Icon = expanded ? FolderOpen : Folder;
-		return <Icon className={className} strokeWidth={1.75} />;
+		return <Icon className={className} />;
 	}
 	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
 	const loaded = showAvatar && loadedUrl === avatarUrl;
@@ -3673,7 +3687,6 @@ function SectionDisclosure({
 				<ChevronRight
 					aria-hidden="true"
 					className={cn("size-3.5! shrink-0 transition-transform duration-150", open && "rotate-90")}
-					strokeWidth={2}
 				/>
 			) : null}
 		</>
@@ -3818,7 +3831,7 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 	return (
 		<SidebarMenuItem className="group-data-[collapsible=icon]:mb-0">
 			<SidebarTopNavRow
-				icon={<Search strokeWidth={1.75} aria-hidden="true" />}
+				icon={<Search aria-hidden="true" />}
 				label={t("shell.search")}
 				onClick={() => {
 					// Open on the microtask after this click rather than inside it: mounting

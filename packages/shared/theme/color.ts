@@ -62,7 +62,7 @@ export function lightness(hex: string): number {
 	return rgbToOklab(parseHex(hex))[0];
 }
 
-function relativeLuminance(hex: string): number {
+export function relativeLuminance(hex: string): number {
 	const [r, g, b] = parseHex(hex).map(toLinear);
 	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }

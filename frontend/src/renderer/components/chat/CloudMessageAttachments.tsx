@@ -8,7 +8,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileIcon, FileText } from "lucide-react";
+import { FileIcon, FileText } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { fetchCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";

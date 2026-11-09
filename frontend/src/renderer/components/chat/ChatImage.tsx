@@ -16,7 +16,7 @@ import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
 import { useTranslation } from "react-i18next";
-import { Copy, Download } from "lucide-react";
+import { Copy, Download } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
@@ -171,22 +171,29 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 					)}
 				</Pressable>
 			</ChatImageMenu>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent
-					aria-describedby={undefined}
-					className="z-overlay w-auto max-w-[calc(100vw-4rem)] gap-0 bg-popover p-2 pt-10"
-				>
-					<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
-					<ChatImageMenu url={url} label={label}>
-						<img
-							crossOrigin={mediaCrossOrigin(url)}
-							src={url}
-							alt={label}
-							className="block max-h-[calc(100svh-8rem)] max-w-full rounded-md object-contain"
-						/>
-					</ChatImageMenu>
-				</DialogContent>
-			</Dialog>
+			<ChatImageDialog open={open} onOpenChange={setOpen} url={url} label={label} />
 		</>
+	);
+}
+
+export function ChatImageDialog({ open, onOpenChange, url, label }: { open: boolean; onOpenChange: (open: boolean) => void; url: string; label: string }) {
+	const { t } = useTranslation();
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent
+				aria-describedby={undefined}
+				className="z-overlay w-max max-w-[calc(100vw-4rem)] gap-0 bg-popover p-2 pt-10"
+			>
+				<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
+				<ChatImageMenu url={url} label={label}>
+					<img
+						crossOrigin={mediaCrossOrigin(url)}
+						src={url}
+						alt={label}
+						className="block max-h-[calc(100svh-8rem)] max-w-full rounded-md object-contain"
+					/>
+				</ChatImageMenu>
+			</DialogContent>
+		</Dialog>
 	);
 }

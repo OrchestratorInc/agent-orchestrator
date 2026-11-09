@@ -1,9 +1,8 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, PanelRight, Plus, SquareTerminal } from "lucide-react";
+import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -76,7 +75,7 @@ import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -585,7 +584,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -1534,15 +1533,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		session && !isOrchestrator ? (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<TopbarButton
+					<Button size="icon-sm"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						<Plus aria-hidden="true" className="size-icon-md" />
-					</TopbarButton>
+					</Button>
 				</TooltipTrigger>
 				<TooltipContent shortcut={newTerminalError ? undefined : "new-shell-terminal"} side="bottom">
 					{newTerminalError ?? t("terminal.new")}
@@ -1659,14 +1658,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// only preview work arriving afterward may reveal Browser automatically.
 	useLayoutEffect(() => {
 		if (!session) return;
-		if (browserOnly) {
-			const current = useUiStore.getState().inspectorSessions[uiSessionId];
-			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
-			return;
-		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+	}, [hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession]);
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
@@ -2098,7 +2091,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenArtifact = useCallback(
 		(target: { feedback?: boolean; path: string }) => {
-			if (browserOnly) return;
 			setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(false);
 			transitionInspectorView("artifacts");
@@ -2108,7 +2100,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
 			}));
 		},
-		[browserOnly, sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
+		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
@@ -2116,7 +2108,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
-			if (browserOnly) return false;
 			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
 			if (!listed(session?.artifactFiles)) {
 				await refreshWorkspaces();
@@ -2128,7 +2119,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			handleOpenArtifact({ path });
 			return true;
 		},
-		[browserOnly, handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
+		[handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
 	);
 
 	const revealResolvedWorkspaceFile = useCallback(
@@ -2350,9 +2341,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
-		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		if (browserOnly && inspectorView === "browser") setBrowserContentRevealed(uiSessionId, true);
 		toggleInspector(uiSessionId);
-	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	}, [browserOnly, inspectorView, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
@@ -2621,6 +2612,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
+									accountMoveQueues={interfaceUi.accountMoveQueues}
 									arriving={interfaceUi.optimisticTarget === "chat"}
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
@@ -2826,7 +2818,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
-							browserOnly={browserOnly}
+							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
 							filesView={
@@ -2850,7 +2842,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							isInspectorVisible={inspectorPanelVisible}
 							artifactRequest={artifactRequestsBySession[uiSessionId] ?? null}
 							onArtifactRequestConsumed={handleArtifactRequestConsumed}
-							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
+							onOpenArtifact={handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
 							onOpenReviewerTerminal={selectReviewerTerminal}
@@ -2868,40 +2860,30 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<PageTopbarTrailingAction>
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
-						<TopbarButton
-							aria-label={
-								browserOnly
-									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-							}
+						<Button type="button" size="icon-sm"
+							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
 								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
 								handleToggleInspector();
 							}}
 							style={noDragStyle}
-							variant="icon"
+							variant="quiet"
 						>
-							{browserOnly ? (
-								<span className="relative inline-flex">
-									<BrowserIcon aria-hidden="true" className="size-icon-md" />
-									{!isInspectorOpen && browserUnseen ? (
-										<span
-											aria-hidden="true"
-											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-											data-testid="orchestrator-browser-unseen-indicator"
-										/>
-									) : null}
-								</span>
-							) : (
+							<span className="relative inline-flex">
 								<PanelRight className="size-icon-md" aria-hidden="true" />
-							)}
-						</TopbarButton>
+								{browserOnly && !isInspectorOpen && browserUnseen ? (
+									<span
+										aria-hidden="true"
+										className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+										data-testid="orchestrator-browser-unseen-indicator"
+									/>
+								) : null}
+							</span>
+						</Button>
 					</TooltipTrigger>
-					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
-						{browserOnly
-							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
+					<TooltipContent shortcut="toggle-inspector" side="bottom">
+						{isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>
