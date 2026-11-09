@@ -566,7 +566,7 @@ export interface paths {
         };
         get: operations["listGitHubRepositories"];
         put?: never;
-        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty repository of that name that already exists is connected instead (200, created false). Push the folder to pushPath, relative to the control plane, with the same bearer token; that endpoint only accepts pushes that create branches. */
+        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty private repository of that name that already exists is connected instead (200, created false); a public one is refused (422 repository_create_refused), as is a repository the member's own GitHub account cannot push to when the installation is user-scoped. Push the folder to pushPath, relative to the control plane, with the same bearer token. That endpoint only accepts pushes to a repository this operation returned for the organization, only pushes that create branches, and answers 403 otherwise; GitHub's own refusals (for example of .github/workflows changes the App may not make) reach git's output unchanged. 422 codes: repository_owner_required, github_installation_required, github_installation_ineligible, repository_create_on_github, repository_create_refused, validation_error. 502 SCM_BROKER_FAILED when GitHub could not be reached or did not grant the repository in time; retry later. */
         post: operations["createGitHubRepository"];
         delete?: never;
         options?: never;
@@ -2832,7 +2832,7 @@ export interface components {
             [key: string]: unknown;
         };
         /**
-         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value.
+         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value. A standalone project has no repository, so creating one with this layout is refused (422).
          * @enum {string}
          */
         ProjectLayout: "workspace";
