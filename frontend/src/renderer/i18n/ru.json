@@ -1430,6 +1430,8 @@
 	"settings.cliLink.foreign": "Эта команда не является ссылкой Orchestrator, поэтому она не изменена.",
 	"settings.remoteHosts": "Удалённые хосты",
 	"settings.navigation": "Навигация",
+	"settings.altMenu": "Показывать меню по Alt",
+	"settings.altMenuSaveFailed": "Не удалось сохранить настройку.",
 	"settings.navigationGestures": "Жесты навигации",
 	"settings.navigationGesturesHint": "Проводите двумя пальцами по горизонтали, чтобы переходить назад или вперёд.",
 	"settings.renderMath": "Отображать формулы",

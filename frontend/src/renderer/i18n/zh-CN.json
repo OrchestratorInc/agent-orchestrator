@@ -1355,6 +1355,8 @@
 	"settings.cliLink.foreign": "This command is not an Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "远程主机",
 	"settings.navigation": "导航",
+	"settings.altMenu": "Show menu bar with Alt",
+	"settings.altMenuSaveFailed": "Could not save this setting.",
 	"settings.navigationGestures": "导航手势",
 	"settings.navigationGesturesHint": "用双指水平滑动来后退或前进。",
 	"settings.renderMath": "渲染数学公式",
