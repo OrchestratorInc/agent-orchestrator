@@ -78,7 +78,7 @@ describe("CloudMessageAttachments", () => {
 		mocks.fetchCloudAttachment.mockResolvedValue(new Blob(["hello"], { type: "text/plain" }));
 		renderAttachments([attachment({})]);
 		const chip = screen.getByRole("button", { name: /notes\.txt/ });
-		expect(chip).toHaveTextContent("2.0 KB");
+		expect(chip).toHaveTextContent("TXT · 2.0 KB");
 		expect(chip).toHaveAttribute("title", "Save notes.txt");
 		fireEvent.click(chip);
 		await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));

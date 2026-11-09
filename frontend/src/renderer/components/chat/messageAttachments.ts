@@ -40,6 +40,23 @@ export function attachmentName(path: string): string {
 	return path.slice(path.lastIndexOf("/") + 1);
 }
 
+/** A file's type as its name gives it, for a chip whose name may truncate. */
+export function attachmentTypeLabel(name: string): string | undefined {
+	return /\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1]?.toUpperCase();
+}
+
+export function formatAttachmentSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * The row of attachments above a user's bubble, capped to the bubble's own width.
+ * Outside the bubble so a long message's fold can never clip them.
+ */
+export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-col items-end gap-1";
+
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
 	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path
 		.split("/")

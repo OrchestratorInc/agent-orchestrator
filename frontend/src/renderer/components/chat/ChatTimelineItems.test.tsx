@@ -738,6 +738,54 @@ describe("HumanMessage", () => {
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
 	});
+
+	describe("attachments", () => {
+		const attached = (paths: string[], body = "") =>
+			`${body ? `${body}\n\n` : ""}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+		const apiBaseUrl = "http://127.0.0.1:3002";
+
+		// jsdom has no layout: every element reports a height far over the fold.
+		beforeEach(() => {
+			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
+		});
+
+		// A normal screenshot is taller than the fold, so inside it every image was cut off.
+		it("keeps them above the bubble and outside a long message's fold", () => {
+			const { container } = render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-ab12.png"], "a long folded message") })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			const toggle = screen.getByRole("button", { name: "Show more" });
+			const fold = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+			const list = screen.getByRole("list", { name: "Attached files" });
+			const bubble = container.querySelector(".cursor-chat-human-message")!;
+			expect(fold).toContainElement(screen.getByText("a long folded message"));
+			expect(fold).not.toContainElement(list);
+			expect(bubble).not.toContainElement(list);
+			expect(list.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		});
+
+		it("draws no bubble or fold for a message that is only attachments, and keeps its actions", () => {
+			const { container } = render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-only.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			expect(screen.getByRole("img", { name: "Image 1" })).toBeInTheDocument();
+			expect(container.querySelector(".cursor-chat-human-message")).toBeNull();
+			expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Copy user message" })).toBeInTheDocument();
+			expect(screen.getByLabelText(/^Sent /)).toBeInTheDocument();
+		});
+
+		it("shows one image at its own shape and several at a shared height", () => {
+			const one = render(<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />);
+			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-auto");
+			one.unmount();
+			render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-40");
+			expect(screen.getByRole("img", { name: "Image 2" })).toHaveClass("h-40");
+		});
+	});
 });
 
 describe("ProviderSwitchMarker", () => {

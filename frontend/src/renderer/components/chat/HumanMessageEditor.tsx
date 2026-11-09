@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { ConversationContentItems } from "./ConversationContentItems";
 import {
+	HUMAN_ATTACHMENTS_CLASS,
 	IMAGE_ATTACHMENT_PATH,
 	stagedAttachmentParts,
 	withAttachmentReferences,
@@ -28,7 +29,7 @@ export interface HumanMessageEditorProps {
 	actionsClassName?: string;
 	/** Drawn first, where the bubble draws it. */
 	leading?: ReactNode;
-	/** Drawn after the staged files and above the text, where the bubble draws them. */
+	/** Drawn after the staged files, above the box, where the message draws them. */
 	cloudAttachments?: ReactNode;
 	pending: boolean;
 	/** Durable unresolved delivery: lock edits, but allow explicit safe recovery. */
@@ -154,6 +155,26 @@ export function HumanMessageEditor({
 
 	return (
 		<>
+			{/* Above the box and outside its fold, where the bubble draws them. */}
+			{attachments.length > 0 || cloudAttachments || otherContent.length > 0 ? (
+				<div className={HUMAN_ATTACHMENTS_CLASS}>
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel={t("chat.attachment.list")}
+						className="justify-end"
+						onRemove={pending || locked ? undefined : removeAttachment}
+					/>
+					{cloudAttachments}
+					<ConversationContentItems
+						content={otherContent}
+						ariaLabel={t("chat.edit.preservedContent")}
+						imageLabel={t("chat.edit.image")}
+						className="justify-end"
+					/>
+				</div>
+			) : null}
 			<div
 				ref={box}
 				className={className}
@@ -163,15 +184,6 @@ export function HumanMessageEditor({
 				    Folded, the editor scrolls instead of clipping, so all of it stays reachable. */}
 				<CollapsibleHumanBody stateKey={foldKey} scrollWhenFolded>
 					{leading}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel={t("chat.attachment.list")}
-						className="mb-2"
-						onRemove={pending || locked ? undefined : removeAttachment}
-					/>
-					{cloudAttachments}
 					{/* A hidden copy of the draft sizes the field (see styles.css), so the box
 					    fits its text exactly as the bubble did and grows only with the text. */}
 					<div className="chat-human-edit-field" data-value={draft}>
@@ -192,12 +204,6 @@ export function HumanMessageEditor({
 							className="w-full min-w-0 resize-none overflow-hidden bg-transparent p-0 break-words whitespace-pre-wrap text-pretty text-foreground outline-none"
 						/>
 					</div>
-					<ConversationContentItems
-						content={otherContent}
-						ariaLabel={t("chat.edit.preservedContent")}
-						imageLabel={t("chat.edit.image")}
-						className="mt-2"
-					/>
 				</CollapsibleHumanBody>
 				{/* Below the field it belongs to, on its own line, so all of it reads. */}
 				{error ? (

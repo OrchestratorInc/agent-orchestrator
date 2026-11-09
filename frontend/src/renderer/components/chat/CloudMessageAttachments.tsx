@@ -17,7 +17,8 @@ import { useUiStore } from "../../stores/ui-store";
 import { PdfPreview } from "../PdfPreview";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
-import { ChatImage } from "./ChatImage";
+import { ChatImage, ChatImageAttachmentSet } from "./ChatImage";
+import { AttachmentFileText } from "./StagedAttachmentItems";
 
 type CloudAttachmentSource = { baseUrl: string; orgId: string; sessionId: string };
 
@@ -28,10 +29,9 @@ export function CloudAttachmentSourceProvider({ source, children }: { source: Cl
 	return <CloudAttachmentSourceContext.Provider value={source}>{children}</CloudAttachmentSourceContext.Provider>;
 }
 
-function formatSize(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** An SVG stays a file chip; it is never rendered as an image. */
+function rendersAsImage(attachment: CloudAttachment): boolean {
+	return attachment.contentType.startsWith("image/") && attachment.contentType !== "image/svg+xml";
 }
 
 function useAttachmentBytes(source: CloudAttachmentSource | undefined, attachment: CloudAttachment, enabled = true) {
@@ -127,8 +127,7 @@ function CloudFileAttachment({ source, attachment }: { source: CloudAttachmentSo
 			className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover disabled:opacity-60"
 		>
 			<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-			<span className="truncate">{attachment.fileName}</span>
-			<span className="shrink-0 tabular-nums opacity-70">{formatSize(attachment.size)}</span>
+			<AttachmentFileText name={attachment.fileName} bytes={attachment.size} />
 		</Pressable>
 	);
 }
@@ -138,18 +137,20 @@ export function CloudMessageAttachments({ attachments, className }: { attachment
 	const source = useContext(CloudAttachmentSourceContext);
 	if (!attachments?.length) return null;
 	return (
-		<ul aria-label={t("chat.attachment.list")} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{attachments.map((attachment) => (
-				<li key={attachment.id} className="max-w-full">
-					{attachment.contentType.startsWith("image/") && attachment.contentType !== "image/svg+xml" ? (
-						<CloudImageAttachment source={source} attachment={attachment} />
-					) : attachment.contentType === "application/pdf" ? (
-						<CloudPdfAttachment source={source} attachment={attachment} />
-					) : (
-						<CloudFileAttachment source={source} attachment={attachment} />
-					)}
-				</li>
-			))}
-		</ul>
+		<ChatImageAttachmentSet count={attachments.filter(rendersAsImage).length}>
+			<ul aria-label={t("chat.attachment.list")} className={cn("flex max-w-full flex-wrap gap-2", className)}>
+				{attachments.map((attachment) => (
+					<li key={attachment.id} className="max-w-full">
+						{rendersAsImage(attachment) ? (
+							<CloudImageAttachment source={source} attachment={attachment} />
+						) : attachment.contentType === "application/pdf" ? (
+							<CloudPdfAttachment source={source} attachment={attachment} />
+						) : (
+							<CloudFileAttachment source={source} attachment={attachment} />
+						)}
+					</li>
+				))}
+			</ul>
+		</ChatImageAttachmentSet>
 	);
 }

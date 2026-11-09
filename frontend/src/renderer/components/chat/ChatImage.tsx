@@ -54,6 +54,11 @@ export function ChatImageGallery({ children }: { children: ReactNode }) {
 	);
 }
 
+/** A message's attached images: several share the gallery's height, one keeps its own shape. */
+export function ChatImageAttachmentSet({ count, children }: { count: number; children: ReactNode }) {
+	return <InGallery.Provider value={count > 1}>{children}</InGallery.Provider>;
+}
+
 export function ChatImageLinkScope({ children }: { children: ReactNode }) {
 	return <InLink.Provider value={true}>{children}</InLink.Provider>;
 }
@@ -138,7 +143,7 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 					onClick={() => setOpen(true)}
 					aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
 					className={cn(
-						"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 motion-reduce:transition-none",
+						"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
 						inline
 							? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
 							: "inline-block align-top",

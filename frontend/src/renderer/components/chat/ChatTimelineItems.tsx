@@ -9,7 +9,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
  * re-sorting. Those belong to the daemon.
  */
 
-import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
+import { stagedAttachmentParts, attachmentURL, HUMAN_ATTACHMENTS_CLASS, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
@@ -1015,6 +1015,9 @@ export function HumanMessage({
 			className="mb-2"
 		/>
 	) : null;
+	const hasAttachments = attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
+	const showBubble = Boolean(body) || Boolean(annotationSummary) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
@@ -1048,7 +1051,7 @@ export function HumanMessage({
 					className={humanBubbleClass()}
 					actionsClassName={editActionRowClass}
 					leading={annotationSummary}
-					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
+					cloudAttachments={message.cloudAttachments?.length ? <CloudMessageAttachments attachments={message.cloudAttachments} className="justify-end" /> : undefined}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1064,36 +1067,44 @@ export function HumanMessage({
 					}}
 				/>
 			) : (
-				<div
-					/* Themes draw sent and queued differently; light theme needs to tell them
-					   apart in CSS because it paints an enclosure only around a sent one. */
-					data-queued={queued ? "" : undefined}
-					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
-				>
-					<CollapsibleHumanBody stateKey={visibleMessageText}>
-						{annotationSummary}
-						{/* Attachments sit above the text they came with. */}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
-						{body ? (
-							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-								<ProseWithInlineImages
-									text={body}
-									attachments={attachments}
-									sessionId={sessionId}
-									apiBaseUrl={apiBaseUrl}
-									renderText={(text) => <SessionLinkedText text={text} />}
-								/>
-							</p>
-						) : null}
-					</CollapsibleHumanBody>
-				</div>
+				<>
+					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
+					{hasAttachments ? (
+						<div className={cn(HUMAN_ATTACHMENTS_CLASS, animateIn && "chat-human-message-enter")}>
+							<StagedAttachmentItems
+								paths={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								ariaLabel="Attached files"
+								className="justify-end"
+							/>
+							<CloudMessageAttachments attachments={message.cloudAttachments} className="justify-end" />
+						</div>
+					) : null}
+					{showBubble ? (
+						<div
+							/* Themes draw sent and queued differently; light theme needs to tell them
+							   apart in CSS because it paints an enclosure only around a sent one. */
+							data-queued={queued ? "" : undefined}
+							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
+						>
+							<CollapsibleHumanBody stateKey={visibleMessageText}>
+								{annotationSummary}
+								{body ? (
+									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+										<ProseWithInlineImages
+											text={body}
+											attachments={attachments}
+											sessionId={sessionId}
+											apiBaseUrl={apiBaseUrl}
+											renderText={(text) => <SessionLinkedText text={text} />}
+										/>
+									</p>
+								) : null}
+							</CollapsibleHumanBody>
+						</div>
+					) : null}
+				</>
 			)}
 			{editing ? null : (
 				<div className={actionRowClass}>
@@ -3331,33 +3342,42 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
-					{body ? (
-						<p>
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
+				<>
+					{/* As on a sent message: attachments above the text, outside its bubble. */}
+					{attachments.length > 0 || remainingContent.length > 0 ? (
+						<div className={HUMAN_ATTACHMENTS_CLASS}>
+							<StagedAttachmentItems
+								paths={attachments}
 								sessionId={sessionId}
 								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => text}
+								ariaLabel="Steered attachments"
+								className="justify-end"
 							/>
-						</p>
+							<ConversationContentItems
+								content={remainingContent}
+								ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
+								imageLabel="Image"
+								imageAlt={(position) => `Steered attachment ${position}`}
+								className="justify-end"
+							/>
+						</div>
 					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Steered attachments"
-						className={cn(body && "mt-2")}
-					/>
-					<ConversationContentItems
-						content={remainingContent}
-						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
-						imageLabel="Image"
-						imageAlt={(position) => `Steered attachment ${position}`}
-						className={cn((body || attachments.length > 0) && "mt-2")}
-					/>
-				</div>
+					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
+						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+							{body ? (
+								<p>
+									<ProseWithInlineImages
+										text={body}
+										attachments={attachments}
+										sessionId={sessionId}
+										apiBaseUrl={apiBaseUrl}
+										renderText={(text) => text}
+									/>
+								</p>
+							) : null}
+						</div>
+					) : null}
+				</>
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
