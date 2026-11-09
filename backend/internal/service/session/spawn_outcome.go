@@ -30,9 +30,41 @@ type spawnAcceptance struct {
 
 	// Set by the observer when the start went asynchronous. Written on the
 	// spawn goroutine before manager.Spawn returns, read after it returns.
-	deferred   bool
-	sessionID  domain.SessionID
+	deferred  bool
+	sessionID domain.SessionID
+
+	// When manager.Spawn answered the request (duration_ms). The background
+	// start can settle first; its report then waits here for that time.
+	mu         sync.Mutex
+	answered   bool
 	answeredMs int64
+	held       func(answeredMs int64)
+}
+
+// answer records when the spawn request was answered and releases an outcome
+// that settled before then.
+func (a *spawnAcceptance) answer(ms int64) {
+	a.mu.Lock()
+	a.answered, a.answeredMs = true, ms
+	held := a.held
+	a.held = nil
+	a.mu.Unlock()
+	if held != nil {
+		held(ms)
+	}
+}
+
+// deliver runs report with the answer time, now or once the request is answered.
+func (a *spawnAcceptance) deliver(report func(answeredMs int64)) {
+	a.mu.Lock()
+	if !a.answered {
+		a.held = report
+		a.mu.Unlock()
+		return
+	}
+	ms := a.answeredMs
+	a.mu.Unlock()
+	report(ms)
 }
 
 type spawnAcceptanceKey struct{}
@@ -65,13 +97,19 @@ type provisionObserverSetter interface {
 	SetProvisionObserver(sessionmanager.ProvisionObserver)
 }
 
-func (s *Service) spawnFactsFromRequest(ctx context.Context, createdBy domain.SessionCreator) spawnFacts {
+// spawnFactsFromRequest reads the request's attribution. withActor also
+// resolves the GitHub login, which can be a network call: only the synchronous
+// path does that, after the session launched. Asynchronous starts leave it to
+// the exporter, which stamps the login the daemon already resolved.
+func (s *Service) spawnFactsFromRequest(ctx context.Context, createdBy domain.SessionCreator, withActor bool) spawnFacts {
 	facts := spawnFacts{createdBy: createdBy, requestID: reqid.FromContext(ctx)}
 	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
 		facts.surface = surface
 	}
-	if actor, ok := s.githubActor(ctx); ok {
-		facts.githubActor = actor
+	if withActor {
+		if actor, ok := s.githubActor(ctx); ok {
+			facts.githubActor = actor
+		}
 	}
 	return facts
 }
@@ -106,9 +144,8 @@ func (s *Service) openAsyncSpawn(ctx context.Context, rec domain.SessionRecord) 
 	attempt := &asyncSpawnAttempt{start: s.now()}
 	if acc, ok := ctx.Value(spawnAcceptanceKey{}).(*spawnAcceptance); ok && acc.sessionID == "" {
 		acc.deferred, acc.sessionID = true, rec.ID
-		acc.answeredMs = s.now().Sub(acc.start).Milliseconds()
 		attempt.start, attempt.acceptance, attempt.firstEligible = acc.start, acc, acc.firstEligible
-		attempt.facts = s.spawnFactsFromRequest(ctx, acc.createdBy)
+		attempt.facts = s.spawnFactsFromRequest(ctx, acc.createdBy, false)
 	} else {
 		// A retry of a failed start: a fresh attempt timed from its own
 		// request. It is the install's first session only if no other exists.
@@ -118,7 +155,7 @@ func (s *Service) openAsyncSpawn(ctx context.Context, rec domain.SessionRecord) 
 				createdBy = facts.CreatedBy
 			}
 		}
-		attempt.facts = s.spawnFactsFromRequest(ctx, createdBy)
+		attempt.facts = s.spawnFactsFromRequest(ctx, createdBy, false)
 		attempt.firstEligible = s.onlySession(ctx, rec.ID)
 		s.firstSession.begin(attempt.firstEligible)
 	}
@@ -152,22 +189,26 @@ func (s *Service) abandonAsyncSpawn(acc *spawnAcceptance) bool {
 
 func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawnAttempt, ready bool, cause error) {
 	elapsed := s.now().Sub(attempt.start).Milliseconds()
-	// duration_ms keeps its meaning (time to answer the request); a retry has
-	// no such answer, so it omits it.
-	answered := int64(-1)
-	if attempt.acceptance != nil {
-		answered = attempt.acceptance.answeredMs
-	}
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)
-	if !ready {
-		s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, requestID: attempt.facts.requestID}, cause, answered, elapsed)
+	report := func(answered int64) {
+		if !ready {
+			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, requestID: attempt.facts.requestID}, cause, answered, elapsed)
+			return
+		}
+		s.emitSpawned(rec, answered, elapsed, firstForInstall, firstKnown, attempt.facts)
+		if attempt.firstEligible && attempt.acceptance != nil {
+			s.emitFirstSessionSpawned(rec, attempt.acceptance.project, attempt.facts.requestID)
+		}
+	}
+	// duration_ms keeps its meaning, the time until manager.Spawn answered;
+	// an outcome that settles first waits for it. A retry has no such answer,
+	// so it omits duration_ms.
+	if attempt.acceptance == nil {
+		report(-1)
 		return
 	}
-	s.emitSpawned(rec, answered, elapsed, firstForInstall, firstKnown, attempt.facts)
-	if attempt.firstEligible && attempt.acceptance != nil {
-		s.emitFirstSessionSpawned(rec, attempt.acceptance.project, attempt.facts.requestID)
-	}
+	attempt.acceptance.deliver(report)
 }
 
 // onlySession reports whether id is the install's only session.

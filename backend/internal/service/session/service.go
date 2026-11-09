@@ -486,24 +486,30 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
 	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
+	answeredMs := s.now().Sub(start).Milliseconds()
 	if err != nil {
-		if acc.deferred && !s.abandonAsyncSpawn(acc) {
-			// The background start already settled this attempt.
-			return domain.SessionRecord{}, 0, 0, err
+		if acc.deferred {
+			abandoned := s.abandonAsyncSpawn(acc)
+			// Releases the outcome of a background start that already settled.
+			acc.answer(answeredMs)
+			if !abandoned {
+				return domain.SessionRecord{}, 0, 0, err
+			}
 		}
 		s.firstSession.finish(s.milestones, firstSession, false)
-		elapsed := s.now().Sub(start).Milliseconds()
+		elapsed := answeredMs
 		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
 	}
 	s.recordCreatedBy(ctx, rec.ID, createdBy)
 	if acc.deferred {
+		acc.answer(answeredMs)
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
-	elapsed := s.now().Sub(start).Milliseconds()
-	facts := s.spawnFactsFromRequest(ctx, createdBy)
+	elapsed := answeredMs
+	facts := s.spawnFactsFromRequest(ctx, createdBy, true)
 	s.emitSpawned(rec, elapsed, elapsed, firstForInstall, firstKnown, facts)
 	if firstSession {
 		s.emitFirstSessionSpawned(rec, project, facts.requestID)

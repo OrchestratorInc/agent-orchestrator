@@ -20,6 +20,9 @@ type asyncCommander struct {
 	observer sessionmanager.ProvisionObserver
 	clock    *fakeClock
 	answerIn time.Duration
+	// afterAsync is work between the provisioning write and the answer
+	// (attachments, the queued prompt).
+	afterAsync time.Duration
 	// settleDuringSpawn settles the start before Spawn answers (a fast start).
 	settleDuringSpawn  domain.SessionProvisionState
 	spawnErrAfterAsync error
@@ -34,6 +37,7 @@ func (a *asyncCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (doma
 	if a.settleDuringSpawn != "" {
 		a.observer(context.Background(), rec, a.settleDuringSpawn, nil)
 	}
+	a.clock.advance(a.afterAsync)
 	if a.spawnErrAfterAsync != nil {
 		return domain.SessionRecord{}, 0, 0, a.spawnErrAfterAsync
 	}
@@ -44,16 +48,30 @@ type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
 
+type countingIdentity struct{ calls int }
+
+func (c *countingIdentity) AuthenticatedIdentityForProvider(context.Context, string, string) (ports.SCMIdentity, error) {
+	c.calls++
+	return ports.SCMIdentity{Login: "octocat", Human: true}, nil
+}
+
 func newAsyncSpawnService(t *testing.T) (*Service, *asyncCommander, *fakeTelemetrySink, *fakeStore, memMilestones) {
 	t.Helper()
+	svc, cmd, sink, st, milestones, _ := newAsyncSpawnServiceWithIdentity(t)
+	return svc, cmd, sink, st, milestones
+}
+
+func newAsyncSpawnServiceWithIdentity(t *testing.T) (*Service, *asyncCommander, *fakeTelemetrySink, *fakeStore, memMilestones, *countingIdentity) {
+	t.Helper()
 	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
-	cmd := &asyncCommander{fakeCommander: &fakeCommander{}, clock: clock, answerIn: 40 * time.Millisecond}
+	cmd := &asyncCommander{fakeCommander: &fakeCommander{}, clock: clock, answerIn: 40 * time.Millisecond, afterAsync: 25 * time.Millisecond}
+	identity := &countingIdentity{}
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
 	sink := &fakeTelemetrySink{}
 	milestones := memMilestones{}
-	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Milestones: milestones, Clock: func() time.Time { return clock.now }})
-	return svc, cmd, sink, st, milestones
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Milestones: milestones, GithubIdentity: identity, Clock: func() time.Time { return clock.now }})
+	return svc, cmd, sink, st, milestones, identity
 }
 
 func named(sink *fakeTelemetrySink, name string) []ports.TelemetryEvent {
@@ -87,8 +105,8 @@ func TestAsyncChatSpawnReportsSpawnedOnlyWhenUsable(t *testing.T) {
 		t.Fatalf("spawned = %d, want exactly one", len(spawned))
 	}
 	p := spawned[0].Payload
-	if p["spawn_duration_ms"] != int64(9040) || p["duration_ms"] != int64(40) {
-		t.Fatalf("durations = %#v / %#v, want 9040 to ready and 40 to answer", p["spawn_duration_ms"], p["duration_ms"])
+	if p["spawn_duration_ms"] != int64(9065) || p["duration_ms"] != int64(65) {
+		t.Fatalf("durations = %#v / %#v, want 9065 to ready and 65 to answer", p["spawn_duration_ms"], p["duration_ms"])
 	}
 	if p["harness"] != "codex" || p["surface"] != "desktop" || p["created_by"] != "user" || p["first_for_install"] != true {
 		t.Fatalf("acceptance context lost: %#v", p)
@@ -107,7 +125,7 @@ func TestAsyncChatSpawnFailureKeepsFirstSessionClaimForTheRetry(t *testing.T) {
 	cmd.clock.advance(2 * time.Second)
 	settle(cmd, domain.SessionProvisionFailed, sessionmanager.ErrWorkspaceCreate)
 	failed := named(sink, "ao.sessions.spawn_failed")
-	if len(failed) != 1 || failed[0].Payload["spawn_duration_ms"] != int64(2040) || failed[0].Payload["harness"] != "codex" {
+	if len(failed) != 1 || failed[0].Payload["spawn_duration_ms"] != int64(2065) || failed[0].Payload["duration_ms"] != int64(65) || failed[0].Payload["harness"] != "codex" {
 		t.Fatalf("spawn_failed = %#v", failed)
 	}
 	if len(named(sink, "ao.sessions.spawned")) != 0 || milestones["session_spawned"] {
@@ -131,14 +149,35 @@ func TestAsyncChatSpawnFailureKeepsFirstSessionClaimForTheRetry(t *testing.T) {
 	}
 }
 
-func TestAsyncChatSpawnSettledBeforeAnswerReportsOnce(t *testing.T) {
+func TestAsyncChatSpawnSettledBeforeAnswerReportsOnceWithTheAnswerTime(t *testing.T) {
 	svc, cmd, sink, _, _ := newAsyncSpawnService(t)
 	cmd.settleDuringSpawn = domain.SessionProvisionReady
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if got := len(named(sink, "ao.sessions.spawned")); got != 1 {
-		t.Fatalf("spawned = %d, want 1", got)
+	spawned := named(sink, "ao.sessions.spawned")
+	if len(spawned) != 1 {
+		t.Fatalf("spawned = %d, want 1", len(spawned))
+	}
+	// Settled at 40ms; the request was answered at 65ms.
+	if p := spawned[0].Payload; p["duration_ms"] != int64(65) || p["spawn_duration_ms"] != int64(40) {
+		t.Fatalf("durations = %#v", p)
+	}
+}
+
+// Resolving the GitHub login can be a network call; an asynchronous start
+// must not wait for it before the agent launches, nor afterwards.
+func TestAsyncChatSpawnDoesNotLookUpGitHubIdentity(t *testing.T) {
+	svc, cmd, sink, _, _, identity := newAsyncSpawnServiceWithIdentity(t)
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	settle(cmd, domain.SessionProvisionReady, nil)
+	if identity.calls != 0 {
+		t.Fatalf("GitHub identity lookups = %d, want 0", identity.calls)
+	}
+	if _, ok := named(sink, "ao.sessions.spawned")[0].Payload["github_actor"]; ok {
+		t.Fatal("github_actor comes from the exporter's resolved identity, not a launch-time lookup")
 	}
 }
 
