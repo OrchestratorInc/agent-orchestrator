@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowUp, RotateCw } from "@/components/app-icons";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
@@ -170,52 +170,75 @@ function FailedDot() {
 	return <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />;
 }
 
+/** "There's a new version" as plain text, for tooltips and the title attribute. */
+function newVersionText(t: TFunction): string {
+	return t("shell.updateNewVersion").replace(/<\/?new>/g, "");
+}
+
+/** The dotted word in "There's a new version" and the card it opens. */
+function NewVersionHoverCard({
+	children,
+	nightly,
+	notes,
+	tabIndex,
+	version,
+}: {
+	children?: React.ReactNode;
+	nightly: string | null;
+	notes?: string;
+	tabIndex: number;
+	version: string;
+}) {
+	const { t } = useTranslation();
+	return (
+		<HoverCard>
+			<HoverCardTrigger asChild>
+				<span
+					className="cursor-default underline decoration-passive decoration-dotted underline-offset-[3px] outline-none focus-visible:rounded-xs focus-visible:ring-2 focus-visible:ring-ring"
+					tabIndex={tabIndex}
+				>
+					{children}
+				</span>
+			</HoverCardTrigger>
+			<HoverCardContent className="max-h-80 w-max max-w-80 overflow-y-auto p-3" side="top">
+				<p className="text-sm font-medium text-foreground">
+					{notes ? t("shell.updateWhatsNewVersion", { version }) : t("shell.updateVersionLabel", { version })}
+				</p>
+				{nightly ? <p className="mt-0.5 text-xs text-passive">{nightly}</p> : null}
+				{notes ? (
+					<div className="mt-2">
+						<DesktopReleaseNotes notes={notes} textClassName="text-sm text-muted-foreground" />
+					</div>
+				) : null}
+			</HoverCardContent>
+		</HoverCard>
+	);
+}
+
 /**
- * "0.14.11 is here" with the version underlined in dots when there is more to
- * read. Hovering or focusing the version shows what's new in that build.
+ * "There's a new version" with "new" underlined in dots. Hovering or focusing
+ * it shows which version, and what's new in it when the feed says.
  */
 function AvailableTitle({
 	nightly,
 	notes,
 	tabIndex,
-	title,
 	version,
 }: {
 	nightly: string | null;
 	notes?: string;
 	tabIndex: number;
-	title: string;
-	version: string;
+	version?: string;
 }) {
 	const { t } = useTranslation();
-	const at = title.indexOf(version);
-	if (at < 0 || (!notes && !nightly)) return <>{title}</>;
+	if (!version) return <>{newVersionText(t)}</>;
 	return (
-		<>
-			{title.slice(0, at)}
-			<HoverCard>
-				<HoverCardTrigger asChild>
-					<span
-						className="cursor-default underline decoration-passive decoration-dotted underline-offset-[3px] outline-none focus-visible:rounded-xs focus-visible:ring-2 focus-visible:ring-ring"
-						tabIndex={tabIndex}
-					>
-						{version}
-					</span>
-				</HoverCardTrigger>
-				<HoverCardContent className="max-h-80 w-max max-w-80 overflow-y-auto p-3" side="top">
-					<p className="text-sm font-medium text-foreground">
-						{notes ? t("shell.updateWhatsNewVersion", { version }) : version}
-					</p>
-					{nightly ? <p className="mt-0.5 text-xs text-passive">{nightly}</p> : null}
-					{notes ? (
-						<div className="mt-2">
-							<DesktopReleaseNotes notes={notes} textClassName="text-sm text-muted-foreground" />
-						</div>
-					) : null}
-				</HoverCardContent>
-			</HoverCard>
-			{title.slice(at + version.length)}
-		</>
+		<Trans
+			t={t}
+			i18nKey="shell.updateNewVersion"
+			// Trans fills the component's children with the translated word.
+			components={{ new: <NewVersionHoverCard nightly={nightly} notes={notes} tabIndex={tabIndex} version={version} /> }}
+		/>
 	);
 }
 
@@ -249,18 +272,15 @@ export function SidebarUpdateRow({
 
 	if (action.kind === "download") {
 		const version = displayVersion(action.version);
-		title = version ? t("shell.updateIsHere", { version }) : t("shell.updateAvailable");
-		if (version) {
-			titleContent = (
-				<AvailableTitle
-					nightly={nightlyCaption(action.version, t, locale)}
-					notes={action.releaseNotes}
-					tabIndex={tabIndex}
-					title={title}
-					version={version}
-				/>
-			);
-		}
+		title = newVersionText(t);
+		titleContent = (
+			<AvailableTitle
+				nightly={nightlyCaption(action.version, t, locale)}
+				notes={action.releaseNotes}
+				tabIndex={tabIndex}
+				version={version}
+			/>
+		);
 		pill = (
 			<UpdatePill
 				aria-label={
@@ -334,15 +354,19 @@ export function SidebarUpdateRow({
 
 	return (
 		<div
-			className="mb-0.5 flex min-h-9 w-full items-center py-1.5 pr-1.5 pl-2.5"
+			className="mb-0.5 flex min-h-9 w-full items-center py-1.5 pr-1 pl-2.5"
 			data-testid={testId}
 			{...rowProps}
 		>
-			{/* A one-line row centres its dot; a two-line row pins it to the title. */}
-			<span className={cn("mr-2 grid size-4 shrink-0 place-items-center", caption && "self-start mt-0.5")}>{lead}</span>
+			{/* Only a downloading or failed update has a marker, centred on a one-line
+			    row and pinned to the title on a two-line one. The calm states start at
+			    the icon column so the whole sentence fits the default width. */}
+			{lead ? (
+				<span className={cn("mr-2 grid size-4 shrink-0 place-items-center", caption && "self-start mt-0.5")}>{lead}</span>
+			) : null}
 			<span className="mr-2 flex min-w-0 flex-1 flex-col gap-0.5">
 				{/* No native tooltip over the version's hover card. */}
-				<span className="truncate text-sm font-medium tracking-tight text-foreground" title={titleContent ? undefined : title}>
+				<span className="truncate text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground" title={titleContent ? undefined : title}>
 					{titleContent ?? title}
 				</span>
 				{caption ? (
@@ -395,9 +419,8 @@ export function SidebarUpdateRail({
 	let onClick: () => void;
 	let failed = false;
 	if (action.kind === "download") {
-		const version = displayVersion(action.version);
 		label = action.version ? t("shell.downloadUpdateVersion", { version: action.version }) : t("shell.downloadUpdate");
-		tooltip = `${version ? t("shell.updateIsHere", { version }) : t("shell.updateAvailable")} · ${t("shell.updateAction")}`;
+		tooltip = `${newVersionText(t)} · ${t("shell.updateAction")}`;
 		onClick = () => void requestUpdateDownload();
 	} else if (action.kind === "install") {
 		const version = displayVersion(action.version);

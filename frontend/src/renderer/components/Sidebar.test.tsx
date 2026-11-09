@@ -3720,7 +3720,7 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(availableRow).toHaveTextContent("9.9.9 is here");
+		expect(availableRow).toHaveTextContent(/^There's a new version/);
 		const pill = within(availableRow).getByRole("button", { name: "Download update v9.9.9" });
 		expect(pill).toHaveTextContent("Update");
 		expect(pill).toHaveClass("rounded-full", "bg-logo-accent/16");
@@ -3733,36 +3733,37 @@ describe("Sidebar", () => {
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows what's new from the dotted version number", async () => {
+	it("shows what's new from the dotted word", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9", releaseNotes: "Faster boot" });
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		const version = within(availableRow).getByText("9.9.9");
-		expect(version).toHaveClass("decoration-dotted");
-		await userEvent.hover(version);
+		const word = within(availableRow).getByText("new", { exact: true });
+		expect(word).toHaveClass("decoration-dotted");
+		await userEvent.hover(word);
 		expect(await screen.findByText("What's new in 9.9.9")).toBeVisible();
 		expect(screen.getByText("Faster boot")).toBeVisible();
 	});
 
-	it("leaves the version plain when there is nothing more to read", async () => {
+	it("names the version in the hover card when the feed has no release notes", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(within(availableRow).getByText("9.9.9 is here")).toBeVisible();
-		expect(availableRow.querySelector(".decoration-dotted")).toBeNull();
+		expect(availableRow).not.toHaveTextContent("9.9.9");
+		await userEvent.hover(within(availableRow).getByText("new", { exact: true }));
+		expect(await screen.findByText("Version 9.9.9")).toBeVisible();
 	});
 
-	it("names a nightly by its base version and keeps the build date for the hover card", async () => {
+	it("keeps a nightly's base version and build date for the hover card", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "0.12.11-nightly.202609021713" });
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(availableRow).toHaveTextContent(/^0\.12\.11 is here/);
-		expect(within(availableRow).queryByText(/Nightly/)).not.toBeInTheDocument();
-		await userEvent.hover(within(availableRow).getByText("0.12.11"));
-		expect(await screen.findByText(/^Nightly · Sep [23]$/)).toBeVisible();
+		expect(within(availableRow).queryByText(/Nightly|0\.12\.11/)).not.toBeInTheDocument();
+		await userEvent.hover(within(availableRow).getByText("new", { exact: true }));
+		expect(await screen.findByText("Version 0.12.11")).toBeVisible();
+		expect(screen.getByText(/^Nightly · Sep [23]$/)).toBeVisible();
 	});
 
 	it("shows download progress as a bar, not a percentage", async () => {

@@ -117,10 +117,10 @@ for (const width of [1400, 900]) {
 	});
 }
 
-for (const [label, version, settingsText, sidebarTitle, sidebarLabel, nightlyCaption] of [
-	["prefixed nightly", "v0.14.10-nightly.202611052338", "Updating to v0.14.10-nightly.202611052338", /^0\.14\.10 is here$/, "Download update v0.14.10-nightly.202611052338", /^Nightly · /],
-	["prefixed stable", "v2.0.0", "Updating to v2.0.0", /^2\.0\.0 is here$/, "Download update v2.0.0", null],
-	["bare stable", "2.0.0", "Updating to v2.0.0", /^2\.0\.0 is here$/, "Download update v2.0.0", null],
+for (const [label, version, settingsText, cardTitle, sidebarLabel, nightlyCaption] of [
+	["prefixed nightly", "v0.14.10-nightly.202611052338", "Updating to v0.14.10-nightly.202611052338", "Version 0.14.10", "Download update v0.14.10-nightly.202611052338", /^Nightly · /],
+	["prefixed stable", "v2.0.0", "Updating to v2.0.0", "Version 2.0.0", "Download update v2.0.0", null],
+	["bare stable", "2.0.0", "Updating to v2.0.0", "Version 2.0.0", "Download update v2.0.0", null],
 ] as const) {
 	test(`@P0 update labels show one v for a ${label} version`, async ({ page }) => {
 		await installFakeBridge(page, {
@@ -131,16 +131,14 @@ for (const [label, version, settingsText, sidebarTitle, sidebarLabel, nightlyCap
 		await page.goto("/#/settings");
 		await page.getByRole("button", { name: "Updates", exact: true }).click();
 		await expect(page.getByTestId("update-status-line")).toContainText(settingsText);
-		// The sidebar names the bare base version ("2.0.0 is here"); its pill
-		// carries the full version behind exactly one "v".
+		// The sidebar says "There's a new version"; its pill carries the full
+		// version behind exactly one "v", and hovering "new" names the bare one.
 		const available = page.getByTestId("sidebar-update-available");
-		await expect(available.getByText(sidebarTitle)).toBeVisible();
+		await expect(available).toContainText("There's a new version");
 		await expect(available.getByRole("button", { name: sidebarLabel, exact: true })).toBeVisible();
-		if (nightlyCaption) {
-			// A nightly keeps its build date for the hover card on the version.
-			await available.getByText("0.14.10", { exact: true }).hover();
-			await expect(page.getByText(nightlyCaption)).toBeVisible();
-		}
+		await available.getByText("new", { exact: true }).hover();
+		await expect(page.getByText(cardTitle, { exact: true })).toBeVisible();
+		if (nightlyCaption) await expect(page.getByText(nightlyCaption)).toBeVisible();
 		await page.evaluate((v) => {
 			window.__aoFakeUpdates!.setStatus({ state: "downloading", version: v, percent: 5 });
 		}, version);
