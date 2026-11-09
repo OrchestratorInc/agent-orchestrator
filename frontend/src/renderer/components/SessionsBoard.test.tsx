@@ -356,7 +356,7 @@ describe("SessionsBoard", () => {
 		expect(indicator.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
-		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
+		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · Orchestrator holds 12.0 GB · pressure 35.0");
 		await userEvent.click(indicator);
 		expect(await screen.findByTestId("session-memory-stacked")).toBeInTheDocument();
 	});
@@ -504,9 +504,9 @@ describe("SessionsBoard", () => {
 
 		renderBoard("p1");
 
-		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
-		expect(within(button).getByText("Orchestrator").hasAttribute("data-compact-label")).toBe(true);
+		expect(within(button).getByText("Orchestrator agent").hasAttribute("data-compact-label")).toBe(true);
 		expect(indicator).toBeNull();
 	});
 
@@ -563,7 +563,7 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("Idle")).toBeInTheDocument();
 		const terminateButton = within(idleCard).getByRole("button", { name: "Archive brand-font-pipeline" });
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
-		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
+		expect(terminateButton.querySelector("svg")).toHaveClass("icon-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});

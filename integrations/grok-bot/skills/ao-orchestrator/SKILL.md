@@ -1,7 +1,7 @@
 ---
 name: ao-orchestrator
 description: >-
-  Talk to a project's AO orchestrator: pass the user's request to it, wait for
+  Talk to a project's Orchestrator orchestrator: pass the user's request to it, wait for
   its reply and relay it. The default route for starting or changing work,
   "catch me up", "why", "what next" and plans. Use for "in <project>: <ask>",
   "tell the orchestrator ...", "catch me up on <project>", "start work on ...".
@@ -19,7 +19,7 @@ for s in json.load(sys.stdin)["sessions"]: print(s["id"], (s.get("activity") or 
 ```
 - One line: that is the orchestrator. Its state tells you if it is busy (`active`).
 - `exited`: resume it first with `aoapi POST "sessions/<id>/resume-agent" '{}'`, then go on.
-- Provision state `failed`: AO could not create its workspace, and messages to it fail. Read the reason with `aoapi GET "sessions/<id>"` (field `provisionError`), tell the user in plain words, and ask them to fix it in AO. Stop here.
+- Provision state `failed`: Orchestrator could not create its workspace, and messages to it fail. Read the reason with `aoapi GET "sessions/<id>"` (field `provisionError`), tell the user in plain words, and ask them to fix it in Orchestrator. Stop here.
 - No line: ask "There's no orchestrator in <project> on <host>. Start one with your request?" On yes, start it with the request as its first message (step 3's file and tag), then go to step 4. Its reply is its first turn:
 
 ### Start an orchestrator
@@ -48,7 +48,7 @@ EOF
   aoapi POST "sessions/$O/resume-agent" '{}' >/dev/null; sleep 5
   aoapi POST "sessions/$O/send" "$B" >/dev/null && echo "sent TAG=$TAG F=$F"; }; f
 ```
-A failed send prints AO's error. If it still fails after the retry, tell the user the orchestrator isn't accepting messages and to open it in AO.
+A failed send prints Orchestrator's error. If it still fails after the retry, tell the user the orchestrator isn't accepting messages and to open it in Orchestrator.
 
 If the orchestrator was `active` in step 2, the message waits and runs as its own turn after the current one. Tell the user right away, in one line: "The orchestrator is busy with <what its last turn is about>. Your question is queued and runs next." Then go on to step 4.
 

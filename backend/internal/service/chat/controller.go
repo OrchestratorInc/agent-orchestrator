@@ -81,7 +81,7 @@ type Store interface {
 	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
-	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, now time.Time) error
+	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, usageLimitResetsAt time.Time, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -224,6 +224,7 @@ type Controller struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
+	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 
 	// sendMu serializes command dispatch so only one operation mutates the
@@ -395,6 +396,7 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	recheckAccount func(domain.SessionID, domain.AgentHarness),
+	prChanged func(domain.SessionID),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
 ) *Controller {
@@ -413,6 +415,7 @@ func newController(
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
 		recheckAccount:         recheckAccount,
+		prChanged:              prChanged,
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
@@ -1870,7 +1873,7 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 		switch item.Type {
 		case "text":
 			if !item.Internal || strings.TrimSpace(item.Text) == "" {
-				return nil, fmt.Errorf("%w: text context must be AO-owned and nonempty", ErrRetryContentInvalid)
+				return nil, fmt.Errorf("%w: text context must be Orchestrator-owned and nonempty", ErrRetryContentInvalid)
 			}
 		case "image":
 			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
@@ -3345,7 +3348,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		}
 		state := settledTurnState(event)
 		if err := c.store.SettleTurnWithFailureCode(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, now); err != nil {
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
@@ -3451,6 +3454,10 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if event.Kind == ports.ChatEventActivityCompleted && event.ActivityStatus == domain.ActivityStatusCompleted &&
+			event.ActivityKind == domain.ActivityKindCommand && c.prChanged != nil && commandDetailMayChangePR(event.Detail) {
+			c.prChanged(c.sessionID)
 		}
 		// After the upsert, so the row exists to settle. Only when the provider
 		// actually settled something: an empty settle would erase an accumulation the
@@ -3742,6 +3749,8 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+	case ports.ChatEventProviderState:
+		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
@@ -3806,6 +3815,32 @@ func settledTurnState(event ports.ChatEvent) domain.TurnState {
 		return domain.TurnStateFailed
 	}
 	return event.TurnState
+}
+
+// reportProviderState covers work the agent runs on its own between AO turns,
+// such as answering a finished background task. While AO has a turn in flight,
+// the turn events own the activity: a provider idle can lag behind the next
+// turn's start, so it must not end that turn early.
+func (c *Controller) reportProviderState(ctx context.Context, state *ports.ChatThreadState, now time.Time) {
+	if state == nil {
+		return
+	}
+	c.mu.Lock()
+	turnInFlight := c.pendingTurnID != "" || c.dispatchingTurnID != "" || c.compactionPending
+	c.mu.Unlock()
+	if turnInFlight {
+		return
+	}
+	switch state.Status {
+	case domain.ThreadStatusActive:
+		c.reportActivity(ctx, domain.ActivityActive, "chat.provider.running", now)
+	case domain.ThreadStatusIdle:
+		// An open approval or question still waits on the user.
+		if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+			return
+		}
+		c.reportActivity(ctx, domain.ActivityIdle, "chat.provider.idle", now)
+	}
 }
 
 func (c *Controller) reportInteractionResolved(ctx context.Context, event string, now time.Time) {
@@ -4326,4 +4361,16 @@ func (c *Controller) reportActivity(
 		c.log.Debug("chat activity signal rejected",
 			"session", c.sessionID, "event", event, "error", err)
 	}
+}
+
+// commandDetailMayChangePR reads a finished command activity's normalized
+// detail and reports whether the command probably changed a pull request.
+func commandDetailMayChangePR(detail []byte) bool {
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil {
+		return false
+	}
+	return domain.CommandMayChangePR(d.Command)
 }

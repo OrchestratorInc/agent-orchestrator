@@ -5553,6 +5553,45 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
+func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+	cases := []struct {
+		name string
+		ci   domain.CIState
+		want []string
+	}{
+		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
+		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "pending lists nothing", ci: domain.CIPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+			prURL := "https://github.com/acme/repo/pull/8"
+			stList := &multiPRFakeStore{fakeStore: st, prs: []domain.PullRequest{{
+				URL:       prURL,
+				SessionID: "mer-1",
+				Number:    8,
+				CI:        tc.ci,
+				HeadSHA:   "new-sha",
+				UpdatedAt: time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC),
+			}}}
+			stList.checks[prURL] = []domain.PullRequestCheck{
+				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+			}
+
+			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
+				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+		})
+	}
+}
+
 func TestListPRSummariesExposesPerPRAutoInjectCIPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import type { PendingSideClose } from "./shared/side-close";
 import {
@@ -361,6 +361,16 @@ const api = {
 			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+		setMenuAvailability: (availability: AppMenuAvailability) => {
+			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
+		},
+		onMenuAction: (listener: (action: AppMenuActionId) => void) => {
+			const wrapped = (_event: unknown, action: AppMenuActionId) => listener(action);
+			ipcRenderer.on(APP_MENU_ACTION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(APP_MENU_ACTION_CHANNEL, wrapped);
 			};
 		},
 		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
@@ -822,6 +832,11 @@ const api = {
 			ipcRenderer.invoke("cliLink:link", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 		unlink: (confirmReplacement: boolean, expectedTarget?: string | null) =>
 			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
+	},
+	cliShadow: {
+		inspect: (identity?: string) => ipcRenderer.invoke("cliShadow:inspect", identity) as Promise<import("./shared/cli-shadow").CliShadowStatus>,
+		replace: (path: string, target: string, identity: string) => ipcRenderer.invoke("cliShadow:replace", path, target, identity) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
+		reveal: () => ipcRenderer.invoke("cliShadow:reveal") as Promise<void>,
 	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,

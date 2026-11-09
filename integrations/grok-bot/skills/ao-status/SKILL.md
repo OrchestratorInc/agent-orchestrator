@@ -1,13 +1,13 @@
 ---
 name: ao-status
 description: >-
-  What AO is doing on every host: which sessions are running, waiting on the
+  What Orchestrator is doing on every host: which sessions are running, waiting on the
   user, idle or exited, which PRs are ready to merge or got a review, and a
   daily digest. Read-only. Use for "status", "what's running", "what's waiting
   on me", "what's ready to merge", "anything stuck", and the AO daily digest
   routine.
 ---
-Follow the ao-rules skill. Read-only in AO: it never marks anything read there. It keeps its own seen list in `~/.ao-grok/` on each `via` computer. Run on every host in the **AO hosts** note, in parallel, each from its `via` computer with the `aoapi` helper (set `AO_REMOTE_BASE` and `AO_REMOTE_HEADER` for remote hosts). If memory has no **AO hosts** note, run ao-setup first. Don't save hosts without the user's yes.
+Follow the ao-rules skill. Read-only in Orchestrator: it never marks anything read there. It keeps its own seen list in `~/.ao-grok/` on each `via` computer. Run on every host in the **AO hosts** note, in parallel, each from its `via` computer with the `aoapi` helper (set `AO_REMOTE_BASE` and `AO_REMOTE_HEADER` for remote hosts). If memory has no **AO hosts** note, run ao-setup first. Don't save hosts without the user's yes.
 
 ## 1. Sessions
 ```sh

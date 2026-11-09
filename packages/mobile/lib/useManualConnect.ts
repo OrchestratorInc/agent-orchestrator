@@ -3,10 +3,9 @@ import { AccessibilityInfo, Platform } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
-import { isValidPort, portError } from "./connectionFields";
+import { manualAddressError, resolveManualAddress } from "./connectionFields";
 import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHost } from "./connectionError";
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
-import { normalizeServerHost } from "./endpoints";
 import { haptics } from "./haptics";
 import { renameHost, saveHost, setActiveHost, type Host } from "./hosts";
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
@@ -62,9 +61,11 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 	};
 
 	async function connect() {
+		const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		const target = { ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() };
+		const target = { ...cfg, host: address.host, httpPort: address.port };
 		try {
 			if (editingHost) {
 				await persistManualHostEdit(editingHost, target, machineName, editingEndpointIndex, {
@@ -116,12 +117,13 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		}
 	}
 
-	const validPort = isValidPort(cfg.httpPort);
-	const canConnect = !!machineName.trim() && !!cfg.host.trim() && validPort;
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+	const canConnect = !!machineName.trim() && address.ok;
 	const editing = !!editingHost;
 	// What Connect is waiting for, said beside it: a disabled button alone does
-	// not say a name is required. A bad port has its own error.
-	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host"].filter(Boolean);
+	// not say a name is required. A bad port or address has its own error.
+	const missingPort = !address.ok && address.incomplete && !!cfg.host.trim();
+	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host", missingPort && "a port (or turn on Use TLS for 443)"].filter(Boolean);
 	const connectHint = missing.length ? `Add ${missing.join(" and ")} to ${editing ? "save" : "connect"}.` : undefined;
 	return {
 		cfg,
@@ -131,7 +133,7 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		setMachineName,
 		busy,
 		failure,
-		portError: portError(cfg.httpPort),
+		portError: manualAddressError(cfg.host, cfg.httpPort, cfg.secure),
 		canConnect,
 		connectHint,
 		connect,

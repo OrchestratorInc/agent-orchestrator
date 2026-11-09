@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "lucide-react";
+import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -290,15 +290,15 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 					: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 				: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
-					<TooltipTrigger asChild><Button size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
+					<TooltipTrigger asChild><Button size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
 					<TooltipContent side="top" className="max-w-64">{method?.updateReason || t("settings.harness.ownershipUnknown")}</TooltipContent>
 				</Tooltip>
-				: <Button size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
+				: <Button size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 			</div>
 			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
-				<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 			</div> : null}
 		</SwipeCard>;
 	};
@@ -333,7 +333,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			help={updateAllSummary && !startingAll ? updateAllSummary : help}
 			footer={<>
 				{/* The list toggle keeps one place, opposite Update all, whichever way it points. */}
-				<Button type="button" size="sm" variant="outline" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}
+				<Button type="button" size="sm" variant="secondary" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}
 					onClick={() => setExpanded(!isExpanded)}>
 					{isExpanded ? t("settings.harness.hideUpdateStack") : t("settings.harness.showUpdateStack", { count: updates.length })}
 					<ChevronDown className={cn("size-icon-2xs transition-transform duration-200 motion-reduce:transition-none", isExpanded && "rotate-180")} aria-hidden="true" />
