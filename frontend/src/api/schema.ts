@@ -5937,6 +5937,7 @@ export interface components {
             activities: components["schemas"]["ConversationActivityResponse"][];
             /** Format: int64 */
             afterSequence?: number;
+            batchedDeliveries?: components["schemas"]["DomainConversationBatchedDelivery"][];
             branchMaterialization?: components["schemas"]["ConversationBranchMaterializationResponse"];
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
