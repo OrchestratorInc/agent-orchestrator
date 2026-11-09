@@ -7,7 +7,7 @@ import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { ATTACHMENT_TILE_CLASS } from "./messageAttachments";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS } from "./messageAttachments";
 
 export interface ChatAnnotationSummaryItem {
 	kind?: "chat" | "file";
@@ -66,7 +66,7 @@ export function ChatAnnotationSummary({
 			<div
 				className={cn(
 					tile
-						? cn(ATTACHMENT_TILE_CLASS, "relative w-fit self-start px-0 transition-colors", !disabled && "hover:bg-interactive-hover")
+						? cn(ATTACHMENT_TILE_CLASS, "p-0 transition-colors", !disabled && "hover:bg-interactive-active")
 						: cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded-md bg-interactive-hover transition-colors", !disabled && "hover:bg-interactive-active"),
 					className,
 				)}
@@ -78,18 +78,20 @@ export function ChatAnnotationSummary({
 						aria-label={label}
 						className={cn(
 							"inline-flex w-full min-w-0 select-none items-center rounded-md text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
-							tile ? "h-full gap-2 px-3 focus-visible:ring-2 focus-visible:ring-ring" : "h-7 gap-1.5 px-1.5",
+							tile ? "h-full flex-col items-start justify-between p-2 text-left text-caption focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "h-7 gap-1.5 px-1.5",
 							onRemoveAll && "pr-7",
 						)}
 					>
-						<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
 						{tile ? (
-							<span className="flex min-w-0 flex-col gap-0.5">
-								<span className="truncate">{label}</span>
-								{firstLine ? <span className="truncate opacity-70">{firstLine}</span> : null}
-							</span>
+							<>
+								<span className="line-clamp-2 text-foreground">{firstLine}</span>
+								<span className={ATTACHMENT_TILE_PILL_CLASS}>{label}</span>
+							</>
 						) : (
-							<span className="truncate">{label}</span>
+							<>
+								<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
+								<span className="truncate">{label}</span>
+							</>
 						)}
 					</Pressable>
 				</PopoverTrigger>

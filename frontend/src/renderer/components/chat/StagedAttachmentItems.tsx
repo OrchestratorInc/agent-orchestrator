@@ -1,22 +1,35 @@
 import { useState } from "react";
-import { File as FileIcon, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { ChatImage, ChatImageAttachmentRow, ChatImageDialog } from "./ChatImage";
-import { ATTACHMENT_TILE_CLASS, attachmentName, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
 
 /** A file chip's words: the name, then its type and, when it is known, its size. */
-export function AttachmentFileText({ name, bytes, nameClassName, stacked = false }: { name: string; bytes?: number; nameClassName?: string; /** Two lines, for a tile. */ stacked?: boolean }) {
+export function AttachmentFileText({ name, bytes, nameClassName }: { name: string; bytes?: number; nameClassName?: string }) {
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ");
-	const text = (
+	return (
 		<>
 			<span className={cn("truncate", nameClassName)}>{name}</span>
 			{details ? <span className="shrink-0 tabular-nums opacity-70">{details}</span> : null}
 		</>
 	);
-	return stacked ? <span className="flex min-w-0 flex-col gap-0.5">{text}</span> : text;
+}
+
+/** A file tile's contents: the name on top, then its type as a pill and its size when known. */
+export function AttachmentFileCard({ name, bytes }: { name: string; bytes?: number }) {
+	const type = attachmentTypeLabel(name);
+	return (
+		<>
+			<span className="line-clamp-2 text-foreground">{name}</span>
+			<span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+				{type ? <span className={ATTACHMENT_TILE_PILL_CLASS}>{type}</span> : null}
+				{bytes === undefined ? null : <span className="whitespace-nowrap text-micro tabular-nums">{formatAttachmentSize(bytes)}</span>}
+			</span>
+		</>
+	);
 }
 
 /** The composer strip's image: a small square that opens the picture at full size. */
@@ -81,30 +94,21 @@ export function StagedAttachmentItems({
 							title={path}
 							className={cn("group/attachment", ATTACHMENT_TILE_CLASS)}
 						>
-							<span className="relative flex size-3.5 shrink-0">
-								<FileIcon
-									aria-hidden="true"
-									className={cn(
-										"size-3.5",
-										remove && "group-focus-within/attachment:opacity-0 group-hover/attachment:opacity-0",
-									)}
-								/>
-								{/* Remove takes the icon's place on hover, so the chip keeps its size. */}
-								{remove ? (
-									<span className="absolute -inset-[5px] flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onClick={() => remove(path)}
-											aria-label={t("chat.attachment.remove", { name })}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</span>
-								) : null}
-							</span>
-							<AttachmentFileText name={name} stacked />
+							<AttachmentFileCard name={name} />
+							{/* Remove appears in the corner on hover, so the card keeps its size. */}
+							{remove ? (
+								<span className="absolute right-0.5 top-0.5 flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">
+									<Button
+										type="button"
+										variant="destructive-ghost"
+										size="icon-xs"
+										onClick={() => remove(path)}
+										aria-label={t("chat.attachment.remove", { name })}
+									>
+										<X aria-hidden="true" className="size-3" />
+									</Button>
+								</span>
+							) : null}
 						</li>
 					);
 				})}

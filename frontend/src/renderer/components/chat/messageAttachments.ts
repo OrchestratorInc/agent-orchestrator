@@ -58,8 +58,13 @@ export function formatAttachmentSize(bytes: number): string {
  */
 export const HUMAN_ATTACHMENTS_CLASS = "flex max-w-[min(78%,560px)] flex-wrap items-start justify-end gap-2";
 
-/** One size for anything attached to a sent message, so a mixed row lines up. */
-export const ATTACHMENT_TILE_CLASS = "flex h-16 max-w-56 min-w-0 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs text-muted-foreground";
+/**
+ * One size for anything attached to a sent message, so a mixed row lines up: the
+ * height of an image tile and the width of the widest one. Text on top, a pill below.
+ */
+export const ATTACHMENT_TILE_CLASS = "relative flex h-16 w-32 min-w-0 select-none flex-col justify-between overflow-hidden break-all rounded-md border border-border bg-interactive-hover p-2 text-left text-caption leading-tight text-muted-foreground";
+
+export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-full border border-border px-1.5 text-micro whitespace-nowrap";
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {
 	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path

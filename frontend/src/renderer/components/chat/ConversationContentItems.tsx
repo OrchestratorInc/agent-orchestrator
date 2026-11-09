@@ -52,8 +52,8 @@ export function ConversationContentItems({
 					const label = item.type === "image" ? item.mimeType || imageLabel : item.name || item.uri || item.type;
 					return (
 						<li key={key} title={item.uri || label} className={ATTACHMENT_TILE_CLASS}>
+							<span className="line-clamp-2 text-foreground">{label}</span>
 							<Icon aria-hidden="true" className="size-3.5 shrink-0" />
-							<span className="truncate">{label}</span>
 						</li>
 					);
 				})}
