@@ -207,6 +207,39 @@ func TestListWorkspaceTreeHidesDirectoriesContainingOnlyAOManagedFiles(t *testin
 	}
 }
 
+// Pi's extension is claimed from .pi/.gitignore: Pi skips an extension a
+// .gitignore in its own folder lists.
+func TestListWorkspaceTreeHidesAOFilesClaimedFromTheParentFolder(t *testing.T) {
+	root := t.TempDir()
+	writeWorkspaceFile(t, root, ".pi/.gitignore", aoManagedGitignoreSentinel+"\n/.gitignore\n/extensions/ao-activity.ts\n")
+	writeWorkspaceFile(t, root, ".pi/extensions/ao-activity.ts", "// AO\n")
+
+	st := newFakeStore()
+	st.sessions["standalone-1"] = domain.SessionRecord{
+		ID:       "standalone-1",
+		Kind:     domain.KindWorker,
+		Metadata: domain.SessionMetadata{WorkspacePath: root},
+	}
+	svc := &Service{store: st}
+	tree, err := svc.ListWorkspaceTree(context.Background(), "standalone-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Entries) != 0 {
+		t.Fatalf("root entries = %#v, want .pi hidden while it holds only AO files", tree.Entries)
+	}
+
+	// A file of the user's own in the same folder stays visible.
+	writeWorkspaceFile(t, root, ".pi/extensions/mine.ts", "// user\n")
+	tree, err = svc.ListWorkspaceTree(context.Background(), "standalone-1", ".pi/extensions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Entries) != 1 || tree.Entries[0].Name != "mine.ts" {
+		t.Fatalf(".pi/extensions entries = %#v, want only the user's mine.ts", tree.Entries)
+	}
+}
+
 func TestListWorkspaceTreeHidesAOManagedSymlink(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, ".kimi/.gitignore", aoManagedGitignoreSentinel+"\n/.gitignore\n/AGENTS.md\n")

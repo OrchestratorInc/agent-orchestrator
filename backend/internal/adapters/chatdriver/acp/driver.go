@@ -157,6 +157,9 @@ type Config struct {
 	// session/prompt on the running session. It takes precedence over
 	// SteerRequest.
 	SteerPrompt *SteerPrompt
+	// SteerExternal is for an agent AO steers outside ACP. It takes precedence
+	// over SteerPrompt and SteerRequest.
+	SteerExternal *SteerExternal
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
@@ -861,6 +864,9 @@ func (d *Driver) initialize(
 	conv.suppressSessionModes = d.cfg.SuppressSessionModes
 	conv.resetsConversation = d.cfg.ResetsConversation
 	conv.steering = steeringFor(d.cfg)
+	if external := conv.steering.external; external != nil && external.Open != nil {
+		conv.steerChannel = external.Open(cfg)
+	}
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.promptFailureCode = d.cfg.PromptFailureCode

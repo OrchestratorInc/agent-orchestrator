@@ -117,6 +117,38 @@ type SteerPrompt struct {
 	Wait time.Duration
 }
 
+// SteerExternal is for an agent AO steers outside ACP, through a channel the
+// binding opens for each launched conversation, such as an extension AO
+// installs into the agent (Pi). Steer is offered only once the channel reports
+// that it can reach the session.
+type SteerExternal struct {
+	// Supported reports from the handshake whether the agent can be steered
+	// this way at all.
+	Supported func(acpsdk.InitializeResponse) bool
+	// Open returns the channel for one launched conversation.
+	Open func(LaunchConfig) SteerChannel
+	// ReadyWait bounds how long session setup waits for the channel to come
+	// up. Zero uses one second. A channel that is not up by then leaves Steer
+	// off for the session.
+	ReadyWait time.Duration
+}
+
+// SteerChannel delivers mid-turn guidance outside ACP.
+type SteerChannel interface {
+	// Ready reports whether the channel can reach the session now.
+	Ready(sessionID string) bool
+	// Steer hands text to the session's running turn. SteerNoRunningTurn means
+	// nothing was running and nothing was started. A refusal the agent gave on
+	// its own terms should be wrapped with RefuseSteer.
+	Steer(ctx context.Context, sessionID, text string) (SteerOutcome, error)
+}
+
+// RefuseSteer marks err as the agent's definite refusal of a steer, so the
+// Chat service settles the delivery as rejected rather than uncertain.
+func RefuseSteer(err error) error { return &providerRefusal{err: err} }
+
+const defaultSteerExternalReadyWait = time.Second
+
 // defaultSteerPromptWait bounds how long a prompt-mode steer waits for the
 // agent to hand off the earlier prompt. Antigravity answers at once.
 const defaultSteerPromptWait = 5 * time.Second
@@ -170,16 +202,21 @@ var sessionSteeringRequest = SteerRequest{
 
 // steering is the steering protocol a conversation negotiated.
 type steering struct {
-	request *SteerRequest
-	drain   *SteerDrain
-	prompt  *SteerPrompt
+	request  *SteerRequest
+	drain    *SteerDrain
+	prompt   *SteerPrompt
+	external *SteerExternal
 }
 
-// steeringFor returns the binding's protocol. A drain takes precedence, then a
-// prompt; a binding that names none uses ACP's _session/steering extension.
+// steeringFor returns the binding's protocol. A drain takes precedence, then
+// an external channel, then a prompt; a binding that names none uses ACP's
+// _session/steering extension.
 func steeringFor(cfg Config) steering {
 	if cfg.SteerDrain != nil {
 		return steering{drain: cfg.SteerDrain}
+	}
+	if cfg.SteerExternal != nil {
+		return steering{external: cfg.SteerExternal}
 	}
 	if cfg.SteerPrompt != nil {
 		return steering{prompt: cfg.SteerPrompt}
@@ -196,6 +233,8 @@ func (s steering) supported(init acpsdk.InitializeResponse) bool {
 		return s.drain.Supported != nil && s.drain.Supported(init)
 	case s.prompt != nil:
 		return s.prompt.Supported != nil && s.prompt.Supported(init)
+	case s.external != nil:
+		return s.external.Supported != nil && s.external.Supported(init)
 	case s.request != nil:
 		return s.request.Supported != nil && s.request.Supported(init)
 	default:
@@ -259,6 +298,9 @@ func (c *conversation) Steer(
 	}
 	if c.steering.prompt != nil {
 		return c.steerByPrompt(ctx, providerTurnID, sessionID, msg.ClientMessageID, prompt)
+	}
+	if c.steering.external != nil {
+		return c.steerByChannel(ctx, providerTurnID, sessionID, prompt)
 	}
 	request := c.steering.request
 	if request == nil {
@@ -489,6 +531,61 @@ func (c *conversation) steerByPrompt(
 	}
 	c.mu.Unlock()
 	return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
+}
+
+// steerByChannel hands the guidance to an external channel. It is text only.
+func (c *conversation) steerByChannel(
+	ctx context.Context,
+	providerTurnID string,
+	sessionID string,
+	prompt []acpsdk.ContentBlock,
+) (ports.ChatTurnRef, error) {
+	text, err := drainText(prompt)
+	if err != nil {
+		return ports.ChatTurnRef{}, fmt.Errorf("%w: %w", ports.ErrChatSteerContentUnsupported, err)
+	}
+	if c.steerChannel == nil {
+		return ports.ChatTurnRef{}, fmt.Errorf("%w: no steering channel for this session", ports.ErrChatTurnNotSteerable)
+	}
+	outcome, err := c.steerChannel.Steer(ctx, sessionID, text)
+	if err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	switch outcome {
+	case SteerInjected:
+		c.mu.Lock()
+		if c.activeTurn == providerTurnID {
+			c.steerSegment++
+		}
+		c.mu.Unlock()
+		return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
+	case SteerNoRunningTurn:
+		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
+	default:
+		return ports.ChatTurnRef{}, fmt.Errorf("steering channel returned unknown outcome %d", outcome)
+	}
+}
+
+// externalSteerReady waits briefly for an external steering channel to reach
+// the session. Steer stays off for a session whose channel never comes up.
+func (c *conversation) externalSteerReady(sessionID string) bool {
+	if c.steerChannel == nil {
+		return false
+	}
+	wait := c.steering.external.ReadyWait
+	if wait <= 0 {
+		wait = defaultSteerExternalReadyWait
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		if c.steerChannel.Ready(sessionID) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // errSteerDeclined marks guidance the agent acknowledged but did not take.
