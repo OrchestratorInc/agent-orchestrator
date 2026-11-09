@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
-import { PdfPreview } from "../PdfPreview";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { useChatImageSrc } from "./chat-image-source";
@@ -11,6 +10,10 @@ import {
 	attachmentTypeLabel,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
+
+// Loaded on first use: the PDF viewer pulls in the diff library, which registers
+// custom elements, and the composer and every chat import this file.
+const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ default: module.PdfPreview })));
 
 /** Enough of a text file to fill a tile. */
 const TEXT_PREVIEW_BYTES = 2048;
@@ -81,7 +84,9 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 							aria-label={name}
 							className="absolute inset-0 cursor-zoom-in focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
 						>
-							<span inert className={PREVIEW_CLASS}>{preview}</span>
+							<span inert className={PREVIEW_CLASS}>
+								<Suspense fallback={null}>{preview}</Suspense>
+							</span>
 						</Pressable>
 					)}
 					{type ? <span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{type}</span> : null}
@@ -93,7 +98,9 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 						<DialogTitle className="truncate text-sm">{name}</DialogTitle>
 						<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 							{kind === "pdf" ? (
-								<PdfPreview onError={onError} path={name} src={src} />
+								<Suspense fallback={null}>
+									<PdfPreview onError={onError} path={name} src={src} />
+								</Suspense>
 							) : (
 								<video crossOrigin={mediaCrossOrigin(src)} controls onError={onError} playsInline preload="metadata" src={src} className="size-full min-h-0 object-contain" />
 							)}
