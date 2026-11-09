@@ -12,6 +12,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
  */
 
 import type { ScriptRun } from "../lib/cloud-script-runs";
+import type { CloudAttachment } from "../lib/cloud-attachments";
 
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
@@ -103,6 +104,8 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
 	spansTurns?: boolean;
+	/** A later turn or run carries a newer copy of this list; the daemon sets it. */
+	superseded?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -129,6 +132,19 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	/**
+	 * Where the turn's group sorts when that is not its first loaded item: a
+	 * turn whose prompt is above the loaded part of a history began before
+	 * every prompt in it, so it sorts ahead of them (between the sequence
+	 * before the loaded events and their first).
+	 */
+	anchorSequence?: number;
+	/**
+	 * The key of the turn's group, held while its first loaded item changes
+	 * (older history loading above it brings in its prompt), so the reader's
+	 * view stays on it. Without one the group is keyed by its first item.
+	 */
+	groupKey?: string;
 	errorMessage?: string;
 	failureCode?: "provider_key_missing";
 	usageLimit?: ConversationUsageLimit;
@@ -216,6 +232,8 @@ export interface ConversationMessage {
 	senderDisplayName?: string;
 	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
 	clientMessageId?: string;
+	/** Files a cloud message carries, read back from the control plane. */
+	cloudAttachments?: CloudAttachment[];
 	createdAt: string;
 }
 
@@ -291,6 +309,8 @@ export interface CommandDetail {
 	outputSource?: "stream" | "aggregate";
 	/** Accumulation stopped at the daemon's cap; the command printed more. */
 	outputTruncated?: boolean;
+	/** The page carries only the head and tail of the output; this is its full size in bytes. */
+	outputBytes?: number;
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
@@ -385,7 +405,9 @@ export interface McpToolDetail {
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
+	/** Codex and Hermes send the call's arguments here; other ACP agents send `input`. */
 	arguments?: unknown;
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;
@@ -485,7 +507,9 @@ export interface SystemEventDetail {
 		| "workspace.script.run"
 		| "account.switched"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
-		| "approval_mode.substituted";
+		| "approval_mode.substituted"
+		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
+		| "session.model_unavailable";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
@@ -545,6 +569,10 @@ export interface SystemEventDetail {
 export interface PlanDetail {
 	explanation?: string;
 	steps?: PlanStep[];
+	/** The list spans turns; see ConversationPlan.spansTurns. */
+	spansTurns?: boolean;
+	/** See ConversationPlan.superseded. */
+	superseded?: boolean;
 }
 
 export interface UsageDetail {
@@ -614,7 +642,8 @@ export function reviewedPaths(activity: ConversationActivity): string[] {
  * The daemon writes both: the turn column answers "what is the plan now" and this
  * row answers "where in the conversation did the agent plan". They cannot disagree —
  * both are written from one event — so the surface prefers the turn's copy and only
- * falls back to this for a plan whose turn predates the controller.
+ * falls back to this for a plan no turn holds: work the agent did on its own outside
+ * an AO turn, or a provider turn AO never correlated.
  */
 export function activityPlan(activity: ConversationActivity): ConversationPlan | undefined {
 	const steps = activity.detail?.steps;
@@ -710,6 +739,8 @@ export interface ChatModel {
 	supportsFast?: boolean;
 	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator". */
+	hint?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -737,6 +768,8 @@ export interface ChatConfigChoice {
 	groupName?: string;
 	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
 	unavailableReason?: string;
+	/** A quiet note AO shows beside the name, such as "Same as orchestrator"; the provider never sends it. */
+	hint?: string;
 }
 
 /** The two value shapes ACP session config supports. */

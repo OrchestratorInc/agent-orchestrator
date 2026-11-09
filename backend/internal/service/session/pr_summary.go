@@ -102,6 +102,8 @@ type PRListing struct {
 }
 
 // ListPRListing combines tracked PRs with created PRs reported by the worker.
+// A reported PR the session already tracks is left out, also when the worker
+// linked it under a renamed repository's old name.
 func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRListing, error) {
 	tracked, err := s.ListPRSummaries(ctx, id)
 	if err != nil {
@@ -111,6 +113,20 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 	if err != nil {
 		return PRListing{}, err
 	}
+	renames, err := s.store.ListRepositoryRenames(ctx)
+	if err != nil {
+		return PRListing{}, err
+	}
+	current := make(map[string]string, len(renames))
+	for _, r := range renames {
+		current[r.Host+"/"+r.OldName] = r.Name
+	}
+	key := func(ref domain.ChangeRequestReference) string {
+		if name, ok := current[ref.Host+"/"+strings.ToLower(ref.Repository)]; ok {
+			ref.Repository = name
+		}
+		return ref.Key()
+	}
 	seen := make(map[string]bool, len(tracked)+len(urls))
 	for _, pr := range tracked {
 		ref, err := domain.ParseChangeRequestURL(pr.HTMLURL)
@@ -118,16 +134,16 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 			ref, err = domain.ParseChangeRequestURL(pr.URL)
 		}
 		if err == nil {
-			seen[ref.Key()] = true
+			seen[key(ref)] = true
 		}
 	}
 	linked := make([]domain.ChangeRequestReference, 0, len(urls))
 	for _, raw := range urls {
 		ref, err := domain.ParseChangeRequestURL(raw)
-		if err != nil || seen[ref.Key()] {
+		if err != nil || seen[key(ref)] {
 			continue
 		}
-		seen[ref.Key()] = true
+		seen[key(ref)] = true
 		linked = append(linked, ref)
 	}
 	return PRListing{Tracked: tracked, Linked: linked}, nil
@@ -181,11 +197,22 @@ func summarizePRStateChangedAt(pr domain.PullRequest) time.Time {
 func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISummary {
 	state := ciOrUnknown(pr.CI)
 	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI}
-	if state != domain.CIFailing || pr.Merged || pr.Closed {
+	// Failing lists what failed. Unknown lists cancelled checks, so clients can
+	// show a run cancelled with no replacement as settled rather than loading.
+	var listed domain.PRCheckStatus
+	switch state {
+	case domain.CIFailing:
+		listed = domain.PRCheckFailed
+	case domain.CIUnknown:
+		listed = domain.PRCheckCancelled
+	default:
+		return out
+	}
+	if pr.Merged || pr.Closed {
 		return out
 	}
 	for _, ch := range checks {
-		if ch.Status != domain.PRCheckFailed && ch.Status != domain.PRCheckCancelled {
+		if ch.Status != listed {
 			continue
 		}
 		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {

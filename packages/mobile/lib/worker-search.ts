@@ -1,15 +1,6 @@
 import type { DashboardSession } from "./api";
 import { sessionTitle } from "./sessionStatus";
 
-export function workerSearchClearState(query: string) {
-	const visible = query.length > 0;
-	return {
-		disabled: !visible,
-		opacity: visible ? 1 : 0,
-		scale: visible ? 1 : 0.82,
-	};
-}
-
 export function filterWorkerSessions(
 	sessions: readonly DashboardSession[],
 	query: string,

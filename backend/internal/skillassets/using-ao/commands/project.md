@@ -14,7 +14,7 @@ ao project <subcommand> [args] [flags]
 
 ### ao project add
 
-Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; AO initializes/adopts the parent as the root repo and gitignores children.
+Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; Orchestrator initializes/adopts the parent as the root repo and gitignores children.
 
 **Syntax:**
 ```
@@ -126,7 +126,7 @@ ao project rm agent-orchestrator -y
 
 ### ao project set-config
 
-Update a project's saved configuration. AO reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
+Update a project's saved configuration. Orchestrator reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
 
 **Warning:** `--config-json` replaces the whole config. The CLI silently ignores unknown keys in it, so a typo can leave the replacement empty. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
 
@@ -152,6 +152,7 @@ ao project set-config <id> [flags]
 | `--orchestrator-rules string` | Project-specific standing instructions appended to orchestrator session prompts | - |
 | `--permission string` | Permission mode: `default`, `accept-edits`, `auto`, `bypass-permissions` | - |
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
+| `--pre-remove stringArray` | Command to run before workspace removal (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
 | `--tracker-assignee string` | Issue assignee required for tracker intake eligibility | - |
@@ -182,6 +183,11 @@ ao project set-config agent-orchestrator --config-json \
 ```bash
 # Set an env var and a post-create command
 ao project set-config agent-orchestrator --env "NODE_ENV=development" --post-create "npm install"
+```
+
+```bash
+# Set cleanup commands that run before a worktree is removed
+ao project set-config agent-orchestrator --pre-remove "docker compose down -v" --pre-remove "rm -rf .cache"
 ```
 
 ```bash

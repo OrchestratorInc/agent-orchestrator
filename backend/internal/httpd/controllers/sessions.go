@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	maxPromptLen      = 16 << 10
+	maxPromptLen      = 100 << 10
 	maxMessageLen     = 4096
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
@@ -157,6 +157,12 @@ type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
+// PRRefresher re-reads a session's pull requests early, when a local signal
+// says they probably just changed on the provider.
+type PRRefresher interface {
+	RequestSessionRefresh(id domain.SessionID)
+}
+
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
@@ -191,6 +197,7 @@ type SessionsController struct {
 		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
 	}
 	Activity                 ActivityRecorder
+	PRRefresh                PRRefresher
 	NativeSessions           ports.AgentNativeSessionResolver
 	DataDir                  string
 	Usage                    UsageHookRecorder
@@ -284,10 +291,11 @@ func (c *SessionsController) Register(r chi.Router) {
 }
 
 // RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree notifications remain active only while a client is
-// actually viewing that session's files.
+// middleware. Worktree and artifact notifications remain active only while a
+// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
+	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
 }
 
 func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +365,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(in.Prompt) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
@@ -384,7 +392,9 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	// A standalone worker has no project to start in the background.
+	async := in.Async && in.ProjectID != ""
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -589,6 +599,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.URL.Query().Get("source") == "artifact" {
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
+			return
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
@@ -866,6 +880,10 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		// is served verbatim from ArtifactDir: there is no marker to strip
 		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, asset, version)
+			return true
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
 		return true
 	}
@@ -1584,8 +1602,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 //   - An explicit workspace-local path (e.g. `index.html`, `./dist/index.html`)
 //     is served through the preview/files route so local files load.
 //   - Absolute paths and file: URLs are accepted only when their fully resolved
-//     target remains inside the fully resolved session workspace. They use the
-//     workspace-confined preview origin rather than an automatable file: URL.
+//     target remains inside the fully resolved session workspace or artifact
+//     directory. They use that root's confined preview origin rather than an
+//     automatable file: URL.
 //   - External http(s) URLs and host:port dev servers are kept verbatim.
 //
 // Every call bumps the session's preview revision, so re-running `ao preview`
@@ -1622,7 +1641,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 			}
 		} else if existing := strings.TrimSpace(sess.Metadata.PreviewURL); existing != "" {
 			var resolveErr error
-			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, existing, false)
+			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, existing, false)
 			if resolveErr != nil {
 				writePreviewResolveError(w, r, resolveErr)
 				return
@@ -1633,7 +1652,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		var resolveErr error
-		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, previewURL, in.RequireWorkspaceFile)
+		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, previewURL, in.RequireWorkspaceFile)
 		if resolveErr != nil {
 			writePreviewResolveError(w, r, resolveErr)
 			return
@@ -2126,7 +2145,7 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	result, err := c.Svc.RequestKill(r.Context(), sessionID(r))
+	result, err := c.Svc.RequestKill(sessionsvc.WithActionCaller(r.Context(), in.CallerSessionID), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -2275,7 +2294,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(in.Brief) > maxPromptLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 16 KiB or fewer", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TASK_TOO_LONG", "Task must be 100 KiB or fewer", nil)
 		return
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(in.Model)) > maxModelLen {
@@ -2408,7 +2427,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" && !in.PRMayHaveChanged {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
@@ -2499,6 +2518,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing; retry the hook", nil)
 		return
+	}
+	if in.PRMayHaveChanged && c.PRRefresh != nil {
+		c.PRRefresh.RequestSessionRefresh(sessionID(r))
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
 }
@@ -2656,7 +2678,7 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{
@@ -2802,16 +2824,16 @@ func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, ra
 	return resolved, true, err
 }
 
-func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, raw string, requireWorkspaceFile bool) (string, error) {
+func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, artifactDir, raw string, requireWorkspaceFile bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if filePath, isFileURL, err := previewFileURLPath(raw); isFileURL {
 		if err != nil {
 			return "", err
 		}
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, filePath)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, filePath)
 	}
 	if isAbsolutePreviewPath(raw) {
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, raw)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, raw)
 	}
 	if !hasURLScheme(raw) && containsParentPathSegment(raw) {
 		return "", errPreviewFileOutsideWorkspace
@@ -2865,20 +2887,16 @@ func previewFileURLPath(raw string) (string, bool, error) {
 	return filePath, true, nil
 }
 
-func workspaceAbsolutePreviewURL(
+// absolutePreviewURL opens an absolute file path only when its fully resolved
+// target is a file inside the fully resolved session workspace or session
+// artifact directory. Each root keeps its own isolated preview origin.
+func absolutePreviewURL(
 	r *http.Request,
 	id domain.SessionID,
 	workspacePath,
+	artifactDir,
 	filePath string,
 ) (string, error) {
-	workspaceAbs, err := filepath.Abs(workspacePath)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
-	workspaceResolved, err := filepath.EvalSymlinks(workspaceAbs)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
 	fileAbs, err := filepath.Abs(filePath)
 	if err != nil {
 		return "", errPreviewFileNotFound
@@ -2887,20 +2905,50 @@ func workspaceAbsolutePreviewURL(
 	if err != nil {
 		return "", errPreviewFileNotFound
 	}
-	rel, err := filepath.Rel(workspaceResolved, fileResolved)
+	if root, rel, ok := resolvedRootRelative(workspacePath, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewFileURL(r, id, entry.Path)
+	}
+	// Deliverables live in the artifact directory, outside the workspace, and
+	// agents open them by their absolute path.
+	if root, rel, ok := resolvedRootRelative(artifactDir, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewutil.ArtifactFileURL("http://"+r.Host, id, entry.Path)
+	}
+	return "", errPreviewFileOutsideWorkspace
+}
+
+// resolvedRootRelative returns root with its symlinks resolved and target's
+// slash path below it. It reports false for an empty or missing root and for a
+// target that is root itself or outside it.
+func resolvedRootRelative(root, target string) (string, string, bool) {
+	if root == "" {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(rootResolved, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errPreviewFileOutsideWorkspace
+		return "", "", false
 	}
-	entry, ok := previewutil.EntryAtPath(workspaceResolved, filepath.ToSlash(rel))
-	if !ok {
-		return "", errPreviewFileNotFound
-	}
-	return previewFileURL(r, id, entry.Path)
+	return rootResolved, filepath.ToSlash(rel), true
 }
 
 func writePreviewResolveError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errPreviewFileOutsideWorkspace) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace", nil)
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace or artifact directory", nil)
 		return
 	}
 	if errors.Is(err, errPreviewFileNotFound) {
@@ -2986,6 +3034,7 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 			Kind:      artifact.Kind,
 			Size:      artifact.Size,
 			UpdatedAt: artifact.UpdatedAt,
+			ShareURL:  artifact.ShareURL,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide

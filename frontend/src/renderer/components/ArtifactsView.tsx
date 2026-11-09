@@ -1,5 +1,5 @@
 import { BrowserIcon } from "./icons";
-import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "lucide-react";
+import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -22,7 +22,6 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
 import {
@@ -36,7 +35,9 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
 const MAX_LIVE_PREVIEWS = 4;
@@ -46,6 +47,7 @@ const MAX_LIVE_PREVIEWS = 4;
  * in cloud sessions when the control plane keeps artifacts.
  */
 export function ArtifactsView() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const { t } = useTranslation();
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
@@ -55,6 +57,13 @@ export function ArtifactsView() {
 	const [projectId, setProjectId] = useState("");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	// The open preview follows its row as the list refreshes, so a file an
+	// agent rewrites shows its new content.
+	const previewRow = useMemo(() => {
+		if (!preview) return null;
+		const key = artifactKey(preview.row);
+		return groups.flatMap((group) => group.rows).find((row) => artifactKey(row) === key) ?? preview.row;
+	}, [groups, preview]);
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
@@ -127,11 +136,11 @@ export function ArtifactsView() {
 							</label>
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
-									<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
+									<Button type="button" size="sm" variant="quiet" aria-label={t("artifacts.projectFilter")} className="max-w-44">
 										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
 										<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
 										<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
-									</TopbarButton>
+									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
 									<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
@@ -141,22 +150,21 @@ export function ArtifactsView() {
 									</DropdownMenuRadioGroup>
 								</DropdownMenuContent>
 							</DropdownMenu>
-							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
+							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0">
 								{([
 									{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
 									{ value: "list", label: t("artifacts.listView"), icon: List },
 								] as const).map(({ value, label, icon: Icon }) => (
 									<Tooltip key={value}>
 										<TooltipTrigger asChild>
-											<TopbarButton
-												variant="icon"
+											<Button type="button" size="icon-sm"
+												variant="quiet"
 												aria-label={label}
 												aria-pressed={view === value}
 												onClick={() => setView(value)}
-												className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
 											>
 												<Icon aria-hidden="true" className="size-icon-sm" />
-											</TopbarButton>
+											</Button>
 										</TooltipTrigger>
 										<TooltipContent side="bottom">{label}</TooltipContent>
 									</Tooltip>
@@ -177,7 +185,7 @@ export function ArtifactsView() {
 			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
-					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
+					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none">
 						<div className={cn("pr-4 pb-4 pl-(--space-4_5)", visibleGroups.length === 1 && "pt-4")}>
 							{workspaceQuery.isLoading ? (
 								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>
@@ -188,7 +196,7 @@ export function ArtifactsView() {
 							) : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
-									<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={clearFilters}>
+									<Button variant="quiet" size="sm" onClick={clearFilters}>
 										{t("artifacts.clearFilters")}
 									</Button>
 								</div>
@@ -231,7 +239,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
-			<ArtifactPreviewModal artifact={preview?.row ?? null} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
+			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
@@ -264,17 +272,16 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 		<section aria-label={name} className={expanded ? "mb-3" : undefined}>
 			<header>
 				<h2 aria-label={name}>
-					{collapsible ? <button
-						type="button"
+					{collapsible ? <Pressable
 						aria-label={name}
 						aria-expanded={expanded}
 						aria-controls={gridId}
 						onClick={() => toggleSection(sectionId)}
-						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md text-left transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md"
 					>
 						{headerContent}
 						<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground", !expanded && "-rotate-90")} />
-					</button> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
+					</Pressable> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
 				</h2>
 			</header>
 			<ul id={gridId} aria-label={name} hidden={!expanded} className={expanded ? (view === "gallery" ? ARTIFACT_GRID_CLASS : "grid gap-2") : "hidden"}>
@@ -304,9 +311,8 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 		return (
 			<li>
 				<div className="group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent">
-					<button
-						type="button"
-						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch text-left outline-none after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
+					<Pressable
+						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
 						onClick={open}
 						title={`${row.sessionTitle} · ${row.path}`}
 					>
@@ -315,7 +321,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						<span className="relative z-[1] min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 						</span>
-					</button>
+					</Pressable>
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
@@ -359,8 +365,6 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
-	// Developer mode moves account management to the Harness page.
-	const agentsSection = useUiStore((state) => state.developerMode) ? "harness" : "agents";
 	const { agentReady, create, pending } = useCreateArtifactSession();
 	const hasCloudProject = workspaces.some((workspace) => workspace.kind === CLOUD_PROJECT_KIND && Boolean(workspace.cloudOrgId));
 
@@ -370,7 +374,7 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
 				<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.noAgent.description")}</p>
-				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings(agentsSection)}>
+				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("harness")}>
 					{t("artifacts.noAgent.action")}
 				</Button>
 			</div>
@@ -429,9 +433,9 @@ function CreateArtifactMenu({
 	const trigger =
 		label === "new" ? (
 			// Anchors the menu, so it must not scale on press.
-			<TopbarButton
+			<Button type="button" size="sm"
 				variant="primary"
-				className={cn("topbar-control--labeled topbar-control--static-press", className)}
+				className={className}
 				disabled={disabled}
 				aria-busy={pending}
 			>
@@ -441,7 +445,7 @@ function CreateArtifactMenu({
 					<Plus aria-hidden="true" className="size-icon-md" />
 				)}
 				{pending ? t("artifacts.creating") : t("artifacts.new")}
-			</TopbarButton>
+			</Button>
 		) : (
 			<Button size="sm" className={className} disabled={disabled} aria-busy={pending}>
 				{pending ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin text-status-working motion-reduce:animate-none" /> : null}

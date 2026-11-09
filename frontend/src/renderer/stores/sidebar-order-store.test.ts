@@ -67,3 +67,21 @@ it.each([
 	const { useSidebarOrderStore } = await import("./sidebar-order-store");
 	expect(useSidebarOrderStore.getState().projectOrder).toEqual(expected);
 });
+
+it("pins projects to the top and restores the pins after a renderer restart", async () => {
+	const { useSidebarOrderStore } = await import("./sidebar-order-store");
+	const store = useSidebarOrderStore.getState();
+	store.setProjectOrder(["alpha", "beta", "gamma", "delta"]);
+	store.setProjectPinned("gamma", true);
+	store.setProjectPinned("delta", true);
+	expect(useSidebarOrderStore.getState().pinnedProjectIds).toEqual(["gamma", "delta"]);
+	expect(useSidebarOrderStore.getState().projectOrder).toEqual(["gamma", "delta", "alpha", "beta"]);
+
+	store.setProjectPinned("gamma", false);
+	expect(useSidebarOrderStore.getState().pinnedProjectIds).toEqual(["delta"]);
+	expect(useSidebarOrderStore.getState().projectOrder).toEqual(["delta", "gamma", "alpha", "beta"]);
+
+	vi.resetModules();
+	const restarted = await import("./sidebar-order-store");
+	expect(restarted.useSidebarOrderStore.getState().pinnedProjectIds).toEqual(["delta"]);
+});

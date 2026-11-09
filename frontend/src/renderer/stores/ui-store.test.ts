@@ -66,8 +66,8 @@ describe("global settings deep links", () => {
 			focusAgentId: "codex",
 		});
 
-		useUiStore.getState().openGlobalSettings("agents");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "agents" });
+		useUiStore.getState().openGlobalSettings("mobile");
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile" });
 	});
 
 	it("preserves project settings only for explicit recovery navigation", () => {
@@ -131,6 +131,28 @@ describe("cloud review cleanup", () => {
 async function bootStore() {
 	return (await import("./ui-store")).useUiStore;
 }
+
+describe("chat send key preference", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+		useUiStore.setState({ chatSendKeyMode: "enter" });
+	});
+
+	it("defaults to Enter sends, including for an invalid saved value", async () => {
+		expect((await bootStore()).getState().chatSendKeyMode).toBe("enter");
+		vi.resetModules();
+		window.localStorage.setItem("ao.chatSendKeyMode", "invalid");
+		expect((await bootStore()).getState().chatSendKeyMode).toBe("enter");
+	});
+
+	it.each(["enter", "mod-enter"] as const)("persists %s across a renderer restart", async (mode) => {
+		useUiStore.getState().setChatSendKeyMode(mode);
+		expect(useUiStore.getState().chatSendKeyMode).toBe(mode);
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe(mode);
+		expect((await bootStore()).getState().chatSendKeyMode).toBe(mode);
+	});
+});
 
 describe("Cloud review persistence", () => {
 	beforeEach(() => {

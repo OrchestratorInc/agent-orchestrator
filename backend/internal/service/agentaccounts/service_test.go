@@ -559,8 +559,13 @@ func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{}, apiKey: map[string]bool{"": true}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
-	if _, err := svc.List(ctx, true); err != nil {
+	views, err := svc.List(ctx, true)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The app shows it as a login, not as signed out.
+	if len(views) != 1 || views[0].SignedIn || !views[0].LoggedIn {
+		t.Fatalf("API-key CLI login view = %+v, want logged in without a subscription", views)
 	}
 	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s1"] != "device-claude" {
 		t.Fatalf("new task on an API-key CLI login: %q %v", store.bindings["s1"], err)
@@ -731,5 +736,39 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 		if view.Account.ID == start.OperationID && (view.Limits == nil || len(view.Limits.Windows) != 1) {
 			t.Fatalf("limits with windows were not kept: %+v", view.Limits)
 		}
+	}
+}
+
+func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{}, failing: map[string]bool{}}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	at := time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return at }
+	var confirmed []string
+	svc.SetLoginConfirmed(func(account domain.AgentAccount, checkedAt time.Time) {
+		if !checkedAt.Equal(at) {
+			t.Errorf("confirmed at %v, want the reading's start %v", checkedAt, at)
+		}
+		confirmed = append(confirmed, account.ID)
+	})
+	read := func() {
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read() // signed out
+	claude.failing[""] = true
+	read() // the check fails
+	if len(confirmed) != 0 {
+		t.Fatalf("confirmed without a working login: %v", confirmed)
+	}
+	// Signed in with the CLI's own login, outside AO.
+	claude.failing[""] = false
+	claude.signedInAs[""] = "a@example.com"
+	read()
+	if len(confirmed) != 1 || confirmed[0] != domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude) {
+		t.Fatalf("confirmed = %v", confirmed)
 	}
 }

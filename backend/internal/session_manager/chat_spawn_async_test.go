@@ -53,6 +53,18 @@ func (s *failReadyProvisionStore) SetSessionProvisionState(ctx context.Context, 
 	return s.fakeStore.SetSessionProvisionState(ctx, id, state, message, now)
 }
 
+// seedRecordingStore keeps the provision state each session row was first
+// inserted with.
+type seedRecordingStore struct {
+	*fakeStore
+	seeded []domain.SessionProvisionState
+}
+
+func (s *seedRecordingStore) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
+	s.seeded = append(s.seeded, rec.ProvisionState)
+	return s.fakeStore.CreateSession(ctx, rec)
+}
+
 type countingHarnessUseGate struct{ active int }
 
 func (g *countingHarnessUseGate) TryBeginHarnessUse(domain.AgentHarness) (func(), bool) {
@@ -134,6 +146,22 @@ func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.
 	}
 	if got := st.sessions[rec.ID].ProvisionState; got != domain.SessionProvisionReady {
 		t.Fatalf("provision state after start = %q, want ready", got)
+	}
+}
+
+// A view can open the session the moment its row exists. That first row must
+// already read as starting: a ready row with no controller looks stopped.
+func TestSpawnAsyncChat_FirstRowIsProvisioning(t *testing.T) {
+	m, st, _ := newChatManager(&recordingLauncher{})
+	store := &seedRecordingStore{fakeStore: st}
+	m.store = store
+	m.browserCapabilities = browsersvc.NewAuthority()
+	deferredBackground(m)
+	if _, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing")); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if len(store.seeded) != 1 || store.seeded[0] != domain.SessionProvisionProvisioning {
+		t.Fatalf("seeded provision states = %v, want [provisioning]", store.seeded)
 	}
 }
 
@@ -1041,7 +1069,7 @@ func TestReconcileLive_KeepsAnInterruptedAsyncSpawn(t *testing.T) {
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionFailed,
-		ProvisionError: "AO restarted before this session finished starting",
+		ProvisionError: "Orchestrator restarted before this session finished starting",
 	}
 
 	if err := m.reconcileLive(context.Background(), st.sessions["mer-1"]); err != nil {

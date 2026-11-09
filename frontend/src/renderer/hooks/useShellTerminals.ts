@@ -4,6 +4,7 @@
 // must not invalidate session state when they come and go.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queueCloudShellInput } from "../lib/cloud-shell-input";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { paneTerminalGridHint } from "../lib/terminal-grid-hint";
 import type { components } from "../../api/schema";
@@ -11,7 +12,6 @@ import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { mockShellTerminals } from "../lib/mock-data";
-import { isWindowsPlatform } from "../lib/platform";
 import { terminalShellRequestValue, useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useCloudCp } from "./useCloudCp";
 
@@ -160,6 +160,12 @@ export type OpenShellTerminalInput = {
 	sessionId?: string;
 	shell?: string;
 	cloud?: { orgId: string };
+	/**
+	 * Typed into a Cloud shell once it is up (a command cue's command). It is
+	 * queued before the shell is listed, so the terminal that connects to it
+	 * always finds it.
+	 */
+	initialInput?: string;
 };
 
 function nextCloudShellTitle(terminals: ShellTerminal[], sessionId: string): string {
@@ -235,6 +241,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		sessionId,
 		shell,
 		cloud,
+		initialInput,
 		optimisticShell,
 	}: OpenShellTerminalMutationInput): Promise<ShellTerminal> => {
 		if (usePreviewData && !remote) {
@@ -265,6 +272,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				createdAt: new Date().toISOString(),
 				cloud,
 			};
+			if (initialInput) queueCloudShellInput(shell.handleId, initialInput);
 			cloudShellTerminals = [...cloudShellTerminals, shell];
 			return shell;
 		}
@@ -286,7 +294,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		if (projectId) body.projectId = projectId;
 		if (sessionId) body.sessionId = sessionId;
 		if (remote && shell) body.shell = shell;
-		if (!remote && isWindowsPlatform()) {
+		if (!remote) {
 			await useTerminalShellStore.getState().load();
 			body.shell = shell ?? terminalShellRequestValue(useTerminalShellStore.getState().preference);
 		}
@@ -350,7 +358,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				current?.filter((shell) => shell.handleId !== context?.optimisticHandleId),
 			);
 			console.error("Failed to open shell terminal:", error);
-			if (!remote && isWindowsPlatform() && apiErrorCode(error) === "SHELL_TERMINAL_SHELL_UNAVAILABLE") {
+			if (!remote && apiErrorCode(error) === "SHELL_TERMINAL_SHELL_UNAVAILABLE") {
 				void useTerminalShellStore.getState().setPreference({ kind: "auto" });
 			}
 		},

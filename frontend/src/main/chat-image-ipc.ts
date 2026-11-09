@@ -6,11 +6,15 @@
  * tainted and `fetch` is subject to CORS and missing cookies. The main process
  * fetches through the sender's own session instead, the same cookies and cache
  * that loaded the `<img>`, and owns the native clipboard and save dialog.
+ *
+ * A saved file came from an agent or AO Cloud, so on macOS it is marked as a
+ * download (com.apple.quarantine), as a browser marks one.
  */
 
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import type { Dialog, IpcMain, NativeImage, SaveDialogOptions, Session } from "electron";
+import { markDownloaded } from "./quarantine";
 
 /** A chat image larger than this is not a screenshot; refuse rather than buffer it. */
 export const MAX_CHAT_IMAGE_BYTES = 64 * 1024 * 1024;
@@ -25,6 +29,10 @@ export type ChatImageIpcDeps = {
 	dialog: Pick<Dialog, "showSaveDialog">;
 	downloadsDirectory: () => string;
 	write?: (filePath: string, bytes: Uint8Array) => Promise<void>;
+	/** The app name a saved file's quarantine names as its downloader. */
+	appName: string;
+	/** Marks a saved file as downloaded; markDownloaded unless a test replaces it. */
+	markDownloaded?: (filePath: string, appName: string) => Promise<void>;
 };
 
 /** Fetch an http(s) image through `session`, refusing anything that is not an image. */
@@ -56,6 +64,7 @@ export function chatImageFileName(name: string): string {
 
 export function registerChatImageIpc(deps: ChatImageIpcDeps): void {
 	const write = deps.write ?? ((filePath, bytes) => writeFile(filePath, bytes));
+	const mark = deps.markDownloaded ?? ((filePath: string, appName: string) => markDownloaded(filePath, appName));
 
 	deps.ipcMain.handle("chatImage:fetch", (event, url: string) => fetchChatImage(event.sender.session, String(url)));
 
@@ -72,6 +81,10 @@ export function registerChatImageIpc(deps: ChatImageIpcDeps): void {
 		const result = await deps.dialog.showSaveDialog(options);
 		if (result.canceled || !result.filePath) return false;
 		await write(result.filePath, input.bytes);
+		// Saved either way: a browser keeps a download it could not mark, too.
+		await mark(result.filePath, deps.appName).catch((error: unknown) => {
+			console.warn("AO: could not mark a saved file as downloaded", error);
+		});
 		return true;
 	});
 }

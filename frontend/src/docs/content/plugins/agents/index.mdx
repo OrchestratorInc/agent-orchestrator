@@ -41,6 +41,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `continue` | Yes | — | — |
 | `devin` | Yes | — | Yes |
 | `omp` | Yes | Yes | — |
+| `hermes` | Yes | Yes | — |
 | `cline` | Yes | — | Yes |
 | `kiro` | Yes | — | Yes |
 | `kilocode` | Yes | — | Yes |
@@ -92,6 +93,7 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `cursor` | Native ACP |
 | `omp` | Native ACP |
 | `qwen` | Native ACP |
+| `hermes` | Native ACP (`hermes acp`) |
 | `unreal-agent` | Built into Orchestrator |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
 | `command-code` | Native ACP (`cmd acp`) |
@@ -117,5 +119,6 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Codex" description="Terminal UI and native app-server Chat." href="/plugins/agents/codex" />
 	<Card title="OpenCode" description="Terminal UI and native ACP Chat." href="/plugins/agents/opencode" />
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
+	<Card title="Hermes" description="Terminal UI and native ACP Chat." href="/plugins/agents/hermes" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
