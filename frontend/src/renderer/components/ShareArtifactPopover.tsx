@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Globe, Share } from "@/components/app-icons";
+import { AlertTriangle, Check, Copy, File, FileText, Globe, Link, RefreshCw, Share } from "@/components/app-icons";
 import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useSettings } from "../hooks/useSettings";
@@ -135,7 +135,7 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, child
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor asChild>{children}</PopoverAnchor>
-			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
 			</PopoverContent>
 		</Popover>
@@ -190,10 +190,36 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			{trigger}
-			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
 		</Popover>
+	);
+}
+
+const HTML_FILE = /\.html?$/i;
+const TEXT_FILE = /\.(?:md|markdown|txt|csv|tsv|json|yaml|yml|log)$/i;
+
+/** A size for the share header: bytes are too exact for a card, so it rounds to one unit. */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The file being shared: a kind icon on a quiet tile, its name, and its size once known. */
+function ShareFileHeader({ name, caption }: { name: string; caption: string }) {
+	const Icon = HTML_FILE.test(name) ? Globe : TEXT_FILE.test(name) ? FileText : File;
+	return (
+		<div className="flex min-w-0 items-center gap-2.5">
+			<span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+				<Icon className="size-icon-sm" />
+			</span>
+			<div className="min-w-0">
+				<p className="truncate text-control font-medium leading-5 text-foreground" title={name}>{name}</p>
+				<p className="truncate text-caption leading-4 text-muted-foreground tabular-nums">{caption}</p>
+			</div>
+		</div>
 	);
 }
 
@@ -332,25 +358,33 @@ function SharePanel({
 		}
 	};
 
-	// Every state is a title, an optional status line, and one action row whose
-	// primary action sits at the right; its left holds the plan count, the
-	// progress or Unpublish.
+	// Every state is a header, optional notices, and one action row under a
+	// hairline whose primary action sits at the right; its left holds the plan
+	// count, the progress or Unpublish. A warning or an outdated link is a
+	// notice card; a plain line of explanation stays muted text.
 	const heading = (text: string) => <p className="truncate text-control font-medium text-foreground">{text}</p>;
-	const title = heading(t("artifacts.share.title", { name }));
-	const status = (text: string, role?: "alert" | "status") => (
-		<p role={role} className={cn("mt-1 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
-	);
+	const sizeBytes = phase.kind === "publish" ? phase.inspection.size : phase.kind === "published" ? (phase.outdated?.inspection.size ?? phase.share.size) : undefined;
+	const title = <ShareFileHeader caption={[t("artifacts.share.menu"), sizeBytes !== undefined ? formatSize(sizeBytes) : ""].filter(Boolean).join(" · ")} name={name} />;
+	const status = (text: string, role?: "alert" | "status") => role ? (
+		<p role={role} className="flex items-start gap-2 rounded-md bg-muted px-2.5 py-2 text-caption leading-4 text-foreground">
+			{role === "alert"
+				? <AlertTriangle aria-hidden="true" className="mt-px size-icon-sm shrink-0 text-error" />
+				: <RefreshCw aria-hidden="true" className="mt-px size-icon-sm shrink-0 text-warning" />}
+			<span className="min-w-0">{text}</span>
+		</p>
+	) : <p className="text-caption text-muted-foreground">{text}</p>;
 	// Buttons and inputs inherit their font (styles.css), so the row sets the
 	// buttons' size and meta() the smaller secondary text. Labels too long for
 	// one line, as with three actions in German, wrap with the actions at the right.
 	const footer = (left: React.ReactNode, right: React.ReactNode) => (
-		<div className="mt-3 flex min-h-control-md flex-wrap items-center justify-between gap-2 text-xs">
+		<div className="-mx-3 -mb-1 flex min-h-control-md flex-wrap items-center justify-between gap-2 border-t border-border px-3 pt-3 text-xs">
 			<div className="min-w-0 truncate">{left}</div>
 			<div className="ml-auto flex shrink-0 items-center gap-1.5">{right}</div>
 		</div>
 	);
 	const meta = (text: string) => <span className="text-caption text-muted-foreground tabular-nums">{text}</span>;
 
+	const body = ((): React.ReactNode => {
 	switch (phase.kind) {
 		case "loading":
 			return <>{title}{status(t("artifacts.share.checking"))}</>;
@@ -398,7 +432,7 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					<div className="mt-2.5 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.uploaded", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+					<div className="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.uploaded", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
 						<div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
 					</div>
 					{footer(
@@ -440,14 +474,15 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					<p className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground">
+					<p className="flex items-center gap-1.5 text-caption text-muted-foreground">
 						<Globe aria-hidden="true" className="size-3 shrink-0 text-success" />
 						{t("artifacts.share.publicStatus")}
 					</p>
-					<div className="mt-2.5 font-mono text-caption">
+					<div className="relative font-mono text-caption">
+						<Link aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-muted-foreground" />
 						<input
 							aria-label={t("artifacts.share.linkLabel")}
-							className="block h-control-md w-full truncate rounded-md bg-muted px-2 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							className="block h-control-md w-full truncate rounded-md bg-muted pl-8 pr-2.5 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 							onFocus={(event) => event.currentTarget.select()}
 							readOnly
 							value={link}
@@ -490,4 +525,6 @@ function SharePanel({
 				</>
 			);
 	}
+	})();
+	return <div className="flex flex-col gap-3">{body}</div>;
 }
