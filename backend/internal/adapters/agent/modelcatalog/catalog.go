@@ -422,6 +422,16 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 // catalog. Folding configuration in is what lets a settings edit invalidate a
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
+	fingerprint := d.baseCatalogFingerprint(ctx, request)
+	if request.AgentID == "opencode-v2" {
+		// Snapshots from before OpenCode 2 was asked for its default model lack
+		// one; this replaces them through the normal background refresh.
+		fingerprint += ":resolved-default-v1"
+	}
+	return fingerprint
+}
+
+func (d Discoverer) baseCatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
 	if request.AgentID == "fx" && request.CredentialType == "" {
 		return fingerprint + ":shared-providers-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
@@ -506,7 +516,14 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	if len(models) == 0 && len(base.Providers) == 0 {
 		return base, fmt.Errorf("%s model discovery returned no models", agentID)
 	}
-	models = applyConfiguredDefault(models, configuredDefaultModel(agentID, workingDir, env))
+	configuredDefault := configuredDefaultModel(agentID, workingDir, env)
+	if agentID == "opencode-v2" {
+		// The CLI's own answer outranks AO's reading of its config files.
+		if resolved := openCodeV2ResolvedDefault(ctx, binary, workingDir, env); resolved != "" {
+			configuredDefault = resolved
+		}
+	}
+	models = applyConfiguredDefault(models, configuredDefault)
 	if agentID == "codewhale" {
 		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
 	}

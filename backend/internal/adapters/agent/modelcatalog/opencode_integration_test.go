@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -69,4 +70,35 @@ func TestOpenCodeCredentialScopeListsProviderModels(t *testing.T) {
 		t.Fatalf("credential scope anthropic_api_key listed no anthropic/* models (got %d models); "+
 			"provider-presence env did not unlock the provider", len(catalog.Models))
 	}
+}
+
+// TestOpenCodeV2DiscoveryReportsTheRealDefault runs discovery against the
+// installed OpenCode 2 and checks that whatever default it marks is one the
+// catalog lists, and that at most one is marked. It skips when no opencode 2 is
+// installed, and never fails on a machine where opencode has no usable default.
+func TestOpenCodeV2DiscoveryReportsTheRealDefault(t *testing.T) {
+	binary := resolveRealOpenCode(t)
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || !regexp.MustCompile(`(^|\s)v?2\.`).Match(version) {
+		t.Skipf("not OpenCode 2 (%q)", strings.TrimSpace(string(version)))
+	}
+	workingDir := t.TempDir()
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID:    "opencode-v2",
+		Binary:     binary,
+		WorkingDir: workingDir,
+	})
+	if err != nil {
+		t.Fatalf("live opencode-v2 discovery failed: %v", err)
+	}
+	var defaults []string
+	for _, m := range catalog.Models {
+		if m.IsDefault {
+			defaults = append(defaults, m.ID)
+		}
+	}
+	if len(defaults) > 1 {
+		t.Fatalf("more than one default marked: %v", defaults)
+	}
+	t.Logf("OpenCode %s reported default: %v (of %d models)", strings.TrimSpace(string(version)), defaults, len(catalog.Models))
 }
