@@ -24,8 +24,8 @@ import (
 // Tool output and images dominate provider files, so whole files stream while
 // oversized records keep only their short top-level fields.
 const (
-	maxTranscriptBytes = 1 << 30
-	maxVisibleBytes    = 16 << 20
+	maxTranscriptBytes = 4 << 30
+	maxVisibleBytes    = 32 << 20
 	maxSkimMember      = 4 << 10
 )
 
