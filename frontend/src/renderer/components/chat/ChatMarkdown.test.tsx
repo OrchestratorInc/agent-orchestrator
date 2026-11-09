@@ -523,6 +523,33 @@ describe("ChatMarkdown", () => {
 		expect(onFileOpen).not.toHaveBeenCalled();
 	});
 
+	it("opens a Markdown link to a listed artifact whose name Markdown percent-encodes", async () => {
+		// Markdown percent-encodes a link's target, so a space or a non-ASCII
+		// letter in the file name arrives as %20 or %C3%A9; the listed path is
+		// the name as written.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "Migration Guide.md" }, { path: "notes/résumé.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+			<ChatMarkdown text="[guide](</workspace/.ao/worker/artifacts/worker-1/Migration Guide.md>) and [cv](/workspace/.ao/worker/artifacts/worker-1/notes/résumé.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/Migration%20Guide.md");
+		expect(screen.getByRole("link", { name: "cv" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/notes/r%C3%A9sum%C3%A9.md");
+		await userEvent.click(screen.getByRole("link", { name: "guide" }));
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/Migration%20Guide.md");
+		expect(onFileOpen).not.toHaveBeenCalled();
+	});
+
+	it("matches a listed artifact whose name itself contains a percent escape", () => {
+		// A file literally named "50%25-done.md": Markdown keeps a valid escape as
+		// written, so the target matches as it is, before any decoding.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "50%25-done.md" }] }] }];
+		render(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown text="[half](/workspace/.ao/worker/artifacts/worker-1/50%25-done.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "half" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/50%2525-done.md");
+	});
+
 	it("leaves a Markdown link to an unlisted artifact path as a file link", async () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();

@@ -380,11 +380,25 @@ function MarkdownLink(props: MarkdownLinkProps) {
  * A link to the file a session artifact was written to (the worker writes it
  * under .../artifacts/<session>/<path>), opened as that artifact when the
  * session lists it: the file lives outside the checkout, so the workspace file
- * view cannot read it.
+ * view cannot read it. Markdown percent-encodes a link's target (a space
+ * arrives as %20), while the session lists the name as written, so the target
+ * is matched as it is and then decoded.
  */
 function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 	const workspaces = useChatLinkWorkspaces();
-	return <MarkdownLinkTarget {...props} href={artifactLinkForPath(props.href, workspaces) ?? props.href} />;
+	const decoded = decodedLinkTarget(props.href);
+	const artifact = artifactLinkForPath(props.href, workspaces)
+		?? (decoded === props.href ? undefined : artifactLinkForPath(decoded, workspaces));
+	return <MarkdownLinkTarget {...props} href={artifact ?? props.href} />;
+}
+
+/** A link target with its percent escapes decoded, or as it is when it holds a malformed one. */
+function decodedLinkTarget(href: string): string {
+	try {
+		return decodeURI(href);
+	} catch {
+		return href;
+	}
 }
 
 function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
