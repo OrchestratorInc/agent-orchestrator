@@ -236,7 +236,9 @@ function fallbackNormalize(pathname: string): string {
 			i += 1;
 		}
 	}
-	return segments.join("/");
+	// Route words never contain a digit, apart from the API version; any other
+	// segment with one is an identifier (a side-chat UUID, a shell terminal ID).
+	return segments.map((segment) => (/\d/.test(segment) && !/^v\d+$/.test(segment) ? ":id" : segment)).join("/");
 }
 
 export function normalizeApiOperation(method: string, pathname: string): string {
@@ -291,10 +293,11 @@ function reportApiError(
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
 	lastApiErrorAt.set(key, now);
-	void captureRendererEvent("ao.renderer.api_error", {
+	void captureRendererEvent("ao.requests.failed", {
 		operation,
 		error_category: category,
 		status,
+		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
 		captureApiErrorToSentry(operation, category, status, code, requestId);

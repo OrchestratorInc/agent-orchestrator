@@ -1384,7 +1384,7 @@
 	"settings.telemetryEvents.unsupported": "此平台不支持可靠的同意写入，因此无法启用。",
 	"settings.telemetryEvents.releaseBlocked": "此版本的安全门已禁用错误报告。",
 	"settings.analytics.label": "共享使用分析",
-	"settings.analytics.description": "向 PostHog 发送产品使用事件。登录 Orchestrator Cloud 后，用户 ID 和 GitHub 用户名会附加到事件；邮箱仅用作人员属性。关闭后，此桌面端、守护进程和已配对手机都会停止发送分析数据。",
+	"settings.analytics.description": "向 PostHog 发送产品使用事件。登录 Orchestrator Cloud 后，用户 ID 和 GitHub 用户名会附加到事件；邮箱仅用作人员属性。关闭后，此桌面端、守护进程和已配对手机都会停止发送分析数据。还会从 PostHog 加载功能开关，用于产品实验。",
 	"settings.analytics.loadFailed": "无法加载分析偏好设置。",
 	"settings.analytics.saveFailed": "无法保存分析偏好设置。",
 	"settings.sessions": "会话",

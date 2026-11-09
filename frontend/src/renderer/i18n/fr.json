@@ -1424,7 +1424,7 @@
 	"settings.telemetryEvents.unsupported": "L’activation n’est pas disponible sur cette plateforme.",
 	"settings.telemetryEvents.releaseBlocked": "Les rapports d’erreur sont désactivés par la barrière de sécurité de cette version.",
 	"settings.analytics.label": "Partager les analyses d’usage",
-	"settings.analytics.description": "Envoie des événements d’utilisation à PostHog. Une fois connecté à Orchestrator Cloud, votre identifiant et votre nom GitHub accompagnent les événements; votre e-mail sert uniquement de propriété de personne. La désactivation arrête les analyses sur ce bureau, dans le daemon et sur les téléphones associés.",
+	"settings.analytics.description": "Envoie des événements d’utilisation à PostHog. Une fois connecté à Orchestrator Cloud, votre identifiant et votre nom GitHub accompagnent les événements; votre e-mail sert uniquement de propriété de personne. La désactivation arrête les analyses sur ce bureau, dans le daemon et sur les téléphones associés. Il charge aussi des feature flags depuis PostHog pour des expériences produit.",
 	"settings.analytics.loadFailed": "Impossible de charger la préférence d’analyse.",
 	"settings.analytics.saveFailed": "Impossible d’enregistrer la préférence d’analyse.",
 	"settings.sessions": "Sessions",

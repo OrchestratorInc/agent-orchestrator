@@ -891,3 +891,54 @@ describe("the sign-in redirect each build sends", () => {
     });
   });
 });
+
+describe("cloud:signOut", () => {
+  it("finishes the signed-out hook before telling the renderers", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
+    const order: string[] = [];
+    mocks.ipcHandle.mockClear();
+    mocks.notifyRenderers.mockImplementation(() => order.push("notified"));
+    installCloudIPC(() => dataDir, mocks.notifyRenderers, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("telemetry retired");
+    });
+    const handler = mocks.ipcHandle.mock.calls.find(([channel]) => channel === "cloud:signOut")?.[1] as () => Promise<void>;
+    await handler();
+    expect(order).toEqual(["telemetry retired", "notified"]);
+    await rm(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe("cloud:signOut with telemetry", () => {
+  it("retires a handed-off account's telemetry binding before renderers are told, with the daemon down", async () => {
+    const { existsSync } = await import("node:fs");
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const { TelemetryIdentityController } = await import("./telemetry-identity");
+    const telemetryDir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+    const authDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
+    let daemonUp = true;
+    const fetcher = vi.fn(async () => {
+      if (!daemonUp) throw new Error("connection refused");
+      return new Response(null, { status: 204 });
+    });
+    const ctl = new TelemetryIdentityController(telemetryDir, () => "http://127.0.0.1:4010", fetcher as never);
+    // A normal signed-in hand-off: the daemon recorded user_A.
+    expect(await ctl.setCloudUser("user_A")).toBe(true);
+    await writeFile(path.join(telemetryDir, "telemetry_bound_user"), "user_A\n");
+    await writeFile(path.join(telemetryDir, "telemetry_anonymous_id"), "anon_linked\n");
+    daemonUp = false;
+
+    const bindingAtNotify: boolean[] = [];
+    mocks.ipcHandle.mockClear();
+    installCloudIPC(() => authDir, () => {
+      bindingAtNotify.push(existsSync(path.join(telemetryDir, "telemetry_bound_user")));
+    }, () => ctl.signOut());
+    const handler = mocks.ipcHandle.mock.calls.find(([channel]) => channel === "cloud:signOut")?.[1] as () => Promise<void>;
+    await handler();
+
+    expect(bindingAtNotify).toEqual([false]);
+    expect((await readFile(path.join(telemetryDir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
+    await rm(telemetryDir, { recursive: true, force: true });
+    await rm(authDir, { recursive: true, force: true });
+  });
+});

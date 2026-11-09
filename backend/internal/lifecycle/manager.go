@@ -1361,7 +1361,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 	// transition emits neither event so dwell covers the whole pause.
 	if !prevState.NeedsInput() && next.Activity.State.NeedsInput() && !next.IsTerminated {
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_entered",
+			Name:       "ao.sessions.input_wait_started",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1379,7 +1379,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 			"exited_to": string(next.Activity.State),
 		}
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_exited",
+			Name:       "ao.sessions.input_wait_ended",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1398,7 +1398,7 @@ func (m *Manager) emitTelemetry(ctx context.Context, ev ports.TelemetryEvent) {
 	if ev.RequestID == "" {
 		ev.RequestID = reqid.FromContext(ctx)
 	}
-	if ev.Name == "ao.session.waiting_input_entered" && ev.SessionID != nil {
+	if ev.Name == "ao.sessions.input_wait_started" && ev.SessionID != nil {
 		m.countWaitingInput(ctx, *ev.SessionID)
 	}
 	m.telemetry.Emit(ctx, ev)

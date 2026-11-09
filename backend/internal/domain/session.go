@@ -584,6 +584,10 @@ type Session struct {
 	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
 	// archive: clients list its failure but raise no error for it.
 	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
+	// WorkspacePublished says the session has a recorded workspace, so its
+	// workspace reads can succeed. An asynchronous start publishes it partway
+	// through, and a failed start can keep one. The path itself stays private.
+	WorkspacePublished bool `json:"workspacePublished" description:"Whether the session has a recorded workspace that workspace reads can use."`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`

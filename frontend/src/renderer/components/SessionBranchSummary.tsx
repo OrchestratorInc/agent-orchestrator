@@ -22,7 +22,7 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
-import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
+import { type SessionBranchState, type WorkspaceSession, sessionWorkspaceReady } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -77,7 +77,8 @@ export function SessionBranchSummary({
 	// workers rather than shipping a branch of their own. An imported chat has
 	// no branch until it is opened.
 	const showGit = !session.cloud && session.kind !== "orchestrator" && !session.needsResume;
-	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit });
+	// No worktree yet means a guaranteed 404; read it once the start publishes one.
+	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit && sessionWorkspaceReady(session) });
 
 	const sections = manifest.data?.sections;
 	const facts: GitFacts = {

@@ -5737,6 +5737,8 @@ export interface components {
             /** @enum {string} */
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
             workspaceCleanupReportOnly?: boolean;
+            /** @description Whether the session has a recorded workspace that workspace reads can use. */
+            workspacePublished: boolean;
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;

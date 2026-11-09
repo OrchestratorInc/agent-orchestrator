@@ -313,7 +313,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const save = async (values: ProjectSettingsDraft) => {
 		try {
 			const result = await persist(values);
-			void captureRendererEvent("ao.renderer.settings_save_succeeded", { project_id: projectId });
+			void captureRendererEvent("ao.settings.saved", { project_id: projectId });
 			void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) });
 			void queryClient.invalidateQueries({ queryKey: hostId ? ["project-config", hostId, projectId] : ["project-config", projectId] });
 			void onSaved();
