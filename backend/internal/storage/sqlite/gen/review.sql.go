@@ -453,6 +453,15 @@ SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, 
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
        ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
+       ) AS INTEGER) AS auto_retry_blocked,
        CAST(
            EXISTS (
                SELECT 1
@@ -507,6 +516,7 @@ type ListCurrentHeadReviewRunsBySessionRow struct {
 	Verdict           domain.ReviewVerdict
 	CreatedAt         time.Time
 	FailedAutoRuns    int64
+	AutoRetryBlocked  int64
 	FeedbackDelivered int64
 }
 
@@ -515,7 +525,9 @@ type ListCurrentHeadReviewRunsBySessionRow struct {
 // session's Kanban column. The latest same-head pass per (pr, harness) wins,
 // so a superseded retry cannot outvote the rerun that replaced it.
 // failed_auto_runs counts every failed auto pass on that head, the number auto
-// review compares against its retry limit.
+// review compares against its retry limit. auto_retry_blocked mirrors the other
+// reasons auto review will not run this head again for this harness: any
+// cancelled pass, or any pass with a verdict, even if a later pass superseded it.
 // feedback_delivered is true once every actionable inline comment of this pass's
 // provider review has a lifecycle nudge receipt. AO reviews post as COMMENT and
 // the worker receives only their inline comments, so those receipts are the
@@ -537,6 +549,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessio
 			&i.Verdict,
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
+			&i.AutoRetryBlocked,
 			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err
@@ -567,6 +580,15 @@ SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_u
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
        ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
+       ) AS INTEGER) AS auto_retry_blocked,
        CAST(
            EXISTS (
                SELECT 1
@@ -622,6 +644,7 @@ type ListCurrentHeadReviewRunsBySessionsRow struct {
 	Verdict           domain.ReviewVerdict
 	CreatedAt         time.Time
 	FailedAutoRuns    int64
+	AutoRetryBlocked  int64
 	FeedbackDelivered int64
 }
 
@@ -646,6 +669,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 			&i.Verdict,
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
+			&i.AutoRetryBlocked,
 			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err

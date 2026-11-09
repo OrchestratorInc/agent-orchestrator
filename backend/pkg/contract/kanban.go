@@ -72,8 +72,9 @@ type KanbanReviewRunFacts struct {
 	Failed bool
 	// Cancelled reports that a pass for the current head was cancelled.
 	Cancelled bool
-	// RetryExhausted reports that auto review has failed on the current head
-	// as many times as it retries, so it will not try again on this commit.
+	// RetryExhausted reports that auto review will not try a failed pass again
+	// on this commit: it reached its retry limit, or an earlier pass on the
+	// head was cancelled or returned a verdict.
 	RetryExhausted bool
 }
 

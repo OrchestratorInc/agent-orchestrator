@@ -528,6 +528,7 @@ func (s *Store) ListCurrentHeadReviewRunsForSession(ctx context.Context, id doma
 			ID:                r.ID,
 			CreatedAt:         r.CreatedAt,
 			FailedAutoRuns:    int(r.FailedAutoRuns),
+			AutoRetryBlocked:  r.AutoRetryBlocked != 0,
 			FeedbackDelivered: r.FeedbackDelivered != 0,
 		})
 	}
@@ -560,6 +561,7 @@ func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []
 			ID:                r.ID,
 			CreatedAt:         r.CreatedAt,
 			FailedAutoRuns:    int(r.FailedAutoRuns),
+			AutoRetryBlocked:  r.AutoRetryBlocked != 0,
 			FeedbackDelivered: r.FeedbackDelivered != 0,
 		})
 	}

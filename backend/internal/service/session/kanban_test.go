@@ -439,6 +439,82 @@ func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
 	}
 }
 
+// The label must agree with the coordinator, which stops on any cancelled or
+// decided pass for the head and harness, not just the latest one.
+func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		earlierHarness domain.ReviewerHarness
+		earlierStatus  domain.ReviewRunStatus
+		earlierVerdict domain.ReviewVerdict
+		wantDisplay    contract.DisplayStatus
+	}{
+		{
+			name: "cancelled pass before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunCancelled, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "approved pass before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictApproved, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "changes requested before a failed rerun", earlierHarness: "claude-code",
+			earlierStatus: domain.ReviewRunComplete, earlierVerdict: domain.VerdictChangesRequested, wantDisplay: contract.DisplayReviewFailed,
+		},
+		{
+			name: "another harness cancelled does not stop this one", earlierHarness: "codex",
+			earlierStatus: domain.ReviewRunCancelled, wantDisplay: contract.DisplayRetryingReview,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newSQLiteKanbanTestStore(t)
+			ctx := context.Background()
+			seedKanbanTestProject(t, st, "mer")
+			now := time.Now().UTC().Truncate(time.Second)
+			rec, err := st.CreateSession(ctx, domain.SessionRecord{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				AutoReviewEnabled: true, CreatedAt: now, UpdatedAt: now,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+				URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+			}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+				t.Fatal(err)
+			}
+			harnesses := map[domain.ReviewerHarness]string{"claude-code": "rev-claude"}
+			harnesses[tc.earlierHarness] = "rev-earlier"
+			for harness, reviewID := range harnesses {
+				if err := st.UpsertReview(ctx, domain.Review{
+					ID: reviewID, SessionID: rec.ID, ProjectID: "mer", Harness: harness,
+					PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, run := range []domain.ReviewRun{
+				{ID: "earlier", ReviewID: harnesses[tc.earlierHarness], Harness: tc.earlierHarness, Status: tc.earlierStatus, Verdict: tc.earlierVerdict, TriggerSource: domain.ReviewTriggerAuto},
+				{ID: "failed-rerun", ReviewID: harnesses["claude-code"], Harness: "claude-code", Status: domain.ReviewRunFailed, TriggerSource: domain.ReviewTriggerManual},
+			} {
+				run.SessionID, run.PRURL, run.TargetSHA = rec.ID, "pr/1", "head1"
+				run.CreatedAt = now.Add(time.Duration(i) * time.Second)
+				if err := st.InsertReviewRun(ctx, run); err != nil {
+					t.Fatalf("insert run %s: %v", run.ID, err)
+				}
+			}
+			svc := &Service{store: st}
+			got, err := svc.Get(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != tc.wantDisplay {
+				t.Fatalf("presentation = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, tc.wantDisplay)
+			}
+		})
+	}
+}
+
 func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 	st := newSQLiteKanbanTestStore(t)
 	ctx := context.Background()
