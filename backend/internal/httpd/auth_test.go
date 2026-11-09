@@ -495,3 +495,19 @@ func TestLockoutGroupsIPv6SourcesBySlash64(t *testing.T) {
 		t.Fatalf("another /64: got %d want 200", w.Code)
 	}
 }
+
+func TestRetiredHashesAreCapped(t *testing.T) {
+	state := &authState{}
+	for i := range maxRetiredHashes + 5 {
+		state.setHash(mobilebridge.HashPassword(fmt.Sprintf("pass%04d", i)))
+	}
+	if got := len(state.hashes.Load().retired); got != maxRetiredHashes {
+		t.Fatalf("retired hashes: got %d want %d", got, maxRetiredHashes)
+	}
+	if !state.retiredPasswordMatches(fmt.Sprintf("pass%04d", maxRetiredHashes+3)) {
+		t.Fatal("the most recent retired password is no longer recognized")
+	}
+	if state.retiredPasswordMatches("pass0000") {
+		t.Fatal("the oldest retired password is still recognized")
+	}
+}

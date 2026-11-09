@@ -22,6 +22,9 @@ type authHashes struct {
 	retired []string
 }
 
+// maxRetiredHashes bounds how many rotated passwords stay exempt from lockout.
+const maxRetiredHashes = 8
+
 func (a *authState) setHash(h string) {
 	for {
 		previous := a.hashes.Load()
@@ -34,6 +37,9 @@ func (a *authState) setHash(h string) {
 			next.retired = append(next.retired, previous.retired...)
 			if previous.current != "" {
 				next.retired = append(next.retired, previous.current)
+			}
+			if len(next.retired) > maxRetiredHashes {
+				next.retired = next.retired[len(next.retired)-maxRetiredHashes:]
 			}
 		}
 		if a.hashes.CompareAndSwap(previous, next) {
