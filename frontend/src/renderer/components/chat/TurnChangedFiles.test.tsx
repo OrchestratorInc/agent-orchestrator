@@ -282,7 +282,7 @@ describe("ActivityRow command output", () => {
 
 	it("updates the bounded preview as a running command prints more", async () => {
 		const output = "start\n".repeat(1_000);
-		const { container, rerender } = render(<TooltipProvider><ActivityRow activity={commandActivity({ output }, "running")} /></TooltipProvider>);
+		const { container, rerender } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
 		await userEvent.click(screen.getByRole("button"));
 		rerender(<TooltipProvider><ActivityRow activity={commandActivity({ output: output + "latest failure" }, "running")} /></TooltipProvider>);
 		expect(container.querySelector("pre")?.textContent).toMatch(/latest failure$/);
