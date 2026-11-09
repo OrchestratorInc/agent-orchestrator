@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, ChevronRight, Folder, FolderGit2 } from "lucide-react";
+import { ArrowUp, ChevronRight, Folder, FolderGit2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { clientForHost } from "../lib/host-clients";

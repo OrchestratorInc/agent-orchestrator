@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";

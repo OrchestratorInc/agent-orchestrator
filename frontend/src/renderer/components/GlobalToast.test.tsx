@@ -16,7 +16,7 @@ describe("GlobalToast", () => {
 		const toast = screen.getByRole("status");
 		expect(toast.parentElement).toHaveClass("left-1/2", "-translate-x-1/2", "bottom-3", "w-max");
 		expect(toast).toHaveClass("gap-2", "py-2");
-		expect(toast.querySelector("svg")).toHaveClass("lucide-check", "text-green-500");
+		expect(toast.querySelector("svg")).toHaveClass("icon-check", "text-green-500");
 		act(() => vi.advanceTimersByTime(3_499));
 		expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
 		act(() => vi.advanceTimersByTime(1));

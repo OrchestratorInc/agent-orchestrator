@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { type ReactNode, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "@/components/app-icons";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "../ui/accordion";
 import { TurnDuration } from "./ChatTimelineItems";
 

@@ -158,10 +158,10 @@ test("@P0 collapsed files keep feedback usable and toggle the all-files icon", a
 	const inspector = await openInspector(page);
 	await inspector.getByRole("tab", { name: /Files?$/ }).click();
 	const collapseAll = page.getByRole("button", { name: "Collapse all files", exact: true });
-	await expect(collapseAll.locator("svg")).toHaveClass(/lucide-list-chevrons-down-up/);
+	await expect(collapseAll.locator("svg")).toHaveClass(/icon-list-chevrons-down-up/);
 	await page.getByRole("button", { name: `Collapse ${filePath}`, exact: true }).click();
 	const expandAll = page.getByRole("button", { name: "Expand all files", exact: true });
-	await expect(expandAll.locator("svg")).toHaveClass(/lucide-list-chevrons-up-down/);
+	await expect(expandAll.locator("svg")).toHaveClass(/icon-list-chevrons-up-down/);
 	await inspector.getByRole("button", { name: "Add feedback", exact: true }).click();
 	const feedback = page.getByRole("textbox", { name: new RegExp(`Feedback for ${filePath}`) });
 	await expect(feedback).toBeVisible();
@@ -169,9 +169,9 @@ test("@P0 collapsed files keep feedback usable and toggle the all-files icon", a
 	await expandAll.click();
 	await expect(feedback).toBeVisible();
 	await expect(feedback).toHaveValue("Keep this draft while changing file visibility");
-	await expect(collapseAll.locator("svg")).toHaveClass(/lucide-list-chevrons-down-up/);
+	await expect(collapseAll.locator("svg")).toHaveClass(/icon-list-chevrons-down-up/);
 	await collapseAll.click();
 	await expect(feedback).toBeVisible();
 	await expect(feedback).toHaveValue("Keep this draft while changing file visibility");
-	await expect(expandAll.locator("svg")).toHaveClass(/lucide-list-chevrons-up-down/);
+	await expect(expandAll.locator("svg")).toHaveClass(/icon-list-chevrons-up-down/);
 });

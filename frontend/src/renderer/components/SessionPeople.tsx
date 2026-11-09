@@ -1,4 +1,4 @@
-import { ChevronDown, Link2, Share2 } from "lucide-react";
+import { ChevronDown, Link2, Share2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
