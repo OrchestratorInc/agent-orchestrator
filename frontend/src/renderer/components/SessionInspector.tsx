@@ -1069,6 +1069,15 @@ function ArtifactSummaryCard({
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+				{artifact.updatedAt ? (
+					<time
+						className="shrink-0 text-caption tabular-nums text-settings-muted"
+						dateTime={artifact.updatedAt}
+						title={new Date(artifact.updatedAt).toLocaleString()}
+					>
+						{formatTimeCompact(artifact.updatedAt)}
+					</time>
+				) : null}
 			</Pressable>
 		</div>
 	);
