@@ -1354,13 +1354,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 }) {
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
-	// Per step: null until the reader decides, so a step that starts printing opens
-	// itself, as its own row did. The next step starts from its own default.
+	// Per step: the row stays one line, even while the step prints, until the reader
+	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
 	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
-	const stepStreaming = step?.status === "running" && Boolean(step.detail?.output);
-	const stepOpen = expandable && (stepChoice?.id === step?.id ? stepChoice!.open : stepStreaming);
+	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
 	// A finished step stays on the row for a moment before it moves up. It says what
 	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
@@ -1670,21 +1669,19 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
 function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
-	// null means "nobody has decided", which is what lets a running command open
-	// itself and then close again once it settles. Once the user clicks, their
-	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
-	// a finished row open. That goes for a choice made on the live row too, which
-	// the row starts from when the step moves up from there.
+	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
+	// someone is reading is worse than leaving a finished row open. That goes for a
+	// choice made on the live row too, which the row starts from when the step moves
+	// up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [override, setOverride] = useState<boolean | null>(() => stepChoices?.get(activity.id) ?? null);
-	const toggle = (open: boolean) => {
-		setOverride(open);
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const toggle = (next: boolean) => {
+		setOpen(next);
 		// Kept current, so a later remount starts from the reader's latest choice.
-		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, open);
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, next);
 	};
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
-	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const hasBody = genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
@@ -1703,11 +1700,6 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const noticeLabel = retry?.label.startsWith("Reconnecting…") ? retry.label : undefined;
 	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
-
-	// Live output is only live if it is on screen, so a command that is still
-	// running and already printing opens itself.
-	const streamingOutput = activity.status === "running" && Boolean(detail?.output);
-	const open = override ?? streamingOutput;
 
 	return (
 		<div
