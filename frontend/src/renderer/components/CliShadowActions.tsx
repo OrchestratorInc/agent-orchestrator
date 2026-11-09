@@ -12,9 +12,12 @@ type Shadowed = Extract<CliShadowStatus, { kind: "shadowed" }>;
 // The notice and the Settings row each hold a status, and a fix from either
 // one has to clear both.
 const refreshers = new Set<(status: CliShadowStatus) => void>();
+let refreshSequence = 0;
 
 async function refreshCliShadowStatus(identity?: string): Promise<void> {
+	const request = ++refreshSequence;
 	const status = await aoBridge.cliShadow.inspect(identity);
+	if (request !== refreshSequence) return;
 	for (const refresh of refreshers) refresh(status);
 }
 

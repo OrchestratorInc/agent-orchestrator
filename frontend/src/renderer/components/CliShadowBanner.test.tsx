@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliShadowStatus } from "../../shared/cli-shadow";
 import { aoBridge } from "../lib/bridge";
@@ -133,6 +133,28 @@ describe("CliShadowBanner", () => {
 		fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
 		await waitFor(() => expect(replace).toHaveBeenCalledWith("/Users/me/.local/bin/ao", "/Users/me/old/ao", "identity-1"));
 		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+	});
+
+	it("ignores a version probe that finishes after a replacement refresh", async () => {
+		const unchecked: Shadowed = { ...shadowed, versionChecked: false, shadowVersion: null, relation: "different" };
+		let finishProbe: (status: CliShadowStatus) => void = () => { throw new Error("probe not initialized"); };
+		const probe = new Promise<CliShadowStatus>((resolve) => { finishProbe = resolve; });
+		const inspect = vi.spyOn(aoBridge.cliShadow, "inspect")
+			.mockResolvedValueOnce(unchecked)
+			.mockReturnValueOnce(probe)
+			.mockResolvedValue({ kind: "match" });
+		vi.spyOn(aoBridge.cliShadow, "replace").mockResolvedValue({ ok: true });
+		render(<CliShadowBanner />);
+		await screen.findByRole("status");
+		fireEvent.click(screen.getByRole("button", { name: "Run ao version" }));
+		await waitFor(() => expect(inspect).toHaveBeenCalledTimes(2));
+		fireEvent.click(screen.getByRole("button", { name: "Use this app's ao" }));
+		await screen.findByRole("dialog");
+		const buttons = screen.getAllByRole("button", { name: "Use this app's ao" });
+		fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+		await act(async () => { finishProbe(unchecked); });
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
 	it("warns that replacing a regular file cannot be undone", async () => {
