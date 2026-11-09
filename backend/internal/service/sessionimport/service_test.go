@@ -98,8 +98,8 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	current := "11111111-1111-4111-8111-111111111111"
 	old := "22222222-2222-4222-8222-222222222222"
 	path := writeClaude(t, root, current, project, "fix parser", time.Now())
-	oldPath := writeClaude(t, root, old, "", "old standalone", time.Now().AddDate(0, 0, -60))
-	reply, _ := json.Marshal(map[string]any{"type": "assistant", "sessionId": old, "timestamp": time.Now().AddDate(0, 0, -60), "message": map[string]any{"id": "m1", "role": "assistant", "model": "claude-haiku-5-5", "content": []map[string]any{{"type": "text", "text": "done"}}}})
+	oldPath := writeClaude(t, root, old, "", "old standalone", time.Now().AddDate(0, 0, -20))
+	reply, _ := json.Marshal(map[string]any{"type": "assistant", "sessionId": old, "timestamp": time.Now().AddDate(0, 0, -20), "message": map[string]any{"id": "m1", "role": "assistant", "model": "claude-haiku-5-5", "content": []map[string]any{{"type": "text", "text": "done"}}}})
 	if f, err := os.OpenFile(oldPath, os.O_APPEND|os.O_WRONLY, 0); err != nil {
 		t.Fatal(err)
 	} else if _, err := f.Write(append(reply, '\n')); err != nil || f.Close() != nil {
@@ -129,7 +129,7 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 			}
 		} else {
 			oldID = c.ID
-			if c.Suggested || c.ProjectID != "" {
+			if c.ProjectID != "" {
 				t.Fatal(c)
 			}
 		}

@@ -60,7 +60,7 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(screen.queryByText("Codex refactor")).not.toBeInTheDocument();
 	const older = screen.getByRole("checkbox", { name: "Import Old discussion" });
 	expect(older).not.toBeChecked();
-	expect(screen.getAllByText("Some text in this chat is too large to import.")).toHaveLength(1);
+	expect(screen.getAllByText("Only part of this chat's history is imported.")).toHaveLength(1);
 	fireEvent.click(recent);
 	const user = userEvent.setup();
 	await user.click(screen.getByRole("combobox", { name: "Project" }));

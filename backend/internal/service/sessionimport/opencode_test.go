@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -109,6 +110,7 @@ func TestScanOffersOpenCodeWithReadableHistory(t *testing.T) {
 	addMessage(t, db, "ses_deferred", "msg_deferred", "user", 1000, "text:keep tools in AO")
 	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessOpenCode: root}
+	svc.now = func() time.Time { return time.UnixMilli(9000).Add(time.Hour) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil {
 		t.Fatal(err)

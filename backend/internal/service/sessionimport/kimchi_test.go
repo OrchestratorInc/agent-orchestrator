@@ -227,6 +227,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 		t.Fatal("Kimchi discovery followed an override its runtime ignores")
 	}
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimchi: root}
+	svc.now = func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }
 	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"` + cwd + `","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
 	path := writeFile(t, kimchiPath(root, "--source--", kimchiSession), header+`
 {"type":"model_change","id":"m1","parentId":null,"provider":"kimchi-dev","modelId":"auto"}

@@ -40,11 +40,14 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessGemini: {root: geminiRoot, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
 }
 
-func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {
+func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (t transcript, err error) {
 	if read := harnessImporters[harness].readWithProjects; read != nil {
-		return read(ctx, root, projects, paths...)
+		t, err = read(ctx, root, projects, paths...)
+	} else {
+		t, err = readTranscript(ctx, harness, root, paths...)
 	}
-	return readTranscript(ctx, harness, root, paths...)
+	t.keepRecentMessages()
+	return t, err
 }
 
 // importTitle keeps list titles compact without cutting UTF-8 characters.

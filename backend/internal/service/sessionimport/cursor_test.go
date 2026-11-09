@@ -74,6 +74,7 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
 	svc := New(st, "", func(domain.AgentHarness) bool { return false })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
+	svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("scan = %#v, %v", preview, err)
@@ -129,6 +130,7 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
 	svc := New(st, "", func(domain.AgentHarness) bool { return true })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
+	svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("scan = %#v, %v", preview, err)
@@ -256,6 +258,7 @@ func TestCursorScanInvalidatesWALAndSidecarChanges(t *testing.T) {
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-wal", Path: cwd}}}
 	svc := New(st, "", func(domain.AgentHarness) bool { return true })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
+	svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("initial scan = %#v, %v", preview, err)

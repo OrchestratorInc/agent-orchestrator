@@ -13,6 +13,7 @@ export type ImportResult = components["schemas"]["SessionImportResult"];
 export type AgentBlock = "not_installed" | "signed_out";
 
 export const MAX_IMPORT = 500;
+export const MAX_CHATS_PER_PROJECT = 100;
 
 export const sessionImportPreviewQuery = queryOptions({
 	queryKey: ["session-import-preview"],
@@ -101,8 +102,23 @@ export function useImportedAgentBlock(
 	};
 }
 
+function newestPerProject(queryClient: QueryClient, ids: string[]): string[] {
+	const wanted = new Set(ids);
+	const taken = new Map<string, number>();
+	const dropped = new Set<string>();
+	const chats = (queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? []).filter((c) => wanted.has(c.id) && !c.sessionId);
+	for (const c of chats.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))) {
+		const key = c.projectId ?? c.folder ?? "";
+		const count = (taken.get(key) ?? 0) + 1;
+		taken.set(key, count);
+		if (count > MAX_CHATS_PER_PROJECT) dropped.add(c.id);
+	}
+	return ids.filter((id) => !dropped.has(id));
+}
+
 export async function importChats(queryClient: QueryClient, source: ImportSource, ids: string[], folders: string[] = []): Promise<ImportResult[]> {
 	const results: ImportResult[] = [];
+	let batch = ids;
 	let threw = true;
 	try {
 		for (const path of folders) {
@@ -113,15 +129,16 @@ export async function importChats(queryClient: QueryClient, source: ImportSource
 			await queryClient.cancelQueries({ queryKey: sessionImportPreviewQuery.queryKey });
 			await queryClient.fetchQuery(sessionImportPreviewQuery);
 		}
-		for (let start = 0; start < ids.length; start += MAX_IMPORT) {
+		batch = newestPerProject(queryClient, ids);
+		for (let start = 0; start < batch.length; start += MAX_IMPORT) {
 			try {
-				const response = await apiClient.POST("/api/v1/session-import", { body: { ids: ids.slice(start, start + MAX_IMPORT) } });
+				const response = await apiClient.POST("/api/v1/session-import", { body: { ids: batch.slice(start, start + MAX_IMPORT) } });
 				if (response.error) throw apiErrorException(response.error);
 				results.push(...response.data.results);
 			} catch (err) {
 				if (!results.length) throw err;
 				const error = err instanceof Error ? err.message : String(err);
-				results.push(...ids.slice(start).map((id) => ({ id, status: "failed" as const, error })));
+				results.push(...batch.slice(start).map((id) => ({ id, status: "failed" as const, error })));
 				break;
 			}
 		}
@@ -134,7 +151,7 @@ export async function importChats(queryClient: QueryClient, source: ImportSource
 			source,
 			created_count: created.length,
 			existing_count: results.filter((r) => r.status === "already_imported").length,
-			failed_count: threw ? ids.length : results.filter((r) => r.status === "failed").length,
+			failed_count: threw ? batch.length : results.filter((r) => r.status === "failed").length,
 			folder_count: folders.length,
 			agents: [...new Set(created.flatMap((r) => harness.get(r.id) ?? []))].sort().join(","),
 		});

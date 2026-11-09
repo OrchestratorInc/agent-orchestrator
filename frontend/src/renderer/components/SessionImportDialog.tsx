@@ -12,6 +12,7 @@ import {
 	countBy,
 	folderName,
 	importChats,
+	MAX_CHATS_PER_PROJECT,
 	projectChats,
 	sessionImportPreviewQuery,
 	type AgentBlock,
@@ -109,7 +110,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	const blockOf = useAgentBlocks();
 	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const [unchecked, setUnchecked] = useState(new Set<string>());
-	const chats = projectChats(preview.data?.candidates, projectId);
+	const chats = projectChats(preview.data?.candidates, projectId).slice(0, MAX_CHATS_PER_PROJECT);
 	const selected = chats.filter((chat) => !unchecked.has(chat.id));
 	const { importing, error, failures, run } = useImportRun("project_dialog", (results) => {
 		const created = results.filter((result) => result.status === "created").length;

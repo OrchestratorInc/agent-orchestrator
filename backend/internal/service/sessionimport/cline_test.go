@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -112,6 +113,7 @@ func TestClineTerminalImportAndFirstOpenRefresh(t *testing.T) {
 	svc := New(store, "", nil)
 	svc.home = canonical(cwd)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCline: root}
+	svc.now = func() time.Time { return time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("preview = %+v, %v", preview, err)

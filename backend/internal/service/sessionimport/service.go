@@ -23,7 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// recentDays is the window the dialog preselects.
+// recentDays is the window of activity a chat needs to be offered.
 const recentDays = 30
 
 // Store keeps registration and the readable copy atomic. It never launches a controller.
@@ -98,6 +98,7 @@ type Service struct {
 	mu           sync.Mutex
 	selections   map[string]selection
 	cache        map[string]parsed
+	now          func() time.Time
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
@@ -134,7 +135,7 @@ func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) boo
 			roots[harness] = root
 		}
 	}
-	s := &Service{store: store, supportsChat: supportsChat, home: canonical(home), roots: roots}
+	s := &Service{store: store, supportsChat: supportsChat, home: canonical(home), roots: roots, now: time.Now}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -558,7 +559,7 @@ func (f sourceFiles) cacheKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
 }
 
-// Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
+// Scan offers chats active within recentDays and hides missing, malformed and unreadable sources.
 // A chat from a repository that no project holds names that repository's folder.
 func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	s.mu.Lock()
@@ -618,7 +619,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		}
 		// Every scan reads all histories; unchanged ones come from the cache,
 		// keyed by size and mtime.
-		recent := time.Now().AddDate(0, 0, -recentDays)
+		recent := s.now().AddDate(0, 0, -recentDays)
 		results := make([]parsed, len(files))
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
@@ -639,7 +640,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
-				count := len(source.messages)
+				count := len(source.messages) + source.omitted
 				source.fingerprint = file.fingerprint
 				source.messages = nil // Retain only metadata between preview and import.
 				results[i] = parsed{source: source, count: count, err: err}
@@ -656,6 +657,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			}
 			cache[file.cacheKey()] = result
 			source := result.source
+			if source.last.Before(recent) {
+				continue
+			}
 			id := candidateID(harness, source.root, source.nativeID)
 			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
 				continue
