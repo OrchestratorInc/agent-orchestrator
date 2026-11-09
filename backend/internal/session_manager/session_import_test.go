@@ -175,24 +175,6 @@ func TestImportedIdleHistoryDoesNotRestartUntilResume(t *testing.T) {
 	}
 }
 
-func TestDeferredPendingImportPreservesHistoryWithoutPreparingWorkspace(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessKimi, domain.HarnessDroid} {
-		t.Run(string(harness), func(t *testing.T) {
-			rec := domain.SessionRecord{ID: "mer-1", Harness: harness, Mode: domain.SessionModeChat}
-			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-session", ConfigDir: "/provider/home"}
-			// No dependencies: refusal must precede provider probes, workspace creation,
-			// archive refresh, or any write to the imported record.
-			got, err := new(Manager).prepareImportedWorkspace(context.Background(), rec, domain.ProjectRecord{})
-			if !errors.Is(err, ports.ErrChatResumeFailed) || !strings.Contains(err.Error(), "history is preserved") {
-				t.Fatalf("deferred import error=%v", err)
-			}
-			if got.Metadata.ImportSource != rec.Metadata.ImportSource || !got.NeedsImportResume() || got.Metadata.WorkspacePath != "" {
-				t.Fatalf("deferred import changed: %+v", got)
-			}
-		})
-	}
-}
-
 func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	root := t.TempDir()
 	source, destination := filepath.Join(root, "source"), filepath.Join(root, "ao")
@@ -377,6 +359,10 @@ func (s *failingImportWorkspaceStore) SetSessionImportWorkspace(ctx context.Cont
 		return false, errors.New("injected database write failure")
 	}
 	return s.fakeStore.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
+func (s *failingImportWorkspaceStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return s.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
 }
 
 func TestImportedWorkspaceTransferRetriesAfterMetadataFailure(t *testing.T) {

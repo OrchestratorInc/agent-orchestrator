@@ -12238,6 +12238,10 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	}
 }
 
+func (f *fakeStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return f.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
 func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
 	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != workspace.WorkspacePath {

@@ -124,20 +124,3 @@ func TestTerminalImportAdmissionPreservesIdleSessionGuards(t *testing.T) {
 	}
 }
 
-func TestFingerprintImportRequiresFirstOpenValidationBeforeNativeSideEffects(t *testing.T) {
-	a := &terminalImportAgent{native: true}
-	rt := &fakeRuntime{}
-	m, st, _ := newExitedResumeManager(t, rt, a)
-	rec := st.sessions["mer-1"]
-	rec.Mode, rec.Activity.State = domain.SessionModeTUI, domain.ActivityIdle
-	rec.Metadata.WorkspacePath = t.TempDir()
-	rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = "", ""
-	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agent-x", ConfigDir: t.TempDir(), Transferred: true, Prepared: true, Fingerprint: "synthetic-native-snapshot"}
-	st.sessions[rec.ID] = rec
-	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil {
-		t.Fatal("fingerprinted import opened without its first-open validator")
-	}
-	if len(a.relocations) != 0 || len(a.restores) != 0 || rt.created != 0 {
-		t.Fatal("unvalidated native snapshot reached provider/runtime preparation")
-	}
-}

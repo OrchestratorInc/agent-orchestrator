@@ -384,6 +384,7 @@ type Store interface {
 	SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error
 	ClearSessionBranchNaming(ctx context.Context) error
 	SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error)
+	SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -3609,9 +3610,7 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 			return RestoreResult{}, err
 		}
 		if !m.hasFingerprintImportPreparer(rec) {
-			if err := m.refreshImportArchive(ctx, rec); err != nil {
-				return RestoreResult{}, err
-			}
+			m.refreshImportArchive(ctx, rec)
 		}
 		requireNativeHistory = true
 	} else if adoptedOwnedElsewhere(ctx, rec) {

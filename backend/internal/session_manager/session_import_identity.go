@@ -5,7 +5,6 @@ import (
 	"errors"
 	"maps"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -61,15 +60,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 		next := *source
 		next.ResumeNativeID, next.ResumeConfigDir, next.ResumeCwd = ref.NativeSessionID, ref.ConfigDir, launchPath
 		next.ResumeTranscriptPath = ref.TranscriptPath
-		if next.SourceTranscriptPath == "" {
-			next.SourceTranscriptPath = rec.Metadata.NativeTranscriptPath
-		}
-		var updated bool
-		if identity, ok := m.store.(preparedImportIdentityStore); ok {
-			updated, err = identity.SetPreparedImportIdentity(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
-		} else {
-			updated, err = m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
-		}
+		updated, err := m.store.SetPreparedImportIdentity(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
 		if err != nil {
 			return rec, err
 		}
@@ -97,10 +88,4 @@ func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 		metadata[ports.MetadataKeyImportConfigDir] = importedNativeRef(source).ConfigDir
 	}
 	return metadata
-}
-
-// preparedImportIdentityStore moves the session's native handles with a
-// preparer's new copy, so a conversation created for the first launch binds it.
-type preparedImportIdentityStore interface {
-	SetPreparedImportIdentity(context.Context, domain.SessionID, *domain.SessionImportSource, *domain.SessionImportSource, domain.SessionMetadata, time.Time) (bool, error)
 }

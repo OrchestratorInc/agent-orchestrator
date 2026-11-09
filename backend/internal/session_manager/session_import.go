@@ -29,34 +29,20 @@ type ImportArchiveRefresher interface {
 	RefreshArchive(context.Context, domain.SessionRecord) error
 }
 
-// SetImportArchiveRefresher late-binds the import service. Nil skips optional
-// archive refresh, but cannot validate a fingerprinted first-open source.
+// SetImportArchiveRefresher late-binds the import service. Nil skips the archive refresh.
 func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 	m.importArchive = refresher
 }
 
 // refreshImportArchive keeps turns added in another app since the import in the
 // visible history. The copy taken at import remains when the source is unreadable.
-func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
-	source := rec.Metadata.ImportSource
-	if source != nil && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
-		return nil // Retain the archive paired with the checkpointed native copy.
-	}
-	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
+func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
 	if m.importArchive == nil {
-		if required {
-			return importNotice("native source snapshot validation is unavailable; retry after the import service is ready")
-		}
-		return nil
+		return
 	}
 	if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
-		if required {
-			m.logger.Warn("native import source snapshot could not be verified", "sessionID", rec.ID, "error", err)
-			return importNotice("the native source changed or could not be verified; retry, or remove this pending import and scan again")
-		}
 		m.logger.Warn("imported history refresh failed; keeping the import-time copy", "sessionID", rec.ID, "error", err)
 	}
-	return nil
 }
 
 // importReplayedThrough is the last sequence of the provider replay projected
@@ -424,11 +410,6 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
-	// Kimi and Droid have no safe resume of an import in AO's workspace yet:
-	// refuse before any probe or write, so a stored row keeps its history.
-	if rec.Harness == domain.HarnessKimi || rec.Harness == domain.HarnessDroid {
-		return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("this harness cannot yet resume an import safely in AO's workspace; the imported history is preserved"))
-	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}

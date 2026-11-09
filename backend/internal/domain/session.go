@@ -189,9 +189,6 @@ type SessionImportSource struct {
 	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
 	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
 	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
-	// SourceTranscriptPath preserves the archive's source when preparation
-	// selects a different native transcript for the resumed binding.
-	SourceTranscriptPath string `json:"sourceTranscriptPath,omitempty"`
 	// Fingerprint pins optional provider content/sidecar evidence from selection.
 	// First-open native preparation must verify it before copying that source.
 	Fingerprint string `json:"fingerprint,omitempty"`

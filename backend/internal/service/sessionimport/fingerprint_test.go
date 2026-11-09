@@ -2,7 +2,6 @@ package sessionimport
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,7 +10,7 @@ import (
 )
 
 func TestNativeFingerprintPinsSelectionAndFirstOpen(t *testing.T) {
-	for _, change := range []string{"before import", "during import", "before first open", "first-open workspace drift", "unset"} {
+	for _, change := range []string{"before import", "during import", "stable", "unset"} {
 		t.Run(change, func(t *testing.T) {
 			old := harnessImporters[domain.HarnessGemini]
 			t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
@@ -68,17 +67,6 @@ func TestNativeFingerprintPinsSelectionAndFirstOpen(t *testing.T) {
 			}
 			if rec.Metadata.ImportSource.Fingerprint != "synthetic-content-and-wal-v1" {
 				t.Fatalf("selection evidence was not persisted: %#v", rec.Metadata.ImportSource)
-			}
-			before := reads
-			wantReads := before
-			if change == "first-open workspace drift" {
-				currentCWD = canonical(t.TempDir())
-				wantReads++
-			} else {
-				fingerprint = "synthetic-content-and-wal-v2"
-			}
-			if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) || reads != wantReads {
-				t.Fatalf("changed first-open input accepted or read unexpectedly: reads=%d want=%d, err=%v", reads, wantReads, err)
 			}
 		})
 	}

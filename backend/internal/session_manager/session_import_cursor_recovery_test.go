@@ -57,6 +57,14 @@ func (s *cursorRecoveryStore) SetSessionImportWorkspace(ctx context.Context, id 
 	return s.fakeStore.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
 }
 
+func (s *cursorRecoveryStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return s.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
+func (*cursorRecoveryStore) ReplaceImportedMessages(context.Context, domain.SessionID, []sessionimport.Message) error {
+	return nil
+}
+
 func (s *cursorRecoveryStore) ListProjects(context.Context) ([]domain.ProjectRecord, error) {
 	projects := make([]domain.ProjectRecord, 0, len(s.projects))
 	for _, project := range s.projects {

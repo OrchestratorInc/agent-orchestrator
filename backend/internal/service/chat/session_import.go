@@ -2,26 +2,17 @@ package chat
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type importArchiveReader interface {
-	LoadSessionImportMessages(context.Context, domain.SessionID, int64, int64) ([]domain.ConversationMessage, bool, error)
-}
-
 // withImportedHistory continues an adopted import's timeline below its first
 // AO turn with the archive read from the provider transcript. The provider's own
 // replay is partial (Claude resumes from its latest compaction), so the store
 // hides it; the archive owns the sequences before it.
 func (s *Service) withImportedHistory(ctx context.Context, id domain.SessionID, replayedThrough int64, rows ConversationRows, before, limit int64) (ConversationRows, error) {
-	reader, ok := s.store.(importArchiveReader)
-	if !ok {
-		return rows, nil
-	}
 	if limit <= 0 {
 		limit = 200 // the store's default page (DefaultConversationPageSize)
 	}
@@ -33,7 +24,7 @@ func (s *Service) withImportedHistory(ctx context.Context, id domain.SessionID, 
 	if before <= 0 || before > replayedThrough+1 {
 		before = replayedThrough + 1
 	}
-	messages, more, err := reader.LoadSessionImportMessages(ctx, id, before, room)
+	messages, more, err := s.store.LoadSessionImportMessages(ctx, id, before, room)
 	if err != nil || len(messages) == 0 {
 		return rows, err
 	}
@@ -43,11 +34,7 @@ func (s *Service) withImportedHistory(ctx context.Context, id domain.SessionID, 
 }
 
 func (s *Service) importedSnapshot(ctx context.Context, rec domain.SessionRecord, before, limit int64) (Snapshot, error) {
-	reader, ok := s.store.(importArchiveReader)
-	if !ok {
-		return Snapshot{}, errors.New("imported history reader is unavailable")
-	}
-	messages, more, err := reader.LoadSessionImportMessages(ctx, rec.ID, before, limit)
+	messages, more, err := s.store.LoadSessionImportMessages(ctx, rec.ID, before, limit)
 	if err != nil {
 		return Snapshot{}, err
 	}

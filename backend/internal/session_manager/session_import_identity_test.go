@@ -38,7 +38,7 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 	if a.request.SourceFingerprint != "synthetic-native-snapshot" {
 		t.Fatal("native preparer did not receive the selected source fingerprint")
 	}
-	if prepared.Metadata.AgentSessionID != "copied-native" || prepared.Metadata.ProviderConversationID != "copied-native" || source.NativeID != "original" || source.ResumeNativeID != "copied-native" || source.SourceTranscriptPath != "/original/history.json" || prepared.Metadata.NativeTranscriptPath != "/private/copy.json" {
+	if prepared.Metadata.AgentSessionID != "copied-native" || prepared.Metadata.ProviderConversationID != "copied-native" || source.NativeID != "original" || source.ResumeNativeID != "copied-native" || prepared.Metadata.NativeTranscriptPath != "/private/copy.json" {
 		t.Fatalf("prepared identity = %#v", prepared.Metadata)
 	}
 	checkpoint := st.sessions[rec.ID]

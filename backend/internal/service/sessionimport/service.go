@@ -32,6 +32,7 @@ type Store interface {
 	ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error)
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
 	CreateImportedSession(context.Context, domain.SessionRecord, []Message) (domain.SessionRecord, bool, error)
+	ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
 }
 
 // Candidate exposes an opaque selection handle, never a provider file path.
@@ -703,16 +704,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 // retries: later source turns need not exist in the pinned native copy.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
-	replacer, ok := s.store.(interface {
-		ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
-	})
-	if source == nil || source.Adopted {
-		return nil
-	}
-	if source.ResumeNativeID != "" || source.ResumeCwd != "" {
-		return nil
-	}
-	if source.Fingerprint == "" && !ok {
+	if source == nil || source.Adopted || source.ResumeNativeID != "" || source.ResumeCwd != "" {
 		return nil
 	}
 	dests, err := s.destinations(ctx)
@@ -720,16 +712,7 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		return err
 	}
 	projects := s.registeredDiscoveryRoots(dests)
-	path := rec.Metadata.NativeTranscriptPath
-	if source.SourceTranscriptPath != "" {
-		path = source.SourceTranscriptPath
-	}
-	selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
-	// A source that already changed is refused without reading it.
-	if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil || !ok {
-		return err
-	}
-	paths := []string{path}
+	paths := []string{rec.Metadata.NativeTranscriptPath}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -744,16 +727,8 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if err != nil {
 		return err
 	}
-	// Checked again after the read, as Import does, so a turn added meanwhile
-	// cannot reach the archive beyond the pinned history.
-	if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil {
-		return err
-	}
 	if fresh.nativeID != source.NativeID {
 		return errors.New("the source no longer holds this conversation")
-	}
-	if source.Fingerprint != "" && fresh.cwd != source.CWD {
-		return errSourceFingerprintChanged
 	}
 	if len(fresh.messages) == 0 {
 		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
@@ -761,7 +736,7 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		}
 		return errors.New("the source no longer holds readable conversation history")
 	}
-	return replacer.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
+	return s.store.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
 }
 
 // importOne registers one selected conversation from its fresh read. s.mu is held.

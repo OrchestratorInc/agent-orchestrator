@@ -2,7 +2,6 @@ package sessionimport
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,11 +57,6 @@ func TestAiderRegisteredProjectScanImportsNativeTerminalHistory(t *testing.T) {
 	if rec.Metadata.ImportSource.Fingerprint == "" {
 		t.Fatal("import did not persist its selected snapshot")
 	}
-	if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) {
-		t.Fatalf("changed pinned source was accepted: %v", err)
-	}
-	// Legacy imports without selection evidence retain archive refresh behavior.
-	rec.Metadata.ImportSource.Fingerprint = ""
 	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
