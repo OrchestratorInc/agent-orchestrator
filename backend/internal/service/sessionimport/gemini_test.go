@@ -108,7 +108,6 @@ func TestGeminiLegacyHashResolvesOnlyRegisteredProjectsWithoutMetadata(t *testin
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "legacy", Path: cwd}}}
 	svc := New(st, "", nil)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessGemini: root}
-	svc.now = func() time.Time { return time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].ProjectID != "legacy" {
 		t.Fatalf("legacy preview = %#v, %v", preview, err)

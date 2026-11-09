@@ -2,6 +2,7 @@ package sessionimport
 
 import (
 	"context"
+	"os"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -45,6 +46,11 @@ func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness,
 		t, err = read(ctx, root, projects, paths...)
 	} else {
 		t, err = readTranscript(ctx, harness, root, paths...)
+	}
+	if t.last.IsZero() {
+		if info, statErr := os.Stat(t.path); statErr == nil {
+			t.last = info.ModTime()
+		}
 	}
 	t.keepRecentMessages()
 	return t, err
