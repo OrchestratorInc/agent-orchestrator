@@ -107,7 +107,9 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	const prs = useMemo(() => sessionPRDisplaySummaries(session), [session]);
 	const status = session.statusReadiness === "unavailable"
 		? t("session.statusUnavailable")
-		: session.displayStatus || getSessionStatusView(session.status, t).label;
+		: session.needsResume && !session.isTerminated
+			? t("session.importedNotOpened")
+			: session.displayStatus || getSessionStatusView(session.status, t).label;
 	return (
 		<div className="space-y-1.5" role="status" aria-label={`${session.title}, ${status}`}>
 			<div className="flex min-w-0 items-start gap-2">

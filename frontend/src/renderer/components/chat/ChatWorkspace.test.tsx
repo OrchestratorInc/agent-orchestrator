@@ -376,6 +376,12 @@ describe("HumanMessage attachments", () => {
 		).not.toBeInTheDocument();
 	}
 
+	it("shows a read-only archive for a pending Terminal import", () => {
+		render(<ChatWorkspace snapshot={chatFixtureSettled} session={{ ...chatSession, mode: "tui", needsResume: true }} sessionRole="worker" />);
+		expect(screen.getByText("Saved history. This conversation continues in Terminal when the agent resumes.")).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Message the agent" })).not.toBeInTheDocument();
+	});
+
 	it("renders staged image references in human messages as images", () => {
 		renderImageAttachment(
 			"Attached files (read these files in the workspace):",

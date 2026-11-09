@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 
@@ -4086,4 +4087,14 @@ type SwitchSessionAgentAccountRequest struct {
 	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
+}
+
+// SessionImportRequest carries opaque handles returned by the local preview.
+type SessionImportRequest struct {
+	IDs []string `json:"ids" minItems:"1" maxItems:"500"`
+}
+
+// SessionImportResponse retains an outcome for every selected history.
+type SessionImportResponse struct {
+	Results []sessionimport.Result `json:"results"`
 }

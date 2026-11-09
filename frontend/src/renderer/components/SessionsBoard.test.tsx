@@ -66,6 +66,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 }));
 
+vi.mock("./ProjectImportOffer", () => ({ ProjectImportOffer: () => null }));
+
 vi.mock("./SessionTopbarActions", async (importOriginal) => ({ ...(await importOriginal<typeof import("./SessionTopbarActions")>()), SessionTopbarActions: () => null }));
 
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
