@@ -230,10 +230,11 @@ function codeOnly(text) {
 	return collapseWhitespace(text.replace(/^\s*\/\/.*$/gm, ""));
 }
 
-// codeOnly keeps every "/*" and "*/", so the compared branch is live if it starts in live code:
-// only indentation before it, no block comment open, and inside the stream_event case.
-// shortcut: a text scan, not a parse. A "/*" in an earlier string fails packaging, and a string
-// around the branch goes unseen; parse the adapter if upstream ever does either.
+// codeOnly keeps every "/*" and "*/", so check only what sits before the compared branch: nothing
+// but indentation on its first line, no block comment open, and stream_event as the nearest case.
+// shortcut: a text scan, not a parse. A "/*" in an earlier string fails packaging. A string around
+// the branch, or an earlier statement that skips it (a brace-less if, a break), goes unseen; parse
+// the adapter if upstream ever does either.
 function startsLiveStreamCode(source, at) {
 	return !/\S/.test(source.slice(source.lastIndexOf("\n", at) + 1, at)) &&
 		source.lastIndexOf("/*", at) <= source.lastIndexOf("*/", at) &&
