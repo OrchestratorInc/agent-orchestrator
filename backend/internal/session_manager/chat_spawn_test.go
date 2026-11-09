@@ -945,14 +945,20 @@ func TestResumeChatRefusedLoginAsksForSignIn(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		startErr error
-		want     []domain.SessionID
+		moving   bool
+		want     []string
 	}{
-		{"login refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), []domain.SessionID{"mer-1"}},
-		{"provider down", fmt.Errorf("%w: persistent ACP host: exit status 1", ports.ErrChatDriverUnavailable), nil},
+		{"login refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), false, []string{"mer-1: agent requires authentication"}},
+		{"chat login refused", fmt.Errorf("resume thread: %w", ports.ErrChatAuthRequired), false, []string{"mer-1: " + ports.ErrChatAuthRequired.Error()}},
+		{"account move refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), true, nil},
+		{"provider down", fmt.Errorf("%w: persistent ACP host: exit status 1", ports.ErrChatDriverUnavailable), false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, store, _ := newChatManager(&recordingLauncher{startErr: tc.startErr})
 			seedChatResumeSession(store, domain.ActivityExited)
+			if tc.moving {
+				mgr.setAccountOverride("mer-1", "acct-b")
+			}
 			if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); !errors.Is(err, tc.startErr) {
 				t.Fatalf("resume error = %v, want %v", err, tc.startErr)
 			}

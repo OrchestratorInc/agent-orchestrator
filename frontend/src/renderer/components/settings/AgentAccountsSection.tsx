@@ -89,10 +89,12 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	};
 	const requestedLogin = useUiStore((state) => state.accountLogin);
 	useEffect(() => {
-		if (!requestedLogin || !rows.some((account) => account.id === requestedLogin)) return;
+		const account = rows.find((row) => row.id === requestedLogin);
+		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
 		useUiStore.setState({ accountLogin: null });
-		void startLogin(requestedLogin);
-	}, [requestedLogin, accounts.data]);
+		if (account.device) cliLogin?.onSignIn();
+		else void startLogin(account.id);
+	}, [requestedLogin, accounts.data, cliLogin?.disabled]);
 
 	return <>
 		<HarnessDetailGroup

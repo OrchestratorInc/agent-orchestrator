@@ -709,7 +709,14 @@ func (m *Manager) resumeChatController(
 }
 
 func (m *Manager) requireChatLogin(ctx context.Context, id domain.SessionID, err error) {
-	if !errors.Is(err, ports.ErrAgentAuthRequired) && !errors.Is(err, ports.ErrChatAuthRequired) {
+	reason := ""
+	for _, sentinel := range []error{ports.ErrChatAuthRequired, ports.ErrAgentAuthRequired} {
+		if errors.Is(err, sentinel) {
+			reason = sentinel.Error()
+			break
+		}
+	}
+	if reason == "" || m.accountOverride(id) != "" {
 		return
 	}
 	store, ok := m.store.(interface {
@@ -718,7 +725,7 @@ func (m *Manager) requireChatLogin(ctx context.Context, id domain.SessionID, err
 	if !ok {
 		return
 	}
-	if err := store.RequireSessionLogin(ctx, id, ports.ErrAgentAuthRequired.Error(), m.clock()); err != nil {
+	if err := store.RequireSessionLogin(ctx, id, reason, m.clock()); err != nil {
 		m.logger.Warn("record chat sign-in demand", "sessionID", id, "error", err)
 	}
 }

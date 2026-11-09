@@ -8,11 +8,10 @@ const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
 }));
-const sessionAccounts = vi.hoisted(() => ({ bound: {} as Record<string, string>, accounts: [] as { id: string; device: boolean }[] }));
+const sessionAccounts = vi.hoisted(() => ({ bound: {} as Record<string, string> | undefined }));
 vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
-	useSessionAgentAccounts: (sessionId?: string) => ({ data: sessionId ? sessionAccounts.bound : undefined }),
-	useAgentAccounts: (enabled = true) => ({ data: enabled ? sessionAccounts.accounts : undefined }),
+	useSessionAgentAccounts: (sessionId?: string) => ({ data: sessionId ? sessionAccounts.bound : undefined, isPending: Boolean(sessionId) && !sessionAccounts.bound }),
 }));
 vi.mock("../../lib/host-clients", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/host-clients")>()),
@@ -32,7 +31,6 @@ describe("ReauthBanner", () => {
 		useUiStore.setState({ openGlobalSettings: original });
 		openGlobalSettings.mockReset();
 		sessionAccounts.bound = {};
-		sessionAccounts.accounts = [];
 	});
 
 	it("says the login expired in plain words, without the provider's error", () => {
@@ -52,7 +50,6 @@ describe("ReauthBanner", () => {
 
 	it("signs in the saved account the session runs on", async () => {
 		sessionAccounts.bound = { claude: "acct-b" };
-		sessionAccounts.accounts = [{ id: "device-claude", device: true }, { id: "acct-b", device: false }];
 		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
 		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
@@ -60,14 +57,19 @@ describe("ReauthBanner", () => {
 		});
 	});
 
-	it("logs the CLI in when the session runs on this computer's login", async () => {
+	it("signs in this computer's login when the session runs on it", async () => {
 		sessionAccounts.bound = { claude: "device-claude" };
-		sessionAccounts.accounts = [{ id: "device-claude", device: true }, { id: "acct-b", device: false }];
 		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
 		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
-			focusAgentId: "claude-code", harnessView: "local", startLogin: true, preserveProject: true,
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "device-claude", preserveProject: true,
 		});
+	});
+
+	it("waits to learn the session's account before it signs in", () => {
+		sessionAccounts.bound = undefined;
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeDisabled();
 	});
 
 	// A remote session runs on its host, so that host's login is the one to fix.

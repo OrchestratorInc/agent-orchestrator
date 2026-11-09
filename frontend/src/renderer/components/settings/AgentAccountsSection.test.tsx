@@ -39,6 +39,7 @@ const findCliLoginRow = () => waitFor(() => {
 });
 
 beforeEach(() => {
+	useUiStore.setState({ accountLogin: null });
 	getMock.mockReset().mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
 	}));
@@ -70,9 +71,27 @@ it("starts the sign-in a chat asked for, once", async () => {
 	renderPanel();
 
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
-	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } });
+	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/{accountId}/login")).toEqual([
+		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } }],
+	]);
 	expect(useUiStore.getState().accountLogin).toBeNull();
 	await user.click(screen.getByRole("button", { name: "Close sign-in" }));
+});
+
+it("signs this computer's login in through the CLI once it can, when a chat asks", async () => {
+	useUiStore.setState({ accountLogin: "device-claude" });
+	const onSignIn = vi.fn();
+	const cliLogin = { disabled: true, canLogout: true, onSignIn, onLogout: vi.fn() };
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const panel = (controls: CliLoginControls) => <QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" cliLogin={controls} /></TooltipProvider></QueryClientProvider>;
+	const { rerender } = render(panel(cliLogin));
+	await findCliLoginRow();
+	expect(onSignIn).not.toHaveBeenCalled();
+
+	rerender(panel({ ...cliLogin, disabled: false }));
+	await waitFor(() => expect(onSignIn).toHaveBeenCalledTimes(1));
+	expect(useUiStore.getState().accountLogin).toBeNull();
+	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", expect.anything());
 });
 
 it("does not check a closed sign-in, and the remove dialog starts without an old error", async () => {

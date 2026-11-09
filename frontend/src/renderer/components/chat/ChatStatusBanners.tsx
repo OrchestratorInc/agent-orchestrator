@@ -16,7 +16,7 @@
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
-import { agentAccountProviderFor, useAgentAccounts, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
@@ -103,16 +103,14 @@ function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: str
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
 	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
-	const accounts = useAgentAccounts(provider !== null);
 	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
-	const savedAccount = accounts.data?.find((candidate) => candidate.id === sessionAccountId && !candidate.device);
 	return (
-		<Button type="button" size="sm" variant="secondary" className="shrink-0"
+		<Button type="button" size="sm" variant="secondary" className="shrink-0" disabled={provider !== null && sessionAccounts.isPending}
 			onClick={() => openGlobalSettings("harness", {
 				focusAgentId: harness,
 				...(hostId ? { hostId } : {}),
 				harnessView: cloud ? "cloud" : "local",
-				...(savedAccount ? { loginAccountId: savedAccount.id } : { startLogin: true }),
+				...(sessionAccountId ? { loginAccountId: sessionAccountId } : { startLogin: true }),
 				preserveProject: true,
 			})}>
 			{t("chat.reauth.logInAgain")}
