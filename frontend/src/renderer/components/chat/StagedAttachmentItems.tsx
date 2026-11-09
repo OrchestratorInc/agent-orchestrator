@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
@@ -73,11 +74,12 @@ export function StagedAttachmentItems({
 	const { t } = useTranslation();
 	if (paths.length === 0) return null;
 	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const originalNames = readAttachmentNames();
 	return (
 		<ChatImageAttachmentRow>
 			<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
 				{paths.map((path) => {
-					const name = attachmentName(path);
+					const name = originalNames[path] ?? attachmentName(path);
 					const image = IMAGE_ATTACHMENT_PATH.test(path);
 					// An image with no preview URL shows as a file chip, but it still can't go.
 					const remove = image ? undefined : onRemove;
