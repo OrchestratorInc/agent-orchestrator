@@ -49,6 +49,11 @@ export function parseArtifactLink(value: string): ArtifactLinkTarget | undefined
 	return { ...target, path: path.join("/") };
 }
 
+/** The canonical session route, `ao://sessions/{project}/{session}`, with each id percent-encoded. */
+export function sessionLink(projectId: string, sessionId: string): string {
+	return `${SESSION_LINK_PREFIX}${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}`;
+}
+
 /** The canonical artifact route for a slash-separated path inside a session's artifact directory. */
 export function artifactLink(projectId: string, sessionId: string, path: string): string {
 	const encodedPath = path.split("/").map(encodeURIComponent).join("/");

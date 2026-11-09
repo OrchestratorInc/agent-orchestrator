@@ -414,11 +414,15 @@ describe("Linux package maintainer", () => {
 });
 
 describe("packaged authentication callback registration", () => {
-	it("declares ao-app in the macOS bundle and Linux package metadata", () => {
+	it("declares ao-app and ao in the macOS bundle and Linux package metadata", () => {
 		expect(config.packagerConfig?.protocols).toEqual([
 			{
 				name: "Orchestrator authentication callback",
 				schemes: ["ao-app"],
+			},
+			{
+				name: "Orchestrator session link",
+				schemes: ["ao"],
 			},
 		]);
 
@@ -433,6 +437,7 @@ describe("packaged authentication callback registration", () => {
 			const maker = makers.find((candidate) => candidate.name === name);
 			expect(maker?.config?.options?.mimeType).toEqual([
 				"x-scheme-handler/ao-app",
+				"x-scheme-handler/ao",
 			]);
 		}
 	});

@@ -188,6 +188,11 @@ import {
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import {
+	createSessionDeepLinkRouter,
+	findSessionDeepLinkArg,
+	registerSessionProtocol,
+} from "./main/session-deep-link";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { ShareLinkRecords } from "./main/cloud-share-links";
@@ -669,6 +674,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 } else {
 	registerCloudProtocol();
+	registerSessionProtocol();
 	installLifecycleLog();
 }
 
@@ -4439,6 +4445,26 @@ function isShareDeepLink(raw: string): boolean {
 	}
 }
 
+// ao://sessions/<project>/<session> links, from anywhere on the OS. The shell
+// renderer asks for the queued one once its listener is installed
+// (session-link:take); until then a link waits here.
+let sessionLinkRendererContentsId: number | undefined;
+
+ipcMain.handle("session-link:take", (event) => {
+	sessionLinkRendererContentsId = event.sender.id;
+	return sessionDeepLinks.take();
+});
+
+const sessionDeepLinks = createSessionDeepLinkRouter({
+	focus: focusCloudWindow,
+	deliver: (link) => {
+		const contents = getShellWebContents();
+		if (!contents || contents.isDestroyed() || contents.isLoading() || contents.id !== sessionLinkRendererContentsId) return false;
+		contents.send("session-link:open", link);
+		return true;
+	},
+});
+
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	// A published artifact's "Open on orchestrator": the Artifacts page opens it,
 	// or hands it back to openSharedArtifact's isolated window when it cannot.
@@ -4553,10 +4579,19 @@ function isBillingDeepLink(raw: string): boolean {
 // on first launch (handled in app.whenReady below).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
+	if (/^ao:\/\//i.test(url)) {
+		sessionDeepLinks.handle(url);
+		return;
+	}
 	void handleCloudDeepLinkAndFocus(url);
 });
 
 app.on("second-instance", (_event, argv) => {
+	const sessionLinkArg = findSessionDeepLinkArg(argv);
+	if (sessionLinkArg) {
+		sessionDeepLinks.handle(sessionLinkArg);
+		return;
+	}
 	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
 	if (deepLink) {
 		void handleCloudDeepLinkAndFocus(deepLink);
@@ -4854,6 +4889,10 @@ app.whenReady().then(async () => {
 	if (deepLinkArg) {
 		void handleCloudDeepLinkAndFocus(deepLinkArg);
 	}
+
+	// Windows/Linux cold launch from an ao:// link; macOS delivers it as open-url.
+	const sessionLinkArg = findSessionDeepLinkArg(process.argv);
+	if (sessionLinkArg) sessionDeepLinks.handle(sessionLinkArg);
 
 	// Windows/Linux: a folder dropped on the taskbar icon/shortcut while the
 	// app was not running launches it with the folder's path in argv. The
