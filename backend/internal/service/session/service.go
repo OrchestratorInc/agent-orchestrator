@@ -1783,6 +1783,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SessionRecord:              rec,
 		WorkspaceCleanup:           cleanup.WorkspaceDisposition,
 		WorkspaceCleanupReportOnly: cleanup.ReportOnly,
+		WorkspacePublished:         strings.TrimSpace(rec.Metadata.WorkspacePath) != "",
 		StatusReadiness:            readiness,
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),

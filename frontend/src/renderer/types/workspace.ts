@@ -173,6 +173,11 @@ export type WorkspaceSession = {
 	 * "running" on a failed session is the step that failed.
 	 */
 	provisionSteps?: SessionProvisionStep[];
+	/**
+	 * The daemon has a recorded workspace for this session, so workspace reads
+	 * can succeed. Absent from older daemons, which is treated as published.
+	 */
+	workspacePublished?: boolean;
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
@@ -409,14 +414,14 @@ export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSes
 }
 
 /**
- * Whether the session's local worktree exists yet. An asynchronous start
- * publishes it when the worktree step finishes; until then, and after a failed
- * start, every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND.
+ * Whether workspace reads can succeed. The daemon reports whether it has a
+ * recorded workspace: an asynchronous start publishes one partway through, a
+ * failed start can keep one, and an agent-only retry reuses it. Until then
+ * every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND. An older
+ * daemon does not report it, so its sessions are treated as published.
  */
-export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "provisionState" | "provisionSteps">): boolean {
-	if (session.provisionState === "failed") return false;
-	if (session.provisionState !== "provisioning") return true;
-	return session.provisionSteps?.some((step) => step.id === "worktree" && step.status === "done") ?? false;
+export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspacePublished">): boolean {
+	return session.workspacePublished !== false;
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {

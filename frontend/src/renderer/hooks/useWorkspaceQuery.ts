@@ -123,6 +123,7 @@ export function toWorkspaceSession(
 		displayStatus: session.displayStatus || undefined,
 		statusReadiness,
 		provisionState: session.provisionState,
+		...(typeof session.workspacePublished === "boolean" ? { workspacePublished: session.workspacePublished } : {}),
 		provisionError: session.provisionError || undefined,
 		provisionSteps: session.provisionSteps?.map((step) => ({
 			id: step.id,
@@ -230,6 +231,7 @@ function toLocalWorkspaceSession(
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
 		provisionState: session.provisionState,
+		...(typeof session.workspacePublished === "boolean" ? { workspacePublished: session.workspacePublished } : {}),
 		provisionError: session.provisionError || undefined,
 		provisionSteps: session.provisionSteps?.map((step) => ({
 			id: step.id,

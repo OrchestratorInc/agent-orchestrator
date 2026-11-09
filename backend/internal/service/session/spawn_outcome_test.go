@@ -180,3 +180,28 @@ func TestSyncSpawnReportsSpawnDuration(t *testing.T) {
 		t.Fatalf("payload = %#v", p)
 	}
 }
+
+// Workspace reads are gated on the daemon's recorded workspace, not on the
+// start state: a failed start can keep its workspace, and an agent-only retry
+// reuses it without a worktree step.
+func TestSessionReportsWhetherItsWorkspaceIsPublished(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["starting"] = domain.SessionRecord{ID: "starting", ProjectID: "mer", ProvisionState: domain.SessionProvisionProvisioning}
+	failed := domain.SessionRecord{ID: "failed-kept", ProjectID: "mer", ProvisionState: domain.SessionProvisionFailed}
+	failed.Metadata.WorkspacePath = "/tmp/worktrees/failed-kept"
+	st.sessions[failed.ID] = failed
+	retry := domain.SessionRecord{ID: "agent-retry", ProjectID: "mer", ProvisionState: domain.SessionProvisionProvisioning,
+		ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepRunning}}}
+	retry.Metadata.WorkspacePath = "/tmp/worktrees/agent-retry"
+	st.sessions[retry.ID] = retry
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	for id, want := range map[domain.SessionID]bool{"starting": false, "failed-kept": true, "agent-retry": true} {
+		got, err := svc.Get(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if got.WorkspacePublished != want {
+			t.Errorf("%s workspacePublished = %t, want %t", id, got.WorkspacePublished, want)
+		}
+	}
+}

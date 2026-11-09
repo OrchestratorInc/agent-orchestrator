@@ -428,12 +428,10 @@ describe("attentionZone", () => {
 });
 
 describe("sessionWorkspaceReady", () => {
-	it("waits for the worktree step of an asynchronous start", () => {
+	it("follows the daemon's published workspace, not the start state", () => {
+		expect(sessionWorkspaceReady({ workspacePublished: false })).toBe(false);
+		expect(sessionWorkspaceReady({ workspacePublished: true })).toBe(true);
+		// An older daemon that does not report it.
 		expect(sessionWorkspaceReady({})).toBe(true);
-		expect(sessionWorkspaceReady({ provisionState: "ready" })).toBe(true);
-		expect(sessionWorkspaceReady({ provisionState: "failed" })).toBe(false);
-		expect(sessionWorkspaceReady({ provisionState: "provisioning" })).toBe(false);
-		expect(sessionWorkspaceReady({ provisionState: "provisioning", provisionSteps: [{ id: "fetch", status: "done" }, { id: "worktree", status: "running" }] })).toBe(false);
-		expect(sessionWorkspaceReady({ provisionState: "provisioning", provisionSteps: [{ id: "worktree", status: "done" }, { id: "agent", status: "running" }] })).toBe(true);
 	});
 });
