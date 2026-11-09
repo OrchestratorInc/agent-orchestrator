@@ -88,6 +88,7 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
+import { SESSION_WORKSPACE_ID } from "../hooks/useHeldSession";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
@@ -474,6 +475,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
+	const sessionTopbarRoute = useMemo(() => ({ hostId, projectId, sessionId }), [hostId, projectId, sessionId]);
 	const { baseUrl: remoteBase, label: hostLabel } = useHostConnection(hostId);
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
@@ -2058,7 +2060,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
 				/>
 			) : null}
-			<SessionTopbarActions />
+			<SessionTopbarActions route={sessionTopbarRoute} />
 		</div>
 	);
 	// While an interface switch runs, its status replaces the tab menu and stays visible.
@@ -2487,7 +2489,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				className="session-split relative flex min-h-0 flex-1 overflow-hidden"
 				data-testid="panel-group"
 				data-workspace-mode={sizing.mode}
-				id="session-workspace"
+				id={SESSION_WORKSPACE_ID}
 				ref={sessionSplitRef}
 				style={
 					{
