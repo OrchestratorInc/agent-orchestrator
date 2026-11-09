@@ -395,6 +395,8 @@ func repositoryRoot(common string) string {
 
 var errManagedByAO = errors.New("this conversation already belongs to an AO session")
 
+var errInactive = errors.New("this conversation has no activity within the import window")
+
 func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	sum := sha256.Sum256([]byte(string(harness) + "\x00" + root + "\x00" + nativeID))
 	return hex.EncodeToString(sum[:])
@@ -617,13 +619,17 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			slog.Warn("session import: skipping a provider whose history could not be read", "harness", harness, "err", err)
 			continue
 		}
-		// Every scan reads all histories; unchanged ones come from the cache,
-		// keyed by size and mtime.
+		// Every scan reads the histories modified within recentDays; unchanged
+		// ones come from the cache, keyed by size and mtime.
 		recent := s.now().AddDate(0, 0, -recentDays)
 		results := make([]parsed, len(files))
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
 		for i, file := range files {
+			if file.modTime.Before(recent) {
+				results[i] = parsed{err: errInactive}
+				continue
+			}
 			// AO's own sessions are never offered; skip reading their histories.
 			if _, own := managed[file.nativeID()]; own {
 				if _, wasImported := imported[[2]string{file.root, file.nativeID()}]; !wasImported {
@@ -640,7 +646,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
-				count := len(source.messages) + source.omitted
+				count := len(source.messages)
 				source.fingerprint = file.fingerprint
 				source.messages = nil // Retain only metadata between preview and import.
 				results[i] = parsed{source: source, count: count, err: err}

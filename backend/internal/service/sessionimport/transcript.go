@@ -60,24 +60,8 @@ type transcript struct {
 	last                      time.Time
 	// shortened reports visible text that was too large to keep.
 	shortened bool
-	omitted   int
 	// fingerprint is the optional native-input evidence captured by discovery.
 	fingerprint string
-}
-
-const maxImportedMessages = 200
-
-func (t *transcript) keepRecentMessages() {
-	n := len(t.messages)
-	if n <= maxImportedMessages {
-		return
-	}
-	cut := n - maxImportedMessages
-	kept := slices.Clone(t.messages[cut:])
-	if first := slices.IndexFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }); first >= 0 && first < cut {
-		kept = append([]Message{t.messages[first]}, kept[1:]...)
-	}
-	t.messages, t.omitted, t.shortened = kept, n-len(kept), true
 }
 
 type textBlock struct{ Type, Text string }

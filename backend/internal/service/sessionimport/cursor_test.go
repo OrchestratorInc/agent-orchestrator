@@ -263,6 +263,10 @@ func TestCursorScanInvalidatesWALAndSidecarChanges(t *testing.T) {
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("initial scan = %#v, %v", preview, err)
 	}
+	old := svc.now().AddDate(0, 0, -recentDays-1)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)

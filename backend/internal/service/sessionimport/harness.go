@@ -52,7 +52,6 @@ func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness,
 			t.last = info.ModTime()
 		}
 	}
-	t.keepRecentMessages()
 	return t, err
 }
 

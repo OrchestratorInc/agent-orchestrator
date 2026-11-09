@@ -3707,7 +3707,7 @@
 	"sessionImport.allProjects": "Todos os projetos e conversas independentes",
 	"sessionImport.selectionHelp": "Somente conversas ativas nos últimos 30 dias são exibidas. Cada importação traz até 100 por projeto. Todas as sessões permanecem ociosas após a importação.",
 	"sessionImport.reading": "Lendo históricos locais…",
-	"sessionImport.shortened": "Somente parte do histórico desta conversa é importada.",
+	"sessionImport.shortened": "Parte do texto desta conversa é grande demais para ser importada.",
 	"sessionImport.selectAllAria": "Selecionar todas as conversas exibidas",
 	"sessionImport.selectAll_one": "Selecionar todas · {{count}} conversa",
 	"sessionImport.selectAll_other": "Selecionar todas · {{count}} conversas",

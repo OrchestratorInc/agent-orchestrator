@@ -3646,7 +3646,7 @@
 	"sessionImport.allProjects": "Alle Projekte und eigenständigen Unterhaltungen",
 	"sessionImport.selectionHelp": "Es werden nur Unterhaltungen mit Aktivität in den letzten 30 Tagen angezeigt. Jeder Import übernimmt bis zu 100 pro Projekt. Nach dem Import bleiben alle Sitzungen inaktiv.",
 	"sessionImport.reading": "Lokale Verläufe werden gelesen…",
-	"sessionImport.shortened": "Nur ein Teil des Verlaufs dieser Unterhaltung wird importiert.",
+	"sessionImport.shortened": "Ein Teil des Texts in dieser Unterhaltung ist zu groß für den Import.",
 	"sessionImport.selectAllAria": "Alle angezeigten Unterhaltungen auswählen",
 	"sessionImport.selectAll_one": "Alle angezeigten auswählen · {{count}} Unterhaltung",
 	"sessionImport.selectAll_other": "Alle angezeigten auswählen · {{count}} Unterhaltungen",

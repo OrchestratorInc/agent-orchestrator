@@ -79,7 +79,13 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		}
 		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
 		// a newer AO copy could hide the eligible original with the same id.
-		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: archive.ID, modTime: info.ModTime(), size: info.Size(), fingerprint: fingerprint})
+		modTime := info.ModTime()
+		for _, input := range []string{path + "-wal", filepath.Join(filepath.Dir(path), "meta.json")} {
+			if sidecar, err := os.Lstat(input); err == nil && sidecar.ModTime().After(modTime) {
+				modTime = sidecar.ModTime()
+			}
+		}
+		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: archive.ID, modTime: modTime, size: info.Size(), fingerprint: fingerprint})
 		return nil
 	})
 	return files, err

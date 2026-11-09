@@ -3627,7 +3627,7 @@
 	"sessionImport.allProjects": "All projects and Standalone",
 	"sessionImport.selectionHelp": "Only conversations active in the last 30 days are listed. Each import takes up to 100 per project. Import leaves every session idle.",
 	"sessionImport.reading": "Reading local histories…",
-	"sessionImport.shortened": "Only part of this chat's history is imported.",
+	"sessionImport.shortened": "Some text in this chat is too large to import.",
 	"sessionImport.selectAllAria": "Select all shown conversations",
 	"sessionImport.selectAll_one": "Select all shown · {{count}} conversation",
 	"sessionImport.selectAll_other": "Select all shown · {{count}} conversations",

@@ -3983,7 +3983,7 @@
 	"sessionImport.allProjects": "Все проекты и отдельные сессии",
 	"sessionImport.selectionHelp": "Показаны только чаты, активные за последние 30 дней. За один импорт переносится до 100 чатов на проект. После импорта все сессии остаются неактивными.",
 	"sessionImport.reading": "Чтение локальной истории…",
-	"sessionImport.shortened": "Импортируется только часть истории этого чата.",
+	"sessionImport.shortened": "Часть текста в этом чате слишком велика для импорта.",
 	"sessionImport.selectAllAria": "Выбрать все показанные чаты",
 	"sessionImport.selectAll_one": "Выбрать все показанные · {{count}} чат",
 	"sessionImport.selectAll_few": "Выбрать все показанные · {{count}} чата",

@@ -3646,7 +3646,7 @@
 	"sessionImport.allProjects": "すべてのプロジェクトと単独の会話",
 	"sessionImport.selectionHelp": "過去30日間にアクティブだった会話のみが表示されます。1回のインポートで取り込むのはプロジェクトごとに最大100件です。インポート後、すべてのセッションは待機状態になります。",
 	"sessionImport.reading": "ローカルの履歴を読み取り中…",
-	"sessionImport.shortened": "この会話の履歴は一部のみインポートされます。",
+	"sessionImport.shortened": "この会話の一部のテキストは大きすぎるため、インポートできません。",
 	"sessionImport.selectAllAria": "表示中の会話をすべて選択",
 	"sessionImport.selectAll_one": "表示中をすべて選択 · {{count}} 件の会話",
 	"sessionImport.selectAll_other": "表示中をすべて選択 · {{count}} 件の会話",

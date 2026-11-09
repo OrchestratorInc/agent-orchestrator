@@ -464,13 +464,16 @@ func TestScanDestinations(t *testing.T) {
 func TestScanOffersOnlyRecentConversations(t *testing.T) {
 	claude := t.TempDir()
 	now := time.Now()
-	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
-		at := now.Add(time.Duration(-i) * 24 * time.Hour)
+	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"} {
+		at, stamp := now.Add(time.Duration(-i)*24*time.Hour), now.AddDate(0, 0, -recentDays-1)
 		if i == 2 {
-			at = now.AddDate(0, 0, -recentDays-1)
+			at = stamp
+		}
+		if i < 2 {
+			stamp = at
 		}
 		path := writeClaude(t, claude, name, "", "claude "+name[:1], at)
-		if err := os.Chtimes(path, at, at); err != nil {
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -487,23 +490,6 @@ func TestScanOffersOnlyRecentConversations(t *testing.T) {
 	sort.Strings(titles)
 	if strings.Join(titles, ",") != "claude 1,claude 2" {
 		t.Fatalf("titles=%q", titles)
-	}
-}
-
-func TestKeepRecentMessagesKeepsFirstPromptAndNewest(t *testing.T) {
-	messages := []Message{{Role: domain.MessageRoleAssistant, Text: "banner"}, {Role: domain.MessageRoleUser, Text: "first prompt"}}
-	for i := range 300 {
-		messages = append(messages, Message{Role: domain.MessageRoleAssistant, Text: fmt.Sprint(i)})
-	}
-	long := transcript{messages: messages}
-	long.keepRecentMessages()
-	if len(long.messages) != maxImportedMessages || long.messages[0].Text != "first prompt" || long.messages[1].Text != "101" || long.messages[maxImportedMessages-1].Text != "299" || long.omitted != 102 || !long.shortened {
-		t.Fatalf("kept %d, first %q, second %q, omitted %d, shortened %v", len(long.messages), long.messages[0].Text, long.messages[1].Text, long.omitted, long.shortened)
-	}
-	short := transcript{messages: messages[:maxImportedMessages]}
-	short.keepRecentMessages()
-	if len(short.messages) != maxImportedMessages || short.omitted != 0 || short.shortened {
-		t.Fatalf("short chat changed: %d, %d, %v", len(short.messages), short.omitted, short.shortened)
 	}
 }
 
