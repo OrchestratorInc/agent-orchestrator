@@ -300,24 +300,108 @@ describe("useTerminateSession", () => {
 });
 
 describe("durable workspace cleanup feedback", () => {
-	it("shows pending and failed cleanup after Kill succeeds, then clears it after retry", async () => {
+	const setCleanup = (queryClient: QueryClient, workspaceCleanup: WorkspaceSession["workspaceCleanup"], workspaceCleanupReportOnly?: boolean) =>
+		queryClient.setQueryData(workspaceQueryKey, [{
+			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup, workspaceCleanupReportOnly }],
+		}]);
+	const toasts = () => useUiStore.getState().globalToasts;
+	const dirtyTitle = "Worktree has uncommitted changes. Retry cleanup after you save them.";
+	const archive = async (queryClient: QueryClient) => {
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync(session); });
+	};
+
+	beforeEach(() => {
+		useUiStore.getState().clearGlobalToast();
+	});
+
+	it("tracks pending cleanup and leaves settled outcomes out of the page state", async () => {
 		const queryClient = new QueryClient();
 		const queryFn = vi.fn().mockResolvedValue(workspaces);
 		queryClient.setQueryDefaults(workspaceQueryKey, { queryFn });
-		const setCleanup = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{
-			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup }],
-		}]);
-		setCleanup("pending");
-		const { result } = renderHook(() => useTerminateSessionState(session.id), { wrapper: wrapper(queryClient) });
+		setCleanup(queryClient, "pending");
+		const { result } = renderHook(() => ({
+			session: useTerminateSessionState(session.id),
+			project: useProjectTerminateSessionStates(workspaces[0].id),
+		}), { wrapper: wrapper(queryClient) });
 		expect(queryClient.getQueryCache().find({ queryKey: workspaceQueryKey })?.options.queryFn).toBe(queryFn);
 		expect(queryFn).not.toHaveBeenCalled();
-		expect(result.current.isPending).toBe(true);
-		await act(async () => { setCleanup("failed"); });
-		await waitFor(() => expect(result.current.error).toBe("Workspace cleanup failed. Retry cleanup in project Scripts settings."));
-		expect(result.current.isPending).toBe(false);
-		await act(async () => { setCleanup("removed"); });
-		await waitFor(() => expect(result.current.error).toBeNull());
-		expect(result.current.isPending).toBe(false);
+		expect(result.current.session.isPending).toBe(true);
+		expect(result.current.project).toMatchObject([{ cleanupPending: true, error: null }]);
+		for (const settled of ["failed", "preserved_dirty"] as const) {
+			await act(async () => { setCleanup(queryClient, settled); });
+			await waitFor(() => expect(result.current.session).toEqual({ error: null, isPending: false }));
+			expect(result.current.project).toEqual([]);
+		}
+		expect(toasts()).toEqual([]);
+	});
+
+	it("reports a kept worktree once, when the archive that started the cleanup settles", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "pending");
+		expect(toasts()).toEqual([]);
+
+		setCleanup(queryClient, "preserved_dirty");
+		setCleanup(queryClient, "preserved_dirty");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0]).toMatchObject({ title: dirtyTitle, body: "do the thing", tone: "info", action: { label: "Retry cleanup" } });
+	});
+
+	it("reports a failed teardown in the error tone", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+
+		setCleanup(queryClient, "failed");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0]).toMatchObject({ title: "Workspace cleanup failed. Retry cleanup in project Scripts settings.", tone: "error" });
+	});
+
+	it("says nothing when the cleanup succeeds or a sweep recorded it", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty", true);
+		setCleanup(queryClient, "removed");
+		setCleanup(queryClient, "preserved_dirty");
+		expect(toasts()).toEqual([]);
+	});
+
+	it("retries from the notice, repeating it while the worktree stays dirty", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		const first = toasts()[0];
+		postMock.mockResolvedValueOnce({
+			data: { ok: true, cleaned: [], alreadyGone: [], skipped: [{ sessionId: session.id, code: "dirty", reason: "workspace has uncommitted changes" }] },
+			error: undefined,
+		});
+
+		await act(async () => { first.action?.run(); });
+
+		await waitFor(() => expect(toasts()[0]?.nonce).not.toBe(first.nonce));
+		expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/cleanup", { params: { query: { project: "proj-1" } } });
+		expect(toasts()).toHaveLength(1);
+		expect(toasts()[0]).toMatchObject({ title: dirtyTitle });
+
+		postMock.mockResolvedValueOnce({ data: { ok: true, cleaned: [session.id], alreadyGone: [], skipped: [] }, error: undefined });
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts().at(-1)).toMatchObject({ title: "Cleaned 1; skipped 0.", tone: "success" }));
+	});
+
+	it("says so when the retry itself fails", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "failed");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		postMock.mockResolvedValueOnce({ data: undefined, error: { message: "nope" } });
+
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts().at(-1)).toMatchObject({ title: "Could not retry cleanup.", tone: "error" }));
 	});
 
 	it("raises nothing for a cleanup a sweep recorded", async () => {
