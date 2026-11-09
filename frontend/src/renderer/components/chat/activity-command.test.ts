@@ -21,6 +21,7 @@ describe("commandCategory", () => {
 	it("groups a chain with the segment that names it", () => {
 		expect(commandCategory("cat a.ts && rm -rf src")).toBe("run");
 		expect(commandCategory("npm test | tee log.txt")).toBe("run");
+		expect(commandCategory('for p in AGENTS.md ../AGENTS.md; do if [ -f "$p" ]; then cat "$p"; fi; done')).toBe("search");
 	});
 
 	it("counts a Codex web search as exploring", () => {

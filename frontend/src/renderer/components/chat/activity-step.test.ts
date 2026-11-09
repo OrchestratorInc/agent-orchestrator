@@ -245,6 +245,10 @@ describe("describeCommandStep", () => {
 
 	it("looks past shell grammar to the program it runs", () => {
 		expect(done('for f in src/*.ts; do wc -l "$f"; done')).toBe("Read file");
+		const lookup = 'for p in AGENTS.md ../AGENTS.md; do if [ -f "$p" ]; then printf "\\n%s\\n" "$p"; cat "$p"; fi; done';
+		expect(done(lookup)).toBe("Looked for AGENTS.md");
+		expect(live(lookup)).toBe("Looking for AGENTS.md");
+		expect(done('for p in AGENTS.md ../AGENTS.md; do if [ -f "$p" ]; then cat "$p"; rm "$p"; fi; done')).not.toBe("Looked for AGENTS.md");
 		expect(done("if [ -f a.ts ]; then cat a.ts; fi")).toBe("Read a.ts");
 		expect(done("if ! grep -q TODO notes.md; then echo none; fi")).toBe("Searched for TODO");
 		expect(done("while true; do sleep 5; done")).toBe("Waited 5s");

@@ -193,6 +193,8 @@ export function pastTenseHoldsOnFailure(step: Pick<CommandStep, "done">): boolea
 
 /** Name one shell command line. Anything unrecognized becomes "Ran <program>". */
 export function describeCommandStep(command: string): CommandStep {
+	const lookup = conditionalFileLookup(command);
+	if (lookup) return { done: "Looked for", live: "Looking for", target: lookup, icon: "search" };
 	const step = describeKnownCommand(command);
 	if (step) return step;
 	const binary = mainSegment(command)?.binary;
@@ -828,10 +830,27 @@ function fallbackStep(binary: string): CommandStep {
  * program writes a file (`cat > a`, `sed -i`), so a row and its header agree.
  */
 export function commandIntent(command: string): { program?: string; writes: boolean } {
+	if (conditionalFileLookup(command)) return { program: "find", writes: false };
 	const segment = mainSegment(command);
 	if (!segment) return { writes: false };
 	const writes = segment.writeTarget ? WRITERS.has(segment.binary) : segment.binary === "sed" && sedInPlace(segment.args);
 	return { program: segment.binary, writes };
+}
+
+/** A loop that checks candidate paths and reads the one that exists. */
+function conditionalFileLookup(command: string): string | undefined {
+	const header = /^\s*for\s+([A-Za-z_]\w*)\s+in\s+([\s\S]*?)(?:;\s*|\n\s*)do\b/.exec(command);
+	if (!header) return undefined;
+	const variable = header[1]!;
+	const body = command.slice(header[0].length);
+	const reference = `\\$\\{?${variable}\\}?`;
+	const path = `["']?${reference}["']?`;
+	const check = `(?:\\[\\s*-f\\s+${path}\\s*\\]|test\\s+-f\\s+${path})`;
+	const read = `(?:printf\\s+[^;]*;\\s*)?cat\\s+${path}`;
+	if (!new RegExp(`^\\s*if\\s+${check}\\s*;\\s*then\\s+${read}\\s*;?\\s*(?:break\\s*;\\s*)?fi\\s*;?\\s*done\\s*$`).test(body)) return undefined;
+	const paths = tokenize(header[2]!).filter((word) => !word.operator).map((word) => fileBasename(word.text));
+	const name = paths[0];
+	return name && looksLikeFile(name) && paths.every((path) => path === name) ? name : undefined;
 }
 
 /**
