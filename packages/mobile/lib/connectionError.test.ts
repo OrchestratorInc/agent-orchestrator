@@ -143,8 +143,11 @@ describe("describeConnectionFailure", () => {
 
 	it("explains the lockout on a 429, and that it clears itself", () => {
 		const d = describeConnectionFailure("rate-limited", target());
-		expect(d.message).toContain("locked this device out");
 		expect(d.message).toContain("about a minute");
+		// The lockout is per network address, and wrong passwords from any device
+		// on it count, so the copy must not blame this phone's password (#7980).
+		expect(d.message).toContain("same network");
+		expect(d.message).not.toMatch(/check the password/i);
 	});
 
 	it("points at the machine logs on a server error", () => {
