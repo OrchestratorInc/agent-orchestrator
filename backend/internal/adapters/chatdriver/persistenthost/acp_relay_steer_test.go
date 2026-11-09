@@ -95,3 +95,23 @@ func TestACPRelayRefusesASteerPromptOutsideATurn(t *testing.T) {
 		t.Fatalf("steer prompt after the turn = provider %q client %q err %v, want refused", late.provider, late.client, err)
 	}
 }
+
+// Hermes answers a steer prompt at once and the running prompt keeps the turn,
+// so the turn's result is the first prompt's later answer.
+func TestACPRelaySettlesTheTurnOnTheLastPromptToReturn(t *testing.T) {
+	relay := newTestACPRelay(t)
+	first := startRelayPrompt(t, relay)
+	steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerPromptParams+`}`+"\n"), 1))
+
+	ack, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+	if journaled || frameID(t, ack) != "3" || strings.Contains(string(ack), ACPEventIDMetaKey) {
+		t.Fatalf("acknowledged steer prompt = journaled:%v frame:%s, want a plain answer to client id 3", journaled, ack)
+	}
+	if state := relay.snapshot(); !state.ActivePrompt || state.PendingResultEventID != "" {
+		t.Fatalf("state after the acknowledgement = %+v, want the first prompt still running", state)
+	}
+	final, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+	if !journaled || frameID(t, final) != "2" || !strings.Contains(string(final), ACPEventIDMetaKey) {
+		t.Fatalf("first prompt answer = journaled:%v frame:%s, want the turn's result", journaled, final)
+	}
+}

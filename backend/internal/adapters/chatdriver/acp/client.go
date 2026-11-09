@@ -711,6 +711,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
 		segment := c.steerSegment

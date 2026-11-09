@@ -75,9 +75,10 @@ type Config struct {
 	PermissionPolicy       acpdriver.PermissionPolicy
 	ClientExtension        acpdriver.ClientExtensionHandler
 	ClientExtensionAliases map[string]string
-	// SteerRequest and SteerDrain: see acpdriver.Config.
+	// SteerRequest, SteerDrain and SteerPrompt: see acpdriver.Config.
 	SteerRequest                 *acpdriver.SteerRequest
 	SteerDrain                   *acpdriver.SteerDrain
+	SteerPrompt                  *acpdriver.SteerPrompt
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
@@ -185,6 +186,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
 		SteerRequest:                 cfg.SteerRequest,
 		SteerDrain:                   cfg.SteerDrain,
+		SteerPrompt:                  cfg.SteerPrompt,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,

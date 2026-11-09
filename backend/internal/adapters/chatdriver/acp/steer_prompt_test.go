@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -229,10 +230,12 @@ func TestACPSteerPromptRefusalLeavesTheEarlierPromptInCharge(t *testing.T) {
 		t.Fatalf("Steer error = %v, want a provider refusal", err)
 	}
 	conv.mu.Lock()
-	active, seq, segment := conv.activeTurn, conv.promptSeq, conv.steerSegment
+	active, outstanding, segment := conv.activeTurn, len(conv.outstanding), conv.steerSegment
+	firstRunning := conv.outstanding[0]
 	conv.mu.Unlock()
-	if active != turn || seq != 0 || segment != 0 {
-		t.Fatalf("after refusal active=%q seq=%d segment=%d, want %q, 0, 0", active, seq, segment, turn)
+	if active != turn || outstanding != 1 || !firstRunning || segment != 0 {
+		t.Fatalf("after refusal active=%q outstanding=%d first running=%v segment=%d, want %q, only the first prompt, 0",
+			active, outstanding, firstRunning, segment, turn)
 	}
 
 	close(agent.release)
@@ -287,5 +290,235 @@ func TestACPSteerPromptSupportComesFromTheBinding(t *testing.T) {
 	}
 	if steeringFor(Config{SteerPrompt: testSteerPrompt(0), SteerDrain: testDrain(0)}).prompt != nil {
 		t.Fatal("a drain must take precedence over prompt steering")
+	}
+}
+
+// ackAgent steers the way Hermes does: a `/steer <text>` prompt while a turn
+// runs is answered at once, after an acknowledgement message, and the running
+// prompt keeps the turn. decline makes it acknowledge without taking it.
+type ackAgent struct {
+	*fakeAgent
+	release chan struct{}
+	stop    chan struct{}
+	started chan struct{}
+	decline bool
+	// silent answers a /steer without an acknowledgement, as an agent that
+	// does not know the command would.
+	silent bool
+
+	mu      sync.Mutex
+	running bool
+	steers  []string
+}
+
+func newAckAgent() *ackAgent {
+	agent := &ackAgent{fakeAgent: &fakeAgent{}, release: make(chan struct{}), stop: make(chan struct{}), started: make(chan struct{}, 4)}
+	agent.customPrompt = agent.prompt
+	return agent
+}
+
+func (a *ackAgent) prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	text := ""
+	for _, block := range params.Prompt {
+		if block.Text != nil {
+			text += block.Text.Text
+		}
+	}
+	a.mu.Lock()
+	if a.running && strings.HasPrefix(text, "/steer ") {
+		a.steers = append(a.steers, strings.TrimPrefix(text, "/steer "))
+		decline := a.decline
+		a.mu.Unlock()
+		ack := "ACK: " + strings.TrimPrefix(text, "/steer ")
+		if decline {
+			ack = "DECLINED: no"
+		}
+		if a.silent {
+			ack = "Unknown command"
+		}
+		_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.UpdateAgentMessageText(ack)})
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+	}
+	a.running = true
+	a.mu.Unlock()
+	a.started <- struct{}{}
+	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.UpdateAgentMessageText("working on it")})
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.release:
+			a.mu.Lock()
+			a.running = false
+			a.mu.Unlock()
+			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+		case <-a.stop:
+			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+		case <-ticker.C:
+			a.fakeAgent.mu.Lock()
+			cancelled := a.cancelCalls > 0
+			a.fakeAgent.mu.Unlock()
+			if cancelled {
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+			}
+		}
+	}
+}
+
+func testAckSteerPrompt() *SteerPrompt {
+	return &SteerPrompt{
+		Supported: func(init acpsdk.InitializeResponse) bool { return true },
+		Prompt: func(prompt []acpsdk.ContentBlock) ([]acpsdk.ContentBlock, error) {
+			text, err := drainText(prompt)
+			if err != nil {
+				return nil, err
+			}
+			return []acpsdk.ContentBlock{acpsdk.TextBlock("/steer " + text)}, nil
+		},
+		Ack: func(text string) (bool, error) {
+			switch {
+			case strings.HasPrefix(text, "ACK: "):
+				return true, nil
+			case strings.HasPrefix(text, "DECLINED: "):
+				return true, errors.New(strings.TrimPrefix(text, "DECLINED: "))
+			}
+			return false, nil
+		},
+		Wait: 2 * time.Second,
+	}
+}
+
+func startAckConversation(t *testing.T, agent *ackAgent) (*conversation, string) {
+	t.Helper()
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true,
+		},
+		Probe:       func(context.Context) error { return nil },
+		Launch:      func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SteerPrompt: testAckSteerPrompt(),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent.fakeAgent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		close(agent.stop)
+		_ = opened.Close()
+	})
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "edit prod.yaml"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-agent.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first prompt never reached the agent")
+	}
+	return opened.(*conversation), ref.ProviderTurnID
+}
+
+// collectTurn gathers message text and completions for turn until quiet.
+func collectTurn(t *testing.T, events <-chan ports.ChatEvent, turn string, quiet time.Duration) (string, []ports.ChatEvent) {
+	t.Helper()
+	var text strings.Builder
+	var completed []ports.ChatEvent
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return text.String(), completed
+			}
+			if event.ProviderTurnID != turn {
+				continue
+			}
+			switch event.Kind {
+			case ports.ChatEventMessageDelta:
+				text.WriteString(event.Delta)
+			case ports.ChatEventTurnCompleted:
+				completed = append(completed, event)
+			}
+		case <-time.After(quiet):
+			return text.String(), completed
+		}
+	}
+}
+
+func TestACPSteerPromptAcknowledgedFirstKeepsTheRunningPrompt(t *testing.T) {
+	agent := newAckAgent()
+	conv, turn := startAckConversation(t, agent)
+	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging"}); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	agent.mu.Lock()
+	steers := append([]string(nil), agent.steers...)
+	agent.mu.Unlock()
+	if len(steers) != 1 || steers[0] != "use staging" {
+		t.Fatalf("agent got steers %q, want the /steer text", steers)
+	}
+	text, done := collectTurn(t, conv.Events(), turn, 200*time.Millisecond)
+	if len(done) != 0 {
+		t.Fatalf("the acknowledged steer prompt completed the turn: %+v", done)
+	}
+	if strings.Contains(text, "ACK:") {
+		t.Fatalf("the acknowledgement reached the reply: %q", text)
+	}
+	conv.mu.Lock()
+	segment := conv.steerSegment
+	conv.mu.Unlock()
+	if segment != 1 {
+		t.Fatalf("steer segment = %d, want 1", segment)
+	}
+
+	close(agent.release)
+	_, done = collectTurn(t, conv.Events(), turn, 500*time.Millisecond)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted {
+		t.Fatalf("turn completions = %+v, want the running prompt to settle it once", done)
+	}
+}
+
+func TestACPSteerPromptDeclinedAcknowledgementIsARefusal(t *testing.T) {
+	agent := newAckAgent()
+	agent.decline = true
+	conv, turn := startAckConversation(t, agent)
+	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging"})
+	var refusal interface{ ChatRefusal() bool }
+	if err == nil || !errors.As(err, &refusal) || !refusal.ChatRefusal() || !strings.Contains(err.Error(), "no") {
+		t.Fatalf("Steer error = %v, want a refusal carrying the agent's reason", err)
+	}
+	close(agent.release)
+	text, done := collectTurn(t, conv.Events(), turn, 500*time.Millisecond)
+	if len(done) != 1 || strings.Contains(text, "DECLINED") {
+		t.Fatalf("completions=%d text=%q, want one completion and no acknowledgement text", len(done), text)
+	}
+}
+
+func TestACPSteerPromptAcknowledgementOutsideASteerIsOrdinaryText(t *testing.T) {
+	agent := newAckAgent()
+	conv, turn := startAckConversation(t, agent)
+	// No steer was sent, so a reply that happens to look like an
+	// acknowledgement is the agent's answer and must be shown.
+	if conv.steerAcknowledgement(turn, "ACK: something") {
+		t.Fatal("text was hidden as an acknowledgement in a turn that sent no steer")
+	}
+}
+
+func TestACPSteerPromptWithoutAnAcknowledgementIsARefusal(t *testing.T) {
+	agent := newAckAgent()
+	agent.silent = true
+	conv, turn := startAckConversation(t, agent)
+	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging"})
+	var refusal interface{ ChatRefusal() bool }
+	if err == nil || !errors.As(err, &refusal) || !refusal.ChatRefusal() {
+		t.Fatalf("Steer error = %v, want a refusal when the agent does not acknowledge", err)
+	}
+	close(agent.release)
+	if _, done := collectTurn(t, conv.Events(), turn, 500*time.Millisecond); len(done) != 1 {
+		t.Fatalf("turn completions = %d, want 1", len(done))
 	}
 }

@@ -144,11 +144,12 @@ type conversation struct {
 	// under it, so cancelling the turn reaches every prompt in it.
 	turnCtx context.Context
 	// promptSeq numbers the running turn's prompts: 0 started it and each
-	// SteerPrompt steer adds one. Only the latest settles the turn.
-	promptSeq int
-	// handedOff closes when the turn's prompt with that number returns while a
-	// later steer prompt owns the turn.
-	handedOff map[int]chan struct{}
+	// SteerPrompt steer adds one. outstanding holds those still running; the
+	// turn settles when the last of them returns.
+	promptSeq   int
+	outstanding map[int]bool
+	// promptSteers are SteerPrompt steers waiting to learn whether they took.
+	promptSteers []*promptSteer
 	// steerSettledTurn is the last turn a steer prompt settled. An earlier
 	// prompt of that turn answering late is dropped, not a second completion.
 	steerSettledTurn string
@@ -793,7 +794,8 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.turnCancel = cancel
 	c.turnCtx = turnCtx
 	c.promptSeq = 0
-	c.handedOff = make(map[int]chan struct{})
+	c.outstanding = map[int]bool{0: true}
+	c.promptSteers = nil
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
 	c.steerSegment = 0
@@ -1029,7 +1031,11 @@ func (c *conversation) finishPrompt(
 		c.turnCancel = nil
 		c.turnCtx = nil
 		c.promptSeq = 0
-		c.handedOff = nil
+		c.outstanding = nil
+		for _, w := range c.promptSteers {
+			w.settle(nil)
+		}
+		c.promptSteers = nil
 		c.providerFailure = nil
 		if c.interrupt == interrupt {
 			c.interrupt = nil
