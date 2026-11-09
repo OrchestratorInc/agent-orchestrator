@@ -110,6 +110,11 @@ it("links PRs and commits in downloaded notes from the renamed repository", asyn
 	} satisfies UpdateStatus);
 	renderUpdates();
 
+	const disclosure = await screen.findByRole("button", { name: /What's new/ });
+	expect(disclosure).toHaveAttribute("aria-expanded", "false");
+	expect(screen.queryByRole("link", { name: "#6228" })).toBeNull();
+	fireEvent.click(disclosure);
+	expect(disclosure).toHaveAttribute("aria-expanded", "true");
 	expect(await screen.findByRole("link", { name: "#6228" })).toHaveAttribute("href", `${repo}/pull/6228`);
 	expect(screen.getByRole("link", { name: "7b7db96" })).toHaveAttribute("href", `${repo}/commit/${commit}`);
 	expect(screen.queryByText(/@illegalcall/)).toBeNull();
