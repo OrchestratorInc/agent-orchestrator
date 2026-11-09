@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { agentLabel } from "../lib/agent-options";
 import { cn } from "../lib/utils";
-import { countBy, importableProject, importChats, projectChats, sessionImportPreviewQuery } from "../lib/session-import";
+import { countBy, importableProject, importChats, projectChats, sessionImportPreviewQuery, useImportOfferShown } from "../lib/session-import";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
@@ -25,6 +25,8 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 	const preview = useQuery({ ...sessionImportPreviewQuery, enabled, staleTime: 60_000 });
 	const [importing, setImporting] = useState(false);
 	const [error, setError] = useState<string>();
+	const chats = projectChats(preview.data?.candidates, projectId);
+	useImportOfferShown("project_board", enabled && !importedCount && chats.length > 0);
 	if (!enabled || !project) return null;
 	const dismiss = (
 		<CloseButton size="icon-xs" className="shrink-0" aria-label={t("sessionImport.projectOfferDismiss")} onClick={() => dismissProject(projectId)} />
@@ -46,14 +48,13 @@ export function ProjectImportOffer({ projectId, className }: { projectId: string
 			</div>
 		);
 	}
-	const chats = projectChats(preview.data?.candidates, projectId);
 	if (!chats.length) return null;
 	const perAgent = countBy(chats.map((chat) => chat.harness));
 	const importAll = async () => {
 		setImporting(true);
 		setError(undefined);
 		try {
-			const results = await importChats(queryClient, chats.map((chat) => chat.id));
+			const results = await importChats(queryClient, "project_offer", chats.map((chat) => chat.id));
 			const created = results.filter((result) => result.status === "created").length;
 			if (created) recordImport(projectId, created);
 			const failed = results.filter((result) => result.status === "failed").length;

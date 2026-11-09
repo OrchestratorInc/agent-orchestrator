@@ -166,7 +166,7 @@ it("keeps earlier batches when a later one fails", async () => {
 	const ids = Array.from({ length: MAX_IMPORT + 1 }, (_, i) => `c${i}`);
 	api.POST.mockResolvedValueOnce({ data: { results: ids.slice(0, MAX_IMPORT).map((id) => ({ id, status: "created", sessionId: `s-${id}` })) } });
 	api.POST.mockResolvedValueOnce({ error: { code: "INTERNAL" } });
-	const results = await importChats(new QueryClient(), ids);
+	const results = await importChats(new QueryClient(), "project_offer", ids);
 	expect(results.filter((result) => result.status === "created")).toHaveLength(MAX_IMPORT);
 	expect(results.at(-1)).toEqual({ id: `c${MAX_IMPORT}`, status: "failed", error: "Import failed" });
 });

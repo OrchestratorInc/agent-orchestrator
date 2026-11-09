@@ -5,6 +5,7 @@ import { agentLabel, type AgentId } from "../lib/agent-options";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
+import { useImportOfferShown } from "../lib/session-import";
 import { IMPORTABLE_AGENTS } from "../lib/session-import-agents";
 import { Button } from "./ui/button";
 
@@ -21,6 +22,7 @@ export function SessionImportOffer() {
 	const agents = (readiness.data?.agents ?? [])
 		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && agent.installation.state === "installed" && agent.authentication.state !== "unauthorized")
 		.map((agent) => agent.id as AgentId);
+	useImportOfferShown("home", !closed && agents.length > 0);
 	if (closed || agents.length === 0) return null;
 	const hidden = agents.length - MAX_LOGOS;
 	return (

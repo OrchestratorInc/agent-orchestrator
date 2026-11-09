@@ -116,7 +116,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		const ids = selectedVisible.map((c) => c.id);
 		try {
 			if (newFolders.length) setProject("all");
-			const imported = await importChats(queryClient, ids, newFolders);
+			const imported = await importChats(queryClient, "settings", ids, newFolders);
 			setResults(imported);
 			setSelected(new Set(imported.filter((r) => r.status === "failed").map((r) => r.id)));
 			if (imported.some((r) => r.status === "created")) closeSessionImportOffer();

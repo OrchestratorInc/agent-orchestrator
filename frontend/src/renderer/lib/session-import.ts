@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -5,6 +6,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode } from "./api-client";
 import { apiErrorException } from "./api-error-exception";
+import { captureRendererEvent } from "./telemetry";
 
 export type ImportCandidate = components["schemas"]["SessionImportCandidate"];
 export type ImportResult = components["schemas"]["SessionImportResult"];
@@ -19,11 +21,38 @@ export const sessionImportPreviewQuery = queryOptions({
 	refetchOnWindowFocus: false,
 	refetchOnReconnect: false,
 	queryFn: async ({ signal }) => {
+		const started = Date.now();
 		const response = await apiClient.GET("/api/v1/session-import", { signal });
+		void captureRendererEvent("ao.renderer.session_import_scan_completed", {
+			outcome: response.error ? "failed" : "succeeded",
+			candidate_count: response.data?.candidates.length,
+			duration_ms: Date.now() - started,
+		});
 		if (response.error) throw apiErrorException(response.error);
 		return response.data;
 	},
 });
+
+export type ImportSource = "home_folders" | "project_offer" | "project_dialog" | "settings";
+
+export function useImportOfferShown(surface: "home" | "project_board", shown: boolean): void {
+	useEffect(() => {
+		if (shown) void captureRendererEvent("ao.renderer.session_import_offer_shown", { surface });
+	}, [surface, shown]);
+}
+
+export function trackImportFirstOpen(agent: string, opening: Promise<void>): void {
+	const started = Date.now();
+	void opening.then(
+		() => captureRendererEvent("ao.renderer.session_import_first_open", { agent, outcome: "succeeded", duration_ms: Date.now() - started }),
+		(error: unknown) => captureRendererEvent("ao.renderer.session_import_first_open", {
+			agent,
+			outcome: apiErrorCode(error) === "SESSION_OPEN_ELSEWHERE" ? "open_elsewhere" : "failed",
+			error_code: apiErrorCode(error),
+			duration_ms: Date.now() - started,
+		}),
+	);
+}
 
 export function countBy(keys: string[]): Map<string, number> {
 	const counts = new Map<string, number>();
@@ -64,8 +93,9 @@ export function useImportedAgentBlock(
 	};
 }
 
-export async function importChats(queryClient: QueryClient, ids: string[], folders: string[] = []): Promise<ImportResult[]> {
+export async function importChats(queryClient: QueryClient, source: ImportSource, ids: string[], folders: string[] = []): Promise<ImportResult[]> {
 	const results: ImportResult[] = [];
+	let threw = true;
 	try {
 		for (const path of folders) {
 			const added = await apiClient.POST("/api/v1/projects", { body: { path } });
@@ -87,8 +117,19 @@ export async function importChats(queryClient: QueryClient, ids: string[], folde
 				break;
 			}
 		}
+		threw = false;
 		return results;
 	} finally {
+		const harness = new Map(queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates.map((c) => [c.id, c.harness] as const));
+		const created = results.filter((r) => r.status === "created");
+		void captureRendererEvent("ao.renderer.session_import_completed", {
+			source,
+			created_count: created.length,
+			existing_count: results.filter((r) => r.status === "already_imported").length,
+			failed_count: threw ? ids.length : results.filter((r) => r.status === "failed").length,
+			folder_count: folders.length,
+			agents: [...new Set(created.flatMap((r) => harness.get(r.id) ?? []))].sort().join(","),
+		});
 		const imported = new Map(results.flatMap((r) => (r.status !== "failed" && r.sessionId ? [[r.id, r.sessionId] as const] : [])));
 		if (imported.size) {
 			await queryClient.cancelQueries({ queryKey: sessionImportPreviewQuery.queryKey });

@@ -216,6 +216,45 @@ describe("telemetry sanitizers", () => {
 		expect(safe).toEqual({ destination: "discord", outcome: "succeeded" });
 	});
 
+	it("reports chat import counts and agents without titles, paths or ids", async () => {
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_scan_completed", {
+			outcome: "succeeded",
+			candidate_count: 42,
+			duration_ms: 1234.6,
+			paths: ["/Users/me/work/secret-client"],
+		})).toEqual({ outcome: "succeeded", candidate_count: 42, duration_ms: 1235 });
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_completed", {
+			source: "project_offer",
+			created_count: 3,
+			existing_count: 1,
+			failed_count: 0,
+			folder_count: 2,
+			agents: "claude-code,codex,../etc/passwd,My Chat",
+			titles: ["fix the billing bug"],
+			folders: ["/Users/me/work/secret-client"],
+		})).toEqual({ source: "project_offer", created_count: 3, existing_count: 1, failed_count: 0, folder_count: 2, agents: "claude-code,codex" });
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_first_open", {
+			agent: "codex",
+			outcome: "failed",
+			error_code: "CHAT_RESUME_FAILED",
+			duration_ms: 21_500,
+			error: "resume failed in /Users/me/work/secret-client",
+			session_id: "s-123",
+		})).toEqual({ agent: "codex", outcome: "failed", error_code: "CHAT_RESUME_FAILED", duration_ms: 21_500 });
+	});
+
+	it("drops chat import values outside their vocabularies", async () => {
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_offer_shown", { surface: "sidebar" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_scan_completed", { outcome: "partial", candidate_count: -1 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_completed", { source: "cli", agents: "Not An Agent" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.session_import_first_open", {
+			agent: "Claude Code",
+			outcome: "crashed",
+			error_code: "resume failed: exit 1",
+		})).toEqual({});
+	});
+
 	it("drops an unrecognised support destination rather than forwarding it", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
 			destination: "mailto:founder@example.com",

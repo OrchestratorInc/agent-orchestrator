@@ -17,6 +17,7 @@ import {
 	type AgentBlock,
 	type ImportCandidate,
 	type ImportResult,
+	type ImportSource,
 } from "../lib/session-import";
 import { cn } from "../lib/utils";
 import { useSessionImportStore } from "../stores/session-import-store";
@@ -68,7 +69,7 @@ export function SessionImportDialog() {
 	);
 }
 
-function useImportRun(onDone: (results: ImportResult[]) => void) {
+function useImportRun(source: ImportSource, onDone: (results: ImportResult[]) => void) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [importing, setImporting] = useState(false);
@@ -79,7 +80,7 @@ function useImportRun(onDone: (results: ImportResult[]) => void) {
 		setError(undefined);
 		setFailures([]);
 		try {
-			const results = await importChats(queryClient, ids, folders);
+			const results = await importChats(queryClient, source, ids, folders);
 			const failed = results.filter((result) => result.status === "failed");
 			const titles = new Map((queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates ?? []).map((chat) => [chat.id, chat.title]));
 			setFailures(failed.map((result) => ({ id: result.id, title: titles.get(result.id) ?? result.id, error: result.error })));
@@ -110,7 +111,7 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 	const [unchecked, setUnchecked] = useState(new Set<string>());
 	const chats = projectChats(preview.data?.candidates, projectId);
 	const selected = chats.filter((chat) => !unchecked.has(chat.id));
-	const { importing, error, failures, run } = useImportRun((results) => {
+	const { importing, error, failures, run } = useImportRun("project_dialog", (results) => {
 		const created = results.filter((result) => result.status === "created").length;
 		if (created) recordImport(projectId, created);
 		if (!results.some((result) => result.status === "failed")) onClose();
@@ -206,7 +207,7 @@ function Folders({ onClose }: { onClose: () => void }) {
 			}
 			return next;
 		});
-	const { importing, error, failures, run } = useImportRun((results) => {
+	const { importing, error, failures, run } = useImportRun("home_folders", (results) => {
 		const created = new Set(results.flatMap((result) => (result.status === "created" ? [result.id] : [])));
 		if (created.size) {
 			closeSessionImportOffer();
