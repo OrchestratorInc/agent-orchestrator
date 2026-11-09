@@ -111,7 +111,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		void refreshOnView();
 		void loadTurnOptionsOnView({ refresh: true, ifMissing: true }).catch(() => {});
 	}, [loadTurnOptionsOnView, refreshOnView]);
-	useChatViewLease(config, session.id, onViewing);
+	const chatOnScreen = useChatViewLease(config, session.id, onViewing);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -798,7 +798,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		    out of the padded root above and rides the keyboard by a transform: the
 		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
 		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
-			{switchCardShown ? null : <McpServerNotice key={mcpNoticeKey} noticeKey={mcpNoticeKey} servers={brokenServers} />}
+			{switchCardShown ? null : <McpServerNotice key={mcpNoticeKey} noticeKey={mcpNoticeKey} servers={brokenServers} visible={chatOnScreen} />}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
