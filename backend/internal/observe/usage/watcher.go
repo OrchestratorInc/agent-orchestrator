@@ -209,16 +209,13 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 	w.mu.Lock()
 	withinRoot := w.withinDesiredRoot(ctx, path)
 	w.mu.Unlock()
-	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
-		filepath.Ext(path) == ".jsonl" &&
-		withinRoot {
+	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 && withinRoot {
 		emit = path
-		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
-	}
-	if database := sqliteDatabaseForPath(path); database != "" &&
-		event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
-		withinRoot {
-		emit = database
+		if database := sqliteDatabaseForPath(path); database != "" {
+			emit = database
+		} else {
+			discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
+		}
 	}
 
 	w.mu.Lock()

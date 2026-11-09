@@ -201,6 +201,23 @@ func TestTranscriptWatcherMarksOnlyCreationEventsForDiscovery(t *testing.T) {
 	}
 }
 
+func TestTranscriptWatcherEmitsSnapshotSourceWrites(t *testing.T) {
+	root := t.TempDir()
+	grok := filepath.Join(root, "grok", "usage.json")
+	deepseek := filepath.Join(root, "deepseek", "session.v4.jsonl.zstd")
+	for _, path := range []string{grok, deepseek} {
+		mustNoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		mustNoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	}
+	watcher, cancel := startTranscriptWatcher(t, root, grok, deepseek)
+	defer stopTranscriptWatcher(t, watcher, cancel)
+
+	for _, path := range []string{grok, deepseek} {
+		mustNoError(t, os.WriteFile(path, []byte(`{"updated":true}`), 0o600))
+		waitForTranscriptEvent(t, watcher.Events(), path)
+	}
+}
+
 func startTranscriptWatcher(t *testing.T, root string, sourcePaths ...string) (*TranscriptWatcher, context.CancelFunc) {
 	t.Helper()
 	watcher, err := NewTranscriptWatcher(context.Background(), []string{root})
