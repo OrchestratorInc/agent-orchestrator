@@ -23,7 +23,7 @@ export const sessionImportPreviewQuery = queryOptions({
 	queryFn: async ({ signal }) => {
 		const started = Date.now();
 		const response = await apiClient.GET("/api/v1/session-import", { signal });
-		void captureRendererEvent("ao.renderer.session_import_scan_completed", {
+		captureOncePerRun("scan", "ao.renderer.session_import_scan_completed", {
 			outcome: response.error ? "failed" : "succeeded",
 			candidate_count: response.data?.candidates.length,
 			duration_ms: Date.now() - started,
@@ -35,9 +35,17 @@ export const sessionImportPreviewQuery = queryOptions({
 
 export type ImportSource = "home_folders" | "project_offer" | "project_dialog" | "settings";
 
+const reportedThisRun = new Set<string>();
+
+function captureOncePerRun(key: string, event: string, properties: Record<string, unknown>): void {
+	if (reportedThisRun.has(key)) return;
+	reportedThisRun.add(key);
+	void captureRendererEvent(event, properties);
+}
+
 export function useImportOfferShown(surface: "home" | "project_board", shown: boolean): void {
 	useEffect(() => {
-		if (shown) void captureRendererEvent("ao.renderer.session_import_offer_shown", { surface });
+		if (shown) captureOncePerRun(`offer:${surface}`, "ao.renderer.session_import_offer_shown", { surface });
 	}, [surface, shown]);
 }
 

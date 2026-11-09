@@ -478,9 +478,14 @@ when you import chats from other agents:
 `surface` is `home` or `project_board`. `source` is `home_folders`,
 `project_offer`, `project_dialog`, or `settings`. The scan `outcome` is
 `succeeded` or `failed`. The first-open `outcome` is `succeeded`, `failed`, or
-`open_elsewhere`. `agents` lists the agent ids of the imported chats, such as
-`claude-code,codex`. `error_code` is the API error code, such as
+`open_elsewhere`. `agents` lists the agents of the imported chats, such as
+`claude-code,codex`, and `agent` names one; both accept only the ids of agents
+AO can import from. `error_code` is the API error code, such as
 `CHAT_RESUME_FAILED`.
+
+The offer and scan events are sent at most once per surface each time the app
+starts. The import and first-open events are sent only when you import or open
+an imported chat.
 
 No chat title, chat content, folder name, path, project identifier, session
 identifier, or error message is sent.

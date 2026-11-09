@@ -230,7 +230,7 @@ describe("telemetry sanitizers", () => {
 			existing_count: 1,
 			failed_count: 0,
 			folder_count: 2,
-			agents: "claude-code,codex,../etc/passwd,My Chat",
+			agents: "claude-code,codex,secret-client,../etc/passwd,My Chat",
 			titles: ["fix the billing bug"],
 			folders: ["/Users/me/work/secret-client"],
 		})).toEqual({ source: "project_offer", created_count: 3, existing_count: 1, failed_count: 0, folder_count: 2, agents: "claude-code,codex" });
@@ -249,7 +249,7 @@ describe("telemetry sanitizers", () => {
 		expect(await sanitizeRendererProperties("ao.renderer.session_import_scan_completed", { outcome: "partial", candidate_count: -1 })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.renderer.session_import_completed", { source: "cli", agents: "Not An Agent" })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.renderer.session_import_first_open", {
-			agent: "Claude Code",
+			agent: "secret-client",
 			outcome: "crashed",
 			error_code: "resume failed: exit 1",
 		})).toEqual({});
