@@ -274,7 +274,7 @@ func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 	}{
 		{"authorized", domain.AgentAuthenticationAuthorized, "succeeded", false},
 		{"signed out", domain.AgentAuthenticationUnauthorized, "failed", true},
-		{"inconclusive", domain.AgentAuthenticationUnknown, "succeeded", true},
+		{"inconclusive", domain.AgentAuthenticationUnknown, "failed", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GEMINI_API_KEY", "")
@@ -315,6 +315,64 @@ func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 				t.Fatalf("claim kept=%v, want %v (err %v)", len(withhold) == 0, tc.claimKept, err)
 			}
 		})
+	}
+}
+
+// claimProbeFake records whether the harness's AO-saved key was still passed
+// to it while its sign-in was being confirmed.
+type claimProbeFake struct {
+	signInProberFake
+	dataDir   string
+	agentID   string
+	mu        sync.Mutex
+	probed    bool
+	stillSeen bool
+}
+
+func (f *claimProbeFake) EnsureAgentReadiness(ctx context.Context, id string, p domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	_, withhold, _ := providerkeys.ForSession(f.dataDir, f.agentID)
+	f.mu.Lock()
+	f.probed, f.stillSeen = true, len(withhold) == 0
+	f.mu.Unlock()
+	return f.signInProberFake.EnsureAgentReadiness(ctx, id, p)
+}
+
+func TestNativeSignInProbeRunsWithoutTheOldKeyClaim(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+	dataDir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+		t.Fatal(err)
+	}
+	prober := &claimProbeFake{signInProberFake: signInProberFake{state: domain.AgentAuthenticationUnauthorized}, dataDir: dataDir, agentID: "gemini"}
+	pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+	svc := NewWithAgentResolver(foundExecutable("gemini"), prober, pty, dataDir)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	pty.alive = false
+	pty.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cur, err := svc.Login(t.Context(), "gemini", started.ID); err != nil || cur.Status != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	prober.mu.Lock()
+	defer prober.mu.Unlock()
+	if !prober.probed || prober.stillSeen {
+		t.Fatalf("probed=%v, key still passed during probe=%v", prober.probed, prober.stillSeen)
+	}
+	// A failed sign-in gives the claim back.
+	if _, withhold, _ := providerkeys.ForSession(dataDir, "gemini"); len(withhold) != 0 {
+		t.Fatalf("claim was not restored after a failed sign-in: %v", withhold)
 	}
 }
 

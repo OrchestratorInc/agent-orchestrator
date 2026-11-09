@@ -249,7 +249,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				}
 				setMethodId(next.method);
 				updateOperation(next);
-				if (targetKey) onProviderKeysChanged?.();
+				if (targetKey || target?.id === "gemini_api_key") onProviderKeysChanged?.();
 			});
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));

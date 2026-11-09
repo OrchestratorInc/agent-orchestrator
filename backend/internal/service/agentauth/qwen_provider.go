@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -32,17 +33,24 @@ var qwenRoutes = map[string]qwenRoute{
 // saveQwenProvider selects a usable model route in Qwen's user settings.
 // Qwen's default auth is OAuth, so an environment key alone is insufficient.
 func saveQwenProvider(ctx context.Context, envName, modelID string) error {
+	_, err := saveQwenProviderUndoable(ctx, envName, modelID)
+	return err
+}
+
+// saveQwenProviderUndoable is saveQwenProvider that also returns a function
+// restoring the settings file as it was, for a caller whose later step fails.
+func saveQwenProviderUndoable(ctx context.Context, envName, modelID string) (func(), error) {
 	modelID = strings.TrimSpace(modelID)
 	if !providerModelID.MatchString(modelID) {
-		return apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a model ID for this Qwen provider.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a model ID for this Qwen provider.", nil)
 	}
 	route, ok := qwenRoutes[envName]
 	if !ok {
-		return apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This Qwen provider is not supported here.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This Qwen provider is not supported here.", nil)
 	}
 	home, err := qwenConfigHome()
 	if err != nil || home == "" {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's configuration home is unavailable.")
+		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's configuration home is unavailable.")
 	}
 	dir := filepath.Join(home, ".qwen")
 	if configured := strings.TrimSpace(os.Getenv("QWEN_HOME")); configured != "" {
@@ -54,35 +62,36 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		case filepath.IsAbs(configured):
 			dir = configured
 		default:
-			return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "QWEN_HOME must be an absolute path.", nil)
+			return nil, apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "QWEN_HOME must be an absolute path.", nil)
 		}
 	}
 	path := filepath.Join(dir, "settings.json")
 	root, data, err := readQwenSettings(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	original, existed := append([]byte(nil), data...), data != nil
 	security, err := qwenObject(root["security"])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	auth, err := qwenObject(security["auth"])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if raw := auth["enforcedType"]; len(raw) != 0 {
 		var enforced string
 		if json.Unmarshal(raw, &enforced) != nil || (enforced != "" && enforced != route.authType) {
-			return apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "Qwen's settings enforce another authentication method.", nil)
+			return nil, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "Qwen's settings enforce another authentication method.", nil)
 		}
 	}
 	providers, err := qwenObject(root["modelProviders"])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var models []map[string]json.RawMessage
 	if raw := providers[route.authType]; len(raw) != 0 && json.Unmarshal(raw, &models) != nil {
-		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's provider models are invalid.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's provider models are invalid.", nil)
 	}
 	found, changed := false, false
 	for _, existing := range models {
@@ -94,7 +103,7 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 			continue
 		}
 		if key != envName || (baseURL != "" && baseURL != route.baseURL) {
-			return apierr.Invalid("AGENT_AUTH_MODEL_CONFLICT", "Qwen already uses this model ID with another credential. Choose another model ID or use native setup.", nil)
+			return nil, apierr.Invalid("AGENT_AUTH_MODEL_CONFLICT", "Qwen already uses this model ID with another credential. Choose another model ID or use native setup.", nil)
 		}
 		// Without the route's endpoint (OpenRouter, DashScope) the model
 		// would send this key to Qwen's default endpoint for its auth type.
@@ -105,7 +114,7 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 		found = true
 	}
 	if _, err := qwenObject(root["model"]); err != nil {
-		return err
+		return nil, err
 	}
 	// Each change is spliced into the file, so comments, key order and
 	// layout elsewhere stay as the user wrote them.
@@ -131,13 +140,24 @@ func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 	for _, change := range edits {
 		raw, err := json.Marshal(change.value)
 		if err != nil {
-			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be encoded.")
+			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be encoded.")
 		}
 		if data, err = setJSONC(data, change.path, raw); err != nil {
-			return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's settings are invalid; repair them before saving a key here.", nil)
+			return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Qwen's settings are invalid; repair them before saving a key here.", nil)
 		}
 	}
-	return atomicConfigWrite(ctx, dir, path, data)
+	if err := atomicConfigWrite(ctx, dir, path, data); err != nil {
+		return nil, err
+	}
+	return func() {
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if !existed {
+			_ = os.Remove(path)
+			return
+		}
+		_ = atomicConfigWrite(restoreCtx, dir, path, original)
+	}, nil
 }
 
 func qwenObject(raw json.RawMessage) (map[string]json.RawMessage, error) {

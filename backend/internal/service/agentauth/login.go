@@ -315,10 +315,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		}
 		// A successful sign-in also replaces an AO-saved key that would
 		// override it. Do that before "succeeded" is visible, so no session
-		// started after it still gets the key. Best effort, outside s.mu.
+		// started after it still gets the key. A failed release fails the
+		// sign-in. Runs outside s.mu.
+		var releaseErr error
 		if err == nil && loginCtx.Err() == nil {
 			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
-			_, _ = s.releaseSubscriptionKey(releaseCtx, agentID)
+			_, releaseErr = s.releaseSubscriptionKey(releaseCtx, agentID)
 			releaseCancel()
 		}
 		s.mu.Lock()
@@ -327,6 +329,11 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			case loginCtx.Err() != nil:
 				op.snapshot.Status = "timed_out"
 			case err != nil:
+				op.snapshot.Status = "failed"
+			case releaseErr != nil:
+				// The earlier API key would still be passed to new sessions
+				// and could bill another account, so the switch is not
+				// complete. Failed lets the panel offer a retry.
 				op.snapshot.Status = "failed"
 			default:
 				op.snapshot.Status = "succeeded"
@@ -463,22 +470,28 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			}
 			// The PTY reports no exit status, and the user may have pressed Esc
 			// or the CLI may have failed, so the harness's own probe decides.
-			// A confirmed sign-in replaces an AO-saved key that would override
-			// it, as for CLI logins, before "succeeded" is visible; a signed-out
-			// harness is reported failed and keeps the key. An inconclusive
-			// probe keeps the key too and leaves the verdict to the panel's own
-			// check. The agent ID never changes after the operation is created.
+			// The old AO-saved key is released first so the probe cannot be
+			// satisfied by it, and given back unless the probe confirms the
+			// sign-in. Only a confirmed sign-in and a successful release
+			// succeed; a signed-out or inconclusive probe fails the operation
+			// so the panel offers a retry or the terminal.
 			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			state := s.nativeSignInState(probeCtx, op.snapshot.AgentID)
-			if state == domain.AgentAuthenticationAuthorized {
-				_, _ = s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
+			released, releaseErr := s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
+			state := domain.AgentAuthenticationUnknown
+			if releaseErr == nil {
+				state = s.nativeSignInState(probeCtx, op.snapshot.AgentID)
+				if state != domain.AgentAuthenticationAuthorized {
+					restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					_ = s.restoreSubscriptionKey(restoreCtx, op.snapshot.AgentID, released)
+					restoreCancel()
+				}
 			}
 			probeCancel()
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
-				op.snapshot.Status = "succeeded"
-				if state == domain.AgentAuthenticationUnauthorized {
-					op.snapshot.Status = "failed"
+				op.snapshot.Status = "failed"
+				if releaseErr == nil && state == domain.AgentAuthenticationAuthorized {
+					op.snapshot.Status = "succeeded"
 				}
 			}
 			op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "", "", nil
@@ -920,19 +933,39 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			if !providerModelID.MatchString(model) {
 				return true, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a LiteLLM model ID for OpenHands.", nil)
 			}
+			stored, err := providerkeys.Load(s.dataDir)
+			if err != nil {
+				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+			}
+			previous, hadPrevious := stored["LLM_MODEL"]
 			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
 			}
 			// Like the key itself, so removing it restores what the user had.
 			if err := providerkeys.ExportForProbes("LLM_MODEL", model); err != nil {
+				undoOpenHandsModel(ctx, s.dataDir, previous, hadPrevious)
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
 			}
-		}
-		if agentID == "qwen" {
-			if err := saveQwenProvider(ctx, name, model); err != nil {
+			// The model and key go together: a failed key save puts the
+			// earlier model back.
+			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+				undoOpenHandsModel(ctx, s.dataDir, previous, hadPrevious)
 				return true, err
 			}
-		} else if agentID == "continue" && name != "CONTINUE_API_KEY" {
+			return true, nil
+		}
+		if agentID == "qwen" {
+			undo, err := saveQwenProviderUndoable(ctx, name, model)
+			if err != nil {
+				return true, err
+			}
+			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+				undo()
+				return true, err
+			}
+			return true, nil
+		}
+		if agentID == "continue" && name != "CONTINUE_API_KEY" {
 			if err := saveContinueProvider(ctx, name, model, secret); err != nil {
 				return true, err
 			}
@@ -940,6 +973,20 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 		return true, s.storeProviderKey(ctx, name, secret, opts.Device, agentID)
 	}
 	return false, nil
+}
+
+// undoOpenHandsModel puts OpenHands' saved model back after the key save
+// that went with it failed.
+func undoOpenHandsModel(ctx context.Context, dataDir, previous string, had bool) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if had {
+		_ = providerkeys.Save(cleanupCtx, dataDir, "LLM_MODEL", previous)
+		_ = providerkeys.ExportForProbes("LLM_MODEL", previous)
+		return
+	}
+	_ = providerkeys.Remove(cleanupCtx, dataDir, "LLM_MODEL")
+	_ = providerkeys.RestoreInherited("LLM_MODEL")
 }
 
 // recordCompletedLogin registers a finished key save as the harness's latest
