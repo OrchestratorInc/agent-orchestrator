@@ -4,7 +4,7 @@ import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -73,7 +73,7 @@ import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/u
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
-import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { setSessionSwitchHeld, useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -198,13 +198,29 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	// Route state reaches React as a synchronous store update. Deferring it lets
+	// the sidebar answer the click at once while the destination renders in
+	// interruptible slices, so main-thread animations keep running. The previous
+	// session stays painted until then; entering from another route has nothing
+	// to keep, so it renders directly.
+	const deferredSessionId = useDeferredValue(liveSessionId);
+	const deferredProjectId = useDeferredValue(liveProjectId);
+	const sessionId = liveSessionId ? (deferredSessionId ?? liveSessionId) : undefined;
+	const projectId = deferredSessionId ? deferredProjectId : liveProjectId;
+	const switching = Boolean(liveSessionId && sessionId !== liveSessionId);
+	useLayoutEffect(() => setSessionSwitchHeld(switching), [switching]);
+	useEffect(() => () => setSessionSwitchHeld(false), []);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }
