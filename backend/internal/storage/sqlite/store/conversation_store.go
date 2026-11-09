@@ -4173,7 +4173,7 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
-	return s.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit)
+	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit, true)
 }
 
 // LoadConversationSnapshotRange is LoadConversationSnapshotPage with a floor:
@@ -4188,6 +4188,18 @@ func (s *Store) LoadConversationSnapshotRange(
 	beforeSequence, afterSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit, true)
+}
+
+// loadConversationSnapshotRange skips the lazy auth reconciliation write when
+// reconcile is false, so read-only callers such as find stay off the writer lock.
+func (s *Store) loadConversationSnapshotRange(
+	ctx context.Context,
+	conversationID string,
+	beforeSequence, afterSequence int64,
+	limit int64,
+	reconcile bool,
+) (ConversationSnapshot, error) {
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4198,7 +4210,7 @@ func (s *Store) LoadConversationSnapshotRange(
 
 	// Targeted lazy reconciliation of legacy demands, using durable provider
 	// evidence. Ordinary snapshots remain read-only and avoid the writer lock.
-	if account := conversationToDomain(conv).Account; account != nil && account.ReauthRequiredAt != nil {
+	if account := conversationToDomain(conv).Account; reconcile && account != nil && account.ReauthRequiredAt != nil {
 		reconciled, reconcileErr := s.ReconcileConversationAuthentication(ctx, conversationID, "", "", time.Now())
 		if reconcileErr != nil {
 			return ConversationSnapshot{}, reconcileErr

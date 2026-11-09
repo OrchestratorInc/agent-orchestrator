@@ -2344,6 +2344,7 @@
 	"shortcut.keyboard-shortcuts": "Show keyboard shortcuts",
 	"shortcut.model-picker": "Choose model",
 	"shortcut.dictate": "Dictate",
+	"shortcut.find-in-chat": "Find in chat",
 	"shortcut.modified": "Modified",
 	"shortcut.moreBindings_one": "{{count}} alternative shortcut. Choose Customize to view all bindings.",
 	"shortcut.moreBindings_other": "{{count}} alternative shortcuts. Choose Customize to view all bindings.",
@@ -4048,5 +4049,19 @@
 	"teams.accessVia": "{{access}} · via {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} shared {{thing}} with {{team}}",
 	"teams.sharedToastWithYou": "{{name}} shared {{thing}} with you",
-	"teams.open": "Open"
+	"teams.open": "Open",
+	"chat.find.incomplete": "Search incomplete",
+	"chat.find.gap": "Messages in between aren't loaded",
+	"chat.find.historyUnavailable": "History is unavailable.",
+	"chat.find.resultChanged": "This result changed. Retry the search.",
+	"chat.find.transportUnavailable": "Full-history search is not available for this chat transport.",
+	"chat.find.queryTooLong": "Search supports up to 512 characters.",
+	"chat.find.searchUnavailable": "Complete history search is unavailable for this chat.",
+	"chat.find.activeChanged": "The active match changed. Moved to the nearest available match.",
+	"chat.find.searchFailed": "Could not search complete history. Retry.",
+	"chat.find.resultsChanged": "Results changed. Updating matches.",
+	"chat.find.nextFailed": "Could not load the next matches.",
+	"chat.find.wrappedFirst": "Wrapped to the first match.",
+	"chat.find.wrappedLast": "Wrapped to the last match.",
+	"chat.find.notRevealed": "This match could not be revealed. Retry the search."
 }

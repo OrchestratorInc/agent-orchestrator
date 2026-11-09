@@ -4236,5 +4236,20 @@
 	"teams.accessVia": "{{access}} · через {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} открывает команде {{team}} доступ к «{{thing}}»",
 	"teams.sharedToastWithYou": "{{name}} открывает вам доступ к «{{thing}}»",
-	"teams.open": "Открыть"
+	"teams.open": "Открыть",
+	"chat.find.incomplete": "Поиск не завершён",
+	"chat.find.gap": "Сообщения между ними не загружены",
+	"chat.find.historyUnavailable": "История недоступна.",
+	"chat.find.resultChanged": "Этот результат изменился. Повторите поиск.",
+	"chat.find.transportUnavailable": "Поиск по всей истории недоступен для этого подключения чата.",
+	"chat.find.queryTooLong": "Поиск поддерживает до 512 символов.",
+	"chat.find.searchUnavailable": "Поиск по всей истории недоступен для этого чата.",
+	"chat.find.activeChanged": "Активное совпадение изменилось. Выполнен переход к ближайшему доступному.",
+	"chat.find.searchFailed": "Не удалось выполнить поиск по всей истории. Повторите попытку.",
+	"chat.find.resultsChanged": "Результаты изменились. Обновление совпадений.",
+	"chat.find.nextFailed": "Не удалось загрузить следующие совпадения.",
+	"chat.find.wrappedFirst": "Возврат к первому совпадению.",
+	"chat.find.wrappedLast": "Переход к последнему совпадению.",
+	"chat.find.notRevealed": "Не удалось показать это совпадение. Повторите поиск.",
+	"shortcut.find-in-chat": "Найти в чате"
 }
