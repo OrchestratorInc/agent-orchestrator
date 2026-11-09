@@ -6,7 +6,7 @@
 // that repository instead of being uploaded again.
 
 import type { TFunction } from "i18next";
-import type { PushFolderResult } from "../../preload";
+import type { PushFolderPreview, PushFolderResult } from "../../preload";
 import { aoBridge } from "./bridge";
 import type { CloudCpClient, CloudCpGitHubAppRepository } from "./cloud-cp";
 import { canonicalGitHubUrl } from "./cloud-project-repos";
@@ -52,6 +52,10 @@ export function folderLabel(path: string): string {
 export type LocalFolderInfo = {
 	remote: string;
 	committed?: { branch?: string };
+	/** The secret-looking files the upload leaves out (main/cloud-folder-push.ts isSecretLookingPath). */
+	leftOut?: string[];
+	/** Why the folder cannot be uploaded at all, as the main process found before uploading. */
+	refusal?: FolderPushError;
 };
 
 export async function describeLocalFolder(path: string): Promise<LocalFolderInfo> {
@@ -72,11 +76,30 @@ export async function describeLocalFolder(path: string): Promise<LocalFolderInfo
 	} catch {
 		branch = undefined;
 	}
-	if (top?.isRepo && top.hasCommit) return { remote, committed: { branch } };
+	// What the upload would leave out, or why it cannot go, from the main
+	// process, which makes the same checks when it pushes.
+	let preview: PushFolderPreview | undefined;
+	try {
+		preview = await aoBridge.cloud.previewFolderUpload({ folder: path });
+	} catch {
+		preview = undefined;
+	}
+	const checked: Pick<LocalFolderInfo, "leftOut" | "refusal"> = preview?.status === "error"
+		? (preview.code === "invalid_request" ? {} : { refusal: new FolderPushError(preview.code, preview.message) })
+		: preview?.leftOut.length ? { leftOut: preview.leftOut } : {};
+	if (top?.isRepo && top.hasCommit) return { remote, committed: { branch }, ...checked };
 	// A linked worktree (or a submodule checkout) has a .git file, which the
 	// scan reads as a plain folder; git still reports its branch at its top.
-	if (top?.needsGitInit && branch) return { remote, committed: { branch } };
-	return { remote };
+	if (top?.needsGitInit && branch) return { remote, committed: { branch }, ...checked };
+	return { remote, ...checked };
+}
+
+/** The notice for files an upload leaves out because they look like secrets. */
+export function leftOutNotice(t: TFunction, files: readonly string[]): string {
+	const shown = files.slice(0, 3).join(", ");
+	return files.length > 3
+		? t("cloudWorkspace.leftOutSecretsMore", { defaultValue: "Leaves out files that look like secrets: {{files}} and {{count}} more", files: shown, count: files.length - 3 })
+		: t("cloudWorkspace.leftOutSecrets", { defaultValue: "Leaves out files that look like secrets: {{files}}", files: shown });
 }
 
 /** What a repository folder uploads: its checked-out commit and history, never uncommitted changes. */
@@ -139,6 +162,7 @@ const PUSH_ERROR_TEXT: Record<string, (t: TFunction, folder: string) => string> 
 	shallow_repository: (t, folder) => t("cloudWorkspace.pushError.shallowRepository", { defaultValue: "{{folder}} is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", folder }),
 	lfs_unsupported: (t, folder) => t("cloudWorkspace.pushError.lfsUnsupported", { defaultValue: "{{folder}} uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", folder }),
 	file_too_large: (t, folder) => t("cloudWorkspace.pushError.fileTooLarge", { defaultValue: "{{folder}} has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", folder }),
+	secret_files: (t, folder) => t("cloudWorkspace.pushError.secretFiles", { defaultValue: "The history of {{folder}} holds files that look like secrets, so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.", folder }),
 	workflows_refused: (t, folder) => t("cloudWorkspace.pushError.workflowsRefused", { defaultValue: "GitHub refused {{folder}} because it contains .github/workflows files and the Orchestrator GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", folder }),
 };
 

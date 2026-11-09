@@ -11,12 +11,16 @@ vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1
 
 import {
 	clearFolderImports,
+	CLOUD_PREVIEW_FOLDER_CHANNEL,
 	CLOUD_PUSH_FOLDER_CHANNEL,
 	FALLBACK_COMMIT_EMAIL,
 	gitSupportsConfigEnv,
 	type GitRunner,
 	isChosenFolder,
+	isSecretLookingPath,
 	isValidPushBranch,
+	pathWithin,
+	previewFolderUpload,
 	pushFolderToRepository,
 	type PushFolderDeps,
 	registerCloudFolderPushIpc,
@@ -157,7 +161,7 @@ describe("pushFolderToRepository", () => {
 
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "trunk" }, deps());
 
-		expect(result).toEqual({ status: "pushed", branch: "trunk", commit: head, source: "head" });
+		expect(result).toEqual({ status: "pushed", branch: "trunk", commit: head, source: "head", leftOut: [] });
 		expect(await git(remote, "rev-parse", "trunk")).toBe(head);
 		expect(await git(folder, "status", "--porcelain")).toBe("?? uncommitted.txt");
 	});
@@ -399,5 +403,132 @@ describe("registerCloudFolderPushIpc", () => {
 		expect(await handler({ sender: shell, senderFrame: { parent: null } }, input)).toMatchObject({ status: "error", message: expect.stringMatching(/folder dialog/) });
 		rememberChosenFolder(folder);
 		expect(await handler({ sender: shell, senderFrame: { parent: null } }, input)).toMatchObject({ status: "pushed" });
+	});
+});
+
+// Every pushed blob's content, to check what reached the remote.
+async function pushedContents(ref: string): Promise<Map<string, { mode: string; content: string }>> {
+	const out = new Map<string, { mode: string; content: string }>();
+	for (const line of (await git(remote, "ls-tree", "-r", ref)).split("\n").filter(Boolean)) {
+		const [meta, file] = line.split("\t");
+		const [mode, , object] = meta.split(" ");
+		out.set(file, { mode, content: await git(remote, "cat-file", "blob", object) });
+	}
+	return out;
+}
+
+const FAKE = "FAKE_TEST_VALUE";
+
+describe("secret-looking files", () => {
+	it("names the files a folder upload leaves out", () => {
+		for (const file of [".env", ".env.local", "config/.env.production", "certs/server.pem", "tls.key", "a/b/store.p12", "x.pfx", "id_rsa", "keys/id_ed25519",
+			".npmrc", ".netrc", ".pypirc", ".git-credentials", "credentials.json", "client_secret_123.apps.json", "service-account-prod.json",
+			".ssh/config", "home/.aws/credentials", ".gnupg/pubring.kbx", ".ENV", "ID_RSA"]) {
+			expect(isSecretLookingPath(file), file).toBe(true);
+		}
+		for (const file of [".env.example", ".env.sample", "app/.env.template", "id_rsa.pub", "keys/id_ed25519.pub", "README.md", "src/env.ts", "environment.md",
+			"keyboard.ts", "monkey.json", "credentials.md", "docs/ssh.md", "aws/handler.ts"]) {
+			expect(isSecretLookingPath(file), file).toBe(false);
+		}
+	});
+
+	it("leaves secret-looking files out of an import, nested ones too, and reports them", async () => {
+		await fs.mkdir(path.join(folder, "config"), { recursive: true });
+		await fs.mkdir(path.join(folder, ".ssh"));
+		await fs.mkdir(path.join(folder, "keys"));
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await fs.writeFile(path.join(folder, ".env.example"), "TOKEN=\n");
+		await fs.writeFile(path.join(folder, "config", ".env.production"), `${FAKE}=${FAKE}\n`);
+		await fs.writeFile(path.join(folder, ".ssh", "config"), `Host x\n  IdentityFile ${FAKE}\n`);
+		await fs.writeFile(path.join(folder, "keys", "id_rsa"), FAKE);
+		await fs.writeFile(path.join(folder, "keys", "id_rsa.pub"), "ssh-rsa AAAA public");
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+		expect(result).toMatchObject({ status: "pushed", source: "import" });
+		const leftOut = result.status === "pushed" ? result.leftOut : [];
+		expect([...leftOut].sort()).toEqual([".env", ".ssh/config", "config/.env.production", "keys/id_rsa"]);
+		const pushed = await pushedContents("main");
+		expect([...pushed.keys()].sort()).toEqual([".env.example", "README.md", "keys/id_rsa.pub"]);
+		for (const { content } of pushed.values()) expect(content).not.toContain(FAKE);
+		// The folder itself is untouched.
+		expect(await fs.readFile(path.join(folder, ".env"), "utf8")).toContain(FAKE);
+	});
+
+	it("uploads a link into ~/.ssh as a link, never the key it points at", async () => {
+		const home = path.join(root, "home");
+		await fs.mkdir(path.join(home, ".ssh"), { recursive: true });
+		await fs.writeFile(path.join(home, ".ssh", "deploy_key"), FAKE);
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.symlink(path.join(home, ".ssh", "deploy_key"), path.join(folder, "key-link"));
+		await fs.symlink(path.join(home, ".ssh"), path.join(folder, "ssh-dir"));
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ homeDir: home }));
+		expect(result).toMatchObject({ status: "pushed", source: "import" });
+		const pushed = await pushedContents("main");
+		// Git stores a symlink as a link (mode 120000) to its target path.
+		expect(pushed.get("key-link")).toEqual({ mode: "120000", content: path.join(home, ".ssh", "deploy_key") });
+		expect(pushed.get("ssh-dir")?.mode).toBe("120000");
+		for (const { content } of pushed.values()) expect(content).not.toContain(FAKE);
+	});
+
+	it("refuses a repository folder whose history holds a secret-looking file, even one deleted since", async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await git(folder, "add", "-A");
+		await git(folder, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "-m", "with env");
+		await git(folder, "rm", "--quiet", ".env");
+		await git(folder, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "-m", "drop env");
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+		expect(result).toMatchObject({ status: "error", code: "secret_files", message: expect.stringContaining(".env") });
+		expect(await git(remote, "branch", "--list")).toBe("");
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files" });
+	});
+
+	it("previews what an upload leaves out without uploading anything", async () => {
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: [".env"] });
+		expect(await git(remote, "branch", "--list")).toBe("");
+		expect(await fs.readdir(tmpRoot)).toEqual([]);
+	});
+});
+
+describe("Orchestrator's own state", () => {
+	it("refuses a folder inside the app's data directory, or one holding it", async () => {
+		const dataDir = path.join(root, "custom-data");
+		await fs.mkdir(path.join(dataDir, "projects"), { recursive: true });
+		await fs.writeFile(path.join(dataDir, "projects", "a.txt"), "a");
+		const withState = deps({ appStateDirs: () => [dataDir] });
+		for (const target of [dataDir, path.join(dataDir, "projects"), root]) {
+			expect(await pushFolderToRepository({ folder: target, pushPath: PUSH_PATH, branch: "main" }, withState), target).toMatchObject({ status: "error", code: "folder_unavailable" });
+		}
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, withState)).toMatchObject({ status: "pushed" });
+	});
+
+	it("compares case only where the file system ignores it", () => {
+		expect(pathWithin("/data/ao/x", "/data/ao", false)).toBe(true);
+		expect(pathWithin("/data/AO/x", "/data/ao", false)).toBe(false);
+		expect(pathWithin("/data/AO/x", "/data/ao", true)).toBe(true);
+		expect(pathWithin("/data/ao-other", "/data/ao", false)).toBe(false);
+		expect(pathWithin("/data", "/data/ao", false)).toBe(false);
+	});
+});
+
+describe("registerCloudFolderPushIpc preview", () => {
+	it("answers only the app's shell, for a folder picked in its folder dialog", async () => {
+		const handlers = new Map<string, (event: unknown, input: unknown) => unknown>();
+		const shell = { id: 1 };
+		registerCloudFolderPushIpc({ handle: (channel, handler) => handlers.set(channel, handler) }, {
+			...deps(),
+			trustedSender: (sender) => sender === shell,
+			chosenFolder: (candidate) => candidate === folder,
+		});
+		const handler = handlers.get(CLOUD_PREVIEW_FOLDER_CHANNEL)!;
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		expect(await handler({ sender: { id: 2 }, senderFrame: { parent: null } }, { folder })).toMatchObject({ status: "error", code: "invalid_request" });
+		expect(await handler({ sender: shell, senderFrame: { parent: {} } }, { folder })).toMatchObject({ status: "error", code: "invalid_request" });
+		expect(await handler({ sender: shell, senderFrame: { parent: null } }, { folder: root })).toMatchObject({ status: "error", message: expect.stringMatching(/folder dialog/) });
+		expect(await handler({ sender: shell, senderFrame: { parent: null } }, { folder })).toEqual({ status: "ok", source: "import", leftOut: [".env"] });
 	});
 });

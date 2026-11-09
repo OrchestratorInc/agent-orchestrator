@@ -49,6 +49,7 @@ import {
 	FolderPushError,
 	folderPushErrorText,
 	grantedRepositoryForRemote,
+	leftOutNotice,
 	pushFolderToCreatedRepository,
 	repositoryOwner,
 	type CreatedFolderRepository,
@@ -114,9 +115,10 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 	return { mutation, edited: () => setSavedAt(false) };
 }
 
-function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: ReactNode; children: ReactNode }) {
+/** labelHidden keeps the label for assistive technology only, where the pane's title already says it. */
+function Field({ label, htmlFor, hint, labelHidden, children }: { label: string; htmlFor?: string; hint?: ReactNode; labelHidden?: boolean; children: ReactNode }) {
 	return <div className="space-y-2">
-		<label className="block text-sm font-medium text-settings-label" htmlFor={htmlFor}>{label}</label>
+		<label className={labelHidden ? "sr-only" : "block text-sm font-medium text-settings-label"} htmlFor={htmlFor}>{label}</label>
 		{children}
 		{hint ? <div className="text-pretty text-xs leading-4 text-settings-muted">{hint}</div> : null}
 	</div>;
@@ -245,7 +247,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 				<p className="text-sm text-settings-muted">{t("settings.cloudProject.standaloneRepositories", { defaultValue: "No repository. Sessions start in an empty folder." })}</p>
 			</Field>
 		) : workspace ? (
-			<Field label={t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" })}
+			<Field label={t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" })} labelHidden
 				hint={t("settings.cloudProject.workspaceRepositoriesHint", { defaultValue: "Checked out side by side in the workspace folder, on the session branch, and the agent starts in that folder. The first one cannot be removed." })}>
 				<p className="font-mono text-sm text-settings-label">{gitHubFullName(project.repositoryUrl) ?? project.repositoryUrl}</p>
 				<CloudAdditionalReposEditor
@@ -356,7 +358,7 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	const repos = useCloudGitHubAppRepositories(project.orgId);
 	const mounted = useMountedRef();
 	const [phase, setPhase] = useState<"idle" | "creating" | "uploading" | "saving">("idle");
-	const [pending, setPending] = useState<{ folder: string; name: string; committed?: { branch?: string } } | null>(null);
+	const [pending, setPending] = useState<{ folder: string; name: string; committed?: { branch?: string }; leftOut?: string[] } | null>(null);
 	// Kept across a failed upload, so a retry pushes to the repository already made.
 	const [created, setCreated] = useState<{ folder: string; repository: CreatedFolderRepository } | null>(null);
 	const [error, setError] = useState<{ message: string; detail?: string } | null>(null);
@@ -367,15 +369,20 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 		setError(null);
 		const folder = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
 		if (!folder || !mounted.current) return;
-		const { remote, committed } = await describeLocalFolder(folder);
+		const { remote, committed, leftOut, refusal } = await describeLocalFolder(folder);
 		if (!mounted.current) return;
 		const existing = grantedRepositoryForRemote(remote, repos.data ?? []);
 		if (existing) {
 			onAddExisting(canonicalGitHubUrl(existing.fullName));
 			return;
 		}
+		// A folder that cannot be uploaded at all is refused before a repository is made.
+		if (refusal) {
+			setError(folderPushErrorText(t, refusal, folder));
+			return;
+		}
 		setCreated(null);
-		setPending({ folder, name: gitHubRepositoryNameFromFolder(folderLabel(folder)), ...(committed ? { committed } : {}) });
+		setPending({ folder, name: gitHubRepositoryNameFromFolder(folderLabel(folder)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) });
 	};
 	const madeForPending = pending !== null && created?.folder === pending.folder ? created.repository : undefined;
 	const nameInvalid = pending !== null && !madeForPending && !isValidGitHubRepositoryName(pending.name.trim());
@@ -464,6 +471,7 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 					? committedUploadHint(t, pending.committed)
 					: t("cloudWorkspace.newPrivateRepository", { defaultValue: "Uploaded to a new private repository" })}
 			</p>
+			{pending.leftOut?.length ? <p className="text-pretty text-xs text-settings-muted [overflow-wrap:anywhere]">{leftOutNotice(t, pending.leftOut)}</p> : null}
 		</div> : <Button type="button" variant="secondary" size="sm" disabled={disabled || atLimit} onClick={() => void choose()}>
 			<FolderPlus aria-hidden="true" className="size-icon-sm" />
 			{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}

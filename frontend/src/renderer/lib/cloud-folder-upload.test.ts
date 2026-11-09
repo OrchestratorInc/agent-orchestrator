@@ -35,7 +35,7 @@ describe("cloud folder upload", () => {
 		const created = await createFolderRepository({ createGitHubRepository }, "org-1", { name: "notes", owner: "acme" });
 		expect(createGitHubRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from Orchestrator" });
 
-		const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "trunk", commit: "c", source: "head" });
+		const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "trunk", commit: "c", source: "head", leftOut: [] });
 		await pushFolderToCreatedRepository("/work/notes", created);
 		expect(push).toHaveBeenCalledWith({ folder: "/work/notes", pushPath: "/p.git", branch: "trunk" });
 

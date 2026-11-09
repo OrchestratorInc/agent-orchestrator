@@ -25,6 +25,7 @@ import {
 	committedUploadHint,
 	folderPushErrorText,
 	grantedRepositoryForRemote,
+	leftOutNotice,
 	pushFolderToCreatedRepository,
 	repositoryOwner,
 	type CreatedFolderRepository,
@@ -95,6 +96,8 @@ export type WorkspaceMember =
 		 * changes. branch is absent when HEAD is detached.
 		 */
 		committed?: { branch?: string };
+		/** The secret-looking files the upload leaves out, shown before it runs. */
+		leftOut?: string[];
 		/** Set once the control plane made the repository; a retry never makes it again. */
 		created?: CreatedFolderRepository;
 		/** The folder is in its repository; a retry skips it. */
@@ -152,7 +155,7 @@ export function CloudWorkspaceCard({
 	// The account a new repository goes in has no usable AO GitHub App
 	// installation: connecting GitHub again is the way on.
 	const [installationNeeded, setInstallationNeeded] = useState(false);
-	const [addError, setAddError] = useState<string | null>(null);
+	const [addError, setAddError] = useState<{ message: string; detail?: string } | null>(null);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
 	// The create request's key, kept while its body stays the same so a retry
@@ -203,22 +206,28 @@ export function CloudWorkspaceCard({
 		const path = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
 		if (!path) return;
 		if (members.some((member) => member.kind === "folder" && member.path === path)) {
-			setAddError(t("cloudWorkspace.folderAlreadyAdded", { defaultValue: "{{folder}} is already in this workspace.", folder: folderLabel(path) }));
+			setAddError({ message: t("cloudWorkspace.folderAlreadyAdded", { defaultValue: "{{folder}} is already in this workspace.", folder: folderLabel(path) }) });
 			return;
 		}
 		// A git repository whose origin the org already grants joins as that
 		// repository instead of being uploaded again.
-		const { remote, committed } = await describeLocalFolder(path);
+		const { remote, committed, leftOut, refusal } = await describeLocalFolder(path);
 		const existing = grantedRepositoryForRemote(remote, granted);
 		if (existing) {
 			if (members.some((member) => member.kind === "repository" && member.githubRepositoryId === existing.githubRepositoryId)) {
-				setAddError(t("cloudWorkspace.repositoryAlreadyAdded", { defaultValue: "{{name}} is already in this workspace.", name: existing.fullName }));
+				setAddError({ message: t("cloudWorkspace.repositoryAlreadyAdded", { defaultValue: "{{name}} is already in this workspace.", name: existing.fullName }) });
 				return;
 			}
 			update([...members, { id: memberId(), kind: "repository", githubRepositoryId: existing.githubRepositoryId, fullName: existing.fullName, fromFolder: path }]);
 			return;
 		}
-		update([...members, { id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committed ? { committed } : {}) }]);
+		// A folder that cannot be uploaded at all (its history holds
+		// secret-looking files) is refused now, not after its repository is made.
+		if (refusal) {
+			setAddError(folderPushErrorText(t, refusal, path));
+			return;
+		}
+		update([...members, { id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) }]);
 	};
 	const remove = (id: string) => {
 		update(members.filter((member) => member.id !== id));
@@ -302,8 +311,10 @@ export function CloudWorkspaceCard({
 						? t("cloudWorkspace.forbidden", { defaultValue: "{{message}} A workspace with more than one repository needs an organization owner or admin.", message: err.message })
 						: err instanceof Error ? err.message : t("createProject.couldNotAdd"),
 				};
+			// A folder's failure shows once, under that folder; anything else
+			// shows below the list.
 			if (current !== undefined) mark(current.id, { phase: "failed", ...failure });
-			setSubmitError(failure.message);
+			setSubmitError(current !== undefined ? null : failure.message);
 			setIsCreating(false);
 		}
 	};
@@ -385,7 +396,10 @@ export function CloudWorkspaceCard({
 							{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}
 						</Button>
 					</div>
-					{addError ? <p className={onboardingFieldErrorClass} role="alert">{addError}</p> : null}
+					{addError ? <div role="alert">
+						<p className={onboardingFieldErrorClass}>{addError.message}</p>
+						{addError.detail ? <p className="whitespace-pre-line text-pretty text-[12px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">{addError.detail}</p> : null}
+					</div> : null}
 					{problemMessage ? <p className={onboardingFieldErrorClass} role="alert">{problemMessage}</p> : null}
 					{badName ? (
 						<p className={onboardingFieldErrorClass} role="alert">
@@ -471,8 +485,18 @@ function WorkspaceMemberRow({ member, owner, progress, disabled, onRename, onRem
 				{member.kind === "repository" ? <GitHubIcon className="size-4" /> : <Folder className="size-4" />}
 			</span>
 			<span className="min-w-0 flex-1">
-				<span className="block truncate text-[13px] font-medium text-foreground" title={member.kind === "folder" ? member.path : undefined}>{label}</span>
-				{detail ? <span className="block truncate text-[12px] leading-5 text-muted-foreground">{detail}</span> : null}
+				<span className="block text-[13px] font-medium text-foreground [overflow-wrap:anywhere]" title={member.kind === "folder" ? member.path : undefined}>{label}</span>
+				{detail ? <span className="block text-pretty text-[12px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">{detail}</span> : null}
+				{member.kind === "folder" && member.leftOut?.length ? (
+					<span className="block text-pretty text-[12px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">{leftOutNotice(t, member.leftOut)}</span>
+				) : null}
+				{progress?.phase === "creating" || progress?.phase === "uploading" ? (
+					<span className="block text-[12px] leading-5 text-muted-foreground" role="status">
+						{progress.phase === "creating"
+							? t("cloudWorkspace.creatingRepository", { defaultValue: "Creating repository" })
+							: t("cloudWorkspace.uploading", { defaultValue: "Uploading" })}
+					</span>
+				) : null}
 				{progress?.phase === "failed" && progress.message ? (
 					<span className="block text-pretty text-[12px] leading-5 text-destructive" role="alert">{progress.message}</span>
 				) : null}
@@ -511,12 +535,10 @@ function MemberProgressIcon({ progress }: { progress?: MemberProgress }) {
 	if (!progress) return null;
 	switch (progress.phase) {
 		case "creating":
-		case "uploading": {
-			const label = progress.phase === "creating"
-				? t("cloudWorkspace.creatingRepository", { defaultValue: "Creating repository" })
-				: t("cloudWorkspace.uploading", { defaultValue: "Uploading" });
-			return <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground" role="status"><LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />{label}</span>;
-		}
+		case "uploading":
+			// The words sit under the folder's name (WorkspaceMemberRow), so the
+			// name keeps its width while the folder uploads.
+			return <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-muted-foreground" />;
 		case "done":
 			return <CheckCircle2 aria-label={t("cloudWorkspace.uploaded", { defaultValue: "Uploaded" })} className="size-4 shrink-0 text-success" />;
 		case "failed":

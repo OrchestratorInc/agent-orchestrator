@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	openExternal: vi.fn(),
 	signIn: vi.fn(),
 	pushFolderToRepository: vi.fn(),
+	previewFolderUpload: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	listGitHubInstallations: vi.fn(),
 	listGitHubRepositories: vi.fn(),
@@ -28,7 +29,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: { chooseDirectory: mocks.chooseDirectory, scanImportFolder: mocks.scanImportFolder, getRepositoryBranch: mocks.getRepositoryBranch, openExternal: mocks.openExternal },
-		cloud: { pushFolderToRepository: mocks.pushFolderToRepository },
+		cloud: { pushFolderToRepository: mocks.pushFolderToRepository, previewFolderUpload: mocks.previewFolderUpload },
 	},
 }));
 
@@ -97,7 +98,8 @@ beforeEach(() => {
 	mocks.scanImportFolder.mockReset().mockImplementation(async ({ path }: { path: string }) => ({ path, repos: [] }));
 	mocks.getRepositoryBranch.mockReset().mockResolvedValue(undefined);
 	mocks.openExternal.mockReset();
-	mocks.pushFolderToRepository.mockReset().mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+	mocks.pushFolderToRepository.mockReset().mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import", leftOut: [] });
+	mocks.previewFolderUpload.mockReset().mockResolvedValue({ status: "ok", source: "import", leftOut: [] });
 	mocks.listUserProviderConnections.mockReset().mockResolvedValue({
 		providerConnections: [{ id: "conn-1", provider: "claude-code", label: "default", config: {}, validationState: "valid", createdAt: "", updatedAt: "" }],
 	});
@@ -115,6 +117,49 @@ beforeEach(() => {
 });
 
 describe("CloudWorkspaceCard", () => {
+	it("says which secret-looking files a folder's upload leaves out, before it runs", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.previewFolderUpload.mockResolvedValue({ status: "ok", source: "import", leftOut: [".env", "keys/id_rsa"] });
+
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+
+		expect(await screen.findByText("Leaves out files that look like secrets: .env, keys/id_rsa")).toBeInTheDocument();
+		expect(mocks.previewFolderUpload).toHaveBeenCalledWith({ folder: "/Users/me/notes" });
+		expect(mocks.pushFolderToRepository).not.toHaveBeenCalled();
+	});
+
+	it("refuses a repository folder whose history holds secret-looking files when it is picked", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.previewFolderUpload.mockResolvedValue({ status: "error", code: "secret_files", message: "notes's history holds files that look like secrets (.env)" });
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+
+		expect(await screen.findByText(/The history of notes holds files that look like secrets/)).toBeInTheDocument();
+		// Which files, from the main process.
+		expect(screen.getByText("notes's history holds files that look like secrets (.env)")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Repository name for notes")).not.toBeInTheDocument();
+		expect(mocks.createGitHubRepository).not.toHaveBeenCalled();
+	});
+
+	it("shows a folder's upload refusal once, under that folder", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.pushFolderToRepository.mockResolvedValueOnce({ status: "error", code: "branch_exists", message: "already has a main branch" });
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		const text = "The repository for notes already has commits, and Orchestrator only uploads a folder into an empty repository. If an earlier upload finished, remove notes and add its repository from GitHub instead.";
+		await waitFor(() => expect(screen.getAllByText(text)).toHaveLength(1));
+	});
+
 	it("offers to connect GitHub when the new repository's account has no usable installation", async () => {
 		const user = userEvent.setup();
 		renderCard();

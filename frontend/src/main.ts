@@ -3973,6 +3973,9 @@ registerCloudFolderPushIpc(ipcMain, {
 	tmpRoot: () => folderImportDir,
 	env: () => daemonEnv(),
 	homeDir: os.homedir(),
+	// The data directory this app resolved (AO_DATA_DIR) and its Electron
+	// profile: no folder inside or holding either is uploaded.
+	appStateDirs: () => [desktopDataDir, app.getPath("userData")],
 	ready: ensureShellEnv,
 	trustedSender: (sender) => {
 		const contents = sender as WebContents;

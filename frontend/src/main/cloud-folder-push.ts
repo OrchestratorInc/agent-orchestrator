@@ -10,6 +10,12 @@
 // state, with the folder as its work tree (so its .gitignore files apply),
 // pushed, and the git directory removed.
 //
+// Files that usually hold credentials (isSecretLookingPath) never reach
+// GitHub: an import leaves them out of its commit and reports which, and a
+// repository folder whose history holds any is refused, since its commits
+// cannot be uploaded without them. previewFolderUpload tells the app both
+// before anything is uploaded.
+//
 // The token goes only to the configured control plane: the push path is joined
 // with the configured control plane here, never with a URL the renderer names,
 // and the token travels to git in its
@@ -25,6 +31,7 @@ import type { ControlPlaneUrlResolver } from "./cloud-control-plane-url";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 export const CLOUD_PUSH_FOLDER_CHANNEL = "cloud:pushFolderToRepository";
+export const CLOUD_PREVIEW_FOLDER_CHANNEL = "cloud:previewFolderUpload";
 
 /** An import larger than this is refused before anything is written. */
 export const MAX_FOLDER_IMPORT_BYTES = 1.5 * 1024 * 1024 * 1024;
@@ -66,10 +73,21 @@ export type PushFolderErrorCode =
 	| "import_failed"
 	| "push_failed"
 	| "push_forbidden"
-	| "branch_exists";
+	| "branch_exists"
+	| "secret_files";
 
 export type PushFolderResult =
-	| { status: "pushed"; branch: string; commit: string; source: "head" | "import" }
+	/** leftOut: the secret-looking files an import did not upload (isSecretLookingPath). */
+	| { status: "pushed"; branch: string; commit: string; source: "head" | "import"; leftOut: string[] }
+	| { status: "error"; code: PushFolderErrorCode; message: string };
+
+/**
+ * What uploading a folder would do, before anything is uploaded: whether its
+ * commit or its files go, and the secret-looking files an import leaves out.
+ * A repository whose history holds secret-looking files is a secret_files error.
+ */
+export type PushFolderPreview =
+	| { status: "ok"; source: "head" | "import"; leftOut: string[] }
 	| { status: "error"; code: PushFolderErrorCode; message: string };
 
 export interface GitRunOptions {
@@ -89,6 +107,12 @@ export interface PushFolderDeps {
 	/** The environment git runs with (the user's shell PATH). */
 	env?: () => NodeJS.ProcessEnv;
 	homeDir?: string;
+	/**
+	 * Folders holding Orchestrator's own state: the data directory the app
+	 * resolves (AO_DATA_DIR) and its Electron profile. A folder inside one, or
+	 * holding one, is never uploaded. Defaults to ~/.ao.
+	 */
+	appStateDirs?: () => string[];
 	git?: GitRunner;
 	/**
 	 * The remote git pushes to for the resolved push URL. Tests point it at a
@@ -227,12 +251,62 @@ function withGitConfig(env: NodeJS.ProcessEnv, entries: Array<[string, string]>)
 	return next;
 }
 
+/** Whether this platform's default file system ignores case (macOS, Windows). */
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+
 function samePath(a: string, b: string): boolean {
-	return process.platform === "win32" || process.platform === "darwin" ? a.toLowerCase() === b.toLowerCase() : a === b;
+	return CASE_INSENSITIVE_FS ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Whether child is parent or inside it. Case is ignored only where the file
+ * system ignores it, so on Linux /data/AO is not inside /data/ao.
+ */
+export function pathWithin(child: string, parent: string, caseInsensitive = CASE_INSENSITIVE_FS): boolean {
+	const fold = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
+	const relative = path.relative(fold(path.resolve(parent)), fold(path.resolve(child)));
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+/**
+ * Files a folder upload never puts on GitHub, because they usually hold
+ * credentials. Matched on each file's path inside the folder, at any depth,
+ * ignoring case:
+ * - environment files: .env and .env.*, except .env.example, .env.sample and
+ *   .env.template, which hold names, not values;
+ * - private keys and certificate bundles: *.pem, *.key, *.p12, *.pfx, and the
+ *   SSH keys id_rsa, id_dsa, id_ecdsa and id_ed25519 (their .pub halves are kept);
+ * - tool credentials: .npmrc, .netrc, .pypirc, .git-credentials;
+ * - cloud credentials: credentials.json, client_secret*.json, service-account*.json;
+ * - anything inside a .ssh, .aws or .gnupg folder.
+ */
+const SECRET_FILE_NAMES = new Set([".env", ".npmrc", ".netrc", ".pypirc", ".git-credentials", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json"]);
+const SECRET_FILE_EXTENSIONS = [".pem", ".key", ".p12", ".pfx"];
+const KEPT_ENV_FILES = new Set([".env.example", ".env.sample", ".env.template"]);
+const SECRET_FOLDERS = new Set([".ssh", ".aws", ".gnupg"]);
+
+export function isSecretLookingPath(relativePath: string): boolean {
+	const segments = relativePath.replace(/\\/g, "/").split("/").filter((segment) => segment !== "").map((segment) => segment.toLowerCase());
+	const name = segments[segments.length - 1];
+	if (name === undefined) return false;
+	if (segments.slice(0, -1).some((segment) => SECRET_FOLDERS.has(segment))) return true;
+	if (/[\\/]$/.test(relativePath)) return SECRET_FOLDERS.has(name);
+	if (SECRET_FILE_NAMES.has(name)) return true;
+	if (name.startsWith(".env.")) return !KEPT_ENV_FILES.has(name);
+	if (SECRET_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return true;
+	return /^(?:client_secret.*|service-account.*)\.json$/.test(name);
+}
+
+function shownFiles(files: readonly string[]): string {
+	return files.slice(0, 5).join(", ") + (files.length > 5 ? `, and ${files.length - 5} more` : "");
+}
+
+function secretFilesError(folderName: string, files: readonly string[]): PushFolderError {
+	return new PushFolderError("secret_files", `${folderName}'s history holds files that look like secrets (${shownFiles(files)}), so Orchestrator does not upload it: they would reach GitHub. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.`);
 }
 
 /** The folder, resolved, when it is a directory that may be uploaded. */
-async function resolveFolder(folder: string, homeDir: string | undefined): Promise<string> {
+async function resolveFolder(folder: string, homeDir: string | undefined, appStateDirs: readonly string[]): Promise<string> {
 	if (!path.isAbsolute(folder)) throw new PushFolderError("invalid_request", "The folder must be an absolute path.");
 	let real: string;
 	try {
@@ -245,9 +319,11 @@ async function resolveFolder(folder: string, homeDir: string | undefined): Promi
 	if (homeDir) {
 		const home = await fs.realpath(homeDir).catch(() => homeDir);
 		if (samePath(real, home)) throw new PushFolderError("folder_unavailable", "Your home folder cannot be uploaded. Choose a project folder.");
-		const aoState = path.join(home, ".ao");
-		if (samePath(real, aoState) || real.toLowerCase().startsWith(`${aoState.toLowerCase()}${path.sep}`)) {
-			throw new PushFolderError("folder_unavailable", "A folder inside Orchestrator's own data cannot be uploaded.");
+	}
+	for (const stateDir of appStateDirs) {
+		const realState = await fs.realpath(stateDir).catch(() => path.resolve(stateDir));
+		if (pathWithin(real, realState) || pathWithin(realState, real)) {
+			throw new PushFolderError("folder_unavailable", "A folder that is or holds Orchestrator's own data cannot be uploaded. Choose a project folder.");
 		}
 	}
 	return real;
@@ -322,6 +398,18 @@ async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.P
 	}
 }
 
+/** The secret-looking files anywhere in the history a repository folder would upload. */
+async function committedSecretFiles(folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
+	const { stdout } = await git(["-C", folder, "log", "--format=", "--name-only", "--no-renames", "-z", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+	return [...new Set(stdout.split(/[\0\n]/).filter((file) => file !== "" && isSecretLookingPath(file)))].sort();
+}
+
+/** The files an import would consider: everything in the folder git does not ignore. */
+async function listImportFiles(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
+	const { stdout } = await git(["--git-dir", gitDir, "--work-tree", folder, "ls-files", "-z", "--others", "--exclude-standard"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+	return stdout.split("\0").filter((file) => file !== "");
+}
+
 interface ImportScan {
 	/** Bytes of the files an import would commit: everything git does not ignore. */
 	size: number;
@@ -329,13 +417,11 @@ interface ImportScan {
 	newestMs: number;
 }
 
-/** Looks over the files an import would commit, refusing what GitHub would refuse. */
-async function scanImport(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number, maxFileBytes: number): Promise<ImportScan> {
-	const { stdout } = await git(["--git-dir", gitDir, "--work-tree", folder, "ls-files", "-z", "--others", "--exclude-standard"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+/** Looks over the files an import commits, refusing what GitHub would refuse. */
+async function scanImport(folder: string, files: readonly string[], limit: number, maxFileBytes: number): Promise<ImportScan> {
 	const name = path.basename(folder);
 	const scan: ImportScan = { size: 0, newestMs: (await fs.stat(folder)).mtimeMs };
-	for (const file of stdout.split("\0")) {
-		if (file === "") continue;
+	for (const file of files) {
 		const full = path.join(folder, file);
 		try {
 			const stat = await fs.lstat(full);
@@ -370,15 +456,27 @@ async function hasConfiguredIdentity(folder: string, git: GitRunner, env: NodeJS
 	return (await value("user.name")) !== "" && (await value("user.email")) !== "";
 }
 
-/** Commits the folder in gitDir with the folder as its work tree; returns the commit. */
-async function importFolder(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number, maxFileBytes: number): Promise<string> {
+/**
+ * Commits the folder in gitDir with the folder as its work tree, all but its
+ * secret-looking files; returns the commit and the files left out.
+ */
+async function importFolder(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number, maxFileBytes: number): Promise<{ commit: string; leftOut: string[] }> {
 	const scoped = ["--git-dir", gitDir, "--work-tree", folder];
 	await git(["init", "--quiet", "--bare", gitDir], { env, timeout: GIT_STEP_TIMEOUT_MS });
-	const { size, newestMs } = await scanImport(folder, gitDir, git, env, limit, maxFileBytes);
+	const listed = await listImportFiles(folder, gitDir, git, env);
+	const leftOut = listed.filter(isSecretLookingPath);
+	const kept = listed.filter((file) => !isSecretLookingPath(file));
+	const { size, newestMs } = await scanImport(folder, kept, limit, maxFileBytes);
 	if (size > limit) {
 		throw new PushFolderError("folder_too_large", `${path.basename(folder)} holds more than ${Math.round(limit / (1024 * 1024 * 1024) * 10) / 10} GB of files git does not ignore. Add the large files to its .gitignore, or make it a git repository and add it as a repository.`);
 	}
-	await git([...scoped, "add", "--all"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+	if (kept.length > 0) {
+		// Exactly the files kept, named literally: never "add --all", which
+		// would take the secret-looking ones too.
+		const pathspecs = path.join(gitDir, "ao-import-paths");
+		await fs.writeFile(pathspecs, `${kept.join("\0")}\0`);
+		await git([...scoped, "add", `--pathspec-from-file=${pathspecs}`, "--pathspec-file-nul"], { env: { ...env, GIT_LITERAL_PATHSPECS: "1" }, timeout: GIT_STEP_TIMEOUT_MS });
+	}
 	// git adds a repository inside the folder as a bare link to its commit, so
 	// its files would never reach the cloud.
 	const embedded = await embeddedRepositories(gitDir, folder, git, env);
@@ -396,7 +494,7 @@ async function importFolder(folder: string, gitDir: string, git: GitRunner, env:
 		: { ...dated, GIT_AUTHOR_NAME: FALLBACK_COMMIT_NAME, GIT_AUTHOR_EMAIL: FALLBACK_COMMIT_EMAIL, GIT_COMMITTER_NAME: FALLBACK_COMMIT_NAME, GIT_COMMITTER_EMAIL: FALLBACK_COMMIT_EMAIL };
 	// No signing prompt and no hooks: this commit is AO's, made in its own git directory.
 	await git([...scoped, "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "--allow-empty", "-m", `Import ${path.basename(folder)}`], { env: identity, timeout: GIT_STEP_TIMEOUT_MS });
-	return (await git(["--git-dir", gitDir, "rev-parse", "HEAD"], { env, timeout: 15_000 })).stdout.trim();
+	return { commit: (await git(["--git-dir", gitDir, "rev-parse", "HEAD"], { env, timeout: 15_000 })).stdout.trim(), leftOut };
 }
 
 export async function pushFolderToRepository(input: unknown, deps: PushFolderDeps): Promise<PushFolderResult> {
@@ -412,7 +510,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 		const controlPlane = await deps.controlPlaneUrl();
 		if (!controlPlane) throw new PushFolderError("invalid_request", "No Orchestrator Cloud control plane is configured.");
 		const remoteUrl = resolvePushUrl(pushPath, controlPlane).toString();
-		const realFolder = await resolveFolder(folder, deps.homeDir ?? os.homedir());
+		const realFolder = await resolveFolder(folder, deps.homeDir ?? os.homedir(), appStateDirs(deps));
 		let version: string;
 		try {
 			version = (await git(["--version"], { env, timeout: 15_000 })).stdout;
@@ -428,9 +526,12 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 		const source = commit ? "head" : "import";
 		const maxFileBytes = deps.maxFileBytes ?? MAX_GITHUB_FILE_BYTES;
 		const pushArgs: string[] = [];
+		let leftOut: string[] = [];
 		if (commit) {
 			try {
 				await checkRepositoryHead(realFolder, git, env, maxFileBytes);
+				const secrets = await committedSecretFiles(realFolder, git, env);
+				if (secrets.length > 0) throw secretFilesError(path.basename(realFolder), secrets);
 			} catch (error) {
 				if (error instanceof PushFolderError) throw error;
 				throw new PushFolderError("import_failed", `Could not prepare ${path.basename(realFolder)}: ${gitMessage(error)}`);
@@ -440,7 +541,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			await fs.mkdir(deps.tmpRoot(), { recursive: true });
 			gitDir = path.join(deps.tmpRoot(), `import-${randomUUID()}`);
 			try {
-				commit = await importFolder(realFolder, gitDir, git, env, deps.maxImportBytes ?? MAX_FOLDER_IMPORT_BYTES, maxFileBytes);
+				({ commit, leftOut } = await importFolder(realFolder, gitDir, git, env, deps.maxImportBytes ?? MAX_FOLDER_IMPORT_BYTES, maxFileBytes));
 			} catch (error) {
 				if (error instanceof PushFolderError) throw error;
 				throw new PushFolderError("import_failed", `Could not prepare ${path.basename(realFolder)}: ${gitMessage(error)}`);
@@ -467,10 +568,50 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 		} catch (error) {
 			throw pushRefusal(error, path.basename(realFolder), branch);
 		}
-		return { status: "pushed", branch, commit: commit ?? "", source };
+		return { status: "pushed", branch, commit: commit ?? "", source, leftOut };
 	} catch (error) {
 		if (error instanceof PushFolderError) return { status: "error", code: error.code, message: redact(error.message, token) };
 		return { status: "error", code: "invalid_request", message: redact(error instanceof Error ? error.message : String(error), token) };
+	} finally {
+		if (gitDir) await fs.rm(gitDir, { recursive: true, force: true }).catch(() => undefined);
+	}
+}
+
+function appStateDirs(deps: Pick<PushFolderDeps, "appStateDirs" | "homeDir">): string[] {
+	return deps.appStateDirs?.() ?? [path.join(deps.homeDir ?? os.homedir(), ".ao")];
+}
+
+/**
+ * What uploading a folder would do (PushFolderPreview), without uploading:
+ * the same checks pushFolderToRepository makes first, and the files an import
+ * would leave out. Nothing in the folder changes.
+ */
+export async function previewFolderUpload(input: unknown, deps: PushFolderDeps): Promise<PushFolderPreview> {
+	const git = deps.git ?? defaultGit;
+	const env = quietGitEnv(deps.env?.() ?? process.env);
+	let gitDir: string | undefined;
+	try {
+		const folder = (typeof input === "object" && input !== null ? (input as Record<string, unknown>).folder : undefined);
+		if (typeof folder !== "string") throw new PushFolderError("invalid_request", "Not a folder to upload.");
+		const realFolder = await resolveFolder(folder, deps.homeDir ?? os.homedir(), appStateDirs(deps));
+		try {
+			await git(["--version"], { env, timeout: 15_000 });
+		} catch {
+			throw new PushFolderError("git_unavailable", "git is not installed or not on PATH. Install git, then try again.");
+		}
+		if (await ownRepositoryHead(realFolder, git, env)) {
+			const secrets = await committedSecretFiles(realFolder, git, env);
+			if (secrets.length > 0) throw secretFilesError(path.basename(realFolder), secrets);
+			return { status: "ok", source: "head", leftOut: [] };
+		}
+		await fs.mkdir(deps.tmpRoot(), { recursive: true });
+		gitDir = path.join(deps.tmpRoot(), `preview-${randomUUID()}`);
+		await git(["init", "--quiet", "--bare", gitDir], { env, timeout: GIT_STEP_TIMEOUT_MS });
+		const leftOut = (await listImportFiles(realFolder, gitDir, git, env)).filter(isSecretLookingPath);
+		return { status: "ok", source: "import", leftOut };
+	} catch (error) {
+		if (error instanceof PushFolderError) return { status: "error", code: error.code, message: error.message };
+		return { status: "error", code: "import_failed", message: error instanceof Error ? error.message : String(error) };
 	} finally {
 		if (gitDir) await fs.rm(gitDir, { recursive: true, force: true }).catch(() => undefined);
 	}
@@ -491,7 +632,7 @@ export async function clearFolderImports(tmpRoot: string, now = Date.now()): Pro
 	} catch {
 		return;
 	}
-	await Promise.all(entries.filter((entry) => entry.startsWith("import-")).map(async (entry) => {
+	await Promise.all(entries.filter((entry) => entry.startsWith("import-") || entry.startsWith("preview-")).map(async (entry) => {
 		const full = path.join(tmpRoot, entry);
 		const stat = await fs.lstat(full).catch(() => null);
 		if (stat && now - stat.mtimeMs > STALE_IMPORT_MS) await fs.rm(full, { recursive: true, force: true }).catch(() => undefined);
@@ -530,16 +671,28 @@ export interface CloudFolderPushIpcDeps extends PushFolderDeps {
 }
 
 export function registerCloudFolderPushIpc(ipcMain: { handle(channel: string, handler: (event: unknown, input: unknown) => unknown): void }, deps: CloudFolderPushIpcDeps): void {
-	ipcMain.handle(CLOUD_PUSH_FOLDER_CHANNEL, async (event, input) => {
+	// Both answer only the app's own window, for a folder picked in its dialog.
+	const refusal = (event: unknown, input: unknown): { status: "error"; code: "invalid_request"; message: string } | undefined => {
 		const sender = (event as { sender?: unknown } | null)?.sender;
 		if (!fromMainFrame(event) || (deps.trustedSender && !deps.trustedSender(sender))) {
-			return { status: "error", code: "invalid_request", message: "Uploading folders is only available from the app window." } satisfies PushFolderResult;
+			return { status: "error", code: "invalid_request", message: "Uploading folders is only available from the app window." };
 		}
 		const folder = (input as { folder?: unknown } | null)?.folder;
 		if (deps.chosenFolder && (typeof folder !== "string" || !deps.chosenFolder(folder))) {
-			return { status: "error", code: "invalid_request", message: "Choose the folder to upload in the folder dialog first." } satisfies PushFolderResult;
+			return { status: "error", code: "invalid_request", message: "Choose the folder to upload in the folder dialog first." };
 		}
+		return undefined;
+	};
+	ipcMain.handle(CLOUD_PUSH_FOLDER_CHANNEL, async (event, input): Promise<PushFolderResult> => {
+		const refused = refusal(event, input);
+		if (refused) return refused;
 		await deps.ready?.();
 		return pushFolderToRepository(input, deps);
+	});
+	ipcMain.handle(CLOUD_PREVIEW_FOLDER_CHANNEL, async (event, input): Promise<PushFolderPreview> => {
+		const refused = refusal(event, input);
+		if (refused) return refused;
+		await deps.ready?.();
+		return previewFolderUpload(input, deps);
 	});
 }

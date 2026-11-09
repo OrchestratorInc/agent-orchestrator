@@ -452,6 +452,7 @@ export const aoBridge: AoBridge =
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
 			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

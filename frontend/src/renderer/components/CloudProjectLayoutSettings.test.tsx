@@ -238,11 +238,12 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 	});
 	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
 	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
-	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import", leftOut: [] });
 	const onSaveState = vi.fn();
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} />);
 
-	expect(await screen.findByText("Workspace repositories")).toBeInTheDocument();
+	// The pane's title already says it, so the field label is for screen readers only.
+	expect(await screen.findByText("Workspace repositories")).toHaveClass("sr-only");
 	expect(screen.queryByText("Agent starts in")).toBeNull();
 	await userEvent.click(screen.getByRole("button", { name: "Add a local folder" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
@@ -262,6 +263,32 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 	choose.mockRestore();
 });
 
+it("says which secret-looking files a picked folder's upload leaves out, and refuses a folder it cannot upload", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload")
+		.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [".env", "config/.npmrc"] })
+		.mockResolvedValueOnce({ status: "error", code: "secret_files", message: "history holds .env" });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockClear();
+	mocks.createRepository.mockClear();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	expect(await screen.findByText("Leaves out files that look like secrets: .env, config/.npmrc")).toBeInTheDocument();
+	expect(preview).toHaveBeenCalledWith({ folder: "/Users/me/notes" });
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	expect(await screen.findByText(/The history of notes holds files that look like secrets/)).toBeInTheDocument();
+	expect(screen.queryByLabelText("Repository name for /Users/me/notes")).toBeNull();
+	expect(push).not.toHaveBeenCalled();
+	expect(mocks.createRepository).not.toHaveBeenCalled();
+	choose.mockRestore();
+	preview.mockRestore();
+});
+
 it("names a folder's repository before uploading it, and retries without making it again", async () => {
 	workspacePatches();
 	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
@@ -274,7 +301,7 @@ it("names a folder's repository before uploading it, and retries without making 
 	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
 	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockClear()
 		.mockResolvedValueOnce({ status: "error", code: "push_failed", message: "Could not upload notes: remote hung up" })
-		.mockResolvedValueOnce({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+		.mockResolvedValueOnce({ status: "pushed", branch: "main", commit: "abc", source: "import", leftOut: [] });
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
@@ -352,7 +379,7 @@ it("says a repository folder uploads its commits and holds the dialog open while
 	// Settings waits for an upload as for a save in flight.
 	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ requestPending: true, phase: "saving" })));
 
-	finishPush({ status: "pushed", branch: "main", commit: "abc", source: "head" });
+	finishPush({ status: "pushed", branch: "main", commit: "abc", source: "head", leftOut: [] });
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ requestPending: false, phase: "saved", dirty: false })));
 	push.mockRestore();
