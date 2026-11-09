@@ -3729,7 +3729,7 @@
 	"usage.limits.signedOut": "Abgemeldet",
 	"usage.limits.thisComputer": "Anmeldung dieses Computers",
 	"usage.limits.paceLeft": "Bei diesem Tempo: etwa {{value}} übrig beim Zurücksetzen",
-	"usage.limits.paceRunsOut": "Bei diesem Tempo aufgebraucht am {{value}}",
+	"usage.limits.paceRunsOut": "Bei diesem Tempo aufgebraucht in {{value}}",
 	"usage.windows.experimental": "Experimentell",
 	"usage.windows.about": "Aus den Limit-Messwerten, die AO während der Ausführung etwa alle 5 Minuten abruft. Gestrichelte Teile sind Prognosen: wo ein Fenster landet, wenn sein bisheriges Tempo anhält.",
 	"usage.windows.recordingSince": "Messwerte ab {{value}}.",

@@ -3711,7 +3711,7 @@
 	"usage.limits.signedOut": "已退出登录",
 	"usage.limits.thisComputer": "此电脑的登录",
 	"usage.limits.paceLeft": "按此速度，重置时约剩 {{value}}",
-	"usage.limits.paceRunsOut": "按此速度将在 {{value}} 用完",
+	"usage.limits.paceRunsOut": "按此速度将在 {{value}}后用完",
 	"usage.windows.experimental": "实验性",
 	"usage.windows.about": "根据 AO 运行时大约每 5 分钟读取一次的额度数据生成。虚线部分是预测：按目前的速度，窗口最终会到达的位置。",
 	"usage.windows.recordingSince": "读数开始于 {{value}}。",

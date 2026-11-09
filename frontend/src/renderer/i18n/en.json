@@ -3710,7 +3710,7 @@
 	"usage.limits.signedOut": "Signed out",
 	"usage.limits.thisComputer": "This computer's login",
 	"usage.limits.paceLeft": "At this pace: about {{value}} left at the reset",
-	"usage.limits.paceRunsOut": "At this pace it runs out {{value}}",
+	"usage.limits.paceRunsOut": "At this pace it runs out in {{value}}",
 	"usage.windows.experimental": "Experimental",
 	"usage.windows.about": "Built from the limit readings AO takes about every 5 minutes while it runs. Dashed parts are projections: where a window lands if its pace so far holds.",
 	"usage.windows.recordingSince": "Readings start {{value}}.",

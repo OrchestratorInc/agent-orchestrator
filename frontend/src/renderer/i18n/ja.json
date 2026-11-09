@@ -3729,7 +3729,7 @@
 	"usage.limits.signedOut": "サインアウト済み",
 	"usage.limits.thisComputer": "このコンピューターのログイン",
 	"usage.limits.paceLeft": "このペースならリセット時の残りは約 {{value}}",
-	"usage.limits.paceRunsOut": "このペースでは {{value}} に使い切ります",
+	"usage.limits.paceRunsOut": "このペースでは {{value}} 後に使い切ります",
 	"usage.windows.experimental": "試験運用",
 	"usage.windows.about": "AO が動作中に約 5 分ごとに取得する上限の読み取り値から作られています。破線部分は予測で、これまでのペースが続いた場合の到達点です。",
 	"usage.windows.recordingSince": "読み取りの開始: {{value}}",

@@ -3792,7 +3792,7 @@
 	"usage.limits.signedOut": "Sesión cerrada",
 	"usage.limits.thisComputer": "Sesión de este equipo",
 	"usage.limits.paceLeft": "A este ritmo: quedará cerca de {{value}} al reiniciarse",
-	"usage.limits.paceRunsOut": "A este ritmo se agota el {{value}}",
+	"usage.limits.paceRunsOut": "A este ritmo se agota en {{value}}",
 	"usage.windows.experimental": "Experimental",
 	"usage.windows.about": "Basado en las lecturas de límites que AO toma cada 5 minutos aproximadamente mientras se ejecuta. Las partes discontinuas son proyecciones: dónde termina una ventana si mantiene su ritmo actual.",
 	"usage.windows.recordingSince": "Las lecturas empiezan el {{value}}.",

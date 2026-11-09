@@ -91,8 +91,8 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 	const tone = remainingTone(remaining);
 	const pace = fetchedAt ? limitWindowPace(window, fetchedAt) : null;
 	const leftAtReset = pace ? Math.max(0, 100 - pace.atReset) : null;
-	const when = new Intl.DateTimeFormat(i18n.language, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 	const countdown = formatCountdown(window.resetsAt, now);
+	const runsOutIn = pace?.runsOutAt ? formatCountdown(pace.runsOutAt.toISOString(), now) : null;
 	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
 	return (
 		<>
@@ -118,10 +118,10 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}
 			</span>
 			{pace ? (
-				<p className={cn("col-span-2 col-start-3 -mt-2 inline-flex items-center gap-1.5 text-xs tabular-nums", pace.runsOutAt ? "text-warning" : "text-muted-foreground")}>
-					{pace.runsOutAt ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
-					{pace.runsOutAt
-						? t("usage.limits.paceRunsOut", { value: when.format(pace.runsOutAt) })
+				<p className={cn("col-span-2 col-start-3 -mt-2 inline-flex items-center gap-1.5 text-xs tabular-nums", runsOutIn ? "text-warning" : "text-muted-foreground")}>
+					{runsOutIn ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
+					{runsOutIn
+						? t("usage.limits.paceRunsOut", { value: runsOutIn })
 						: t("usage.limits.paceLeft", { value: new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((leftAtReset ?? 0) / 100) })}
 				</p>
 			) : null}

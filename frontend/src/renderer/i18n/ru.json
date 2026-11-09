@@ -4070,7 +4070,7 @@
 	"usage.limits.signedOut": "Вход не выполнен",
 	"usage.limits.thisComputer": "Вход на этом компьютере",
 	"usage.limits.paceLeft": "В таком темпе к сбросу останется около {{value}}",
-	"usage.limits.paceRunsOut": "В таком темпе лимит закончится {{value}}",
+	"usage.limits.paceRunsOut": "В таком темпе лимит закончится через {{value}}",
 	"usage.windows.experimental": "Экспериментально",
 	"usage.windows.about": "Построено по показаниям лимитов, которые AO снимает примерно каждые 5 минут, пока работает. Пунктир — прогноз: где окажется окно, если его темп сохранится.",
 	"usage.windows.recordingSince": "Показания начинаются {{value}}.",
