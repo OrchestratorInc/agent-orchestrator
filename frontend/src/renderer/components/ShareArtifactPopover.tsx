@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { Button } from "./ui/button";
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type Phase =
@@ -56,6 +56,74 @@ const pendingShares = new Map<string, PendingShare>();
 
 function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
 	return JSON.stringify([baseUrl, file.sessionId, file.path]);
+}
+
+interface ShareSnapshot {
+	inspection: CloudShareInspection;
+	links: CloudShareLinks;
+}
+
+/** How long what Share fetched stays good: a publish refuses a file that changed since, so a short wait costs nothing. */
+const SNAPSHOT_MS = 30_000;
+const snapshots = new Map<string, { at: number; promise: Promise<ShareSnapshot>; value?: ShareSnapshot }>();
+
+type ShareFileArg = Omit<CloudShareFile, "baseUrl" | "shareId">;
+
+/**
+ * What the share panel needs for a file: its inspection and the person's
+ * links. Started before Share is clicked, so the panel opens with it; a
+ * second ask joins the one in flight.
+ */
+function fetchSnapshot(baseUrl: string, file: ShareFileArg): Promise<ShareSnapshot> {
+	const key = pendingKey(baseUrl, file);
+	const known = snapshots.get(key);
+	if (known && Date.now() - known.at < SNAPSHOT_MS) return known.promise;
+	const entry: { at: number; promise: Promise<ShareSnapshot>; value?: ShareSnapshot } = {
+		at: Date.now(),
+		// A bridge that is missing or throws rejects this, as a failed fetch does.
+		promise: new Promise<[CloudShareInspection, CloudShareLinks]>((resolve) => {
+			resolve(Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), aoBridge.cloudShare.list(baseUrl)]));
+		}).then(([inspection, links]) => ({ inspection, links })),
+	};
+	entry.promise.then(
+		(value) => { entry.value = value; },
+		() => { if (snapshots.get(key) === entry) snapshots.delete(key); },
+	);
+	snapshots.set(key, entry);
+	return entry.promise;
+}
+
+function cachedSnapshot(baseUrl: string, file: ShareFileArg): ShareSnapshot | undefined {
+	const entry = snapshots.get(pendingKey(baseUrl, file));
+	return entry?.value && Date.now() - entry.at < SNAPSHOT_MS ? entry.value : undefined;
+}
+
+/** Forgets everything fetched; tests start each case from nothing. */
+export function clearShareSnapshots(): void {
+	snapshots.clear();
+}
+
+/** Drops what was fetched for a file once its share state changes. */
+function forgetSnapshot(baseUrl: string, file: ShareFileArg): void {
+	snapshots.delete(pendingKey(baseUrl, file));
+}
+
+/** What the panel shows for a file, from its inspection and the person's links. */
+function phaseFor({ inspection, links }: ShareSnapshot): Phase {
+	if (inspection.unsupported) return { kind: "unsupported" };
+	// The link this file was published to from here, while it is active.
+	const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
+	// The file changed since it was published here: the link still serves what it held then.
+	const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
+	if (current) return { kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined };
+	// It was published from here, but its link is unpublished now, usually from
+	// somewhere else. Publishing gives it a new link.
+	const unpublished = Boolean(inspection.shareId);
+	// A file with no active link of its name is most likely a new document; the
+	// server decides for sure when it uploads.
+	const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
+	if (!links.unlimited && likelyNew && links.used >= links.limit) return { kind: "limit", limit: links.limit };
+	return { kind: "publish", inspection, links, unpublished };
 }
 
 /** An error's message, without the wrapper Electron puts around one thrown across IPC. */
@@ -107,6 +175,20 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 	return { baseUrl, signedIn: status === "authenticated" && baseUrl !== "" };
 }
 
+/** Starts fetching what the share panel shows, so Share opens with it. Safe to call often. */
+export function useSharePrefetch(file: ShareFileArg | undefined): () => void {
+	const { baseUrl, signedIn } = useShareAccess();
+	const sessionId = file?.sessionId;
+	const path = file?.path;
+	const projectId = file?.projectId;
+	const source = file?.source;
+	const orgId = file?.orgId;
+	return useCallback(() => {
+		if (!signedIn || sessionId === undefined || path === undefined || projectId === undefined || VIDEO_FILE.test(path)) return;
+		void fetchSnapshot(baseUrl, { sessionId, path, projectId, source, orgId }).catch(() => undefined);
+	}, [signedIn, baseUrl, sessionId, path, projectId, source, orgId]);
+}
+
 /**
  * The file an artifact is shared as, or undefined where the person cannot
  * share it: only the person who started a cloud session publishes its files,
@@ -124,38 +206,35 @@ export function useArtifactShareFile(artifact: Pick<ArtifactRow, "cloud" | "sess
 	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID };
 }
 
-/** The share panel a menu's Share item opens, anchored to the menu's trigger. */
-export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, children }: {
-	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
-	name: string;
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	children: ReactElement;
-}) {
-	return (
-		<Popover open={open} onOpenChange={onOpenChange}>
-			<PopoverAnchor asChild>{children}</PopoverAnchor>
-			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-3" data-browser-native-overlay="true">
-				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
-			</PopoverContent>
-		</Popover>
-	);
-}
-
 /**
  * The Share button beside an open local artifact's other actions. It opens a
  * popover anchored to it: publish the file as a public link, or, once it is
  * published, copy the link, unpublish it, or republish a file that changed
  * since. For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, open: controlledOpen, onOpenChange }: {
+	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
+	name: string;
+	className?: string;
+	iconOnly?: boolean;
+	/** Lets the caller open the panel, as its menu's Share item does. */
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
+}) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	const [ownOpen, setOwnOpen] = useState(false);
+	const open = controlledOpen ?? ownOpen;
+	const setOpen = onOpenChange ?? setOwnOpen;
 	const available = useShareAvailable();
 	const video = VIDEO_FILE.test(file.path);
+	const prefetch = useSharePrefetch(available ? file : undefined);
+	// Fetched as the button appears and again on hover or focus, so the panel opens filled in.
+	useEffect(prefetch, [prefetch]);
 	const button = (
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
+			onFocus={prefetch}
+			onPointerEnter={prefetch}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
 			disabled={video}
@@ -235,10 +314,14 @@ function SharePanel({
 	const { t } = useTranslation();
 	const { baseUrl, signedIn } = useShareAccess();
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
-	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+	const key = pendingKey(baseUrl, file);
+	// What a hover or the menu already fetched shows at once, with no loading state.
+	const [phase, setPhase] = useState<Phase>(() => {
+		const cached = signedIn && !pendingShares.has(key) ? cachedSnapshot(baseUrl, file) : undefined;
+		return cached ? phaseFor(cached) : { kind: "loading" };
+	});
 	const [copied, setCopied] = useState(false);
 	const shareFile = { ...file, baseUrl };
-	const key = pendingKey(baseUrl, file);
 
 	// Shows how a publish ended. Its own refusal is shown as it came, not
 	// worked out again from the link list. A republish names its link: a file
@@ -281,29 +364,19 @@ function SharePanel({
 				cancelled = true;
 			};
 		}
-		setPhase({ kind: "loading" });
-		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), aoBridge.cloudShare.list(baseUrl)])
-			.then(([inspection, links]) => {
-				if (cancelled) return;
-				if (inspection.unsupported) return setPhase({ kind: "unsupported" });
-				// The link this file was published to from here, while it is active.
-				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
-				// The file changed since it was published here: the link still
-				// serves what it held then.
-				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-				if (current) return setPhase({ kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined });
-				// It was published from here, but its link is unpublished now,
-				// usually from somewhere else. Publishing gives it a new link.
-				const unpublished = Boolean(inspection.shareId);
-				// A file with no active link of its name is most likely a new
-				// document; the server decides for sure when it uploads.
-				const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
-				if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
-				setPhase({ kind: "publish", inspection, links, unpublished });
-			})
-			.catch((error: unknown) => {
-				if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
-			});
+		const cached = cachedSnapshot(baseUrl, file);
+		if (cached) {
+			setPhase(phaseFor(cached));
+		} else {
+			setPhase({ kind: "loading" });
+			fetchSnapshot(baseUrl, file)
+				.then((snapshot) => {
+					if (!cancelled) setPhase(phaseFor(snapshot));
+				})
+				.catch((error: unknown) => {
+					if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
+				});
+		}
 		return () => {
 			cancelled = true;
 		};
@@ -329,6 +402,7 @@ function SharePanel({
 
 	// With share, updates that active link in place: same URL, same slot.
 	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink) => {
+		forgetSnapshot(baseUrl, file);
 		setPhase({ kind: "uploading", sent: 0, total: 0 });
 		// The fingerprint ties the publish to what this popover showed.
 		const pending: PendingShare = {
@@ -352,6 +426,7 @@ function SharePanel({
 		setPhase({ kind: "published", share, outdated, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
+			forgetSnapshot(baseUrl, file);
 			load();
 		} catch (error) {
 			setPhase({ kind: "published", share, outdated, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
@@ -387,7 +462,13 @@ function SharePanel({
 	const body = ((): React.ReactNode => {
 	switch (phase.kind) {
 		case "loading":
-			return <>{title}{status(t("artifacts.share.checking"))}</>;
+			return (
+				<>
+					{title}
+					<p className="sr-only" role="status">{t("artifacts.share.checking")}</p>
+					<div aria-hidden="true" className="h-control-md animate-pulse rounded-md bg-muted" />
+				</>
+			);
 		case "signin":
 			return (
 				<>
@@ -521,7 +602,7 @@ function SharePanel({
 				<>
 					{title}
 					{status(t("artifacts.share.failed", { message: phase.message }), "alert")}
-					{footer(null, <Button onClick={() => load()} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
+					{footer(null, <Button onClick={() => { forgetSnapshot(baseUrl, file); load(); }} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
 				</>
 			);
 	}

@@ -1,5 +1,5 @@
 import { ArrowUpRight } from "@/components/app-icons";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
@@ -22,9 +22,11 @@ import { CloseButton } from "./ui/close-button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
+export function ArtifactPreviewModal({ artifact, projectName, openShare = false, onClose }: {
 	artifact: ArtifactRow | null;
 	projectName: string;
+	/** Opens the share panel once the preview is up, as a card's Share item asks. */
+	openShare?: boolean;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
@@ -36,6 +38,16 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const share = useArtifactShareFile(artifact);
+	const [shareOpen, setShareOpen] = useState(false);
+	const artifactId = artifact ? artifactKey(artifact) : "";
+	// A card's Share item opens this preview with the panel open. The panel waits
+	// for the preview to take focus first, so the two do not fight over it.
+	useEffect(() => {
+		setShareOpen(false);
+		if (!artifactId || !openShare) return;
+		const timer = window.setTimeout(() => setShareOpen(true), 250);
+		return () => window.clearTimeout(timer);
+	}, [artifactId, openShare]);
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -60,13 +72,14 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-0.5">
-							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} /> : null}
+							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} onOpenChange={setShareOpen} open={shareOpen} /> : null}
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
 								verticalDots
 								share={share}
+								onShare={() => setShareOpen(true)}
 								pinInMenu
 								pinned={pinned}
 								onTogglePin={() => togglePinnedArtifact(id)}

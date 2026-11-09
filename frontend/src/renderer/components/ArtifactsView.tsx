@@ -56,8 +56,8 @@ export function ArtifactsView() {
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState("");
-	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
-	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string; share: boolean } | null>(null);
+	const openPreview = (row: ArtifactRow, projectName: string, share = false) => setPreview({ row, projectName, share });
 	// The open preview follows its row as the list refreshes, so a file an
 	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
@@ -240,7 +240,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
-			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
+			<ArtifactPreviewModal artifact={previewRow} openShare={preview?.share ?? false} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
@@ -292,7 +292,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	);
 }
 
-function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
+function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string, share?: boolean) => void }) {
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -330,6 +330,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
 							share={share}
+							onShare={() => onPreview(row, projectName, true)}
 							onOpenInSession={openInSession}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
@@ -356,6 +357,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
 					share={share}
+					onShare={() => onPreview(row, projectName, true)}
 					onOpenInSession={openInSession}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactButton, clearShareSnapshots } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -41,6 +41,7 @@ async function openPopover(path = file.path, name = "report.html") {
 }
 
 beforeEach(() => {
+	clearShareSnapshots();
 	mocks.status = "authenticated";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
@@ -53,6 +54,18 @@ describe("ShareArtifactButton", () => {
 		const popover = await openPopover();
 		expect(popover).not.toHaveAttribute("aria-modal", "true");
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+	});
+
+	it("opens with the file already inspected, with no loading state", async () => {
+		const { inspectSpy } = stub(inspection, links);
+		render(<TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider>);
+		const button = await screen.findByRole("button", { name: "Share: report.html" });
+		// The button fetches what the panel shows as it appears, before anyone clicks.
+		await waitFor(() => expect(inspectSpy).toHaveBeenCalledTimes(1));
+		await userEvent.click(button);
+		expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(screen.queryByRole("status")).toBeNull();
+		expect(inspectSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("asks a signed-out person to sign in", async () => {

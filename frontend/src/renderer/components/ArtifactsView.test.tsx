@@ -324,6 +324,15 @@ describe("ArtifactsView", () => {
 		expect(await within(dialog).findByRole("button", { name: "Share: caching-options.md" })).toBeInTheDocument();
 	});
 
+	it("opens the full preview from a card's Share item", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const scratchpad = within(screen.getByRole("region", { name: "Scratchpad" }));
+		await user.click(scratchpad.getByRole("button", { name: "More actions: caching-options.md" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Share" }));
+		expect(await screen.findByRole("dialog", { name: "caching-options.md" })).toBeInTheDocument();
+	});
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();
