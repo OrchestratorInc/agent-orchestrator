@@ -26,6 +26,22 @@ async function fetchLinkPreview(url: string, signal: AbortSignal): Promise<LinkP
 	return data;
 }
 
+function linkPreviewQueryOptions(url: string) {
+	return {
+		queryKey: linkPreviewQueryKey(url),
+		queryFn: ({ signal }: { signal: AbortSignal }) => fetchLinkPreview(url, signal),
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: LINK_PREVIEW_CACHE_MS,
+		retry: false,
+	};
+}
+
+/** Loads a preview into the cache a hover reads, and resolves with it. Never rejects. */
+export async function preloadLinkPreview(url: string): Promise<LinkPreview | undefined> {
+	await queryClient.prefetchQuery(linkPreviewQueryOptions(url));
+	return queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url));
+}
+
 type LinkPreviewSnapshot = {
 	url: string;
 	data?: LinkPreview;
@@ -67,13 +83,7 @@ export function useLinkPreview(url: string, enabled: boolean) {
 			setSnapshot((previous) => (previous.url === url && !previous.isError && !previous.expired ? previous : cachedSnapshot(url)));
 			return;
 		}
-		const observer = new QueryObserver<LinkPreview>(queryClient, {
-			queryKey: linkPreviewQueryKey(url),
-			queryFn: ({ signal }) => fetchLinkPreview(url, signal),
-			staleTime: Number.POSITIVE_INFINITY,
-			gcTime: LINK_PREVIEW_CACHE_MS,
-			retry: false,
-		});
+		const observer = new QueryObserver<LinkPreview>(queryClient, linkPreviewQueryOptions(url));
 		let expired = false;
 		const publish = () => {
 			const result = observer.getCurrentResult();

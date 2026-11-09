@@ -303,7 +303,6 @@ function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
 				src={url}
 				title={title}
 				sandbox="allow-scripts allow-same-origin"
-				loading="lazy"
 				tabIndex={-1}
 				aria-hidden="true"
 				className="pointer-events-none absolute left-0 top-0 origin-top-left border-0"

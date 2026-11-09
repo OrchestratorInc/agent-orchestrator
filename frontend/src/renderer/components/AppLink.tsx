@@ -1,10 +1,11 @@
 import { BrowserIcon } from "./icons";
-import { createContext, useContext, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useImperativeHandle, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Copy, ExternalLink, FileText, } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { useLinkPreview } from "../hooks/useLinkPreview";
+import { observeLinkForPreload } from "../lib/link-preload";
 import { LinkPreviewHoverCard } from "./LinkPreviewCard";
 import {
 	ContextMenu,
@@ -19,7 +20,7 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, menuPath, onFileOpen, hoverPreview, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, menuPath, onFileOpen, hoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
 	filePath?: string;
@@ -39,9 +40,14 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, men
 	const hasHoverPreview = webLink || Boolean(hoverPreview);
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
+	const anchorRef = useRef<HTMLAnchorElement>(null);
+	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
+	// Gaining or losing a card remounts the anchor, so that re-runs this too.
+	useEffect(() => (hasHoverPreview ? observeLinkForPreload(anchorRef.current, href) : undefined), [hasHoverPreview, href]);
 	const anchor = (
 		<a
 			{...props}
+			ref={anchorRef}
 			href={href}
 			onClick={(event) => {
 				onClick?.(event);
