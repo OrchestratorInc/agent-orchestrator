@@ -397,6 +397,77 @@ func TestTriageSessionsPagesLargeArchive(t *testing.T) {
 	}
 }
 
+func TestTriageSessionsIncludesRecentUnpinnedSessions(t *testing.T) {
+	for _, pinned := range []int{20, 40} {
+		t.Run(fmt.Sprintf("%d pinned", pinned), func(t *testing.T) {
+			deps, _, _ := triageTestDeps(t)
+			now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+			type row struct {
+				sessionDTO
+				IsPinned bool `json:"isPinned"`
+			}
+			rows := make([]row, pinned+40)
+			for i := 0; i < pinned; i++ {
+				rows[i] = row{sessionDTO: sessionDTO{ID: fmt.Sprintf("pin%d", i), UpdatedAt: now.Add(-24*time.Hour - time.Duration(i)*time.Minute)}, IsPinned: true}
+			}
+			for i := 0; i < 40; i++ {
+				rows[pinned+i] = row{sessionDTO: sessionDTO{ID: fmt.Sprintf("unpinned%d", i), UpdatedAt: now.Add(-48*time.Hour - time.Duration(i)*time.Minute)}}
+			}
+			rows[pinned].UpdatedAt = now
+			rows[pinned].Status = "error"
+			offsets := map[string]int{"": 0}
+			requests := 0
+			deps.HTTPClient = &http.Client{Transport: triageRoundTrip(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if r.URL.Query().Get("limit") != "20" {
+					t.Errorf("unexpected page size: %s", r.URL)
+				}
+				start, ok := offsets[r.URL.Query().Get("cursor")]
+				if !ok {
+					t.Fatalf("unexpected cursor: %s", r.URL)
+				}
+				end := min(start+20, len(rows))
+				next := ""
+				if end < len(rows) {
+					next = fmt.Sprintf("after %d/+", end)
+					offsets[next] = end
+				}
+				body, err := json.Marshal(map[string]any{"sessions": rows[start:end], "nextCursor": next})
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+			})}
+			var out bytes.Buffer
+			if err := (&commandContext{deps: deps}).triageSessions(context.Background(), 1234, &out); err != nil {
+				t.Fatal(err)
+			}
+			if requests != pinned/20+1 || strings.Count(out.String(), "id=") != 20 || !strings.HasPrefix(out.String(), "id=unpinned0 ") || strings.Contains(out.String(), "id=pin19 ") {
+				t.Fatalf("requests=%d, output=%s", requests, out.String())
+			}
+			for i := 0; i < 19; i++ {
+				if !strings.Contains(out.String(), fmt.Sprintf("id=pin%d ", i)) {
+					t.Errorf("missing recent pinned session pin%d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestTriageSessionsRejectsNonAdvancingCursor(t *testing.T) {
+	deps, _, _ := triageTestDeps(t)
+	requests := 0
+	deps.HTTPClient = &http.Client{Transport: triageRoundTrip(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"sessions":[{"id":"old","isPinned":true}],"nextCursor":"repeat"}`))}, nil
+	})}
+	var out bytes.Buffer
+	err := (&commandContext{deps: deps}).triageSessions(context.Background(), 1234, &out)
+	if err == nil || !strings.Contains(err.Error(), "cursor did not advance") || requests != 2 {
+		t.Fatalf("requests=%d, err=%v", requests, err)
+	}
+}
+
 type triageRoundTrip func(*http.Request) (*http.Response, error)
 
 func (f triageRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

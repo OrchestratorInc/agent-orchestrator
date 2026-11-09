@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -243,24 +244,60 @@ func triageLogTail(ctx context.Context, path string) (string, error) {
 }
 
 func (c *commandContext) triageSessions(ctx context.Context, port int, out io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s:%d/api/v1/sessions?limit=20", config.LoopbackHost, port), http.NoBody)
-	if err != nil {
-		return err
+	base := fmt.Sprintf("http://%s:%d/api/v1/sessions?limit=20", config.LoopbackHost, port)
+	cursor, unpinned := "", 0
+	var recent []sessionDTO
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		endpoint := base
+		if cursor != "" {
+			endpoint += "&cursor=" + url.QueryEscape(cursor)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+		if err != nil {
+			return err
+		}
+		resp, err := c.deps.HTTPClient.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return fmt.Errorf("sessions: HTTP %d", resp.StatusCode)
+		}
+		var result struct {
+			Sessions []struct {
+				sessionDTO
+				IsPinned bool `json:"isPinned"`
+			} `json:"sessions"`
+			NextCursor string `json:"nextCursor"`
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
+		_ = resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		for _, s := range result.Sessions {
+			recent = append(recent, s.sessionDTO)
+			if !s.IsPinned {
+				unpinned++
+			}
+		}
+		slices.SortFunc(recent, func(a, b sessionDTO) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
+		recent = recent[:min(20, len(recent))]
+		// Pinning sorts ahead of recency. After 20 unpinned rows, later pages
+		// cannot contain a row newer than the 20 already considered.
+		if result.NextCursor == "" || unpinned >= 20 {
+			break
+		}
+		if result.NextCursor == cursor {
+			return fmt.Errorf("sessions: cursor did not advance")
+		}
+		cursor = result.NextCursor
 	}
-	resp, err := c.deps.HTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("sessions: HTTP %d", resp.StatusCode)
-	}
-	var result sessionListResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
-		return err
-	}
-	slices.SortFunc(result.Sessions, func(a, b sessionDTO) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
-	for _, s := range result.Sessions[:min(20, len(result.Sessions))] {
+	for _, s := range recent {
 		state := s.Status
 		if state == "" {
 			state = s.Activity.State
