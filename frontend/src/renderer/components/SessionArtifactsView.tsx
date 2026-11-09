@@ -25,7 +25,7 @@ import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
-import { deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
+import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
 import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
@@ -754,7 +754,12 @@ export function SessionArtifactsView({
 		}
 	}, [request]);
 
-	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	// A file renamed while it is open, or opened by a link from before its
+	// rename, is found by the path it had.
+	const listed = selectedPath === null ? undefined : artifactAtPath(artifacts, selectedPath);
+	useEffect(() => {
+		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
+	}, [listed, selectedPath]);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
@@ -796,7 +801,8 @@ export function SessionArtifactsView({
 	// A page that opens another file of its session selects it, so the header
 	// names the file shown.
 	const followFrame = useCallback((path: string) => {
-		if (session.artifactFiles?.some((artifact) => artifact.path === path)) setSelectedPath(path);
+		const artifact = artifactAtPath(session.artifactFiles, path);
+		if (artifact) setSelectedPath(artifact.path);
 	}, [session.artifactFiles]);
 	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
 	useEffect(() => {
@@ -858,13 +864,13 @@ export function SessionArtifactsView({
 						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
-								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
 								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
-								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
 								revision={listed?.updatedAt}
 							/>

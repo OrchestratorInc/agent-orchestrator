@@ -3032,13 +3032,15 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
 	for _, artifact := range s.ArtifactFiles {
 		view := SessionArtifactView{
-			Path:       artifact.Path,
-			Name:       artifact.Name,
-			Kind:       artifact.Kind,
-			Size:       artifact.Size,
-			UpdatedAt:  artifact.UpdatedAt,
-			ShareURL:   artifact.ShareURL,
-			Registered: artifact.Registered,
+			ID:            artifact.ID,
+			Path:          artifact.Path,
+			Name:          artifact.Name,
+			Kind:          artifact.Kind,
+			Size:          artifact.Size,
+			UpdatedAt:     artifact.UpdatedAt,
+			ShareURL:      artifact.ShareURL,
+			Registered:    artifact.Registered,
+			PreviousPaths: artifact.PreviousPaths,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide

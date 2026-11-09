@@ -343,3 +343,50 @@ func TestCaptureSession_NoArtifactDirIsNotAnError(t *testing.T) {
 		t.Fatal("kept observations for a session with no artifacts")
 	}
 }
+
+// A renamed file is the same artifact: its history moves with it, and its next
+// edit is its next version, not the first of a new file.
+func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
+	h := newHarness(t)
+	h.write("page.html", "<p>one</p>")
+	h.tick()
+	h.tick()
+	if vs := h.versions("page.html"); len(vs) != 1 {
+		t.Fatalf("versions before the rename = %+v", vs)
+	}
+	track := func() []domain.SessionArtifactFile {
+		t.Helper()
+		rows, err := h.store.ListSessionArtifacts(h.ctx, h.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files, err := h.cap.Track(h.ctx, h.sess, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	before := track()
+	if len(before) != 1 || before[0].ID == "" {
+		t.Fatalf("tracked files = %+v", before)
+	}
+	if err := os.Rename(filepath.Join(h.dir, "page.html"), filepath.Join(h.dir, "report.html")); err != nil {
+		t.Fatal(err)
+	}
+	after := track()
+	if len(after) != 1 || after[0].Path != "report.html" || after[0].ID != before[0].ID {
+		t.Fatalf("after the rename = %+v, want report.html with id %s", after, before[0].ID)
+	}
+	if vs := h.versions("report.html"); len(vs) != 1 || vs[0].SHA256 != sum("<p>one</p>") {
+		t.Fatalf("history at the new path = %+v", vs)
+	}
+	if vs := h.versions("page.html"); len(vs) != 0 {
+		t.Fatalf("history left at the old path = %+v", vs)
+	}
+	h.write("report.html", "<p>two</p>")
+	h.tick()
+	h.tick()
+	if vs := h.versions("report.html"); len(vs) != 2 || vs[0].Version != 2 {
+		t.Fatalf("history after an edit = %+v, want version 2 on top", vs)
+	}
+}

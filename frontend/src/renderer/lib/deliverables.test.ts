@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundleDirectory, deliverableArtifacts, type ArtifactFacts } from "../../../../packages/shared/artifacts/deliverables";
+import { artifactAtPath, bundleDirectory, deliverableArtifacts, type ArtifactFacts } from "../../../../packages/shared/artifacts/deliverables";
 
 function file(path: string, overrides: Partial<ArtifactFacts> = {}): ArtifactFacts {
 	return {
@@ -89,5 +89,25 @@ describe("bundles", () => {
 		expect(bundleDirectory("x/A.ICON/b.bundle/c.png")).toBe("x/A.ICON");
 		expect(bundleDirectory("x/photo.icon")).toBeUndefined();
 		expect(bundleDirectory("x/y.png")).toBeUndefined();
+	});
+});
+
+describe("artifactAtPath", () => {
+	it("finds the file at a path, or the one renamed away from it", () => {
+		const report = { path: "final/report.html", previousPaths: ["draft.html", "report.html"] };
+		const notes = { path: "notes.md" };
+		expect(artifactAtPath([report, notes], "notes.md")).toBe(notes);
+		expect(artifactAtPath([report, notes], "report.html")).toBe(report);
+		expect(artifactAtPath([report, notes], "draft.html")).toBe(report);
+		expect(artifactAtPath([report, notes], "missing.html")).toBeUndefined();
+		expect(artifactAtPath(undefined, "notes.md")).toBeUndefined();
+	});
+
+	it("prefers a file now at the path, then the one that left it last", () => {
+		const current = { path: "plan.md" };
+		const older = { path: "a.md", previousPaths: ["plan.md", "b.md"] };
+		const newer = { path: "c.md", previousPaths: ["x.md", "plan.md"] };
+		expect(artifactAtPath([older, newer, current], "plan.md")).toBe(current);
+		expect(artifactAtPath([older, newer], "plan.md")).toBe(newer);
 	});
 });

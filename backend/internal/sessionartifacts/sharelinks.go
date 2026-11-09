@@ -23,7 +23,14 @@ type ShareLinks struct {
 	loaded  bool
 	size    int64
 	modTime time.Time
-	urls    map[domain.SessionID]map[string]string
+	urls    map[domain.SessionID]sessionShareLinks
+}
+
+// sessionShareLinks are one session's links, by artifact ID and, for records
+// written before artifacts had one, by path.
+type sessionShareLinks struct {
+	byID   map[string]string
+	byPath map[string]string
 }
 
 // NewShareLinks reads dataDir's share links for one control plane.
@@ -38,11 +45,15 @@ func (l *ShareLinks) Apply(id domain.SessionID, files []domain.SessionArtifactFi
 	}
 	urls := l.load()[id]
 	for i := range files {
-		files[i].ShareURL = urls[files[i].Path]
+		if url, ok := urls.byID[files[i].ID]; ok && files[i].ID != "" {
+			files[i].ShareURL = url
+			continue
+		}
+		files[i].ShareURL = urls.byPath[files[i].Path]
 	}
 }
 
-func (l *ShareLinks) load() map[domain.SessionID]map[string]string {
+func (l *ShareLinks) load() map[domain.SessionID]sessionShareLinks {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	info, err := os.Stat(l.path)
@@ -63,15 +74,16 @@ func (l *ShareLinks) load() map[domain.SessionID]map[string]string {
 	return l.urls
 }
 
-func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]map[string]string {
+func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]sessionShareLinks {
 	var records map[string]json.RawMessage
 	if json.Unmarshal(data, &records) != nil {
 		return nil
 	}
-	urls := map[domain.SessionID]map[string]string{}
+	urls := map[domain.SessionID]sessionShareLinks{}
 	for key, raw := range records {
+		// [baseURL, session, path] or [baseURL, session, "", artifact ID].
 		var parts []string
-		if json.Unmarshal([]byte(key), &parts) != nil || len(parts) != 3 || parts[0] != baseURL {
+		if json.Unmarshal([]byte(key), &parts) != nil || len(parts) < 3 || len(parts) > 4 || parts[0] != baseURL {
 			continue
 		}
 		var record struct {
@@ -81,10 +93,17 @@ func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]map[strin
 			continue
 		}
 		id := domain.SessionID(parts[1])
-		if urls[id] == nil {
-			urls[id] = map[string]string{}
+		links, ok := urls[id]
+		if !ok {
+			links = sessionShareLinks{byID: map[string]string{}, byPath: map[string]string{}}
+			urls[id] = links
 		}
-		urls[id][parts[2]] = record.URL
+		switch {
+		case len(parts) == 4 && parts[2] == "" && parts[3] != "":
+			links.byID[parts[3]] = record.URL
+		case len(parts) == 3:
+			links.byPath[parts[2]] = record.URL
+		}
 	}
 	return urls
 }

@@ -14,6 +14,8 @@ import { isArchivedSession } from "./standalone-archive";
 
 /** One artifact file in the Artifacts list, with the session that wrote it. */
 export type ArtifactRow = {
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
 	path: string;
 	name: string;
 	kind: ArtifactKind;
@@ -86,6 +88,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 			.filter((session) => !isArchivedSession(session))
 			.flatMap((session) =>
 				sessionDeliverables(session).map((artifact): ArtifactRow => ({
+					...(artifact.id ? { id: artifact.id } : {}),
 					path: artifact.path,
 					name: artifact.name,
 					kind: artifact.kind,

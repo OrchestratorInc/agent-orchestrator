@@ -2533,11 +2533,11 @@ func TestSessionArtifacts(t *testing.T) {
 	}
 	read := func() []string {
 		t.Helper()
-		paths, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{sess.ID})
+		rows, err := st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{sess.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return paths[sess.ID]
+		return registeredPaths(rows[sess.ID])
 	}
 	if got := read(); len(got) != 0 {
 		t.Fatalf("new session paths = %v, want none", got)
@@ -2555,7 +2555,7 @@ func TestSessionArtifacts(t *testing.T) {
 	if err := st.RemoveSessionArtifact(ctx, sess.ID, "z.html"); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(); !slices.Equal(got, []string{"b.md", "a.md"}) {
+	if got := read(); !slices.Equal(got, []string{"a.md", "b.md"}) {
 		t.Fatalf("after remove = %v", got)
 	}
 	if err := st.ClearSessionArtifacts(ctx, sess.ID); err != nil {
@@ -2584,17 +2584,27 @@ func TestSessionArtifactsAreReadPerSessionAndGoWithTheSession(t *testing.T) {
 	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, []string{"b.md"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
-	if err != nil || len(got) != 2 || !slices.Equal(got[one.ID], []string{"a.md"}) || !slices.Equal(got[two.ID], []string{"b.md"}) {
-		t.Fatalf("paths = %v, %v", got, err)
+	got, err := st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
+	if err != nil || len(got) != 2 || !slices.Equal(registeredPaths(got[one.ID]), []string{"a.md"}) || !slices.Equal(registeredPaths(got[two.ID]), []string{"b.md"}) {
+		t.Fatalf("rows = %v, %v", got, err)
 	}
 	if deleted, err := st.DeleteTerminatedSession(ctx, one.ID); err != nil || !deleted {
 		t.Fatalf("delete session = %v, %v", deleted, err)
 	}
-	got, err = st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID})
+	got, err = st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{one.ID})
 	if err != nil || len(got) != 0 {
-		t.Fatalf("paths after deleting the session = %v, %v", got, err)
+		t.Fatalf("rows after deleting the session = %v, %v", got, err)
 	}
+}
+
+func registeredPaths(rows []domain.SessionArtifactRecord) []string {
+	var paths []string
+	for _, row := range rows {
+		if row.RegisteredAt != nil {
+			paths = append(paths, row.Path)
+		}
+	}
+	return paths
 }
 
 // Registration is one row per path, so nothing bounds how many files a session
@@ -2614,6 +2624,108 @@ func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
 	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, paths, time.Now())
 	if err != nil || len(got) != len(paths) {
 		t.Fatalf("registered %d of %d, %v", len(got), len(paths), err)
+	}
+}
+
+// A rename moves an artifact's row and its versions to the new path, keeping
+// its ID; artifacts that take each other's paths do not collide on one.
+func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	file := func(n uint64) domain.FileIdentity { return domain.FileIdentity{Dev: 1, Ino: n, Birth: int64(n)} }
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Insert: []domain.SessionArtifactRecord{
+		{ID: "id-a", Path: "a.html", File: file(1), CreatedAt: now},
+		{ID: "id-b", Path: "b.html", File: file(2), CreatedAt: now},
+		{ID: "id-gone", Path: "gone.html", CreatedAt: now},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"a.html"}, now); err != nil {
+		t.Fatal(err)
+	}
+	version := func(path, sha string) {
+		t.Helper()
+		if _, _, err := st.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
+			SessionID: sess.ID, Path: path, SHA256: sha, ContentType: "text/html", ModTime: now, CreatedAt: now,
+		}, 50); err != nil {
+			t.Fatal(err)
+		}
+	}
+	version("a.html", "sha-a1")
+	version("a.html", "sha-a2")
+	version("b.html", "sha-b1")
+	version("gone.html", "sha-gone")
+
+	// a and b swap paths, and c.html, once a file that is gone, takes nothing.
+	freed, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Move: []domain.SessionArtifactMove{
+		{ID: "id-a", From: "a.html", To: "b.html", File: file(1), PreviousPaths: []string{"a.html"}},
+		{ID: "id-b", From: "b.html", To: "a.html", File: file(2), PreviousPaths: []string{"b.html"}},
+	}})
+	if err != nil || len(freed) != 0 {
+		t.Fatalf("swap: freed=%v err=%v", freed, err)
+	}
+	rows, err := st.ListSessionArtifacts(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]domain.SessionArtifactRecord{}
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	if a := byID["id-a"]; a.Path != "b.html" || a.RegisteredAt == nil || !slices.Equal(a.PreviousPaths, []string{"a.html"}) {
+		t.Fatalf("a after the swap = %+v", a)
+	}
+	if b := byID["id-b"]; b.Path != "a.html" || b.RegisteredAt != nil {
+		t.Fatalf("b after the swap = %+v", b)
+	}
+	shas := func(path string) []string {
+		t.Helper()
+		vs, err := st.ListSessionArtifactVersions(ctx, sess.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, v := range vs {
+			out = append(out, v.SHA256)
+		}
+		return out
+	}
+	if got := shas("b.html"); !slices.Equal(got, []string{"sha-a2", "sha-a1"}) {
+		t.Fatalf("versions at b.html = %v, want a's", got)
+	}
+	if got := shas("a.html"); !slices.Equal(got, []string{"sha-b1"}) {
+		t.Fatalf("versions at a.html = %v, want b's", got)
+	}
+
+	// A move onto the path of a file that was gone drops that row and its
+	// history, and returns the history's blobs.
+	freed, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Drop: []domain.SessionArtifactFileUpdate{{ID: "id-gone", Path: "gone.html"}},
+		Move: []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "gone.html", File: file(1), PreviousPaths: []string{"a.html", "b.html"}}},
+	})
+	if err != nil || !slices.Equal(freed, []string{"sha-gone"}) {
+		t.Fatalf("move onto a gone file: freed=%v err=%v", freed, err)
+	}
+	if got := shas("gone.html"); !slices.Equal(got, []string{"sha-a2", "sha-a1"}) {
+		t.Fatalf("versions at gone.html = %v", got)
+	}
+
+	// Changes planned from rows that have changed since apply nothing.
+	_, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Insert: []domain.SessionArtifactRecord{{ID: "id-new", Path: "new.html", CreatedAt: now}},
+		Move:   []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "c.html"}},
+	})
+	if !errors.Is(err, domain.ErrSessionArtifactsChanged) {
+		t.Fatalf("stale move err = %v", err)
+	}
+	if rows, _ := st.ListSessionArtifacts(ctx, sess.ID); len(rows) != 2 {
+		t.Fatalf("rows after a stale move = %+v", rows)
 	}
 }
 

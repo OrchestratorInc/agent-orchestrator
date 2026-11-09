@@ -71,6 +71,8 @@ export type ArtifactKind = "html" | "markdown" | "file";
  * never resolve to a workspace-relative file of the same path.
  */
 export type SessionArtifact = {
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
 	kind: ArtifactKind;
 	name: string;
 	path: string;
@@ -85,6 +87,8 @@ export type SessionArtifact = {
 	updatedAt: string;
 	/** Set on a file the agent registered with `ao artifact add`. */
 	registered?: boolean;
+	/** The paths the artifact had before it was renamed, latest last. */
+	previousPaths?: string[];
 };
 
 /** The daemon-committed controller currently responsible for the session. */

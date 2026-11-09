@@ -118,15 +118,17 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
  * and not once they are shared. A Scratchpad file belongs to the Scratchpad
  * workspace, as in the session view.
  */
-export function useArtifactShareFile(artifact: Pick<ArtifactRow, "cloud" | "sessionId" | "path" | "projectId"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
+export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "sessionId" | "path" | "projectId"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
 	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
 	if (!artifact) return undefined;
+	// The artifact's ID survives a rename, so the renamed file finds its link.
+	const artifactId = artifact.id ? { artifactId: artifact.id } : {};
 	if (artifact.cloud) {
 		const owner = Boolean(cloudUserId) && artifact.cloud.createdByUserId === cloudUserId;
 		if (artifact.cloud.shared || !owner) return undefined;
-		return { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" };
+		return { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "", ...artifactId };
 	}
-	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID };
+	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID, ...artifactId };
 }
 
 /** The share panel a menu's Share item opens, anchored to the menu's trigger. */

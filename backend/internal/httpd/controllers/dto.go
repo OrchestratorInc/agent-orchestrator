@@ -547,6 +547,9 @@ type SessionView struct {
 
 // SessionArtifactView is one inferred file artifact for a session.
 type SessionArtifactView struct {
+	// ID is the artifact's identity. It stays the same when the file is
+	// renamed or moved; empty for a file AO has not tracked yet.
+	ID        string                     `json:"id,omitempty"`
 	Path      string                     `json:"path"`
 	Name      string                     `json:"name"`
 	Kind      domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
@@ -554,8 +557,11 @@ type SessionArtifactView struct {
 	UpdatedAt time.Time                  `json:"updatedAt"`
 	// Registered is set on a file the agent registered with ao artifact add. A
 	// session with no registered file falls back to showing its root files.
-	Registered bool   `json:"registered,omitempty"`
-	PreviewURL string `json:"previewUrl,omitempty"`
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before a rename, most
+	// recent last, so a link that names one still opens it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+	PreviewURL    string   `json:"previewUrl,omitempty"`
 	// RawURL fetches this artifact's raw bytes on the artifact preview
 	// origin — a distinct host from the workspace preview origin, so a
 	// workspace-relative path can never collide with an artifact-relative

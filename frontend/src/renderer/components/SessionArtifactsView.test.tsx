@@ -410,6 +410,23 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByRole("list")).not.toBeInTheDocument();
 	});
 
+	it("keeps a renamed file open, and opens it by a link from before the rename", () => {
+		const before: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "draft.md", path: "draft.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true },
+		];
+		const after: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "summary.md", path: "final/summary.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true, previousPaths: ["draft.md"] },
+		];
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(before)} />);
+		expect(screen.getByRole("button", { name: "draft.md" })).toBeInTheDocument();
+		view.rerender(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+		view.unmount();
+
+		renderView(<SessionArtifactsView request={{ key: 2, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+	});
+
 	it("falls back to the root files when nothing is registered", () => {
 		const files: SessionArtifact[] = [
 			{ kind: "html", name: "brand.html", path: "brand.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },

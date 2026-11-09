@@ -397,11 +397,16 @@ func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, 
 	return f.artifacts[id], true, nil
 }
 
-func (f *fakeStore) ListSessionArtifactPathsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]string, error) {
-	out := make(map[domain.SessionID][]string, len(ids))
+func (f *fakeStore) ListSessionArtifactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
+	out := make(map[domain.SessionID][]domain.SessionArtifactRecord, len(ids))
+	registeredAt := time.Unix(0, 0)
 	for _, id := range ids {
-		if paths, ok := f.artifacts[id]; ok {
-			out[id] = paths
+		paths, ok := f.artifacts[id]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			out[id] = append(out[id], domain.SessionArtifactRecord{ID: "artifact:" + path, SessionID: id, Path: path, RegisteredAt: &registeredAt})
 		}
 	}
 	return out, nil

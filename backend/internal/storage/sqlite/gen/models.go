@@ -793,9 +793,17 @@ type SessionAgentAccount struct {
 }
 
 type SessionArtifact struct {
-	SessionID    domain.SessionID
-	Path         string
-	RegisteredAt time.Time
+	ID             string
+	SessionID      domain.SessionID
+	Path           string
+	RegisteredAt   sql.NullTime
+	FileDev        int64
+	FileIno        int64
+	FileBirth      int64
+	FileGeneration int64
+	FileMtime      int64
+	PreviousPaths  string
+	CreatedAt      time.Time
 }
 
 type SessionArtifactVersion struct {

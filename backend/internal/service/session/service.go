@@ -39,7 +39,7 @@ type Store interface {
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	AddSessionArtifacts(ctx context.Context, id domain.SessionID, paths []string, registeredAt time.Time) ([]string, bool, error)
-	ListSessionArtifactPathsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]string, error)
+	ListSessionArtifactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error)
 	RemoveSessionArtifact(ctx context.Context, id domain.SessionID, path string) error
 	ClearSessionArtifacts(ctx context.Context, id domain.SessionID) error
 	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
@@ -271,6 +271,9 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// artifactTracker lists artifact files with their identity. Nil lists them
+	// by path alone.
+	artifactTracker artifactTracker
 	shareLinks      *sessionartifacts.ShareLinks
 	// runsOnComputerLogin reports whether a new session would launch on the
 	// computer's own CLI login rather than a saved account. Nil means always.
@@ -343,6 +346,9 @@ type Deps struct {
 	// ArtifactDeleter deletes a session's artifacts; daemon wiring passes the
 	// shared *artifactversions.Capturer so a delete cannot race a capture.
 	ArtifactDeleter artifactDeleter
+	// ArtifactTracker follows renamed artifact files; daemon wiring passes the
+	// same Capturer. Left nil, files are listed by path with no identity.
+	ArtifactTracker artifactTracker
 	ShareLinks      *sessionartifacts.ShareLinks
 }
 
@@ -352,7 +358,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, shareLinks: d.ShareLinks}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, artifactTracker: d.ArtifactTracker, shareLinks: d.ShareLinks}
 	s.terminalTitles, _ = d.Store.(terminalTitleSource)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
@@ -1224,6 +1230,26 @@ type artifactDeleter interface {
 	DeleteSession(ctx context.Context, id domain.SessionID) error
 }
 
+// artifactTracker lists a session's artifact files from its artifact rows and
+// records what changed: a renamed file keeps its row. The production
+// implementation is *artifactversions.Capturer.
+type artifactTracker interface {
+	Track(ctx context.Context, sess domain.SessionRecord, rows []domain.SessionArtifactRecord) ([]domain.SessionArtifactFile, error)
+}
+
+// listArtifacts lists rec's artifact files, with each one's identity when a
+// tracker is wired.
+func (s *Service) listArtifacts(ctx context.Context, rec domain.SessionRecord, rows []domain.SessionArtifactRecord) ([]domain.SessionArtifactFile, error) {
+	if s.artifactTracker != nil {
+		return s.artifactTracker.Track(ctx, rec, rows)
+	}
+	observation, err := sessionartifacts.Observe(ctx, rec.Metadata.ArtifactDir, sessionartifacts.RegisteredPaths(rows))
+	if err != nil {
+		return nil, err
+	}
+	return observation.Apply(rows), nil
+}
+
 // DeleteArtifacts deletes a terminated session's artifact files, version
 // history included, and its version rows, then reconciles its OutputType. The
 // directory itself is kept, so a restored session starts with an empty one.
@@ -1646,7 +1672,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 	if err != nil {
 		return nil, fmt.Errorf("list interrupted sessions: %w", err)
 	}
-	artifactsBySession, err := s.store.ListSessionArtifactPathsForSessions(ctx, ids)
+	artifactsBySession, err := s.store.ListSessionArtifactsForSessions(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("list session artifacts: %w", err)
 	}
@@ -1762,7 +1788,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, registered []string, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, artifactRows []domain.SessionArtifactRecord, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1787,7 +1813,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 			backfilledArtifactDir = true
 		}
 	}
-	artifactFiles, err := sessionartifacts.ListRegistered(ctx, rec.Metadata.ArtifactDir, registered)
+	artifactFiles, err := s.listArtifacts(ctx, rec, artifactRows)
 	if err != nil {
 		// An unwalkable artifact root must not fail the session read (and with
 		// it the whole board); the artifact list is simply empty for this read.
@@ -2158,7 +2184,7 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	artifacts, err := s.store.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{rec.ID})
+	artifacts, err := s.store.ListSessionArtifactsForSessions(ctx, []domain.SessionID{rec.ID})
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("list session artifacts %s: %w", rec.ID, err)
 	}

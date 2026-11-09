@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -27,6 +28,24 @@ func (q *Queries) DeleteSessionArtifact(ctx context.Context, arg DeleteSessionAr
 	return err
 }
 
+const deleteSessionArtifactByID = `-- name: DeleteSessionArtifactByID :execrows
+DELETE FROM session_artifacts
+WHERE id = ?1 AND path = ?2
+`
+
+type DeleteSessionArtifactByIDParams struct {
+	ID   string
+	Path string
+}
+
+func (q *Queries) DeleteSessionArtifactByID(ctx context.Context, arg DeleteSessionArtifactByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSessionArtifactByID, arg.ID, arg.Path)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteSessionArtifacts = `-- name: DeleteSessionArtifacts :exec
 DELETE FROM session_artifacts WHERE session_id = ?1
 `
@@ -37,30 +56,50 @@ func (q *Queries) DeleteSessionArtifacts(ctx context.Context, sessionID domain.S
 }
 
 const insertSessionArtifact = `-- name: InsertSessionArtifact :exec
-INSERT INTO session_artifacts (session_id, path, registered_at)
-VALUES (?, ?, ?)
+INSERT INTO session_artifacts (
+    id, session_id, path, registered_at, file_dev, file_ino, file_birth, file_generation, file_mtime, previous_paths, created_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
 ON CONFLICT (session_id, path) DO NOTHING
 `
 
 type InsertSessionArtifactParams struct {
-	SessionID    domain.SessionID
-	Path         string
-	RegisteredAt time.Time
+	ID             string
+	SessionID      domain.SessionID
+	Path           string
+	RegisteredAt   sql.NullTime
+	FileDev        int64
+	FileIno        int64
+	FileBirth      int64
+	FileGeneration int64
+	FileMtime      int64
+	CreatedAt      time.Time
 }
 
 func (q *Queries) InsertSessionArtifact(ctx context.Context, arg InsertSessionArtifactParams) error {
-	_, err := q.db.ExecContext(ctx, insertSessionArtifact, arg.SessionID, arg.Path, arg.RegisteredAt)
+	_, err := q.db.ExecContext(ctx, insertSessionArtifact,
+		arg.ID,
+		arg.SessionID,
+		arg.Path,
+		arg.RegisteredAt,
+		arg.FileDev,
+		arg.FileIno,
+		arg.FileBirth,
+		arg.FileGeneration,
+		arg.FileMtime,
+		arg.CreatedAt,
+	)
 	return err
 }
 
-const listSessionArtifactPaths = `-- name: ListSessionArtifactPaths :many
+const listRegisteredSessionArtifactPaths = `-- name: ListRegisteredSessionArtifactPaths :many
 SELECT path FROM session_artifacts
-WHERE session_id = ?1
+WHERE session_id = ?1 AND registered_at IS NOT NULL
 ORDER BY registered_at, path
 `
 
-func (q *Queries) ListSessionArtifactPaths(ctx context.Context, sessionID domain.SessionID) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionArtifactPaths, sessionID)
+func (q *Queries) ListRegisteredSessionArtifactPaths(ctx context.Context, sessionID domain.SessionID) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listRegisteredSessionArtifactPaths, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,27 +121,34 @@ func (q *Queries) ListSessionArtifactPaths(ctx context.Context, sessionID domain
 	return items, nil
 }
 
-const listSessionArtifactPathsForSessions = `-- name: ListSessionArtifactPathsForSessions :many
-SELECT session_id, path FROM session_artifacts
-WHERE session_id IN (SELECT CAST(j.value AS TEXT) FROM json_each(?) AS j)
-ORDER BY session_id, registered_at, path
+const listSessionArtifacts = `-- name: ListSessionArtifacts :many
+SELECT id, session_id, path, registered_at, file_dev, file_ino, file_birth, file_generation, file_mtime, previous_paths, created_at FROM session_artifacts
+WHERE session_id = ?1
+ORDER BY path
 `
 
-type ListSessionArtifactPathsForSessionsRow struct {
-	SessionID domain.SessionID
-	Path      string
-}
-
-func (q *Queries) ListSessionArtifactPathsForSessions(ctx context.Context, jsonEach interface{}) ([]ListSessionArtifactPathsForSessionsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionArtifactPathsForSessions, jsonEach)
+func (q *Queries) ListSessionArtifacts(ctx context.Context, sessionID domain.SessionID) ([]SessionArtifact, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionArtifacts, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListSessionArtifactPathsForSessionsRow{}
+	items := []SessionArtifact{}
 	for rows.Next() {
-		var i ListSessionArtifactPathsForSessionsRow
-		if err := rows.Scan(&i.SessionID, &i.Path); err != nil {
+		var i SessionArtifact
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Path,
+			&i.RegisteredAt,
+			&i.FileDev,
+			&i.FileIno,
+			&i.FileBirth,
+			&i.FileGeneration,
+			&i.FileMtime,
+			&i.PreviousPaths,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -114,4 +160,150 @@ func (q *Queries) ListSessionArtifactPathsForSessions(ctx context.Context, jsonE
 		return nil, err
 	}
 	return items, nil
+}
+
+const listSessionArtifactsForSessions = `-- name: ListSessionArtifactsForSessions :many
+SELECT id, session_id, path, registered_at, file_dev, file_ino, file_birth, file_generation, file_mtime, previous_paths, created_at FROM session_artifacts
+WHERE session_id IN (SELECT CAST(j.value AS TEXT) FROM json_each(?) AS j)
+ORDER BY session_id, path
+`
+
+func (q *Queries) ListSessionArtifactsForSessions(ctx context.Context, jsonEach interface{}) ([]SessionArtifact, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionArtifactsForSessions, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionArtifact{}
+	for rows.Next() {
+		var i SessionArtifact
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Path,
+			&i.RegisteredAt,
+			&i.FileDev,
+			&i.FileIno,
+			&i.FileBirth,
+			&i.FileGeneration,
+			&i.FileMtime,
+			&i.PreviousPaths,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const moveSessionArtifact = `-- name: MoveSessionArtifact :execrows
+UPDATE session_artifacts
+SET path = ?1, previous_paths = ?2,
+    file_dev = ?3, file_ino = ?4, file_birth = ?5,
+    file_generation = ?6, file_mtime = ?7
+WHERE id = ?8 AND path = ?9
+`
+
+type MoveSessionArtifactParams struct {
+	ToPath         string
+	PreviousPaths  string
+	FileDev        int64
+	FileIno        int64
+	FileBirth      int64
+	FileGeneration int64
+	FileMtime      int64
+	ID             string
+	FromPath       string
+}
+
+func (q *Queries) MoveSessionArtifact(ctx context.Context, arg MoveSessionArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveSessionArtifact,
+		arg.ToPath,
+		arg.PreviousPaths,
+		arg.FileDev,
+		arg.FileIno,
+		arg.FileBirth,
+		arg.FileGeneration,
+		arg.FileMtime,
+		arg.ID,
+		arg.FromPath,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const moveSessionArtifactVersions = `-- name: MoveSessionArtifactVersions :exec
+UPDATE session_artifact_versions
+SET path = ?1
+WHERE session_id = ?2 AND path = ?3
+`
+
+type MoveSessionArtifactVersionsParams struct {
+	ToPath    string
+	SessionID domain.SessionID
+	FromPath  string
+}
+
+func (q *Queries) MoveSessionArtifactVersions(ctx context.Context, arg MoveSessionArtifactVersionsParams) error {
+	_, err := q.db.ExecContext(ctx, moveSessionArtifactVersions, arg.ToPath, arg.SessionID, arg.FromPath)
+	return err
+}
+
+const registerSessionArtifact = `-- name: RegisterSessionArtifact :exec
+UPDATE session_artifacts
+SET registered_at = COALESCE(registered_at, ?1)
+WHERE session_id = ?2 AND path = ?3
+`
+
+type RegisterSessionArtifactParams struct {
+	RegisteredAt sql.NullTime
+	SessionID    domain.SessionID
+	Path         string
+}
+
+func (q *Queries) RegisterSessionArtifact(ctx context.Context, arg RegisterSessionArtifactParams) error {
+	_, err := q.db.ExecContext(ctx, registerSessionArtifact, arg.RegisteredAt, arg.SessionID, arg.Path)
+	return err
+}
+
+const setSessionArtifactFile = `-- name: SetSessionArtifactFile :execrows
+UPDATE session_artifacts
+SET file_dev = ?1, file_ino = ?2, file_birth = ?3,
+    file_generation = ?4, file_mtime = ?5
+WHERE id = ?6 AND path = ?7
+`
+
+type SetSessionArtifactFileParams struct {
+	FileDev        int64
+	FileIno        int64
+	FileBirth      int64
+	FileGeneration int64
+	FileMtime      int64
+	ID             string
+	Path           string
+}
+
+func (q *Queries) SetSessionArtifactFile(ctx context.Context, arg SetSessionArtifactFileParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionArtifactFile,
+		arg.FileDev,
+		arg.FileIno,
+		arg.FileBirth,
+		arg.FileGeneration,
+		arg.FileMtime,
+		arg.ID,
+		arg.Path,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

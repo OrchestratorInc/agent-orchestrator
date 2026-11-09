@@ -49,6 +49,12 @@ const MaxVisited = 10000
 // ignored are skipped, as are unreadable entries rather than failing the walk.
 // A cancelled ctx stops the walk and returns its error.
 func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
+	return list(ctx, dir, nil)
+}
+
+// list is List that also records each file's identity in quick, when quick is
+// not nil.
+func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -104,6 +110,9 @@ func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error)
 		}
 		rel = filepath.ToSlash(rel)
 		files = append(files, artifactFile(rel, info))
+		if quick != nil {
+			quick[rel] = quickIdentity(info)
+		}
 		return nil
 	})
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
@@ -222,7 +231,11 @@ func Registrable(dir, reference string) (string, error) {
 // brand.html: a registered path the walk did not reach is added here, which is
 // why the result can pass MaxFiles. A path that names nothing is ignored.
 func ListRegistered(ctx context.Context, dir string, registered []string) ([]domain.SessionArtifactFile, error) {
-	files, err := List(ctx, dir)
+	return listRegistered(ctx, dir, registered, nil)
+}
+
+func listRegistered(ctx context.Context, dir string, registered []string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
+	files, err := list(ctx, dir, quick)
 	if err != nil || len(registered) == 0 {
 		return files, err
 	}
@@ -231,7 +244,7 @@ func ListRegistered(ctx context.Context, dir string, registered []string) ([]dom
 		seen[file.Path] = true
 	}
 	for _, path := range registered {
-		missing, err := missedFiles(ctx, dir, path, seen)
+		missing, err := missedFiles(ctx, dir, path, seen, quick)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +278,7 @@ func namedBy(path string, names map[string]bool) bool {
 }
 
 // missedFiles returns the files at the registered path rel that are not in seen.
-func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool) ([]domain.SessionArtifactFile, error) {
+func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
 	if seen[rel] {
 		return nil, nil
 	}
@@ -279,18 +292,29 @@ func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool) ([]
 		return nil, nil //nolint:nilerr // removed since the check
 	}
 	if !info.IsDir() {
+		if quick != nil {
+			quick[path] = quickIdentity(info)
+		}
 		return []domain.SessionArtifactFile{artifactFile(path, info)}, nil
 	}
-	inside, err := List(ctx, full)
+	var inner map[string]domain.FileIdentity
+	if quick != nil {
+		inner = make(map[string]domain.FileIdentity)
+	}
+	inside, err := list(ctx, full, inner)
 	if err != nil {
 		return nil, err
 	}
 	var missing []domain.SessionArtifactFile
 	for _, file := range inside {
+		id, known := inner[file.Path]
 		file.Path = path + "/" + file.Path
 		file.Kind = inferKind(file.Path)
 		if !seen[file.Path] {
 			missing = append(missing, file)
+			if known {
+				quick[file.Path] = id
+			}
 		}
 	}
 	return missing, nil

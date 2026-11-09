@@ -26,7 +26,8 @@ ao artifact add report.html
 ```
 
 - **Edits** need no command. AO records new versions on its own.
-- **A renamed or copied file** is a new path, so run `ao artifact add` on it.
+- **A renamed or moved file** stays registered and keeps its version history and share link. Rename it with `mv` in the artifact directory.
+- **A copied file** is a new file, so run `ao artifact add` on the copy if it is a deliverable.
 - **Supporting files**, such as a page's images, stay unregistered.
 
 The command prints how many files stay unlisted and names the ones at the root

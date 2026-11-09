@@ -7311,12 +7311,14 @@ export interface components {
             total: number;
         };
         SessionArtifact: {
+            id?: string;
             inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
             path: string;
             previewUrl?: string;
+            previousPaths?: string[];
             rawUrl?: string;
             registered?: boolean;
             shareUrl?: string;

@@ -1,6 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
@@ -2114,7 +2115,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
-			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
+			const listed = (artifacts: SessionArtifact[] | undefined) => artifactAtPath(artifacts, path) !== undefined;
 			if (!listed(session?.artifactFiles)) {
 				await refreshWorkspaces();
 				const refreshed = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))

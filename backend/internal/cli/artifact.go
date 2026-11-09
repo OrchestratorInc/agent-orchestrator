@@ -40,7 +40,8 @@ func newArtifactCommand(ctx *commandContext) *cobra.Command {
 			"its deliverables. Only registered files are listed as artifacts. Other files\n" +
 			"stay in the directory, so links between them keep working.\n\n" +
 			"A path is absolute, or relative to the artifact directory. Run this once per\n" +
-			"path, not after every edit. A renamed or copied file is a new path.",
+			"path, not after every edit. A file renamed or moved inside the directory stays\n" +
+			"registered; a copy is a new file.",
 		Example: `  ao artifact add report.html
   ao artifact add brand.html icons/app.icon`,
 		Args: cobra.MinimumNArgs(1),

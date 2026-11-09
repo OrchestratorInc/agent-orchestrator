@@ -96,3 +96,27 @@ function bundleEntry<T extends ArtifactFacts>(directory: string, members: readon
 function timeOf(value: string): number {
 	return Date.parse(value) || 0;
 }
+
+/**
+ * The file a link to `path` names: the one there now, or else the one most
+ * recently renamed away from it. A renamed file keeps its artifact, so a link
+ * written before the rename still opens it.
+ */
+export function artifactAtPath<T extends { path: string; previousPaths?: readonly string[] }>(files: readonly T[] | undefined, path: string): T | undefined {
+	if (!files) return undefined;
+	const current = files.find((file) => file.path === path);
+	if (current) return current;
+	// Each file lists its own earlier paths, latest last: the one that left
+	// `path` fewest renames ago is the likeliest target.
+	let renamed: T | undefined;
+	let renamesSince = Infinity;
+	for (const file of files) {
+		const previous = file.previousPaths ?? [];
+		const at = previous.lastIndexOf(path);
+		if (at >= 0 && previous.length - 1 - at < renamesSince) {
+			renamed = file;
+			renamesSince = previous.length - 1 - at;
+		}
+	}
+	return renamed;
+}

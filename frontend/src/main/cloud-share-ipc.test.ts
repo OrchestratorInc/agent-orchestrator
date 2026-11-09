@@ -9,7 +9,7 @@ vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1
 
 import { CLOUD_SHARE_PROGRESS_CHANNEL } from "../shared/cloud-share";
 import { registerCloudShareIpc } from "./cloud-share-ipc";
-import { ShareLinkRecords, shareRecordKey } from "./cloud-share-links";
+import { ShareLinkRecords, artifactRecordKey, shareRecordKey } from "./cloud-share-links";
 
 // Built at runtime so the repository's secret scanner does not flag the fixture.
 const FAKE_AWS_KEY = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
@@ -189,6 +189,31 @@ describe("cloudShare IPC", () => {
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID });
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).not.toHaveProperty("project");
 		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: changed.fingerprint, fingerprint: changed.fingerprint });
+	});
+
+	it("follows a renamed file to the link it was published to, by its artifact ID", async () => {
+		const { invoke, publish, file, bodies } = setup();
+		const artifact = { ...file, artifactId: "art-1" };
+		const before = await invoke("cloudShare:inspect", artifact) as { fingerprint: string };
+		await publish({ ...artifact, fingerprint: before.fingerprint });
+		await fs.mkdir(path.join(dataDir, "artifacts", "sess-1", "final"), { recursive: true });
+		await fs.rename(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), path.join(dataDir, "artifacts", "sess-1", "final", "summary.html"));
+		const renamed = { ...artifact, path: "final/summary.html" };
+		const inspection = await invoke("cloudShare:inspect", renamed) as { fingerprint: string };
+		expect(inspection).toMatchObject({ name: "summary.html", shareId: SHARE_ID, publishedFingerprint: before.fingerprint });
+		// Republish updates that link under the file's new name.
+		const result = await invoke("cloudShare:publish", { ...renamed, fingerprint: inspection.fingerprint, shareId: SHARE_ID });
+		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ name: "summary.html", shareId: SHARE_ID });
+	});
+
+	it("moves a record kept by path to the file's artifact ID", async () => {
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({ [shareRecordKey("https://cp.test", "sess-1", "docs/report.html")]: SHARE_ID }));
+		const { invoke, file } = setup();
+		await expect(invoke("cloudShare:inspect", { ...file, artifactId: "art-1" })).resolves.toMatchObject({ shareId: SHARE_ID });
+		const records = JSON.parse(await fs.readFile(recordsFile, "utf8"));
+		expect(records).toEqual({ [artifactRecordKey("https://cp.test", "sess-1", "art-1")]: SHARE_ID });
 	});
 
 	it("reads a record kept before fingerprints were, as a link with nothing to compare", async () => {

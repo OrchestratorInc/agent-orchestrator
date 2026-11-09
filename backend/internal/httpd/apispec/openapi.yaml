@@ -20848,6 +20848,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        id:
+          type: string
         inlineUrl:
           type: string
         kind:
@@ -20862,6 +20864,10 @@ components:
           type: string
         previewUrl:
           type: string
+        previousPaths:
+          items:
+            type: string
+          type: array
         rawUrl:
           type: string
         registered:
