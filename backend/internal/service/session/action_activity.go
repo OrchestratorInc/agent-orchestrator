@@ -116,7 +116,7 @@ func actionSummary(action string) string {
 	case actionPullRequestCreated:
 		return "Created a pull request"
 	default:
-		return "AO action"
+		return "Orchestrator action"
 	}
 }
 

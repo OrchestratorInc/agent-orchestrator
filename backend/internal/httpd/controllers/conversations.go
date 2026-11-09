@@ -105,6 +105,8 @@ type ConversationsController struct {
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Get("/conversations/{conversationId}/find", c.findConversation)
+	r.Get("/conversations/{conversationId}/find-window", c.findConversationWindow)
 	r.Get("/conversations/search", c.searchConversations)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
@@ -1089,7 +1091,7 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri and name are required"}
 		}
 		if resource.URI == ports.ChatInternalReplayResourceURI {
-			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri is reserved for AO internal context"}
+			return nil, &attachmentError{"INVALID_RESOURCE", "resource uri is reserved for Orchestrator internal context"}
 		}
 		kind, text := "resource_link", ""
 		if resource.Text != nil {

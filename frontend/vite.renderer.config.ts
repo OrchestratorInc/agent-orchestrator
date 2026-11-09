@@ -133,6 +133,7 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		[
 			"connect-src",
 			"'self'",
+			"data:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
 			// Session artifact files are read from the daemon's artifact preview

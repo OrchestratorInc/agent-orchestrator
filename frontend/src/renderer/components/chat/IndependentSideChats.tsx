@@ -613,7 +613,7 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
 			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
-			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!enabled) throw new Error("Side chats are currently available only for local Orchestrator-managed sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
 			const owned = () => creationScope.active && creationScopeRef.current === creationScope && sessionRef.current === sessionId;
 			const current = () => owned() && (options?.isCurrent?.() ?? true);
@@ -1505,6 +1505,7 @@ export function useIndependentSideChats(
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
+				data-chat-find-scope=""
 				aria-label={t("sideChat.sideChats")}
 				className="cursor-chat-surface relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background [font-size:14px]"
 			>
@@ -1537,6 +1538,7 @@ export function useIndependentSideChats(
 									</div>
 								) : null}
 								<Timeline
+									sideChat
 									key={activeId}
 									snapshot={conversation}
 									annotationNavigationRef={timelineNavigationRef}

@@ -819,7 +819,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
-			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			if (isStandaloneSession) {
 				void navigate({ to: "/" });
 				return;
 			}
@@ -1069,6 +1069,15 @@ function ArtifactSummaryCard({
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+				{artifact.updatedAt ? (
+					<time
+						className="shrink-0 text-caption tabular-nums text-settings-muted"
+						dateTime={artifact.updatedAt}
+						title={new Date(artifact.updatedAt).toLocaleString()}
+					>
+						{formatTimeCompact(artifact.updatedAt)}
+					</time>
+				) : null}
 			</Pressable>
 		</div>
 	);
@@ -1106,11 +1115,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
 	};
 	const createdAt = session.createdAt ?? session.updatedAt;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const creationLabel = appI18n.t(isStandalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace");
 
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
+			content: <>{creationLabel}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
@@ -1184,7 +1195,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
-	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
 			tone: "now",
@@ -2322,7 +2333,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	if (url) {
 		lines.push("", `Comment URL: ${url}`);
 	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what AO has provided here.");
+	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
 	return lines.join("\n");
 }
 
@@ -2330,9 +2341,9 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "AO agent review" : "external PR review";
+	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
 	const lines = [
-		`A ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
+		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
 		"",
 		"Review summary:",
 		body,

@@ -380,6 +380,18 @@ describe("sessionArtifacts", () => {
 		expect(sessionArtifacts(session)).toEqual([artifact({ path: "report.md", kind: "markdown" })]);
 	});
 
+	it("lists the newest artifact first, not alphabetically", () => {
+		const session = sessionWith({
+			outputType: "artifact",
+			artifactFiles: [
+				artifact({ path: "a-old.md", updatedAt: "2026-01-01T00:00:00Z" }),
+				artifact({ path: "z-new.md", updatedAt: "2026-01-03T00:00:00Z" }),
+				artifact({ path: "m-mid.md", updatedAt: "2026-01-02T00:00:00Z" }),
+			],
+		});
+		expect(sessionArtifacts(session).map((file) => file.path)).toEqual(["z-new.md", "m-mid.md", "a-old.md"]);
+	});
+
 	it("is empty when outputType is artifact but artifactFiles is absent", () => {
 		expect(sessionArtifacts(sessionWith({ outputType: "artifact" }))).toEqual([]);
 	});

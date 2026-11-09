@@ -264,7 +264,7 @@ describe("agent messages in a worker chat", () => {
 		const message = screen.getByTestId("agent-message");
 		expect(message).toHaveTextContent("Keep the draft local until Dhruv approves.");
 		expect(message).not.toHaveTextContent("[from");
-		expect(within(message).getByRole("link", { name: "Orchestrator" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
+		expect(within(message).getByRole("link", { name: "Orchestrator agent" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
 	});
 
 	it("marks the paths in its plain prose as code and links the sessions it names", () => {
