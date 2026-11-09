@@ -118,10 +118,11 @@ func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanCo
 	// Validating holds everything about AO's own review: a pass that asked for
 	// changes, and, while auto review is on, every head its own pass has not
 	// approved yet, whether that pass is scheduled, failed, or was cancelled.
+	// A cancelled pass stays here even if another harness approved the head.
 	// In review is reserved for a person's review on the provider.
 	case pr.ReviewRun.ChangesRequested:
 		return KanbanValidating
-	case session.AutoReview && !approvedByAO(pr):
+	case session.AutoReview && (!approvedByAO(pr) || pr.ReviewRun.Cancelled):
 		return KanbanValidating
 	// Without auto review nothing will run AO's pass again, so a pass that
 	// was cancelled or failed without a verdict hands the PR to a person.

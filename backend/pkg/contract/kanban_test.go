@@ -257,6 +257,15 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
+			name:    "auto review keeps a cancelled pass in validating even when another harness approved the head",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, Cancelled: true},
+			},
+			want: contract.KanbanValidating,
+		},
+		{
 			name: "without auto review, a cancelled pass hands the pr to a person",
 			pr: contract.KanbanPRFacts{
 				URL: "pr/1", Mergeability: contract.MergeMergeable,
