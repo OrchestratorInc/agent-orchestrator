@@ -82,11 +82,14 @@ func (m PermissionMode) Valid() bool {
 
 // Validate rejects values outside the typed vocabulary so a bad config is
 // refused when it is set (CLI/API) rather than silently dropped at spawn.
+// Mode is adapter-owned: the vocabulary is the union of every adapter that
+// consumes it (Amp's effort levels, ZCode's permission modes).
 func (c AgentConfig) Validate() error {
 	switch c.Mode {
-	case "", "low", "medium", "high", "ultra":
+	case "", "low", "medium", "high", "ultra",
+		"plan", "build", "edit", "yolo", "guarded":
 	default:
-		return fmt.Errorf("invalid mode %q: want one of low, medium, high, ultra", c.Mode)
+		return fmt.Errorf("invalid mode %q: want one of low, medium, high, ultra, plan, build, edit, yolo, guarded", c.Mode)
 	}
 	if c.Permissions.Valid() {
 		return nil

@@ -132,3 +132,22 @@ func TestOpenHandsHarnessIsKnown(t *testing.T) {
 		t.Fatal("HarnessOpenHands.IsKnown() = false, want true")
 	}
 }
+
+func TestZCodeHarnessIsKnown(t *testing.T) {
+	if HarnessZCode != AgentHarness("zcode") {
+		t.Fatalf("HarnessZCode = %q, want zcode", HarnessZCode)
+	}
+	if !HarnessZCode.IsKnown() {
+		t.Fatal("HarnessZCode.IsKnown() = false, want true")
+	}
+	found := false
+	for _, harness := range AllHarnesses {
+		if harness == HarnessZCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("AllHarnesses does not contain HarnessZCode")
+	}
+}

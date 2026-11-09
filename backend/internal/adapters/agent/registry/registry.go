@@ -45,6 +45,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -93,6 +94,7 @@ func Constructors() []adapters.Adapter {
 		mimocode.New(),
 		memcode.New(),
 		deepseekharness.New(),
+		zcode.New(),
 	}
 }
 
