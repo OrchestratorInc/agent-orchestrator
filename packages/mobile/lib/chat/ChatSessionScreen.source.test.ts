@@ -128,15 +128,12 @@ describe("the composer and the keyboard", () => {
 	});
 });
 
-// iOS 26's own edge blur reached only the status bar over the conversation and
-// left the title over sharp text; iOS 27's covers the whole bar.
-describe("the clear bar over the conversation", () => {
-	it("frosts with the system's bar material on iOS 26 and keeps the system's edge blur on iOS 27", () => {
-		expect(screenSource).toContain("const FROSTED_BAR = SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) < 27;");
-		expect(screenSource).toContain('headerBlurEffect: FROSTED_BAR ? "systemChromeMaterial" : undefined,');
-	});
-
-	it("hands terminal sessions the stack's own bar back, without the material", () => {
-		expect(screenSource).toContain("headerStyle: stackScreenOptions(t).headerStyle, headerBlurEffect: undefined });");
+// iOS 26's glass blurred only the status bar over the conversation and left
+// the title over sharp text; iOS 27's covers the whole bar.
+describe("the bar over the conversation", () => {
+	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
+		expect(screenSource).not.toContain("headerBlurEffect");
 	});
 });
