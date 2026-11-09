@@ -1153,6 +1153,40 @@ const artifact = (
 });
 
 describe("SessionInspector Artifacts section", () => {
+  beforeEach(() => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  it("previews the most recently updated artifact and lists the rest by name", () => {
+    const onOpenArtifact = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onOpenArtifact={onOpenArtifact}
+        session={session([], {
+          outputType: "artifact",
+          artifactFiles: [
+            artifact({ path: "older.md", name: "older.md", kind: "markdown", updatedAt: "2026-06-14T00:00:00Z" }),
+            artifact({ path: "newest.md", name: "newest.md", kind: "markdown", updatedAt: "2026-06-16T00:00:00Z" }),
+          ],
+        })}
+      />,
+    );
+
+    const newest = screen.getByTitle("newest.md");
+    expect(newest.querySelector("[aria-hidden='true'].absolute")).not.toBeNull();
+    expect(newest).toHaveTextContent(/Updated/);
+    const older = screen.getByTitle("older.md");
+    expect(older.closest("li")).not.toBeNull();
+    expect(older.querySelector(".absolute")).toBeNull();
+
+    fireEvent.click(newest);
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "newest.md" });
+  });
+
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {
     renderWithQuery(
       <SessionInspector

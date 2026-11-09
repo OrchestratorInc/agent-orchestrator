@@ -2,6 +2,8 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
@@ -444,15 +446,7 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? (
-					artifacts.map((artifact) => (
-						<ArtifactSummaryCard
-							artifact={artifact}
-							key={artifact.path}
-							onOpenArtifact={onOpenArtifact}
-						/>
-					))
-				) : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={orchestrator ? undefined : (
@@ -1049,38 +1043,89 @@ export function PRSummaryCard({
 	);
 }
 
-/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
-function ArtifactSummaryCard({
+/**
+ * The Summary's artifacts: a preview of the most recently updated one, then
+ * the rest by name. Each opens its file in the inspector's Artifacts tab.
+ */
+function ArtifactSummaryList({
+	artifacts,
+	onOpenArtifact,
+	session,
+}: {
+	artifacts: SessionArtifact[];
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const [latest, ...rest] = artifacts;
+	if (!latest) return null;
+	const row: ArtifactRow = { ...latest, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	return (
+		<div className="flex min-w-0 flex-col">
+			<Pressable
+				className="group flex min-w-0 flex-col gap-2 rounded-lg focus-visible:ring-1 focus-visible:ring-ring"
+				onClick={() => onOpenArtifact?.({ path: latest.path })}
+				title={latest.path}
+			>
+				<span className="relative block aspect-[16/9] overflow-hidden rounded-lg bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} />
+				</span>
+				<span className="flex min-w-0 flex-col gap-0.5 px-0.5">
+					<span className="truncate text-sm font-medium leading-5 text-foreground">{latest.name}</span>
+					{latest.updatedAt ? (
+						<time
+							className="text-caption tabular-nums text-passive"
+							dateTime={latest.updatedAt}
+							title={new Date(latest.updatedAt).toLocaleString()}
+						>
+							{t("shell.updatedAt", { time: formatTimeCompact(latest.updatedAt) })}
+						</time>
+					) : null}
+				</span>
+			</Pressable>
+			{rest.length > 0 ? (
+				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
+					{rest.map((artifact) => (
+						<li key={artifact.path}>
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+						</li>
+					))}
+				</ul>
+			) : null}
+		</div>
+	);
+}
+
+/** One Summary row: icon, name and last update. */
+function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 }) {
-	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
-		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<Pressable
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5"
-				onClick={handleOpen}
-			>
-				{artifact.kind === "html" ? (
-					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				) : (
-					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				)}
-				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-				{artifact.updatedAt ? (
-					<time
-						className="shrink-0 text-caption tabular-nums text-settings-muted"
-						dateTime={artifact.updatedAt}
-						title={new Date(artifact.updatedAt).toLocaleString()}
-					>
-						{formatTimeCompact(artifact.updatedAt)}
-					</time>
-				) : null}
-			</Pressable>
-		</div>
+		<Pressable
+			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			{artifact.kind === "html" ? (
+				<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			) : (
+				<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			)}
+			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			{artifact.updatedAt ? (
+				<time
+					className="shrink-0 text-caption tabular-nums text-settings-muted"
+					dateTime={artifact.updatedAt}
+					title={new Date(artifact.updatedAt).toLocaleString()}
+				>
+					{formatTimeCompact(artifact.updatedAt)}
+				</time>
+			) : null}
+		</Pressable>
 	);
 }
 
