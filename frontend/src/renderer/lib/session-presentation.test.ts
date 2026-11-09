@@ -328,9 +328,19 @@ describe("session presentation", () => {
 	it("colours the dot from the PR the card's phrase describes, not the worst PR", () => {
 		// Two PRs: the card reads "Mergeable" from one while the other fails CI,
 		// so scmStatus aggregates to ci_failed. The dot must agree with the card.
-		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", displayStatus: "Mergeable" });
+		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", kanbanColumn: "ready", displayStatus: "Mergeable" });
 
 		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+	});
+
+	it("keeps the legacy dot on the PR the card's phrase describes", () => {
+		useUiStore.setState({ developerMode: true, newSidebarDesign: false });
+		try {
+			const session = sessionWith({ status: "idle", scmStatus: "ci_failed", displayStatus: "Mergeable" });
+			expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+		} finally {
+			useUiStore.setState({ developerMode: false, newSidebarDesign: true });
+		}
 	});
 
 	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {
