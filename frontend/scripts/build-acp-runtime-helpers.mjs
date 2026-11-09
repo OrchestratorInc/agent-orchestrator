@@ -288,8 +288,9 @@ const CLAUDE_WINDOW_PROBE = `
                                         ${CLAUDE_WINDOW_PROBE_MARKER}
                                         else if (session.aoWindowProbe?.models !== session.models ||
                                             (session.aoWindowProbe.settled && session.aoWindowProbe.turn !== session.activeTurn)) {
-                                            // One probe per model selection while it is pending; a failed one is retried on a later turn.
-                                            // Every model switch replaces session.models, even a switch back.
+                                            // One probe per model selection while it is pending. A failed one is retried when
+                                            // session.activeTurn changes: once per turn, twice if the turn's echo lands after
+                                            // its first message. Every model switch replaces session.models, even a switch back.
                                             const probe = { models: session.models, turn: session.activeTurn, settled: false };
                                             session.aoWindowProbe = probe;
                                             void (async () => {
