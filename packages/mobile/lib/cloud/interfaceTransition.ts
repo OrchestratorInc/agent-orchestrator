@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { SessionInterfaceTransition } from "../chat/api";
+import { mobileInterfaceTransitionIsActive, mobileInterfaceTransitionIsCancellable } from "../session/interfaceTransition";
 import type { InterfaceTransitionBackend } from "../session/interfaceTransitionBackend";
+import { INTERFACE_HANDOFF_WAIT_MS, type InterfaceHandoff } from "../session/useInterfaceHandoff";
 import type { CloudClient } from "./client";
 import { CloudError, cloudErrorMessage } from "./errors";
 import type { CloudInterfaceTransition, CloudSession } from "./types";
@@ -49,23 +52,74 @@ export function cloudSwitchNoticeShown(transition: Pick<CloudInterfaceTransition
 }
 
 /**
- * Calls `onEnded` once a switch this screen watched is no longer under way.
- * Cloud's status names only a switch in progress, so a finished one vanishes
- * rather than reading "completed" (which is what tells the hook to read the
- * session again): without this the screen sat on the old interface, with no
- * banner, until the next poll of the session.
+ * Whether the switch card covers a Cloud session's screen. A machine's screens
+ * keep a banner until the source starts stopping, since a drain lasts as long
+ * as the agent's turn; there an idle source passes those phases in a moment.
+ * On Cloud they take seconds (the sandbox's worker has to pick the request
+ * up), and a banner over a screen with nothing to wait for read as a false
+ * start before the card. So the card covers the screen from the tap
+ * (`launching`), and the banner is kept only while a drain waits on a turn the
+ * agent is still working through ("Finish, then switch").
  */
-export function useCloudSwitchEnded(activeTransitionId: string | undefined, onEnded: () => void): void {
-	const watched = useRef<string | undefined>(undefined);
+export function cloudSwitchCovers(
+	transition: Pick<SessionInterfaceTransition, "phase" | "policy"> | undefined,
+	{ launching, sourceBusy }: { launching: boolean; sourceBusy: boolean },
+): boolean {
+	if (launching) return true;
+	if (!transition || !mobileInterfaceTransitionIsActive(transition)) return false;
+	return !(mobileInterfaceTransitionIsCancellable(transition) && transition.policy === "drain" && sourceBusy);
+}
+
+type AwaitedSwitch = { id: string; targetMode: "chat" | "tui"; read: boolean };
+
+/**
+ * A Cloud session's handoff to the interface it switched to: Cloud's version
+ * of `useInterfaceHandoff`. Cloud's status names only a switch in progress, so
+ * a finished one vanishes rather than reading "completed", which is what a
+ * machine's handoff waits on. Once a switch this screen watched vanishes, this
+ * reads the session again (`onEnded`) and stays `pending` until the screen
+ * shows the new interface and that read has landed. Without it the card
+ * dropped at once and the old view showed through: the terminal it had just
+ * stopped read "Agent terminal ended" until the session's next read.
+ *
+ * A switch that failed or was cancelled stays in the status: it is read again
+ * all the same (its notice says what happened), and nothing is held.
+ */
+export function useCloudSwitchHandoff(
+	transition: SessionInterfaceTransition | undefined,
+	screenMode: "chat" | "tui",
+	onEnded: () => Promise<void>,
+): InterfaceHandoff {
+	const watched = useRef<{ id: string; targetMode: "chat" | "tui" } | undefined>(undefined);
 	const ended = useRef(onEnded);
 	ended.current = onEnded;
+	const [awaited, setAwaited] = useState<AwaitedSwitch>();
+	const [stalledId, setStalledId] = useState<string>();
+	const activeId = transition && mobileInterfaceTransitionIsActive(transition) ? transition.id : undefined;
+	const activeTarget = activeId ? transition?.targetMode : undefined;
+	// Gone from the status: Cloud finished it. (A completed one, should Cloud ever list it, is the same.)
+	const finished = !activeId && (!transition || transition.phase === "completed");
 	useEffect(() => {
-		if (activeTransitionId) {
-			watched.current = activeTransitionId;
+		if (activeId && activeTarget) {
+			watched.current = { id: activeId, targetMode: activeTarget };
 			return;
 		}
-		if (!watched.current) return;
+		const last = watched.current;
+		if (!last) return;
 		watched.current = undefined;
-		ended.current();
-	}, [activeTransitionId]);
+		if (finished) setAwaited({ ...last, read: false });
+		const markRead = () => setAwaited((current) => current?.id === last.id ? { ...current, read: true } : current);
+		void ended.current().then(markRead, markRead);
+	}, [activeId, activeTarget, finished]);
+	const arrived = awaited !== undefined && awaited.read && awaited.targetMode === screenMode;
+	useEffect(() => {
+		if (arrived) setAwaited(undefined);
+	}, [arrived]);
+	const pendingId = awaited && !arrived ? awaited.id : undefined;
+	useEffect(() => {
+		if (!pendingId) return;
+		const timer = setTimeout(() => setStalledId(pendingId), INTERFACE_HANDOFF_WAIT_MS);
+		return () => clearTimeout(timer);
+	}, [pendingId]);
+	return { pending: pendingId !== undefined, stalled: pendingId !== undefined && stalledId === pendingId };
 }

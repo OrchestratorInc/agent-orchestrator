@@ -1,10 +1,11 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionInterfaceTransition } from "../chat/api";
+import { INTERFACE_HANDOFF_WAIT_MS } from "../session/useInterfaceHandoff";
 import { useInterfaceTransitionWith } from "../session/useInterfaceTransition";
 import type { CloudClient } from "./client";
 import { CloudError } from "./errors";
-import { cloudInterfaceTransitionBackend, cloudSwitchNoticeShown, cloudTerminalBusy, useCloudSwitchEnded } from "./interfaceTransition";
+import { cloudInterfaceTransitionBackend, cloudSwitchCovers, cloudSwitchNoticeShown, cloudTerminalBusy, useCloudSwitchHandoff } from "./interfaceTransition";
 import { interfaceModeName, switchNotice, switchPhaseLabel, switchPhaseShortLabel } from "./interfaceSwitchCopy";
 
 vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } }));
@@ -97,22 +98,72 @@ describe("the switch hook over Cloud", () => {
 	});
 });
 
+// Seen on the iPhone: a yellow "Switching to…" banner sat over an idle chat for
+// seconds before the card, while Cloud's sandbox picked the request up.
+describe("when the switch card covers a cloud session", () => {
+	it("covers the screen from the tap, unless a drain is waiting on the agent's turn", () => {
+		expect(cloudSwitchCovers(undefined, { launching: true, sourceBusy: false })).toBe(true);
+		expect(cloudSwitchCovers(undefined, { launching: false, sourceBusy: false })).toBe(false);
+		expect(cloudSwitchCovers(transition("requested"), { launching: false, sourceBusy: false })).toBe(true);
+		expect(cloudSwitchCovers(transition("draining"), { launching: false, sourceBusy: false })).toBe(true);
+		// "Finish, then switch": the conversation stays readable behind a banner until the turn ends.
+		expect(cloudSwitchCovers(transition("requested"), { launching: false, sourceBusy: true })).toBe(false);
+		expect(cloudSwitchCovers(transition("draining"), { launching: false, sourceBusy: true })).toBe(false);
+		expect(cloudSwitchCovers(transition("draining", { policy: "interrupt" }), { launching: false, sourceBusy: true })).toBe(true);
+		expect(cloudSwitchCovers(transition("source_stopping"), { launching: false, sourceBusy: true })).toBe(true);
+		expect(cloudSwitchCovers(transition("failed"), { launching: false, sourceBusy: false })).toBe(false);
+	});
+});
+
 // Seen on the Pixel: a finished switch vanished from Cloud's status, and the
-// screen sat on the old interface until the session's next poll.
-it("reads the session again once a watched switch is no longer under way", () => {
-	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	const ended = vi.fn();
-	function Watch({ id }: { id?: string }) { useCloudSwitchEnded(id, ended); return null; }
+// screen sat on the old interface until the session's next poll. Then on the
+// iPhone: once the card dropped, the terminal it had just stopped read "Agent
+// terminal ended" until the session was read again.
+describe("a cloud switch's handoff to the new interface", () => {
+	type Props = { transition?: SessionInterfaceTransition; mode: "chat" | "tui" };
 	let renderer: ReactTestRenderer | undefined;
-	act(() => { renderer = create(<Watch />); });
-	expect(ended).not.toHaveBeenCalled();
-	act(() => renderer!.update(<Watch id="t-1" />));
-	act(() => renderer!.update(<Watch id="t-1" />));
-	expect(ended).not.toHaveBeenCalled();
-	act(() => renderer!.update(<Watch />));
-	expect(ended).toHaveBeenCalledTimes(1);
-	act(() => renderer!.update(<Watch />));
-	expect(ended).toHaveBeenCalledTimes(1);
-	act(() => renderer!.unmount());
-	vi.unstubAllGlobals();
+	let handoff: ReturnType<typeof useCloudSwitchHandoff>;
+	let finishRead: () => void;
+	const ended = vi.fn(() => new Promise<void>((resolve) => { finishRead = resolve; }));
+	function Watch({ transition: current, mode }: Props) { handoff = useCloudSwitchHandoff(current, mode, ended); return null; }
+	const render = (props: Props) => act(() => { if (renderer) renderer.update(<Watch {...props} />); else renderer = create(<Watch {...props} />); });
+	const toChat = (phase: SessionInterfaceTransition["phase"]) => transition(phase, { sourceMode: "tui", targetMode: "chat", policy: "interrupt" });
+	beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); ended.mockClear(); });
+	afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+	it("holds the card until the screen shows the new interface and the session has been read again", async () => {
+		render({ mode: "tui" });
+		render({ transition: toChat("source_stopping"), mode: "tui" });
+		expect(ended).not.toHaveBeenCalled();
+		expect(handoff.pending).toBe(false);
+		render({ mode: "tui" });
+		expect(ended).toHaveBeenCalledTimes(1);
+		expect(handoff.pending).toBe(true);
+		render({ mode: "chat" });
+		expect(handoff.pending).toBe(true);
+		await act(async () => { finishRead(); });
+		expect(handoff.pending).toBe(false);
+		render({ mode: "chat" });
+		expect(ended).toHaveBeenCalledTimes(1);
+		expect(handoff.pending).toBe(false);
+	});
+
+	it("holds nothing for a switch that failed, and still reads the session again", () => {
+		render({ transition: toChat("target_starting"), mode: "tui" });
+		render({ transition: toChat("failed"), mode: "tui" });
+		expect(ended).toHaveBeenCalledTimes(1);
+		expect(handoff.pending).toBe(false);
+	});
+
+	it("offers a way on once the new interface is slow to show", async () => {
+		vi.useFakeTimers();
+		render({ transition: toChat("activating"), mode: "tui" });
+		render({ mode: "tui" });
+		await act(async () => { finishRead(); });
+		expect(handoff).toEqual({ pending: true, stalled: false });
+		act(() => { vi.advanceTimersByTime(INTERFACE_HANDOFF_WAIT_MS); });
+		expect(handoff).toEqual({ pending: true, stalled: true });
+		render({ mode: "chat" });
+		expect(handoff).toEqual({ pending: false, stalled: false });
+	});
 });

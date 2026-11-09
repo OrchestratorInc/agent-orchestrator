@@ -28,13 +28,11 @@ import { useOpenPage } from "../pageNavigation";
 import { reviewRouteForPR, sessionPRReadyForReview } from "../reviewView";
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { startupVisible } from "../session/sessionStartup";
-import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
 import {
 	mobileInterfaceTransitionIsActive,
 	mobileInterfaceTransitionIsBusy,
 	mobileInterfaceTransitionIsCancellable,
 	mobileInterfaceTransitionRecoveryMessage,
-	mobileInterfaceTransitionStoppingSource,
 	useInterfaceTransitionWith,
 } from "../session/useInterfaceTransition";
 import { Spinner } from "../Spinner";
@@ -52,7 +50,7 @@ import { useCloud } from "./CloudProvider";
 import { CloudSignIn } from "./components";
 import { CloudTerminalView } from "./CloudTerminalView";
 import { cloudErrorMessage } from "./errors";
-import { cloudInterfaceTransitionBackend, cloudSwitchNoticeShown, cloudTerminalBusy, useCloudSwitchEnded } from "./interfaceTransition";
+import { cloudInterfaceTransitionBackend, cloudSwitchCovers, cloudSwitchNoticeShown, cloudTerminalBusy, useCloudSwitchHandoff } from "./interfaceTransition";
 import { interfaceModeName, switchNotice, switchPhaseLabel, switchPhaseShortLabel } from "./interfaceSwitchCopy";
 import { cloudChatStageTitle, cloudLifecycleStage, cloudStartupProblem } from "./lifecycle";
 import { CLOUD_HOST_ID, cloudSessionRow } from "./mapping";
@@ -174,34 +172,41 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const switchTo = tui ? "chat" as const : "tui" as const;
 	const transition = interfaceSwitch.transition;
 	const switchActive = mobileInterfaceTransitionIsActive(transition);
-	const handoff = useInterfaceHandoff(transition, switchTarget);
-	useCloudSwitchEnded(switchActive ? transition?.id : undefined, () => void readSwitchedSession().catch(() => {}));
-	// The card covers the screen once the current interface starts stopping;
-	// until then (draining lasts as long as the agent's turn) a banner says it.
-	const switchCardShown = mobileInterfaceTransitionStoppingSource(transition) || handoff.pending;
+	// Holds the card until this screen shows the new interface (Cloud drops a finished switch from its status).
+	const handoff = useCloudSwitchHandoff(transition, switchTarget, readSwitchedSession);
+	const chatBusy = Boolean(snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	// From the tap until Cloud answers with the switch, the card is already up.
+	const [launchingSwitch, setLaunchingSwitch] = useState(false);
+	const switchSourceBusy = tui ? Boolean(session && cloudTerminalBusy(session)) : chatBusy;
+	// The card covers the screen from the tap; a banner says it only while a
+	// drain waits on the agent's turn, with the conversation still readable.
+	const switchCardShown = cloudSwitchCovers(transition, { launching: launchingSwitch, sourceBusy: switchSourceBusy }) || handoff.pending;
 	const switchRecovery = mobileInterfaceTransitionRecoveryMessage(transition);
 	const notice = switchActive || !cloudSwitchNoticeShown(transition) ? undefined : switchNotice(transition);
 	const canSwitch = !terminated && (Boolean(interfaceSwitch.status?.supported) || switchActive);
-	const switching = interfaceSwitch.starting || switchActive || handoff.pending;
+	const switching = interfaceSwitch.starting || launchingSwitch || switchActive || handoff.pending;
 	// Terminal UI starts on the model and effort chosen in the chat, as the desktop's switch sends them.
 	const chosenModel = conversation.settings.model;
 	const chosenEffort = conversation.settings.reasoningEffort;
-	const startSwitch = useCallback(async (policy: "drain" | "interrupt") => {
+	// `cover`: put the card up now. Not for "Finish, then switch", whose banner waits on the turn.
+	const startSwitch = useCallback(async (policy: "drain" | "interrupt", cover = true) => {
+		if (cover) setLaunchingSwitch(true);
 		try {
 			await interfaceSwitch.start(switchTo, policy, { model: chosenModel, reasoningEffort: chosenEffort });
 		} catch (error) {
 			Alert.alert("Couldn't switch interface", cloudErrorMessage(error));
+		} finally {
+			setLaunchingSwitch(false);
 		}
 	}, [chosenEffort, chosenModel, interfaceSwitch, switchTo]);
 	// Work in flight is finished or stopped first, as the person chooses.
 	const askSwitchPolicy = useCallback(() => {
 		Alert.alert(`Switch to ${interfaceModeName(switchTo)}?`, "Keep the same Orchestrator session, worktree, and native agent conversation.", [
 			{ text: `Keep ${interfaceModeName(switchTarget)}`, style: "cancel" },
-			{ text: "Finish, then switch", onPress: () => void startSwitch("drain") },
+			{ text: "Finish, then switch", onPress: () => void startSwitch("drain", false) },
 			{ text: "Stop and switch", style: "destructive", onPress: () => void startSwitch("interrupt") },
 		]);
 	}, [startSwitch, switchTarget, switchTo]);
-	const chatBusy = Boolean(snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
 	const switchOrgId = org?.id;
 	const requestSwitch = useCallback(() => {
 		if (switching || !switchOrgId) return;
@@ -213,9 +218,15 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		}
 		// From Terminal UI the list can lag what was typed in the terminal: read
 		// the session first. An idle terminal is stopped directly (cloudTerminalBusy).
+		setLaunchingSwitch(true);
 		void client.getSession(switchOrgId, sessionId).then(
-			({ session: latest }) => { if (cloudTerminalBusy(latest)) askSwitchPolicy(); else void startSwitch("interrupt"); },
-			() => askSwitchPolicy(),
+			({ session: latest }) => {
+				if (cloudTerminalBusy(latest)) {
+					setLaunchingSwitch(false);
+					askSwitchPolicy();
+				} else void startSwitch("interrupt");
+			},
+			() => { setLaunchingSwitch(false); askSwitchPolicy(); },
 		);
 	}, [askSwitchPolicy, chatBusy, client, sessionId, startSwitch, switchOrgId, switchTo, switching]);
 	const cancelSwitch = useCallback(() => void interfaceSwitch.cancel().catch(() => {}), [interfaceSwitch]);
