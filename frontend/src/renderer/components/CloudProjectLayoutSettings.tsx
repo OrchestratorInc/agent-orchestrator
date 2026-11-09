@@ -36,7 +36,7 @@ import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter as SaveFooter } from "./settings/SettingsSaveFooter";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
-import { FolderPlus, LoaderCircle } from "lucide-react";
+import { FolderPlus, LoaderCircle } from "@/components/app-icons";
 import { aoBridge } from "../lib/bridge";
 import { createdRepositoryUrl, createFolderRepository, grantedRepositoryForRemote, pushFolderToCreatedRepository, repositoryOwner, type CreatedFolderRepository } from "../lib/cloud-folder-upload";
 

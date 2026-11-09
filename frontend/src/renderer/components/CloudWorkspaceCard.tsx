@@ -8,7 +8,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Folder, FolderPlus, LoaderCircle, Plus, X, XCircle } from "lucide-react";
+import { CheckCircle2, Folder, FolderPlus, LoaderCircle, Plus, X, XCircle } from "@/components/app-icons";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -453,7 +453,7 @@ function WorkspaceMemberRow({ member, owner, progress, disabled, onRename, onRem
 	return (
 		<li className="flex min-w-0 items-center gap-3 px-3 py-2">
 			<span className="grid size-6 shrink-0 place-items-center text-muted-foreground" aria-hidden="true">
-				{member.kind === "repository" ? <GitHubIcon className="size-4" /> : <Folder className="size-4" strokeWidth={1.8} />}
+				{member.kind === "repository" ? <GitHubIcon className="size-4" /> : <Folder className="size-4" />}
 			</span>
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-[13px] font-medium text-foreground" title={member.kind === "folder" ? member.path : undefined}>{label}</span>
