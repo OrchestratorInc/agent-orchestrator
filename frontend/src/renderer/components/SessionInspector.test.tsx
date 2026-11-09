@@ -398,6 +398,36 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByTestId("session-account-summary")).not.toBeInTheDocument();
   });
 
+  it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    renderWithQuery(<SessionInspector orchestrator session={session([], {
+      kind: "orchestrator",
+      artifactFiles: [
+        artifact({ path: "direct.html", name: "direct.html", kind: "html" }),
+        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html" }),
+      ],
+    })} />);
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Browser", "Artifacts"]);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
+    expect(screen.getByText("direct.html")).toBeInTheDocument();
+    expect(screen.getByText("chart.html")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an orchestrator's pending artifact link available before the list refreshes", () => {
+    renderWithQuery(<SessionInspector orchestrator artifactRequest={{ key: 1, path: "fresh.html" }}
+      session={session([], { kind: "orchestrator", artifactFiles: [] })} view="artifacts" />);
+
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
+  });
+
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 

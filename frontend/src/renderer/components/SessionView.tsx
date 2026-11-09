@@ -2090,7 +2090,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenArtifact = useCallback(
 		(target: { feedback?: boolean; path: string }) => {
-			if (browserOnly) return;
 			setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(false);
 			transitionInspectorView("artifacts");
@@ -2100,7 +2099,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
 			}));
 		},
-		[browserOnly, sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
+		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
@@ -2108,7 +2107,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
-			if (browserOnly) return false;
 			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
 			if (!listed(session?.artifactFiles)) {
 				await refreshWorkspaces();
@@ -2120,7 +2118,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			handleOpenArtifact({ path });
 			return true;
 		},
-		[browserOnly, handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
+		[handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
 	);
 
 	const revealResolvedWorkspaceFile = useCallback(
@@ -2342,9 +2340,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
-		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		if (browserOnly && inspectorView === "browser") setBrowserContentRevealed(uiSessionId, true);
 		toggleInspector(uiSessionId);
-	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	}, [browserOnly, inspectorView, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
@@ -2842,7 +2840,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							isInspectorVisible={inspectorPanelVisible}
 							artifactRequest={artifactRequestsBySession[uiSessionId] ?? null}
 							onArtifactRequestConsumed={handleArtifactRequestConsumed}
-							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
+							onOpenArtifact={handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
 							onOpenReviewerTerminal={selectReviewerTerminal}
