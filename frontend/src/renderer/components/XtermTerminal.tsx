@@ -56,9 +56,9 @@ import { leaseWebglRenderer, type WebglLease } from "../lib/terminal-webgl-pool"
 import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
-import { LinkPreviewCard, LinkPreviewCardLoading } from "./LinkPreviewCard";
+import { LinkPreviewHoverCard } from "./LinkPreviewCard";
 import { CloseButton } from "./ui/close-button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
 import {
 	DropdownMenu,
@@ -2254,19 +2254,15 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						}}
 					/>
 				</HoverCardTrigger>
-				{linkPreview && !linkPreviewQuery.isError ? (
-					<HoverCardContent
-						collisionPadding={8}
+				{linkPreview ? (
+					<LinkPreviewHoverCard
+						url={linkPreview.url}
+						query={linkPreviewQuery}
+						onBrowserOpen={props.onLinkOpen}
 						portalContainer={contextMenuPortalContainer}
 						onPointerEnter={() => linkPreviewControlsRef.current.cancelHide()}
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
-					>
-						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
-						) : (
-							<LinkPreviewCardLoading />
-						)}
-					</HoverCardContent>
+					/>
 				) : null}
 			</HoverCard>
 		</>

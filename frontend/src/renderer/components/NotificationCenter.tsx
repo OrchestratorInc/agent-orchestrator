@@ -50,7 +50,6 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -689,11 +688,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			<PopoverAnchor asChild>
 				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
-							variant="icon"
+							variant="quiet"
 						>
 							{unreadCount > 0 ? (
 								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
@@ -705,7 +704,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									{unreadCount > 99 ? "99+" : unreadCount}
 								</span>
 							) : null}
-						</TopbarButton>
+						</Button>
 					</PopoverTrigger>
 				</span>
 			</PopoverAnchor>

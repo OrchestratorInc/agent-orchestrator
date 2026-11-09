@@ -37,6 +37,7 @@ import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
@@ -58,6 +59,7 @@ import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
+	createWorkspaceFileLookup,
 	findWorkspaceFilePath,
 	isAbsoluteFileReference,
 	normalizeWorkspaceFileReference,
@@ -114,7 +116,8 @@ const OpenChatLink = createContext<{
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
-}>({ workspacePaths: [] });
+	findFile: (reference: string) => string | undefined;
+}>({ workspacePaths: [], findFile: () => undefined });
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
@@ -138,9 +141,16 @@ export function ChatLinkProvider({
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
+	const openLink = useLatestCallback((url: string) => onLinkOpen?.(url));
+	const openFile = useLatestCallback((path: string, line?: number) => line == null ? onFileOpen?.(path) : onFileOpen?.(path, line));
+	const openSession = useLatestCallback((url: string) => onSessionLinkOpen?.(url));
+	const findFile = useMemo(() => createWorkspaceFileLookup(workspacePaths), [workspacePaths]);
+	const canOpenLink = Boolean(onLinkOpen);
+	const canOpenFile = Boolean(onFileOpen);
+	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
-		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
+		() => ({ open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -505,8 +515,8 @@ function MermaidFence({ code }: { code: string }) {
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
 function useWorkspaceFile(path: string | undefined) {
-	const { openFile, workspacePaths } = useContext(OpenChatLink);
-	const filePath = path && openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	const { openFile, findFile } = useContext(OpenChatLink);
+	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;
 	const target = workspaceFileOpenTarget(path, filePath);
 	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };

@@ -23,7 +23,7 @@ function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onB
 	const { t } = useTranslation();
 	return (
 		<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-			<Button type="button" variant="outline" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
 				<ChevronLeft className="size-4" aria-hidden="true" />
 			</Button>
 			<div className="min-w-0 flex-1 pr-8">

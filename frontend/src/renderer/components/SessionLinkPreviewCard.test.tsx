@@ -360,7 +360,7 @@ describe("ArtifactLinkPreviewCard", () => {
 
 		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/skills-1/artifacts/plans/plan.md" />);
 
-		expect(screen.getByText(/^Orchestrator/)).toHaveTextContent(/^Orchestrator · skills-1$/);
+		expect(screen.getByText(/^Orchestrator/)).toHaveTextContent(/^Orchestrator agent · skills-1$/);
 		expect(screen.queryByText(/#s-1/)).not.toBeInTheDocument();
 	});
 

@@ -2586,7 +2586,7 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-2" />);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(
-				`${startupError.message} AO is still retrying.`,
+				`${startupError.message} Orchestrator is still retrying.`,
 			);
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
@@ -4471,7 +4471,7 @@ describe("SessionView", () => {
 			historyPolicy: "strict" as const,
 			phase: "recovery_required" as const,
 			errorCode: "DAEMON_RESTARTED",
-			errorDetail: "AO recovered the session in its last committed mode.",
+			errorDetail: "Orchestrator recovered the session in its last committed mode.",
 			createdAt: "2026-08-12T10:00:00Z",
 			updatedAt: "2026-08-12T10:01:00Z",
 			completedAt: "2026-08-12T10:01:00Z",
@@ -4606,7 +4606,7 @@ describe("SessionView", () => {
 				historyPolicy: "provider_history",
 				phase: "recovery_required",
 				errorCode: "DAEMON_RESTARTED",
-				errorDetail: "AO restored Terminal after the daemon restarted.",
+				errorDetail: "Orchestrator restored Terminal after the daemon restarted.",
 				createdAt: "2026-08-25T09:00:00Z",
 				updatedAt: "2026-08-25T09:00:01Z",
 				completedAt: "2026-08-25T09:00:01Z",
@@ -4658,7 +4658,7 @@ describe("SessionView", () => {
 			workerSession("sess-1").mode = "tui";
 			interfaceTransitionState.startError = startError;
 			const errorDetail =
-				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+				"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. target still running";
 			interfaceTransitionState.status = {
 				supported: true,
 				targetMode: "chat",
@@ -5711,6 +5711,23 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("opens an absolute orchestrator chat path to a listed artifact", async () => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.mode = "chat";
+		orchestrator.artifactFiles = [{ kind: "html", name: "chart.html", path: "renders/chart.html", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		mockAbsolutePathLookup({ data: { sessionId: "sess-orch", kind: "artifact", path: "renders/chart.html" }, error: undefined });
+		try {
+			render(<SessionView sessionId="sess-orch" />);
+			fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
+			expect(await screen.findByText("selected renders/chart.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		} finally {
+			delete orchestrator.artifactFiles;
+			delete orchestrator.mode;
+		}
+	});
+
 	it("explains an artifact the session still does not list after a refresh", async () => {
 		workerSession("sess-1").mode = "chat";
 		mockAbsolutePathLookup({ data: { sessionId: "sess-1", kind: "artifact", path: "out/new.md" }, error: undefined });
@@ -5997,6 +6014,26 @@ describe("SessionView", () => {
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {
 			delete worker.artifactFiles;
+		}
+	});
+
+	it.each([
+		["direct HTML file", "direct.html"],
+		["render saved as an artifact", "renders/chart.html"],
+	])("opens an orchestrator %s from its artifact link", (_source, path) => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.artifactFiles = [{ kind: "html", name: path.split("/").at(-1)!, path, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		try {
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-orch", path, undefined, "artifact"));
+
+			render(<SessionView sessionId="sess-orch" />);
+
+			expect(screen.getByText(`selected ${path}`)).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete orchestrator.artifactFiles;
 		}
 	});
 
