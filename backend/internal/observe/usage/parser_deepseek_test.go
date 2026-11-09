@@ -82,9 +82,9 @@ func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 	}
 }
 
-func newDeepSeekTestIngestion(t *testing.T, clock *time.Time) (path string, store *sqlite.Store, session domain.SessionRecord, source domain.UsageSourceRecord) {
+func newDeepSeekTestIngestion(t *testing.T, clock *time.Time) (store *sqlite.Store, session domain.SessionRecord, source domain.UsageSourceRecord) {
 	t.Helper()
-	path = filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
+	path := filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
 	writeDeepSeekTestLog(t, path, deepseekTestFrames)
 	store, session = seedUsageTestSession(
 		t, t.TempDir(), "usage", domain.HarnessDeepSeek, domain.ActivityActive, deepseekTestSessionID, *clock,
@@ -102,36 +102,7 @@ func newDeepSeekTestIngestion(t *testing.T, clock *time.Time) (path string, stor
 		UpdatedAt:       *clock,
 	})
 	mustNoError(t, err)
-	return path, store, session, source
-}
-
-func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
-	ctx := context.Background()
-	clock := time.Unix(1700000000, 0).UTC()
-	path, store, session, source := newDeepSeekTestIngestion(t, &clock)
-	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return clock }})
-
-	_, err := ingestor.Ingest(ctx, source.ID)
-	mustNoError(t, err)
-	assertTokenAggregate(t, store, session.ID, 15556+137+15807+90)
-	first, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
-	mustNoError(t, err)
-	if !ok || first.Source.ByteOffset != 29 {
-		t.Fatalf("first cursor = %+v", first.Source)
-	}
-
-	info, err := os.Stat(path)
-	mustNoError(t, err)
-	mustNoError(t, os.WriteFile(path, bytes.Repeat([]byte{0xff}, int(info.Size())), 0o600))
-	mustNoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
-	clock = clock.Add(time.Minute)
-	_, err = ingestor.Ingest(ctx, source.ID)
-	mustNoError(t, err)
-	second, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
-	mustNoError(t, err)
-	if !ok || second.Source.LastErrorCode != "" || !second.Source.UpdatedAt.Equal(first.Source.UpdatedAt) {
-		t.Fatalf("unchanged log pass = %+v, want no read and no write after %+v", second.Source, first.Source)
-	}
+	return store, session, source
 }
 
 type failFirstApplyStore struct {
@@ -153,7 +124,7 @@ func (s *failFirstApplyStore) ApplyUsageChunk(
 func TestIngestorRereadsDeepSeekLogAfterFailedApply(t *testing.T) {
 	ctx := context.Background()
 	clock := time.Unix(1700000000, 0).UTC()
-	_, store, session, source := newDeepSeekTestIngestion(t, &clock)
+	store, session, source := newDeepSeekTestIngestion(t, &clock)
 	ingestor := NewIngestor(&failFirstApplyStore{ingestorStore: store}, IngestorConfig{Clock: func() time.Time { return clock }})
 
 	if _, err := ingestor.Ingest(ctx, source.ID); err == nil {

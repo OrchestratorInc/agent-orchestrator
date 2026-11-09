@@ -70,25 +70,17 @@ func (i *Ingestor) ingestSQLite(
 	path := source.Source.ArtifactPath
 	limit := i.sqliteChunkRows
 	var records []jsonlRecord
-	var stamp snapshotStamp
-	readWhole := false
 	if readSnapshot, snapshot := snapshotUsageReaders[source.Source.Kind]; snapshot {
-		var statErr error
-		stamp, statErr = snapshotStampOf(path)
-		if seen, ok := i.snapshots.Load(source.Source.ID); statErr != nil || !ok || seen != stamp {
-			i.snapshots.Delete(source.Source.ID)
-			var err error
-			records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
-			if err != nil {
-				if ctx.Err() != nil {
-					return result, ctx.Err()
-				}
-				if errors.Is(err, os.ErrNotExist) {
-					return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
-				}
-				return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
+		var err error
+		records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
 			}
-			readWhole = statErr == nil && len(records) < limit
+			if errors.Is(err, os.ErrNotExist) {
+				return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
 		}
 	} else {
 		read := sqliteUsageReaders[source.Source.Kind]
@@ -178,27 +170,11 @@ func (i *Ingestor) ingestSQLite(
 		}
 		i.notifyLateRouteEvidence(ctx, source.Source.ID)
 	}
-	if readWhole {
-		i.snapshots.Store(source.Source.ID, stamp)
-	}
 	if parsed.Cursor.State == domain.UsageSourceComplete {
 		return result, i.completeBinding(ctx, source.Source.BindingID, now)
 	}
 	result.More = progressed && !atEnd
 	return result, nil
-}
-
-type snapshotStamp struct {
-	size    int64
-	modTime int64
-}
-
-func snapshotStampOf(path string) (snapshotStamp, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return snapshotStamp{}, err
-	}
-	return snapshotStamp{size: info.Size(), modTime: info.ModTime().UnixNano()}, nil
 }
 
 func sameRetryTime(a, b *time.Time) bool {

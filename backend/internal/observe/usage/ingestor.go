@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -75,7 +74,6 @@ type Ingestor struct {
 	requestRepair    func()
 	openTranscript   func(string) (*os.File, error)
 	afterRead        func()
-	snapshots        sync.Map
 }
 
 // NewIngestor constructs a bounded transcript ingestor.
