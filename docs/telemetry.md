@@ -520,10 +520,10 @@ when you import chats from other agents:
 
 | Event | When it is sent | Import-specific properties |
 | --- | --- | --- |
-| `ao.renderer.session_import_offer_shown` | An import offer appears | `surface` |
-| `ao.renderer.session_import_scan_completed` | A scan for chats ends | `outcome`, `candidate_count`, `duration_ms` |
-| `ao.renderer.session_import_completed` | An import ends | `source`, `created_count`, `existing_count`, `failed_count`, `folder_count`, `agents` |
-| `ao.renderer.session_import_first_open` | The first open of an imported chat ends | `agent`, `outcome`, `error_code`, `duration_ms` |
+| `ao.session_imports.offer_shown` | An import offer appears | `surface` |
+| `ao.session_imports.scan_completed` | A scan for chats ends | `outcome`, `candidate_count`, `duration_ms` |
+| `ao.session_imports.completed` | An import ends | `source`, `created_count`, `existing_count`, `failed_count`, `folder_count`, `agents` |
+| `ao.session_imports.first_opened` | The first open of an imported chat ends | `agent`, `outcome`, `error_code`, `duration_ms` |
 
 `surface` is `home` or `project_board`. `source` is `home_folders`,
 `project_offer`, `project_dialog`, or `settings`. The scan `outcome` is
