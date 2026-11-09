@@ -109,7 +109,8 @@ export interface CloudCpStreamSender {
 }
 
 export interface CloudCpProxy {
-	request(init: unknown): Promise<CloudCpProxyResponse>;
+	/** hostTokens is for the main process only: renderer requests never carry it. */
+	request(init: unknown, internal?: { hostTokens: true }): Promise<CloudCpProxyResponse>;
 	/** sender is the WebContents that asked: its requests end when it goes away. */
 	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
 	/** Abort one of a WebContents' binary requests; another's is never touched. */
@@ -261,6 +262,32 @@ function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path"
 	return target.toString();
 }
 
+const ACCOUNT_HOSTS_PATH = /\/api\/cloud\/v1\/me\/hosts(?:\/|$)/;
+
+/** The account's machine directory, whose host tokens stay in the main process. */
+function isAccountHostsUrl(url: string): boolean {
+	const { pathname } = new URL(url);
+	try {
+		return ACCOUNT_HOSTS_PATH.test(decodeURIComponent(pathname));
+	} catch {
+		return ACCOUNT_HOSTS_PATH.test(pathname);
+	}
+}
+
+function withoutHostTokens(body: string): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return body;
+	}
+	if (typeof parsed !== "object" || parsed === null) return body;
+	const record = parsed as { token?: unknown; hosts?: unknown };
+	delete record.token;
+	if (Array.isArray(record.hosts)) for (const host of record.hosts) if (typeof host === "object" && host !== null) delete (host as { token?: unknown }).token;
+	return JSON.stringify(record);
+}
+
 function buildHeaders(requested: Record<string, string> | undefined, token: string): Headers {
 	const headers = new Headers();
 	for (const [name, value] of Object.entries(requested ?? {})) {
@@ -385,9 +412,10 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 	}
 
-	async function request(init: unknown): Promise<CloudCpProxyResponse> {
+	async function request(init: unknown, internal?: { hostTokens: true }): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		const redact = internal?.hostTokens !== true && isAccountHostsUrl(url);
 		const token = await getCloudAccessToken(getDataDir());
 		// 401-shaped without touching the network, so the renderer client's
 		// standard auth-error path handles signed-out exactly like a server 401.
@@ -401,7 +429,8 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		response.headers.forEach((value, key) => {
 			headers[key] = value;
 		});
-		return { status: response.status, headers, body: await response.text() };
+		const body = await response.text();
+		return { status: response.status, headers, body: redact ? withoutHostTokens(body) : body };
 	}
 
 	// In-flight binary requests by WebContents and request id, so a cancel
@@ -435,6 +464,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse> {
 		const valid = validateBinaryInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		// Over the channel's limit is a refusal with a message the person can
 		// read, not a request.
 		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
@@ -487,6 +517,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		const ids = trackSender(sender);
 		if (ids.size >= MAX_STREAMS_PER_WEBCONTENTS) {
 			throw streamError(429, `This window already has ${MAX_STREAMS_PER_WEBCONTENTS} open cloud streams.`);
@@ -540,7 +571,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	return { request, requestBinary, cancelBinary, openStream, closeStream };
 }
 
-export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
+export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): CloudCpProxy {
 	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
 	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (event, init: unknown) => proxy.requestBinary(init, event.sender));
@@ -551,4 +582,5 @@ export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: C
 	ipcMain.on(CLOUD_CP_CLOSE_STREAM_CHANNEL, (event, streamId: unknown) => {
 		proxy.closeStream(event.sender, streamId);
 	});
+	return proxy;
 }
