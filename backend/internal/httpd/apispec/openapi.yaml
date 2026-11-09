@@ -16711,6 +16711,8 @@ components:
           type: string
         terminalHandleId:
           type: string
+        terminalTitle:
+          type: string
         terminateOnPrMerge:
           type: boolean
         updatedAt:
@@ -16726,6 +16728,10 @@ components:
           type: string
         workspaceCleanupReportOnly:
           type: boolean
+        workspacePublished:
+          description: Whether the session has a recorded workspace that workspace
+            reads can use.
+          type: boolean
       required:
       - id
       - kind
@@ -16740,6 +16746,7 @@ components:
       - createdAt
       - updatedAt
       - isPinned
+      - workspacePublished
       - statusReadiness
       - chatProviderPreserved
       - status
@@ -21582,6 +21589,8 @@ components:
           type: string
         sessionId:
           type: string
+        terminalTitle:
+          type: string
         title:
           type: string
         workingDir:
@@ -22067,6 +22076,8 @@ components:
         displayName:
           maxLength: 100
           type: string
+        displayNameExplicit:
+          type: boolean
         effort:
           maxLength: 32
           type: string

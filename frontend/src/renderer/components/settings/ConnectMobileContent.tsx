@@ -447,7 +447,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		}
 		if (initialEnabled === undefined || reportedOpen.current) return;
 		reportedOpen.current = true;
-		void captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: initialEnabled });
+		void captureRendererEvent("ao.mobile.connect_opened", { bridge_enabled: initialEnabled });
 	}, [active, initialEnabled]);
 
 	const keepAwakeStatus = query.data?.keepAwake;
@@ -646,7 +646,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	};
 
 	const reportToggle = (next: boolean, outcome: "succeeded" | "failed") => {
-		void captureRendererEvent("ao.renderer.mobile_bridge_toggled", { enabled: next, outcome });
+		void captureRendererEvent("ao.mobile.bridge_toggled", { enabled: next, outcome });
 	};
 
 	const turnOn = (report: boolean) => {

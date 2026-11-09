@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -164,7 +165,13 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
+			// The joined message settles in its own write after the snapshot
+			// above; re-read it briefly instead of racing that write under load.
 			lastTurn, err := h.st.TurnByID(ctx, last.ID)
+			for deadline := time.Now().Add(5 * time.Second); (err != nil || lastTurn.State != domain.TurnStateCompleted) && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+				lastTurn, err = h.st.TurnByID(ctx, last.ID)
+			}
 			if err != nil || lastTurn.State != domain.TurnStateCompleted {
 				t.Fatalf("last queued message did not join the batch: turn=%+v err=%v", lastTurn, err)
 			}
