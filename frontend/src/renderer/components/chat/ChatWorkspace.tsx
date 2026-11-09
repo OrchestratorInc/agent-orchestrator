@@ -1,6 +1,6 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
-import type { FindOccurrence } from "../../lib/chat-find";
+import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
@@ -3867,16 +3867,21 @@ export function Timeline({
 	const virtualRows = virtualizer.getVirtualItems();
 	const virtualHeight = virtualizer.getTotalSize();
 	useEffect(() => {
-		if (!find.open || !findTarget) return;
+		if (!findTarget) return;
+		if (!find.open || !find.engaged || !find.active || occurrenceKey(find.active) !== occurrenceKey(findTarget)) {
+			setFindTarget(undefined);
+			return;
+		}
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === findTarget.messageId));
 		if (index < 0) return;
 		const mounted = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? [])
 			.some((element) => element.dataset.findMessageId === findTarget.messageId);
-		if (mounted) return;
+		// The active highlight persists; mounting completes this one reveal request.
+		if (mounted) { setFindTarget(undefined); return; }
 		const disclosureKey = `${groups[index].key}:worked`;
 		if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
 		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
-	}, [find.open, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
+	}, [find.open, find.engaged, find.active, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
 	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
 		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;

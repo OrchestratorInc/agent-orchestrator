@@ -5,6 +5,7 @@ import { useChatFind } from "./useChatFind";
 import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { aoBridge } from "../lib/bridge";
+import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: get }) }));
@@ -21,11 +22,11 @@ const source: ConversationSnapshot = {
 const hits = [{ messageId: "m", revision: 1, sequence: 10, block: 0, start: 0, end: 5 }, { messageId: "m", revision: 1, sequence: 10, block: 0, start: 6, end: 11 }];
 const reveal = vi.fn(), pause = vi.fn(), send = vi.fn(), interrupt = vi.fn();
 
-function Harness({ snapshot = source }: { snapshot?: ConversationSnapshot }) {
+function Harness({ snapshot = source, markdown = false }: { snapshot?: ConversationSnapshot; markdown?: boolean }) {
 	const root = useRef<HTMLDivElement>(null), viewport = useRef<HTMLDivElement>(null);
 	const find = useChatFind({ source: snapshot, root, viewport, reveal, pauseFollow: pause });
 	return <section data-chat-find-scope="" onKeyDown={(event) => { if (event.key === "Escape") interrupt(); }}>
-		<div ref={root} data-chat-find-surface="">{find.bar}<div ref={viewport} tabIndex={-1}>{find.snapshot.items.map((item) => <div key={item.id} data-find-message-id={item.id}><p data-chat-message-body="">{item.kind === "message" ? item.text : ""}</p></div>)}</div></div>
+		<div ref={root} data-chat-find-surface="">{find.bar}<div ref={viewport} tabIndex={-1}>{find.snapshot.items.map((item) => <div key={item.id} data-find-message-id={item.id}>{markdown && item.kind === "message" && item.role === "assistant" ? <div data-chat-message-body=""><ChatMarkdown text={item.text} streaming={item.streaming} /></div> : <p data-chat-message-body="">{item.kind === "message" ? item.text : ""}</p>}</div>)}</div></div>
 		<textarea aria-label="Composer" defaultValue="draft" onKeyDown={(event) => { if (event.key === "Enter") send(); }} />
 	</section>;
 }
@@ -46,6 +47,27 @@ describe("find in chat interactions", () => {
 		useKeybindingsStore.setState({ overrides: {} });
 	});
 	afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+	it("reveals and highlights a daemon occurrence after a rendered hard break without timing out", async () => {
+		const registry = new Map<string, Set<Range>>();
+		vi.stubGlobal("CSS", { highlights: registry });
+		vi.stubGlobal("Highlight", class extends Set<Range> {});
+		try {
+			const occurrence = { ...hits[0], start: 6, end: 12 };
+			get.mockResolvedValue({ data: { conversationId: "c", transcriptRevision: "break", occurrences: [occurrence], total: 1 }, response: { status: 200 } });
+			const message: ConversationMessage = { ...source.items[0] as ConversationMessage, role: "assistant", origin: "provider", text: "hello  \nneedle" };
+			render(<Harness markdown snapshot={{ ...source, items: [message] }} />);
+			fireEvent.keyDown(document.body, { key: "f", ctrlKey: true });
+			await tick(20);
+			fireEvent.change(screen.getByRole("searchbox"), { target: { value: "needle" } });
+			await tick(3500);
+			expect(screen.getByText("1/1")).toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(reveal).toHaveBeenCalledWith(occurrence);
+			expect([...registry.get("chat-find-active") ?? []].map((range) => range.toString())).toEqual(["needle"]);
+			expect(HTMLElement.prototype.scrollTo).toHaveBeenCalled();
+		} finally { cleanup(); vi.unstubAllGlobals(); }
+	});
 
 	it("finds both occurrences and navigates, wraps, closes and preserves the draft", async () => {
 		render(<Harness />); const composer = screen.getByRole("textbox", { name: "Composer" }); composer.focus();

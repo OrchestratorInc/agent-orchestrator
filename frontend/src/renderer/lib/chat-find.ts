@@ -94,6 +94,9 @@ export function renderedFindBlocks(root: HTMLElement): Array<{ text: string; nod
 	while (walker.nextNode()) {
 		const current = walker.currentNode;
 		if (current.nodeType === Node.ELEMENT_NODE && (current as Element).tagName !== "BR") continue;
+		// React Markdown emits <br> followed by a newline text node for a hard
+		// break. Use that real node once, preserving offsets and Range endpoints.
+		if (current.nodeType === Node.ELEMENT_NODE && current.nextSibling?.nodeType === Node.TEXT_NODE && current.nextSibling.textContent?.startsWith("\n")) continue;
 		const node = current.nodeType === Node.TEXT_NODE ? current as Text : document.createTextNode("\n");
 		const parent = current.parentElement;
 		if (!node.data || parent?.closest(excluded)) continue;

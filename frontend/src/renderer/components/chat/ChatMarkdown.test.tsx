@@ -56,6 +56,17 @@ function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: str
 }
 
 describe("ChatMarkdown", () => {
+	for (const streaming of [false, true]) {
+		it.each(["hello  \nneedle", "hello\\\nneedle", "hello  \n**needle**", "hello  \n\\\nneedle", "hello\nneedle", "😀  \nneedle", "```text\n  hello\n\n  needle\n```"])(`keeps find offsets across hard breaks (streaming=${streaming}): %s`, (source) => {
+			const { container } = render(<ChatMarkdown text={source} streaming={streaming} />);
+			const blocks = renderedFindBlocks(container);
+			const expected = findTextOccurrences(findBlocks(source, true)[0], "needle");
+			const actual = findTextOccurrences(blocks[0].text, "needle");
+			expect(actual).toEqual(expected);
+			expect(findRange(blocks[0].nodes, expected[0].start, expected[0].end)?.toString()).toBe("needle");
+		});
+	}
+
 	it("renders headings as headings rather than literal hashes", () => {
 		render(<ChatMarkdown text={"## Findings\n\nTwo files changed."} />);
 		expect(screen.getByRole("heading", { name: "Findings" })).toBeInTheDocument();
