@@ -29,6 +29,12 @@ export const CLOUD_PUSH_FOLDER_CHANNEL = "cloud:pushFolderToRepository";
 /** An import larger than this is refused before anything is written. */
 export const MAX_FOLDER_IMPORT_BYTES = 1.5 * 1024 * 1024 * 1024;
 
+/** GitHub refuses a push holding any file larger than this. */
+export const MAX_GITHUB_FILE_BYTES = 100 * 1024 * 1024;
+
+/** The control plane refuses a push larger than this (gitProxyMaxPush). */
+export const MAX_PUSH_BYTES = 2 * 1024 * 1024 * 1024;
+
 /** The commit identity of an import when git has none configured. */
 export const FALLBACK_COMMIT_NAME = "AO";
 export const FALLBACK_COMMIT_EMAIL = "noreply@aoagents.dev";
@@ -52,6 +58,10 @@ export type PushFolderErrorCode =
 	| "folder_unavailable"
 	| "folder_too_large"
 	| "folder_has_repositories"
+	| "shallow_repository"
+	| "lfs_unsupported"
+	| "file_too_large"
+	| "workflows_refused"
 	| "git_unavailable"
 	| "import_failed"
 	| "push_failed"
@@ -86,6 +96,7 @@ export interface PushFolderDeps {
 	 */
 	remoteFor?: (pushUrl: string) => string;
 	maxImportBytes?: number;
+	maxFileBytes?: number;
 }
 
 class PushFolderError extends Error {
@@ -150,12 +161,28 @@ function gitMessage(error: unknown): string {
  */
 function pushRefusal(error: unknown, folderName: string, branch: string): PushFolderError {
 	const message = gitMessage(error);
-	const status = /returned error: (\d{3})/.exec(message)?.[1];
-	if (status === "401") return new PushFolderError("signed_out", "Your AO Cloud session expired. Sign in again, then try again.");
-	if (status === "403" || status === "404") {
+	// The deciding line is not always among the last few git prints.
+	const stderr = typeof (error as { stderr?: unknown })?.stderr === "string" ? (error as { stderr: string }).stderr : message;
+	const status = /returned error: (\d{3})/.exec(stderr)?.[1];
+	// git answers a 401 by asking for credentials, which it may not here, so it
+	// never says "returned error: 401" for one.
+	if (status === "401" || /could not read (Username|Password)|Authentication failed/i.test(stderr)) {
+		return new PushFolderError("signed_out", "Your AO Cloud session expired. Sign in again, then try again.");
+	}
+	// git reports a 404 on its first request as "repository '…' not found".
+	if (status === "403" || status === "404" || /repository '[^']*' not found/i.test(stderr)) {
 		return new PushFolderError("push_forbidden", `AO Cloud did not let you upload ${folderName} to its repository. Check that the AO GitHub App still has access to it, then try again.`);
 	}
-	if (/already exists/i.test(message)) {
+	if (/refusing to allow a GitHub App to create or update workflow/i.test(stderr)) {
+		return new PushFolderError("workflows_refused", `GitHub refused ${folderName} because it holds GitHub Actions workflows (.github/workflows), which the AO GitHub App may not add. Remove them from what you upload, or add the repository from GitHub instead.`);
+	}
+	if (/GH001|exceeds GitHub's file size limit/i.test(stderr)) {
+		return new PushFolderError("file_too_large", `GitHub refused ${folderName} because it holds a file larger than 100 MB. Remove it from what you upload (or its history), then try again.`);
+	}
+	// The control plane refuses updating a branch that exists ("already
+	// exists"); git refuses on its own first when the branch holds a commit it
+	// doesn't have ("fetch first").
+	if (/already exists|\[rejected\].*\((fetch first|non-fast-forward)\)/i.test(stderr)) {
 		return new PushFolderError("branch_exists", `The repository for ${folderName} already has a ${branch} branch, and AO only uploads a folder into an empty repository. If an earlier upload finished, remove ${folderName} and add its repository from GitHub instead.`);
 	}
 	return new PushFolderError("push_failed", `Could not upload ${folderName}: ${message}`);
@@ -183,6 +210,10 @@ function quietGitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	delete env.GIT_DIR;
 	delete env.GIT_WORK_TREE;
 	delete env.GIT_INDEX_FILE;
+	// The token must not travel over unverified TLS or into a trace.
+	delete env.GIT_SSL_NO_VERIFY;
+	delete env.GIT_CURL_VERBOSE;
+	for (const key of Object.keys(env)) if (key.startsWith("GIT_TRACE")) delete env[key];
 	return env;
 }
 
@@ -235,20 +266,91 @@ async function ownRepositoryHead(folder: string, git: GitRunner, env: NodeJS.Pro
 	}
 }
 
-/** Bytes of the files an import would commit: everything git does not ignore. */
-async function importSize(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number): Promise<number> {
+/** Whether a .gitattributes file stores paths in Git LFS, which this push cannot carry. */
+function usesLfs(attributes: string): boolean {
+	return /\bfilter\s*=\s*lfs\b/.test(attributes);
+}
+
+function largeFileError(folderName: string, file: string): PushFolderError {
+	return new PushFolderError("file_too_large", `${folderName} holds ${file}, which is larger than GitHub's 100 MB file limit. Remove it from what you upload, then try again.`);
+}
+
+function lfsError(folderName: string): PushFolderError {
+	return new PushFolderError("lfs_unsupported", `${folderName} stores files in Git LFS, which AO cannot upload yet. Push it to GitHub yourself, then add its repository from GitHub.`);
+}
+
+/**
+ * Refuses a repository folder whose commit GitHub would refuse or that would
+ * arrive incomplete: a shallow clone (no history to push), submodules (only
+ * links would arrive), Git LFS (only pointers would arrive), a file over
+ * GitHub's limit, or more than the control plane takes.
+ */
+async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.ProcessEnv, maxFileBytes: number): Promise<void> {
+	const name = path.basename(folder);
+	const shallow = (await git(["-C", folder, "rev-parse", "--is-shallow-repository"], { env, timeout: 15_000 })).stdout.trim();
+	if (shallow === "true") {
+		throw new PushFolderError("shallow_repository", `${name} is a shallow clone, so its history cannot be uploaded. Run "git fetch --unshallow" in it, then try again.`);
+	}
+	const { stdout } = await git(["-C", folder, "ls-tree", "-r", "-l", "-z", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+	const submodules: string[] = [];
+	for (const entry of stdout.split("\0")) {
+		const tab = entry.indexOf("\t");
+		if (tab < 0) continue;
+		const [mode, , object, size] = entry.slice(0, tab).split(/\s+/);
+		const file = entry.slice(tab + 1);
+		if (mode === "160000") {
+			submodules.push(file);
+			continue;
+		}
+		if (Number(size) > maxFileBytes) throw largeFileError(name, file);
+		if (path.posix.basename(file) === ".gitattributes" && usesLfs((await git(["-C", folder, "cat-file", "blob", object], { env, timeout: 15_000 })).stdout)) {
+			throw lfsError(name);
+		}
+	}
+	if (submodules.length > 0) {
+		const shown = submodules.slice(0, 3).join(", ") + (submodules.length > 3 ? `, and ${submodules.length - 3} more` : "");
+		throw new PushFolderError("folder_has_repositories", `${name} holds submodules (${shown}), whose files would not be uploaded. Add each of them to the workspace on its own.`);
+	}
+	try {
+		// git 2.38+; older git just skips this check.
+		const usage = Number((await git(["-C", folder, "rev-list", "--objects", "--disk-usage", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS })).stdout.trim());
+		if (usage > MAX_PUSH_BYTES) {
+			throw new PushFolderError("folder_too_large", `${name}'s history is larger than the 2 GB AO Cloud uploads. Add its repository from GitHub instead.`);
+		}
+	} catch (error) {
+		if (error instanceof PushFolderError) throw error;
+	}
+}
+
+interface ImportScan {
+	/** Bytes of the files an import would commit: everything git does not ignore. */
+	size: number;
+	/** The newest modification time among them, so an unchanged folder imports to the same commit. */
+	newestMs: number;
+}
+
+/** Looks over the files an import would commit, refusing what GitHub would refuse. */
+async function scanImport(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number, maxFileBytes: number): Promise<ImportScan> {
 	const { stdout } = await git(["--git-dir", gitDir, "--work-tree", folder, "ls-files", "-z", "--others", "--exclude-standard"], { env, timeout: GIT_STEP_TIMEOUT_MS });
-	let total = 0;
-	for (const name of stdout.split("\0")) {
-		if (name === "") continue;
+	const name = path.basename(folder);
+	const scan: ImportScan = { size: 0, newestMs: (await fs.stat(folder)).mtimeMs };
+	for (const file of stdout.split("\0")) {
+		if (file === "") continue;
+		const full = path.join(folder, file);
 		try {
-			total += (await fs.lstat(path.join(folder, name))).size;
-		} catch {
+			const stat = await fs.lstat(full);
+			if (stat.size > maxFileBytes) throw largeFileError(name, file);
+			scan.size += stat.size;
+			scan.newestMs = Math.max(scan.newestMs, stat.mtimeMs);
+		} catch (error) {
+			if (error instanceof PushFolderError) throw error;
 			// Gone since it was listed: git add skips it too.
 		}
-		if (total > limit) return total;
+		if (scan.size > limit) return scan;
+		// Checked before git add, which would run the LFS filter and keep only pointers.
+		if (path.basename(file) === ".gitattributes" && usesLfs(await fs.readFile(full, "utf8").catch(() => ""))) throw lfsError(name);
 	}
-	return total;
+	return scan;
 }
 
 /** Paths an import staged as links to other repositories (gitlinks), not as files. */
@@ -269,10 +371,10 @@ async function hasConfiguredIdentity(folder: string, git: GitRunner, env: NodeJS
 }
 
 /** Commits the folder in gitDir with the folder as its work tree; returns the commit. */
-async function importFolder(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number): Promise<string> {
+async function importFolder(folder: string, gitDir: string, git: GitRunner, env: NodeJS.ProcessEnv, limit: number, maxFileBytes: number): Promise<string> {
 	const scoped = ["--git-dir", gitDir, "--work-tree", folder];
 	await git(["init", "--quiet", "--bare", gitDir], { env, timeout: GIT_STEP_TIMEOUT_MS });
-	const size = await importSize(folder, gitDir, git, env, limit);
+	const { size, newestMs } = await scanImport(folder, gitDir, git, env, limit, maxFileBytes);
 	if (size > limit) {
 		throw new PushFolderError("folder_too_large", `${path.basename(folder)} holds more than ${Math.round(limit / (1024 * 1024 * 1024) * 10) / 10} GB of files git does not ignore. Add the large files to its .gitignore, or make it a git repository and add it as a repository.`);
 	}
@@ -284,9 +386,14 @@ async function importFolder(folder: string, gitDir: string, git: GitRunner, env:
 		const shown = embedded.slice(0, 3).join(", ") + (embedded.length > 3 ? `, and ${embedded.length - 3} more` : "");
 		throw new PushFolderError("folder_has_repositories", `${path.basename(folder)} holds git repositories of its own (${shown}), whose files would not be uploaded. Add each of them to the workspace on its own, or add them to ${path.basename(folder)}'s .gitignore.`);
 	}
+	// Dated by the folder's newest change, so a retry of an unchanged folder
+	// (say after a push whose reply was lost) makes the same commit and finds
+	// it already uploaded.
+	const date = `@${Math.floor(newestMs / 1000)} +0000`;
+	const dated = { ...env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
 	const identity = (await hasConfiguredIdentity(folder, git, env))
-		? env
-		: { ...env, GIT_AUTHOR_NAME: FALLBACK_COMMIT_NAME, GIT_AUTHOR_EMAIL: FALLBACK_COMMIT_EMAIL, GIT_COMMITTER_NAME: FALLBACK_COMMIT_NAME, GIT_COMMITTER_EMAIL: FALLBACK_COMMIT_EMAIL };
+		? dated
+		: { ...dated, GIT_AUTHOR_NAME: FALLBACK_COMMIT_NAME, GIT_AUTHOR_EMAIL: FALLBACK_COMMIT_EMAIL, GIT_COMMITTER_NAME: FALLBACK_COMMIT_NAME, GIT_COMMITTER_EMAIL: FALLBACK_COMMIT_EMAIL };
 	// No signing prompt and no hooks: this commit is AO's, made in its own git directory.
 	await git([...scoped, "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "--allow-empty", "-m", `Import ${path.basename(folder)}`], { env: identity, timeout: GIT_STEP_TIMEOUT_MS });
 	return (await git(["--git-dir", gitDir, "rev-parse", "HEAD"], { env, timeout: 15_000 })).stdout.trim();
@@ -319,14 +426,21 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 
 		let commit = await ownRepositoryHead(realFolder, git, env);
 		const source = commit ? "head" : "import";
+		const maxFileBytes = deps.maxFileBytes ?? MAX_GITHUB_FILE_BYTES;
 		const pushArgs: string[] = [];
 		if (commit) {
+			try {
+				await checkRepositoryHead(realFolder, git, env, maxFileBytes);
+			} catch (error) {
+				if (error instanceof PushFolderError) throw error;
+				throw new PushFolderError("import_failed", `Could not prepare ${path.basename(realFolder)}: ${gitMessage(error)}`);
+			}
 			pushArgs.push("-C", realFolder);
 		} else {
 			await fs.mkdir(deps.tmpRoot(), { recursive: true });
 			gitDir = path.join(deps.tmpRoot(), `import-${randomUUID()}`);
 			try {
-				commit = await importFolder(realFolder, gitDir, git, env, deps.maxImportBytes ?? MAX_FOLDER_IMPORT_BYTES);
+				commit = await importFolder(realFolder, gitDir, git, env, deps.maxImportBytes ?? MAX_FOLDER_IMPORT_BYTES, maxFileBytes);
 			} catch (error) {
 				if (error instanceof PushFolderError) throw error;
 				throw new PushFolderError("import_failed", `Could not prepare ${path.basename(realFolder)}: ${gitMessage(error)}`);
@@ -344,6 +458,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			[`http.${remoteUrl}.extraHeader`, ""],
 			[`http.${remoteUrl}.extraHeader`, `Authorization: Bearer ${token}`],
 			["http.followRedirects", "false"],
+			[`http.${remoteUrl}.sslVerify`, "true"],
 			["credential.helper", ""],
 			["core.askPass", ""],
 		]);
@@ -361,9 +476,40 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 	}
 }
 
-/** Import directories left by a crash; they hold only copies of uploaded files. */
-export async function clearFolderImports(tmpRoot: string): Promise<void> {
-	await fs.rm(tmpRoot, { recursive: true, force: true });
+/** How old an import directory must be before it is taken as left by a crash. */
+const STALE_IMPORT_MS = 2 * GIT_PUSH_TIMEOUT_MS;
+
+/**
+ * Import directories left by a crash; they hold only copies of uploaded files.
+ * A recent one may be another running app's (dev beside packaged share ~/.ao)
+ * and is left alone.
+ */
+export async function clearFolderImports(tmpRoot: string, now = Date.now()): Promise<void> {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(tmpRoot);
+	} catch {
+		return;
+	}
+	await Promise.all(entries.filter((entry) => entry.startsWith("import-")).map(async (entry) => {
+		const full = path.join(tmpRoot, entry);
+		const stat = await fs.lstat(full).catch(() => null);
+		if (stat && now - stat.mtimeMs > STALE_IMPORT_MS) await fs.rm(full, { recursive: true, force: true }).catch(() => undefined);
+	}));
+}
+
+/**
+ * Folders the person picked in this app's folder dialog. Only these may be
+ * uploaded, so a renderer cannot name any folder on the disk.
+ */
+const chosenFolders = new Set<string>();
+
+export function rememberChosenFolder(folder: string): void {
+	chosenFolders.add(path.resolve(folder));
+}
+
+export function isChosenFolder(folder: string): boolean {
+	return chosenFolders.has(path.resolve(folder));
 }
 
 /**
@@ -375,9 +521,24 @@ function fromMainFrame(event: unknown): boolean {
 	return !(senderFrame === null || (senderFrame && senderFrame.parent !== null));
 }
 
-export function registerCloudFolderPushIpc(ipcMain: { handle(channel: string, handler: (event: unknown, input: unknown) => unknown): void }, deps: PushFolderDeps & { ready?: () => Promise<void> }): void {
+export interface CloudFolderPushIpcDeps extends PushFolderDeps {
+	ready?: () => Promise<void>;
+	/** Whether the request comes from the app's own shell window. */
+	trustedSender?: (sender: unknown) => boolean;
+	/** Whether the folder is one the person picked (isChosenFolder). */
+	chosenFolder?: (folder: string) => boolean;
+}
+
+export function registerCloudFolderPushIpc(ipcMain: { handle(channel: string, handler: (event: unknown, input: unknown) => unknown): void }, deps: CloudFolderPushIpcDeps): void {
 	ipcMain.handle(CLOUD_PUSH_FOLDER_CHANNEL, async (event, input) => {
-		if (!fromMainFrame(event)) return { status: "error", code: "invalid_request", message: "Uploading folders is only available from the app window." } satisfies PushFolderResult;
+		const sender = (event as { sender?: unknown } | null)?.sender;
+		if (!fromMainFrame(event) || (deps.trustedSender && !deps.trustedSender(sender))) {
+			return { status: "error", code: "invalid_request", message: "Uploading folders is only available from the app window." } satisfies PushFolderResult;
+		}
+		const folder = (input as { folder?: unknown } | null)?.folder;
+		if (deps.chosenFolder && (typeof folder !== "string" || !deps.chosenFolder(folder))) {
+			return { status: "error", code: "invalid_request", message: "Choose the folder to upload in the folder dialog first." } satisfies PushFolderResult;
+		}
 		await deps.ready?.();
 		return pushFolderToRepository(input, deps);
 	});

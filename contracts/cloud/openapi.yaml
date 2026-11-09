@@ -4794,7 +4794,8 @@ components:
         side inside one workspace folder, and the agent starts in that folder
         (agentStartsIn is treated as parent). Set only when the project is
         created; any settings write that includes layout is refused (422),
-        even with the project's current value.
+        even with the project's current value. A standalone project has no
+        repository, so creating one with this layout is refused (422).
     ProjectAdditionalRepositories:
       type: array
       maxItems: 10

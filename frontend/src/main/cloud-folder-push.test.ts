@@ -15,10 +15,12 @@ import {
 	FALLBACK_COMMIT_EMAIL,
 	gitSupportsConfigEnv,
 	type GitRunner,
+	isChosenFolder,
 	isValidPushBranch,
 	pushFolderToRepository,
 	type PushFolderDeps,
 	registerCloudFolderPushIpc,
+	rememberChosenFolder,
 	resolvePushUrl,
 } from "./cloud-folder-push";
 
@@ -209,13 +211,37 @@ describe("pushFolderToRepository", () => {
 		await expect(git(remote, "rev-parse", "--verify", "main")).rejects.toThrow();
 	});
 
-	it("reports git's refusal, without the token", async () => {
+	it("refuses a changed folder into a branch an earlier upload made, without the token", async () => {
 		await fs.writeFile(path.join(folder, "a.txt"), "a");
 		await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
 		await fs.writeFile(path.join(folder, "b.txt"), "b");
 
-		// The branch exists now; a second import would have to update it.
+		// The branch exists now; git refuses on its own ("fetch first").
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+
+		expect(result).toMatchObject({ status: "error", code: "branch_exists" });
+		expect(JSON.stringify(result)).not.toContain("token-1");
+	});
+
+	it("retries an unchanged import to the commit already uploaded", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		const first = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+		// A push whose reply was lost: the retry makes the same commit and finds it there.
+		const retry = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+
+		expect(first).toMatchObject({ status: "pushed", source: "import" });
+		expect(retry).toMatchObject({ status: "pushed", commit: first.status === "pushed" ? first.commit : "" });
+	});
+
+	it("reports git's own failure, without the token", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		const base = deps();
+		const git: GitRunner = async (args, options) => {
+			if (args.includes("push")) throw Object.assign(new Error("git push failed"), { stderr: "fatal: unable to access: Could not resolve host token-1" });
+			return base.git!(args, options);
+		};
+
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, { ...base, git });
 
 		expect(result).toMatchObject({ status: "error", code: "push_failed" });
 		expect(result.status === "error" && result.message).toMatch(/Could not upload notes/);
@@ -224,8 +250,15 @@ describe("pushFolderToRepository", () => {
 
 	it.each([
 		["fatal: unable to access 'https://cp.example.com/x.git/': The requested URL returned error: 401", "signed_out", /Sign in again/],
+		// What git really prints for a 401 with prompts disabled.
+		["fatal: could not read Username for 'https://cp.example.com': terminal prompts disabled", "signed_out", /Sign in again/],
+		["fatal: Authentication failed for 'https://cp.example.com/x.git/'", "signed_out", /Sign in again/],
 		["fatal: unable to access 'https://cp.example.com/x.git/': The requested URL returned error: 403", "push_forbidden", /did not let you upload notes/],
 		[" ! [remote rejected] main -> main (AO only adds new branches here, and refs/heads/main already exists)", "branch_exists", /already has a main branch/],
+		[" ! [rejected]        abc -> main (fetch first)\nerror: failed to push some refs", "branch_exists", /already has a main branch/],
+		["fatal: repository 'https://cp.example.com/x.git/' not found", "push_forbidden", /did not let you upload notes/],
+		["remote: error: GH001: Large files detected.\nremote: error: File big.bin is 120.00 MB; this exceeds GitHub's file size limit of 100.00 MB\n ! [remote rejected] main -> main (pre-receive hook declined)\nerror: failed to push some refs\nhint: a\nhint: b", "file_too_large", /larger than 100 MB/],
+		[" ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)", "workflows_refused", /workflows/],
 	])("explains the control plane's refusal %#", async (stderr, code, message) => {
 		await fs.writeFile(path.join(folder, "a.txt"), "a");
 		const base = deps();
@@ -262,10 +295,80 @@ describe("pushFolderToRepository", () => {
 		expect(await fs.readdir(tmpRoot)).toEqual([]);
 	});
 
-	it("clears leftover import directories", async () => {
-		await fs.mkdir(path.join(tmpRoot, "import-x"), { recursive: true });
+	it("clears import directories left by a crash, not one another app is using", async () => {
+		await fs.mkdir(path.join(tmpRoot, "import-old"), { recursive: true });
+		await fs.mkdir(path.join(tmpRoot, "import-new"), { recursive: true });
+		const hourAgo = new Date(Date.now() - 2 * 60 * 60_000);
+		await fs.utimes(path.join(tmpRoot, "import-old"), hourAgo, hourAgo);
+
 		await clearFolderImports(tmpRoot);
-		await expect(fs.stat(tmpRoot)).rejects.toThrow();
+
+		expect(await fs.readdir(tmpRoot)).toEqual(["import-new"]);
+		await expect(clearFolderImports(path.join(root, "missing"))).resolves.toBeUndefined();
+	});
+
+	it("refuses a shallow clone", async () => {
+		const source = path.join(root, "source");
+		await fs.mkdir(source);
+		await git(source, "init", "--quiet", "--initial-branch=main");
+		for (const n of [1, 2]) {
+			await fs.writeFile(path.join(source, "a.txt"), String(n));
+			await git(source, "add", ".");
+			await git(source, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", `c${n}`);
+		}
+		await fs.rm(folder, { recursive: true });
+		await git(root, "clone", "--quiet", "--depth", "1", `file://${source}`, folder);
+
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+
+		expect(result).toMatchObject({ status: "error", code: "shallow_repository" });
+	});
+
+	it("refuses a repository folder whose commit holds submodules or Git LFS", async () => {
+		await git(folder, "init", "--quiet", "--initial-branch=main");
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await git(folder, "add", ".");
+		await git(folder, "update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},vendor/lib`);
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "first");
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps())).toMatchObject({ status: "error", code: "folder_has_repositories" });
+
+		await git(folder, "rm", "--quiet", "--cached", "vendor/lib");
+		await fs.writeFile(path.join(folder, ".gitattributes"), "*.psd filter=lfs diff=lfs merge=lfs -text\n");
+		await git(folder, "add", ".gitattributes");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "lfs");
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps())).toMatchObject({ status: "error", code: "lfs_unsupported" });
+		await expect(git(remote, "rev-parse", "--verify", "main")).rejects.toThrow();
+	});
+
+	it("refuses an import using Git LFS before adding anything", async () => {
+		await fs.mkdir(path.join(folder, "art"));
+		await fs.writeFile(path.join(folder, "art", ".gitattributes"), "*.psd filter=lfs -text\n");
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+		expect(result).toMatchObject({ status: "error", code: "lfs_unsupported" });
+	});
+
+	it("refuses a file over GitHub's limit, in an import and in a repository's commit", async () => {
+		await fs.writeFile(path.join(folder, "big.bin"), Buffer.alloc(2048));
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ maxFileBytes: 1024 }))).toMatchObject({ status: "error", code: "file_too_large" });
+
+		await git(folder, "init", "--quiet", "--initial-branch=main");
+		await git(folder, "add", ".");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "big");
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ maxFileBytes: 1024 }));
+		expect(result).toMatchObject({ status: "error", code: "file_too_large" });
+		expect(result.status === "error" && result.message).toMatch(/big\.bin/);
+	});
+
+	it("keeps the token off unverified TLS and out of traces", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		const options = deps({ env: () => ({ ...gitEnv, GIT_SSL_NO_VERIFY: "1", GIT_TRACE: "1", GIT_TRACE_CURL: "/tmp/x", GIT_CURL_VERBOSE: "1" }) });
+
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, options)).toMatchObject({ status: "pushed" });
+
+		const push = options.calls.find((call) => call.args.includes("push"))!;
+		for (const key of ["GIT_SSL_NO_VERIFY", "GIT_TRACE", "GIT_TRACE_CURL", "GIT_CURL_VERBOSE"]) expect(push.env[key]).toBeUndefined();
+		const config = Object.entries(push.env).filter(([key]) => key.startsWith("GIT_CONFIG_KEY_")).map(([key, value]) => `${value}=${push.env[key.replace("KEY", "VALUE")]}`);
+		expect(config).toContain(`http.${CP}${PUSH_PATH}.sslVerify=true`);
 	});
 });
 
@@ -278,5 +381,23 @@ describe("registerCloudFolderPushIpc", () => {
 
 		expect(await handler?.({ senderFrame: { parent: {} } }, { folder, pushPath: PUSH_PATH, branch: "main" })).toMatchObject({ status: "error", code: "invalid_request" });
 		expect(await handler?.({ senderFrame: { parent: null } }, { folder, pushPath: PUSH_PATH, branch: "main" })).toMatchObject({ status: "pushed" });
+	});
+
+	it("answers only the app's shell, for a folder picked in its folder dialog", async () => {
+		const handlers = new Map<string, (event: unknown, input: unknown) => unknown>();
+		const shell = { id: 1 };
+		registerCloudFolderPushIpc({ handle: (channel, handler) => handlers.set(channel, handler) }, {
+			...deps(),
+			trustedSender: (sender) => sender === shell,
+			chosenFolder: isChosenFolder,
+		});
+		const handler = handlers.get(CLOUD_PUSH_FOLDER_CHANNEL)!;
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		const input = { folder, pushPath: PUSH_PATH, branch: "main" };
+
+		expect(await handler({ sender: { id: 2 }, senderFrame: { parent: null } }, input)).toMatchObject({ status: "error", code: "invalid_request" });
+		expect(await handler({ sender: shell, senderFrame: { parent: null } }, input)).toMatchObject({ status: "error", message: expect.stringMatching(/folder dialog/) });
+		rememberChosenFolder(folder);
+		expect(await handler({ sender: shell, senderFrame: { parent: null } }, input)).toMatchObject({ status: "pushed" });
 	});
 });
