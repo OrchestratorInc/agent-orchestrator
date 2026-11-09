@@ -3350,7 +3350,7 @@
 	"remote.emptyHosts": "No hosts yet. Add one below.",
 	"remote.editHost": "Edit {{label}}",
 	"remote.removeHost": "Remove {{label}}",
-	"remote.setupHint": "Run ao remote-host enable on the other machine, or add --tunnel for access away from its network. Use ao remote-host status to get the HTTPS address and connection password.",
+	"remote.setupHint": "Run ao remote-host enable on the other machine, or add --tunnel for access away from its network. Use ao remote-host status --show-password to get the HTTPS address and connection password.",
 	"remote.keepPassword": "Leave blank to keep the current password",
 	"remote.saving": "Saving…",
 	"remote.saveHost": "Save host",
