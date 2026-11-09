@@ -421,9 +421,9 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
  * Reports AO delivered together, as one line that opens to their rows: a batch
  * that reached the orchestrator on its own, or one a worker's steer carried.
  * Reports sent with a human message are not drawn. It leads with the first
- * senders' agents, in black and white. A
- * report whose worker still waits on the user (stuck counts too) keeps its count
- * on the closed line; a newer update from that worker clears it.
+ * senders' agent logos, in their own colors. A report whose worker still waits
+ * on the user (stuck counts too) keeps its count on the closed line; a newer
+ * update from that worker clears it.
  */
 export function ReportsLine({ updates, open, onOpenChange }: {
 	updates: readonly WorkerUpdate[];
@@ -460,12 +460,12 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	);
 }
 
-/** One sender's agent on a reports line: its logo in black and white, stacked over the one before. */
+/** One sender's agent on a reports line: its logo in its own colors, stacked over the one before. */
 function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean }) {
 	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
 	return (
 		<span data-report-logo="" className={cn("grid size-[22px] shrink-0 place-items-center rounded-full border-2 border-background bg-muted", !first && "-ml-1.5")}>
-			{provider ? <AgentAvatar provider={provider} decorative className="size-3.5 grayscale" /> : <Bot className="size-3.5 text-muted-foreground" />}
+			{provider ? <AgentAvatar provider={provider} decorative className="size-3.5" /> : <Bot className="size-3.5 text-muted-foreground" />}
 		</span>
 	);
 }

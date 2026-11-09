@@ -321,6 +321,21 @@ describe("orchestrator worker updates", () => {
 		expect(line).not.toHaveTextContent("...");
 	});
 
+	it("draws each sender's logo in its own colors", () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [
+				{ id: "proj-285", workspaceId: "proj", title: "Menus", provider: "codex", kind: "worker", status: "idle", prs: [] },
+				{ id: "proj-286", workspaceId: "proj", title: "iOS pages", provider: "claude-code", kind: "worker", status: "idle", prs: [] },
+			],
+		}] as unknown as WorkspaceSummary[];
+		const entries = "[done] [Menus](ao://sessions/proj/proj-285)\nShipped.\n\n[done] [iOS pages](ao://sessions/proj/proj-286)\nShipped.";
+		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Noted.")], vi.fn(), workspaces);
+		const logos = screen.getByRole("button", { name: /^2 Agent Reports/ }).querySelectorAll("[data-report-logo] img");
+		expect(logos).toHaveLength(2);
+		for (const logo of logos) expect(logo).not.toHaveClass("grayscale");
+	});
+
 	it("still shows the work of a turn that answered with tools only", async () => {
 		renderOrchestrator([
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser"),
