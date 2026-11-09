@@ -367,7 +367,27 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-function MarkdownLink({ href, children, className, menuPath }: { href?: string; children?: ReactNode; className?: string; menuPath?: string }) {
+type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string };
+
+function MarkdownLink(props: MarkdownLinkProps) {
+	const { href } = props;
+	return href && href.includes("/artifacts/") && !isWebLink(href) && !isAoLink(href)
+		? <ArtifactFileLink {...props} href={href} />
+		: <MarkdownLinkTarget {...props} />;
+}
+
+/**
+ * A link to the file a session artifact was written to (the worker writes it
+ * under .../artifacts/<session>/<path>), opened as that artifact when the
+ * session lists it: the file lives outside the checkout, so the workspace file
+ * view cannot read it.
+ */
+function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
+	const workspaces = useChatLinkWorkspaces();
+	return <MarkdownLinkTarget {...props} href={artifactLinkForPath(props.href, workspaces) ?? props.href} />;
+}
+
+function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen

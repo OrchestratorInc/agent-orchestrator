@@ -507,6 +507,32 @@ describe("ChatMarkdown", () => {
 		copy.mockRestore();
 	});
 
+	it("opens a Markdown link to a listed artifact's file as that artifact, not as a workspace file", async () => {
+		// A Cloud agent links the file it wrote under the worker's artifact
+		// directory; the file view cannot read outside the checkout (422).
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "conductor-migration-guide.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+			<ChatMarkdown text="See the [migration guide](/workspace/.ao/worker/artifacts/worker-1/conductor-migration-guide.md)." />
+		</ChatLinkProvider>);
+		const link = screen.getByRole("link", { name: "migration guide" });
+		expect(link).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/conductor-migration-guide.md");
+		await userEvent.click(link);
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/conductor-migration-guide.md");
+		expect(onFileOpen).not.toHaveBeenCalled();
+	});
+
+	it("leaves a Markdown link to an unlisted artifact path as a file link", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={vi.fn()}>
+			<ChatMarkdown text="[other](/workspace/.ao/worker/artifacts/worker-1/other.md)" />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "other" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/other.md");
+		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
