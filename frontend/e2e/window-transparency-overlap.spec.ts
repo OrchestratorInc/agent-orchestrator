@@ -17,7 +17,7 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
-async function expectOccludes(surface: Locator, underneath: Locator) {
+async function expectOccludes(surface: Locator, underneath: Locator, occludes = true) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
 	const cards = await underneath.evaluateAll((elements) => elements.map((element) => {
@@ -27,14 +27,43 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
 	const before = await surface.screenshot({ animations: "disabled" });
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
-	});
-	const after = await surface.screenshot({ animations: "disabled" });
-	expect(before.equals(after), "content underneath must not affect the surface's pixels").toBe(true);
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
-	});
+	try {
+		await underneath.evaluateAll((elements) => {
+			for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
+		});
+		const after = await surface.screenshot({ animations: "disabled" });
+		const changedPixels = await surface.evaluate(async (_, images) => {
+			const decode = async (png: string) => {
+				const image = new Image();
+				image.src = `data:image/png;base64,${png}`;
+				await image.decode();
+				const canvas = document.createElement("canvas");
+				canvas.width = image.width; canvas.height = image.height;
+				const context = canvas.getContext("2d")!;
+				context.drawImage(image, 0, 0);
+				return context.getImageData(0, 0, canvas.width, canvas.height);
+			};
+			const [before, after] = await Promise.all([decode(images.before), decode(images.after)]);
+			if (before.width !== after.width || before.height !== after.height) throw new Error("surface dimensions changed");
+			let changed = 0;
+			for (let i = 0; i < before.data.length; i += 4) {
+				// Repainting the hidden layer can change icon/edge antialiasing by
+				// up to 5/255 per channel (under 2%). Every pixel must stay within that tolerance.
+				if ([0, 1, 2, 3].some((channel) => Math.abs(before.data[i + channel] - after.data[i + channel]) > 5)) changed++;
+			}
+			return changed;
+		}, { before: before.toString("base64"), after: after.toString("base64") });
+		if (occludes && changedPixels) {
+			await test.info().attach("occlusion-before", { body: before, contentType: "image/png" });
+			await test.info().attach("occlusion-after", { body: after, contentType: "image/png" });
+		}
+		if (occludes) expect(changedPixels, "content underneath must not affect the surface's pixels").toBe(0);
+		else expect(changedPixels, "the comparison must detect content when clipping is removed").toBeGreaterThan(0);
+	} finally {
+		await underneath.evaluateAll((elements) => {
+			for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
+		});
+	}
 }
 
 for (const theme of ["dark", "light"]) {
@@ -70,6 +99,19 @@ for (const theme of ["dark", "light"]) {
 			await expect(page.getByRole("list", { name: "Archived sessions" })).toBeVisible();
 			await expectSurfaceTransparency(archive, centerClear);
 			await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'));
+			if (centerClear) {
+				// A negative control keeps the pixel tolerance honest: removing the
+				// production clip must expose the active cards through the clear archive.
+				const lanes = page.locator('[style*="clip-path"]').filter({ has: page.getByTestId("board-column") });
+				await expect(lanes).toHaveCount(1);
+				const clip = await lanes.evaluate((element) => (element as HTMLElement).style.clipPath);
+				try {
+					await lanes.evaluate((element) => { (element as HTMLElement).style.clipPath = "none"; });
+					await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'), false);
+				} finally {
+					await lanes.evaluate((element, clip) => { (element as HTMLElement).style.clipPath = clip; }, clip);
+				}
+			}
 			await toggle.click();
 			await expect(toggle).toHaveAttribute("aria-expanded", "false");
 
