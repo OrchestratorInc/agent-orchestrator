@@ -76,6 +76,8 @@ for (const mode of ["light", "dark"]) {
 			await page.setViewportSize({ width: 1800, height: 900 });
 			await installFakeAgent(page, { projectId: "topbar-palette" });
 			await page.addInitScript(({ mode, palette }) => {
+				Object.defineProperty(navigator, "platform", { get: () => "MacIntel", configurable: true });
+				Object.defineProperty(navigator, "userAgentData", { get: () => ({ platform: "macOS" }), configurable: true });
 				localStorage.setItem("ao.developerMode", "true");
 				localStorage.setItem("ao.theme", mode);
 				localStorage.setItem("ao.theme-style", palette);
