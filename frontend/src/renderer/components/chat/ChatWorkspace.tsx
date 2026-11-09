@@ -3271,9 +3271,10 @@ export function Timeline({
 	const canForkHistoricalContext = can(snapshot, "fork");
 	const canReconstructHistoricalContext =
 		can(snapshot, "prompt_replay") && can(snapshot, "embedded_context");
+	const stableBranchPoints = useStableValue(snapshot.branchPoints);
 	const branchPoints = useMemo(
-		() => new Map((snapshot.branchPoints ?? []).map((point) => [point.turnId, point])),
-		[snapshot.branchPoints],
+		() => new Map((stableBranchPoints ?? []).map((point) => [point.turnId, point])),
+		[stableBranchPoints],
 	);
 	const firstEditableHumanPromptTurnId = useMemo(
 		() =>

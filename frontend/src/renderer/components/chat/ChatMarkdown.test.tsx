@@ -55,6 +55,44 @@ function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: str
 }
 
 describe("ChatMarkdown", () => {
+	it("uses current file and browser handlers after a parent refresh", async () => {
+		const before = vi.fn();
+		const after = vi.fn();
+		const paths = ["src/app.ts"];
+		const content = <ChatMarkdown text={"Open `src/app.ts:12` or [website](https://example.com)."} />;
+		const view = render(<ChatLinkProvider workspacePaths={paths} onFileOpen={before} onLinkOpen={before}>{content}</ChatLinkProvider>);
+		view.rerender(<ChatLinkProvider workspacePaths={paths} onFileOpen={after} onLinkOpen={after}>{content}</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "Open src/app.ts in Files" }));
+		await userEvent.click(screen.getByRole("link", { name: "website" }));
+		expect(before).not.toHaveBeenCalled();
+		expect(after).toHaveBeenCalledWith("src/app.ts", 12);
+		expect(after).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("updates file links when their catalog or opening capability changes", () => {
+		const open = vi.fn();
+		const content = <ChatMarkdown text={"`app.ts` `new.ts`"} />;
+		const view = render(<ChatLinkProvider workspacePaths={["src/app.ts"]} onFileOpen={open}>{content}</ChatLinkProvider>);
+		expect(screen.getByRole("button", { name: "Open src/app.ts in Files" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open src/new.ts in Files" })).not.toBeInTheDocument();
+		view.rerender(<ChatLinkProvider workspacePaths={["src/new.ts", "src/app.ts", "other/app.ts"]} onFileOpen={open}>{content}</ChatLinkProvider>);
+		expect(screen.queryByRole("button", { name: "Open src/app.ts in Files" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open src/new.ts in Files" })).toBeInTheDocument();
+		view.rerender(<ChatLinkProvider workspacePaths={["src/new.ts"]}>{content}</ChatLinkProvider>);
+		expect(screen.queryByRole("button", { name: "Open src/new.ts in Files" })).not.toBeInTheDocument();
+	});
+
+	it("uses the latest session-link handler", async () => {
+		const before = vi.fn();
+		const after = vi.fn();
+		const content = <ChatMarkdown text="[Worker](ao://sessions/project/session)" />;
+		const view = render(<ChatLinkProvider onSessionLinkOpen={before}>{content}</ChatLinkProvider>);
+		view.rerender(<ChatLinkProvider onSessionLinkOpen={after}>{content}</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "Worker" }));
+		expect(before).not.toHaveBeenCalled();
+		expect(after).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/session");
+	});
+
 	it("renders headings as headings rather than literal hashes", () => {
 		render(<ChatMarkdown text={"## Findings\n\nTwo files changed."} />);
 		expect(screen.getByRole("heading", { name: "Findings" })).toBeInTheDocument();
