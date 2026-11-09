@@ -201,8 +201,10 @@ test.afterEach(async ({ page }) => {
 test("renderer: streaming replies keep updating through rapid session switches @T0", async ({ page }) => {
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
-	// Seven switches on a 4x throttled dev build outlast the default timeout.
-	test.setTimeout(120_000);
+	// Seven switches on a 4x throttled dev build outlast the default timeout,
+	// and a loaded CI container can stall a single chunk beyond 10s (observed
+	// on main and fork PRs alike while the stream itself stays healthy).
+	test.setTimeout(240_000);
 	const harness = await heldHarness(page);
 	harness.startStreaming();
 	await throttle(page, 4);
@@ -232,9 +234,11 @@ test("renderer: streaming replies keep updating through rapid session switches @
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
 			previous = session;
-			// The shown session keeps streaming after the switch.
+			// The shown session keeps streaming after the switch. The wait must
+			// outlast a loaded CI container's refetch+render cycle for a 300+
+			// chunk reply under the 4x throttle, not just the stream's 120ms pace.
 			const seen = harness.chunks(session);
-			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });
+			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 30_000 });
 		}
 	} finally {
 		harness.stop();
