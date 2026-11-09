@@ -154,10 +154,12 @@ import {
 	CheckCheck as LucideCheckCheck,
 	ChevronsDownUp as LucideChevronsDownUp,
 	ClipboardCheck as LucideClipboardCheck,
+	CircleDot as LucideCircleDot,
 	Eraser as LucideEraser,
 	FileCode2 as LucideFileCode2,
 	FileDiff as LucideFileDiff,
 	FileJson2 as LucideFileJson2,
+	FilePen as LucideFilePen,
 	FileSearch as LucideFileSearch,
 	FolderGit2 as LucideFolderGit2,
 	FolderOpen as LucideFolderOpen,
@@ -167,6 +169,7 @@ import {
 	GitFork as LucideGitFork,
 	GitPullRequestClosed as LucideGitPullRequestClosed,
 	GitPullRequestDraft as LucideGitPullRequestDraft,
+	Hammer as LucideHammer,
 	History as LucideHistory,
 	Import as LucideImport,
 	Laptop as LucideLaptop,
@@ -177,6 +180,7 @@ import {
 	MonitorCog as LucideMonitorCog,
 	MonitorSmartphone as LucideMonitorSmartphone,
 	NotebookPen as LucideNotebookPen,
+	Paintbrush as LucidePaintbrush,
 	Pilcrow as LucidePilcrow,
 	PinOff as LucidePinOff,
 	Plug as LucidePlug,
@@ -311,6 +315,7 @@ export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
 export const Cookie = fromMyna(MynaCookie, "cookie");
+export const CircleDot = fromLucide(LucideCircleDot, "circle-dot");
 export const Copy = fromLucide(LucideCopy, "copy");
 export const CornerDownLeft = fromMyna(MynaCornerDownLeft, "corner-down-left");
 export const CornerDownRight = fromMyna(MynaCornerDownRight, "corner-down-right");
@@ -327,6 +332,7 @@ export const FileCode2 = fromLucide(LucideFileCode2, "file-code-2");
 export const FileDiff = fromLucide(LucideFileDiff, "file-diff");
 export const FileIcon = fromMyna(MynaFile, "file");
 export const FileJson2 = fromLucide(LucideFileJson2, "file-json-2");
+export const FilePen = fromLucide(LucideFilePen, "file-pen");
 export const FilePlus = fromMyna(MynaFilePlus, "file-plus");
 export const FileSearch = fromLucide(LucideFileSearch, "file-search");
 export const FileText = fromMyna(MynaFileText, "file-text");
@@ -357,6 +363,7 @@ export const Heading2 = fromMyna(MynaHeading2, "heading-2");
 export const Heading3 = fromMyna(MynaHeading3, "heading-3");
 export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
+export const Hammer = fromLucide(LucideHammer, "hammer");
 export const History = fromLucide(LucideHistory, "history");
 export const House = fromMyna(MynaHome, "house");
 export const Image = fromMyna(MynaImage, "image");
@@ -402,6 +409,7 @@ export const PanelLeft = fromMyna(MynaPanelLeft, "panel-left");
 export const PanelLeftIcon = fromMyna(MynaPanelLeft, "panel-left");
 export const PanelRight = fromMyna(MynaPanelRight, "panel-right");
 export const Paperclip = fromMyna(MynaPaperclip, "paperclip");
+export const Paintbrush = fromLucide(LucidePaintbrush, "paintbrush");
 export const Pause = fromLucide(LucidePause, "pause");
 export const Pencil = fromMyna(MynaPencil, "pencil");
 export const PencilLine = fromMyna(MynaPencil, "pencil-line");
