@@ -4,7 +4,7 @@ import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -74,7 +74,8 @@ import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/u
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
-import { setSessionSwitchHeld, useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -202,36 +203,7 @@ function LocalSessionHost() {
 	const cloudOrgId = org?.id;
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
-	// Route state reaches React as a synchronous store update. Deferring it lets
-	// the sidebar answer the click at once while the destination renders in
-	// interruptible slices, so main-thread animations keep running. The previous
-	// session stays painted until then; entering from another route has nothing
-	// to keep, so it renders directly.
-	const deferredSessionId = useDeferredValue(liveSessionId);
-	const deferredProjectId = useDeferredValue(liveProjectId);
-	// Only the session already on screen is kept. Returning from another route
-	// before the deferred value caught up must not bring back an older session.
-	const shownSessionId = useRef<string | undefined>(undefined);
-	const keepShown = Boolean(liveSessionId && deferredSessionId && deferredSessionId === shownSessionId.current);
-	const sessionId = keepShown ? deferredSessionId : liveSessionId;
-	const projectId = keepShown ? deferredProjectId : liveProjectId;
-	const switching = sessionId !== liveSessionId;
-	useLayoutEffect(() => {
-		shownSessionId.current = sessionId;
-	});
-	useLayoutEffect(() => {
-		setSessionSwitchHeld(switching);
-		if (!switching) return;
-		// The kept session is only a placeholder now: keystrokes and clicks
-		// must not reach its composer or controls (keyboard switches leave focus
-		// there). inert has no visual effect.
-		const workspace = document.getElementById("session-workspace");
-		const active = document.activeElement;
-		if (workspace && active instanceof HTMLElement && workspace.contains(active)) active.blur();
-		workspace?.setAttribute("inert", "");
-		return () => workspace?.removeAttribute("inert");
-	}, [switching]);
-	useEffect(() => () => setSessionSwitchHeld(false), []);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
 		[cloudOrgId, projectId, sessionId],
