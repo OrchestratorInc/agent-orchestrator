@@ -369,7 +369,7 @@ describe("SessionsBoardView", () => {
 					{ number: 12, state: "merged", url: "https://example.com/pull/12" },
 				]}
 				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
-				session={{ ...baseSession, branch: "feat/portable", trackerIssueId: "github:42" }}
+				session={{ ...baseSession, branch: "feat/portable" }}
 				usage={{ accessibleLabel: "12,400 tokens", compactLabel: "12.4K tok" }}
 			/>,
 		);
@@ -401,10 +401,40 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText("5m ago")).toHaveAttribute("title", "Updated 2026-08-09T10:00:00Z");
 		expect(screen.getByText("feat/portable")).toHaveClass("text-muted-foreground");
 		expect(screen.getByText("5m ago")).toHaveClass("tabular-nums", "text-muted-foreground");
-		expect(screen.queryByText("github:42")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "portable task" }));
 		expect(onOpen).toHaveBeenCalledOnce();
+	});
+
+	it("links the session's tracker issue even before it has a PR", () => {
+		const onOpen = vi.fn();
+		render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "5m ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				onOpen={onOpen}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{
+					...baseSession,
+					trackerIssue: { number: 42, repo: "acme/demo", url: "https://github.com/acme/demo/issues/42" },
+				}}
+			/>,
+		);
+
+		const issue = screen.getByRole("link", { name: "Issue acme/demo#42" });
+		expect(issue).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
+		expect(issue).toHaveTextContent("#42");
+		issue.addEventListener("click", (event) => event.preventDefault());
+		fireEvent.click(issue);
+		expect(onOpen).not.toHaveBeenCalled();
 	});
 
 	it("keeps a crowded PR row wrapping instead of crushing entries past the card edge", () => {

@@ -5,6 +5,7 @@ import {
 	toSessionActivity,
 	toSessionStatus,
 	type AgentId,
+	type BoardTrackerIssue,
 	type KanbanColumn,
 	type SessionActivity,
 	type SessionActivityState,
@@ -262,20 +263,30 @@ export type WorkspaceSession = {
 	};
 };
 
-// Tracker providers whose ids the intake daemon stamps sessions with, in
-// "<provider>:<native>" form. Adding a provider (Linear, Jira, ...) later is
-// just another prefix in this list — no caller of canonicalTrackerIssueId
-// needs to change.
-const TRACKER_PROVIDER_PREFIXES = ["github:"] as const;
+// The ids tracker intake stamps on sessions (trackerintake.CanonicalIssueID):
+// "github:owner/repo#12" and "gitlab:group/sub/repo#7", with "@host" when the
+// forge is not github.com or gitlab.com.
+const GITHUB_ISSUE_ID = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
+const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 
 /**
- * The provider-prefixed issue id if `issueId` came from tracker intake, or
- * undefined for manually created sessions (whose issueId, if any, is a plain
- * task title with no provider prefix).
+ * The issue's page on its forge when `issueId` is an intake id. Any other
+ * issueId is free text typed at spawn that names no repository, so it gets no
+ * link rather than a guessed one.
  */
-export function canonicalTrackerIssueId(issueId?: string): string | undefined {
+export function trackerIssueLink(issueId?: string): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
-	return TRACKER_PROVIDER_PREFIXES.some((prefix) => issueId.startsWith(prefix)) ? issueId : undefined;
+	const github = GITHUB_ISSUE_ID.exec(issueId);
+	if (github) {
+		const [, repo, number, host = "github.com"] = github;
+		return { number: Number(number), repo, url: `https://${host}/${repo}/issues/${number}` };
+	}
+	const gitlab = GITLAB_ISSUE_ID.exec(issueId);
+	if (gitlab) {
+		const [, repo, number, host = "gitlab.com"] = gitlab;
+		return { number: Number(number), repo, url: `https://${host}/${repo}/-/issues/${number}` };
+	}
+	return undefined;
 }
 
 export type ProjectKind = "single_repo" | "workspace" | "scratch";
