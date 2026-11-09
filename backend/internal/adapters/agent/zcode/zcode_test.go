@@ -185,7 +185,7 @@ func TestGetPromptDeliveryStrategy(t *testing.T) {
 	}
 }
 
-func TestPromptReadinessHintsDelaysWithoutMarker(t *testing.T) {
+func TestPromptReadinessHintsWaitsForComposer(t *testing.T) {
 	hints, err := (&Plugin{}).PromptReadinessHints(context.Background(), ports.LaunchConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -193,8 +193,18 @@ func TestPromptReadinessHintsDelaysWithoutMarker(t *testing.T) {
 	if hints.InitialDelay <= 0 {
 		t.Fatalf("hints.InitialDelay = %v, want a bounded settle delay", hints.InitialDelay)
 	}
-	if len(hints.Patterns) != 0 {
-		t.Fatalf("hints.Patterns = %#v, want none (no verified ready marker)", hints.Patterns)
+	// Keystrokes typed before the composer renders are lost (observed live as
+	// an echoed prompt line, an empty composer and a session that never ran),
+	// so readiness must wait for the composer placeholder — with a bounded
+	// timeout so a build that drops it degrades to fixed-delay delivery.
+	if len(hints.Patterns) != 1 || hints.Patterns[0] != "Ask a task about this workspace" {
+		t.Fatalf("hints.Patterns = %#v, want the composer placeholder marker", hints.Patterns)
+	}
+	if hints.Timeout <= 0 {
+		t.Fatalf("hints.Timeout = %v, want a bounded fallback timeout", hints.Timeout)
+	}
+	if hints.PollInterval <= 0 || hints.Lines <= 0 {
+		t.Fatalf("hints.PollInterval = %v, hints.Lines = %v, want positive poll settings", hints.PollInterval, hints.Lines)
 	}
 }
 

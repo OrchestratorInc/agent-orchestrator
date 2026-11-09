@@ -189,16 +189,25 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.Launch
 	return ports.PromptDeliveryInCommand, nil
 }
 
-// PromptReadinessHints gives the TUI a bounded settle delay before AO injects
-// the worker's first task. No terminal marker is asserted: ZCode's TUI has no
-// ready marker AO can rely on across builds, and an empty pattern list makes
-// the manager deliver after the delay without waiting for one.
+// PromptReadinessHints waits for ZCode's composer before AO injects the
+// worker's first task. The composer placeholder ("Ask a task about this
+// workspace", rendered by the client's own TUI package) is the ready marker:
+// the TUI keeps booting for well over a second after the process starts
+// (MCP servers connect, then the composer renders), and keystrokes typed
+// before it is live are lost — observed live as an echoed prompt line
+// followed by an empty composer and a session that never ran. The timeout
+// fallback still bounds the wait: a build that drops the placeholder
+// degrades to the old fixed-delay behavior instead of blocking spawn.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
 		InitialDelay: 500 * time.Millisecond,
+		Patterns:     []string{"Ask a task about this workspace"},
+		Timeout:      30 * time.Second,
+		PollInterval: 100 * time.Millisecond,
+		Lines:        100,
 	}, nil
 }
 
