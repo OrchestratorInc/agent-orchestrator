@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestAuthLockoutResetsAfterCooldown(t *testing.T) {
 	// Lock the source with 5 failures.
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req("Bearer wrong"))
+		h.ServeHTTP(w, req(fmt.Sprintf("Bearer wrong%d", i)))
 	}
 	// Still within cooldown → 429 even with the right password.
 	w := httptest.NewRecorder()
@@ -111,7 +112,7 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", func() time.Time { return now })
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req("Bearer wrong"))
+		h.ServeHTTP(w, req(fmt.Sprintf("Bearer wrong%d", i)))
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
 		}
@@ -124,11 +125,77 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	}
 }
 
+// A client repeating one stale password has made one guess, however many
+// requests carry it: a phone holding the password from before a rotation and
+// daemon restart fails every batched poll at once. Guessing the password needs
+// distinct wrong passwords, and only those count toward the lockout.
+func TestAuthLockoutCountsDistinctWrongPasswords(t *testing.T) {
+	type attempt struct {
+		src, password string
+		wait          time.Duration
+	}
+	const srcA, srcB = "192.168.1.50", "192.168.1.99"
+	repeat := func(n int, a attempt) []attempt {
+		out := make([]attempt, n)
+		for i := range out {
+			out[i] = a
+		}
+		return out
+	}
+	distinct := func(n int, src string) []attempt {
+		out := make([]attempt, n)
+		for i := range out {
+			out[i] = attempt{src: src, password: fmt.Sprintf("wrong%d", i)}
+		}
+		return out
+	}
+	steps := func(groups ...[]attempt) []attempt { return slices.Concat(groups...) }
+	for _, tc := range []struct {
+		name     string
+		attempts []attempt
+		blocked  map[string]bool
+	}{
+		{"same wrong password repeated", repeat(20, attempt{src: srcA, password: "stale"}), map[string]bool{srcA: false}},
+		{"five distinct wrong passwords", distinct(5, srcA), map[string]bool{srcA: true}},
+		{"four distinct wrong passwords", distinct(4, srcA), map[string]bool{srcA: false}},
+		{"repeats mixed with distinct", steps(repeat(10, attempt{src: srcA, password: "stale"}), distinct(3, srcA), repeat(10, attempt{src: srcA, password: "stale"})), map[string]bool{srcA: false}},
+		{"repeats mixed with five distinct", steps(repeat(10, attempt{src: srcA, password: "stale"}), distinct(4, srcA)), map[string]bool{srcA: true}},
+		{"missing password counts once", steps(repeat(10, attempt{src: srcA}), distinct(3, srcA)), map[string]bool{srcA: false}},
+		{"missing password counts as a guess", steps(repeat(10, attempt{src: srcA}), distinct(4, srcA)), map[string]bool{srcA: true}},
+		{"window expires", steps(distinct(4, srcA), []attempt{{src: srcA, password: "late", wait: time.Minute + time.Second}}, distinct(3, srcA)), map[string]bool{srcA: false}},
+		{"success resets", steps(distinct(4, srcA), []attempt{{src: srcA, password: "secret12"}, {src: srcA, password: "other"}}), map[string]bool{srcA: false}},
+		{"per source", steps(distinct(5, srcA), distinct(4, srcB)), map[string]bool{srcA: true, srcB: false}},
+		{"retired password not counted", steps(distinct(4, srcA), repeat(3, attempt{src: srcA, password: "retired1"})), map[string]bool{srcA: false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			state := &authState{}
+			state.setHash(mobilebridge.HashPassword("retired1"))
+			state.setHash(mobilebridge.HashPassword("secret12"))
+			lock := newLockout(func() time.Time { return now })
+			h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+			for _, a := range tc.attempts {
+				now = now.Add(a.wait)
+				auth := ""
+				if a.password != "" {
+					auth = "Bearer " + a.password
+				}
+				h.ServeHTTP(httptest.NewRecorder(), reqFrom(a.src+":5555", auth))
+			}
+			for src, want := range tc.blocked {
+				if got := lock.blocked(src); got != want {
+					t.Errorf("%s blocked: got %v want %v", src, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestValidTunnelClientSurvivesAnotherClientsLockout(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
-	for range 5 {
+	for i := range 5 {
 		w := httptest.NewRecorder()
-		r := reqFrom("127.0.0.1:5555", "Bearer wrong")
+		r := reqFrom("127.0.0.1:5555", fmt.Sprintf("Bearer wrong%d", i))
 		r.Header.Set("CF-Connecting-IP", "198.51.100.1")
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusUnauthorized {
@@ -154,7 +221,7 @@ func TestValidTunnelClientSurvivesAnotherClientsLockout(t *testing.T) {
 func TestLANClientCannotSpoofTunnelSource(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	for i := range 5 {
-		r := reqFrom("192.168.1.50:5555", "Bearer wrong")
+		r := reqFrom("192.168.1.50:5555", fmt.Sprintf("Bearer wrong%d", i))
 		r.Header.Set("CF-Connecting-IP", fmt.Sprintf("203.0.113.%d", i+1))
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -174,9 +241,9 @@ func TestLANClientCannotSpoofTunnelSource(t *testing.T) {
 func TestLockoutPrunesAbandonedSources(t *testing.T) {
 	now := time.Now()
 	lock := newLockout(func() time.Time { return now })
-	lock.fail("abandoned")
+	lock.fail("abandoned", "wrong")
 	now = now.Add(time.Minute + time.Second)
-	lock.fail("current")
+	lock.fail("current", "wrong")
 	if _, ok := lock.attempts["abandoned"]; ok {
 		t.Fatal("expired source remains in lockout map")
 	}
@@ -218,8 +285,8 @@ func TestRetiredPasswordDoesNotResetLockout(t *testing.T) {
 	h := authMiddleware(state, lock, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	for range 5 {
-		for _, password := range []string{"oldpass1", "wrong"} {
+	for i := range 5 {
+		for _, password := range []string{"oldpass1", fmt.Sprintf("wrong%d", i)} {
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req("Bearer "+password))
 			if w.Code != http.StatusUnauthorized {
@@ -239,9 +306,9 @@ func TestLANManagerPasswordRotationClearsPriorLockout(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}), "", 0, nil, nil)
 	m.SetPasswordHash(mobilebridge.HashPassword("oldpass1"))
-	for range 5 {
+	for i := range 5 {
 		w := httptest.NewRecorder()
-		m.handler.ServeHTTP(w, req("Bearer wrong"))
+		m.handler.ServeHTTP(w, req(fmt.Sprintf("Bearer wrong%d", i)))
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("failed attempt: got %d want 401", w.Code)
 		}
@@ -376,7 +443,7 @@ func TestAuthLockoutIsPerSource(t *testing.T) {
 	sourceA := "192.168.1.50:5555"
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, reqFrom(sourceA, "Bearer wrong"))
+		h.ServeHTTP(w, reqFrom(sourceA, fmt.Sprintf("Bearer wrong%d", i)))
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("source A attempt %d: got %d want 401", i, w.Code)
 		}

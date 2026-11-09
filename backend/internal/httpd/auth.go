@@ -2,8 +2,10 @@ package httpd
 
 import (
 	"context"
+	"hash/maphash"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,21 +80,29 @@ func (a *authState) retiredPasswordMatches(token string) bool {
 	return false
 }
 
-// lockout throttles password guessing per source address.
+// lockoutLimit is how many distinct wrong passwords a source may try in one
+// window before it is blocked.
+const lockoutLimit = 5
+
+// lockout throttles password guessing per source address. Only distinct wrong
+// passwords count: a client repeating one stale password on every request has
+// made one guess, and guessing the password needs different ones.
 type lockout struct {
 	mu        sync.Mutex
 	now       func() time.Time
+	seed      maphash.Seed
 	attempts  map[string]authAttempts
 	lastSweep time.Time
 }
 
 type authAttempts struct {
-	fails   int
+	// tried holds keyed hashes of the wrong passwords, never the passwords.
+	tried   []uint64
 	expires time.Time
 }
 
 func newLockout(now func() time.Time) *lockout {
-	return &lockout{now: now, attempts: map[string]authAttempts{}}
+	return &lockout{now: now, seed: maphash.MakeSeed(), attempts: map[string]authAttempts{}}
 }
 
 func (l *lockout) blocked(src string) bool {
@@ -103,13 +113,13 @@ func (l *lockout) blocked(src string) bool {
 		return false
 	}
 	if l.now().Before(a.expires) {
-		return a.fails >= 5
+		return len(a.tried) >= lockoutLimit
 	}
 	delete(l.attempts, src)
 	return false
 }
 
-func (l *lockout) fail(src string) {
+func (l *lockout) fail(src, token string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -123,9 +133,11 @@ func (l *lockout) fail(src string) {
 	}
 	a := l.attempts[src]
 	if !now.Before(a.expires) {
-		a.fails = 0
+		a.tried = nil
 	}
-	a.fails++
+	if tried := maphash.String(l.seed, token); len(a.tried) < lockoutLimit && !slices.Contains(a.tried, tried) {
+		a.tried = append(a.tried, tried)
+	}
 	a.expires = now.Add(time.Minute)
 	l.attempts[src] = a
 }
@@ -320,7 +332,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			if !state.retiredPasswordMatches(tok) {
-				lock.fail(src)
+				lock.fail(src, tok)
 			}
 			envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "BAD_PASSWORD",
 				"missing or invalid connection password", nil)
