@@ -16,6 +16,7 @@ func main() {
 	addr := os.Args[1]
 	upstream, _ := url.Parse("https://api.anthropic.com")
 	var until atomic.Int64
+	var weekly atomic.Bool
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	base := proxy.Director
 	proxy.Director = func(r *http.Request) { base(r); r.Host = upstream.Host }
@@ -23,6 +24,7 @@ func main() {
 	http.HandleFunc("/__lab/limit", func(w http.ResponseWriter, r *http.Request) {
 		v, _ := strconv.ParseInt(r.URL.Query().Get("until"), 10, 64)
 		until.Store(v)
+		weekly.Store(r.URL.Query().Get("claim") == "seven_day")
 		log.Printf("LAB limit until=%d (%s)", v, time.Unix(v, 0).UTC().Format(time.RFC3339))
 		fmt.Fprintf(w, "until=%d\n", v)
 	})
@@ -33,10 +35,14 @@ func main() {
 			h.Set("content-type", "application/json")
 			h.Set("anthropic-ratelimit-unified-status", "rejected")
 			h.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(reset, 10))
-			h.Set("anthropic-ratelimit-unified-representative-claim", "five_hour")
-			h.Set("anthropic-ratelimit-unified-5h-status", "rejected")
-			h.Set("anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(reset, 10))
-			h.Set("anthropic-ratelimit-unified-5h-utilization", "1.0")
+			claim, window := "five_hour", "5h"
+			if weekly.Load() {
+				claim, window = "seven_day", "7d"
+			}
+			h.Set("anthropic-ratelimit-unified-representative-claim", claim)
+			h.Set("anthropic-ratelimit-unified-"+window+"-status", "rejected")
+			h.Set("anthropic-ratelimit-unified-"+window+"-reset", strconv.FormatInt(reset, 10))
+			h.Set("anthropic-ratelimit-unified-"+window+"-utilization", "1.0")
 			h.Set("anthropic-ratelimit-unified-overage-status", "rejected")
 			h.Set("anthropic-ratelimit-unified-overage-disabled-reason", "org_level_disabled")
 			h.Set("request-id", "req_lab_usage_limit")

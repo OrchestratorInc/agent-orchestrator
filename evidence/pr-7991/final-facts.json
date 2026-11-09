@@ -1,0 +1,37 @@
+{
+ "daemon": "0b30a88230 (PR #7991 head), real Claude CLI, device login, lab 429 proxy",
+ "five_hour_run": {
+  "mode": "final",
+  "until": 1794222840,
+  "untilISO": "2026-11-09T11:14:00.000Z",
+  "failedTurn": "bf58131a-b7ef-40e8-aad5-c680462397db",
+  "errorMessage": "You've hit your 5-hour limit \u00b7 resets 4:44pm (Asia/Calcutta)",
+  "noticeShown": true,
+  "turnsAfterFailure": [
+   {
+    "id": "c08a22f9-1722-47b5-a802-d0f95cb702f1",
+    "state": "completed"
+   }
+  ],
+  "failedTurnRow": "failed|You've hit your 5-hour limit \u00b7 resets 4:44pm (Asia/Calcutta)|2026-11-09 11:14:00 +0000 UTC|0||2026-11-09 11:10:47.219476 +0000 UTC",
+  "resumedTurn": {
+   "id": "c08a22f9-1722-47b5-a802-d0f95cb702f1",
+   "row": "completed|||0||2026-11-09 11:14:03.960724 +0000 UTC"
+  },
+  "resumedSecondsAfterReset": 4.325,
+  "pongVisible": true
+ },
+ "weekly_run": {
+  "until": 1794482160,
+  "untilISO": "2026-11-12T11:16:00.000Z",
+  "failedTurn": "b4da3e33-4b16-42b9-99c1-d55535d86dac",
+  "rowAtFailure": "You've hit your weekly limit \u00b7 resets Nov 12 at 4:46pm (Asia/Calcutta)|2026-11-12 11:16:00 +0000 UTC|0",
+  "apiUsageLimit": {
+   "resetsAt": "2026-11-12T11:16:00Z",
+   "autoResume": false
+  },
+  "autoResumeOffered": true,
+  "resumeOffered": false
+ },
+ "weekly_text_parser": "ParseConversationUsageLimit on the weekly sentence: recognised=true, resetsAt=nil"
+}
