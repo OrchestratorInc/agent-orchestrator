@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_WORKSPACE_ID, useHeldSession } from "./useHeldSession";
 
 const { heldMock } = vi.hoisted(() => ({ heldMock: vi.fn() }));
-vi.mock("./useSessionSwitchSnap", () => ({ setSessionSwitchHeld: heldMock }));
+vi.mock("./useSessionSwitchSnap", async (importOriginal) => ({
+	...await importOriginal<typeof import("./useSessionSwitchSnap")>(),
+	setSessionSwitchHeld: heldMock,
+}));
 
 type Route = { sessionId?: string; projectId?: string };
 type Shown = ReturnType<typeof useHeldSession>;

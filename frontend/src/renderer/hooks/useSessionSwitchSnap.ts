@@ -7,6 +7,16 @@ export const SESSION_SWITCHING_ATTR = "data-session-switching";
 // Upper bound when a navigation never reports rendered (blocked or superseded).
 const SNAP_TIMEOUT_MS = 1000;
 
+/** The workspace element of the session on screen; a held switch makes it inert. */
+export const SESSION_WORKSPACE_ID = "session-workspace";
+
+/** Moves focus out of the session on screen, so keystrokes typed while a switch
+ *  is under way never reach its composer. */
+export function blurSessionWorkspace(workspace = document.getElementById(SESSION_WORKSPACE_ID)) {
+	const active = document.activeElement;
+	if (workspace && active instanceof HTMLElement && workspace.contains(active)) active.blur();
+}
+
 let switchHeld = false;
 let resumeAfterHold: (() => void) | undefined;
 
@@ -61,6 +71,9 @@ export function useSessionSwitchSnap() {
 				return;
 			}
 			cancel();
+			// The router renders the destination after it resolves the route, so
+			// keystrokes typed in between would still reach the old composer.
+			blurSessionWorkspace();
 			target = event.toLocation.href;
 			root.setAttribute(SESSION_SWITCHING_ATTR, "");
 			timer = window.setTimeout(clear, SNAP_TIMEOUT_MS);

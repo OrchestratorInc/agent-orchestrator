@@ -75,12 +75,19 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 	});
 	const chunks = new Map(sessions.map((session) => [session.id, 1]));
 	const drafts: { sessionId: string; text: string }[] = [];
+	const requests: { sessionId: string; sent: number; answered?: number }[] = [];
 	await page.route("**/api/v1/sessions/held-*/**", async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
 		const session = sessions.find((candidate) => path.includes(`/sessions/${candidate.id}/`));
 		if (!session) return route.fallback();
-		if (path.endsWith("/conversation") && request.method() === "GET") return route.fulfill({ json: conversation(session, chunks.get(session.id) ?? 1) });
+		if (path.endsWith("/conversation") && request.method() === "GET") {
+			const entry: (typeof requests)[number] = { sessionId: session.id, sent: Date.now() };
+			requests.push(entry);
+			await route.fulfill({ json: conversation(session, chunks.get(session.id) ?? 1) });
+			entry.answered = Date.now();
+			return;
+		}
 		if (path.endsWith("/conversation/models")) return route.fulfill({ json: { models: [], selected: {} } });
 		if (path.endsWith("/conversation/skills")) return route.fulfill({ json: { skills: [] } });
 		if (path.endsWith("/workspace/files")) return route.fulfill({ json: { files: [], truncated: false } });
@@ -96,6 +103,7 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 	let streaming: ReturnType<typeof setInterval> | undefined;
 	return {
 		drafts,
+		requests,
 		/** Grows every session's reply and tells the app, as the daemon does while agents stream. */
 		startStreaming() {
 			streaming = setInterval(() => {
@@ -167,12 +175,20 @@ test("renderer: streaming replies keep updating through rapid session switches @
 	try {
 		for (const session of [sessions[1], sessions[2], sessions[0], sessions[2], sessions[1], sessions[0], sessions[1]]) {
 			const clicked = Date.now();
+			const firstRequest = harness.requests.length;
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
+			await expect(page).toHaveURL(new RegExp(`/sessions/${session.id}$`));
+			const routed = Date.now() - clicked;
+			await page.waitForTimeout(250);
+			const inertAfterHoldLimit = await page.locator("#session-workspace").getAttribute("inert");
 			await expectShowing(page, session);
+			const shown = Date.now() - clicked;
 			// A streaming session on screen must not stall the switch: the hold
 			// gives way after a bounded time even if the background render
 			// keeps restarting. Loose for a throttled CI machine.
-			expect(Date.now() - clicked).toBeLessThan(3_000);
+			const fetches = harness.requests.slice(firstRequest)
+				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
+			expect(shown, `routed ${routed} ms; inert 250 ms later: ${inertAfterHoldLimit !== null}; conversation fetches since click: ${fetches.join(", ")}`).toBeLessThan(3_000);
 			// The shown session keeps streaming after the switch.
 			const seen = harness.chunks(session);
 			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });

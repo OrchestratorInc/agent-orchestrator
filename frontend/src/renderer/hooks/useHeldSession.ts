@@ -1,8 +1,7 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { setSessionSwitchHeld } from "./useSessionSwitchSnap";
+import { blurSessionWorkspace, SESSION_WORKSPACE_ID, setSessionSwitchHeld } from "./useSessionSwitchSnap";
 
-/** The workspace element of the session on screen; the held view's inert root. */
-export const SESSION_WORKSPACE_ID = "session-workspace";
+export { SESSION_WORKSPACE_ID };
 /** Longest a switch keeps the previous session before rendering the destination directly. */
 export const SESSION_HOLD_LIMIT_MS = 500;
 
@@ -39,8 +38,7 @@ export function useHeldSession(liveSessionId: string | undefined, liveProjectId:
 		// must not reach its composer or controls (keyboard switches leave focus
 		// there). inert has no visual effect.
 		const workspace = document.getElementById(SESSION_WORKSPACE_ID);
-		const active = document.activeElement;
-		if (workspace && active instanceof HTMLElement && workspace.contains(active)) active.blur();
+		blurSessionWorkspace(workspace);
 		workspace?.setAttribute("inert", "");
 		return () => workspace?.removeAttribute("inert");
 	}, [switching]);

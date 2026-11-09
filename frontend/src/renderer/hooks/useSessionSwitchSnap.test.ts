@@ -1,6 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SESSION_SWITCHING_ATTR, setSessionSwitchHeld, useSessionSwitchSnap } from "./useSessionSwitchSnap";
+import { SESSION_SWITCHING_ATTR, SESSION_WORKSPACE_ID, setSessionSwitchHeld, useSessionSwitchSnap } from "./useSessionSwitchSnap";
 
 const listeners = new Map<string, (event: unknown) => void>();
 vi.mock("@tanstack/react-router", () => ({
@@ -92,5 +92,27 @@ describe("useSessionSwitchSnap", () => {
 		navigate("/sessions/s1");
 		vi.advanceTimersByTime(1000);
 		expect(document.documentElement).not.toHaveAttribute(SESSION_SWITCHING_ATTR);
+	});
+	it("moves focus out of the session on screen as soon as a switch starts", () => {
+		renderHook(() => useSessionSwitchSnap());
+		const workspace = document.createElement("div");
+		workspace.id = SESSION_WORKSPACE_ID;
+		const composer = document.createElement("textarea");
+		workspace.append(composer);
+		const outside = document.createElement("input");
+		document.body.append(workspace, outside);
+		try {
+			composer.focus();
+			navigate("/projects/p1/sessions/s2");
+			expect(document.activeElement).not.toBe(composer);
+
+			// Focus elsewhere, such as the command palette's input, is left alone.
+			outside.focus();
+			navigate("/projects/p1/sessions/s3");
+			expect(document.activeElement).toBe(outside);
+		} finally {
+			workspace.remove();
+			outside.remove();
+		}
 	});
 });
