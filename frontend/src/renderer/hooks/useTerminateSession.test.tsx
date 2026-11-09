@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { settingsQueryKey } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
 
@@ -402,6 +402,49 @@ describe("durable workspace cleanup feedback", () => {
 		await act(async () => { toasts()[0].action?.run(); });
 
 		await waitFor(() => expect(toasts().at(-1)).toMatchObject({ title: "Could not retry cleanup.", tone: "error" }));
+	});
+
+	it("reports why the retry was refused, not why the archive was", async () => {
+		const queryClient = newQueryClient();
+		await archive(queryClient);
+		setCleanup(queryClient, "preserved_dirty");
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		postMock.mockResolvedValueOnce({
+			data: { ok: true, cleaned: [], alreadyGone: [], skipped: [{ sessionId: session.id, code: "cleanup_script_failed", reason: "script failed" }] },
+			error: undefined,
+		});
+
+		await act(async () => { toasts()[0].action?.run(); });
+
+		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Workspace cleanup failed. Retry cleanup in project Scripts settings.", tone: "error" }));
+	});
+
+	it("follows a remote archive through the host's session list and retries on that host", async () => {
+		const queryClient = newQueryClient();
+		const remoteSessions = [...remoteWorkspaceQueryKey("box-a"), "sessions"];
+		const setRemoteCleanup = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) =>
+			queryClient.setQueryData(remoteSessions, [{ id: session.id, isTerminated: true, workspaceCleanup }]);
+		setRemoteCleanup("pending");
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, hostId: "box-a" }); });
+
+		setRemoteCleanup("preserved_dirty");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		remotePostMock.mockResolvedValueOnce({ data: { ok: true, cleaned: [session.id], alreadyGone: [], skipped: [] }, error: undefined });
+		await act(async () => { toasts()[0].action?.run(); });
+		await waitFor(() => expect(remotePostMock).toHaveBeenLastCalledWith("box-a", "/api/v1/sessions/cleanup", { params: { query: { project: "proj-1" } } }));
+	});
+
+	it("offers no retry for a standalone session, which has no project to sweep", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+
+		setCleanup(queryClient, "failed");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0].action).toBeUndefined();
 	});
 
 	it("raises nothing for a cleanup a sweep recorded", async () => {

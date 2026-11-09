@@ -1,9 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useSyncExternalStore } from "react";
-import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import { hashKey, type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { cloudSessionsQueryKey, remoteSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
 	applyTerminatedSession,
 	clearOptimisticSessionKill,
@@ -199,24 +199,26 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
+type CleanupFacts = Pick<WorkspaceSession, "id" | "isTerminated" | "workspaceCleanup" | "workspaceCleanupReportOnly">;
+
 // `ao session cleanup` and the daemon's background pass record what they find
 // on sessions nobody archived; only a cleanup an archive started is the app's
 // to report.
-function archiveCleanup(session: WorkspaceSession | undefined): WorkspaceSession["workspaceCleanup"] {
+function archiveCleanup(session: CleanupFacts | undefined): WorkspaceSession["workspaceCleanup"] {
 	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
 }
 
 type WorkspaceCleanupErrorKey = "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty";
 
-function workspaceCleanupErrorKey(session: WorkspaceSession | undefined): WorkspaceCleanupErrorKey | null {
+function workspaceCleanupErrorKey(session: CleanupFacts | undefined): WorkspaceCleanupErrorKey | null {
 	const cleanup = archiveCleanup(session);
 	if (cleanup === "failed") return "shell.workspaceCleanupFailed";
 	if (cleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
 	return null;
 }
 
-// Covers the daemon's 90 s teardown budget and its background retries.
-const CLEANUP_REPORT_WINDOW_MS = 5 * 60_000;
+// Cleanup scripts are untimed and the daemon's retry sweep runs every 10 minutes.
+const CLEANUP_REPORT_WINDOW_MS = 30 * 60_000;
 const CLEANUP_NOTICE_MS = 10_000;
 
 function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
@@ -226,19 +228,23 @@ function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: Workspa
 		dismissible: true,
 		durationMs: CLEANUP_NOTICE_MS,
 		dedupeKey: `workspace-cleanup:${sessionUiKey(session.id, session.hostId)}`,
-		action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, errorKey, t) },
+		// Cleanup sweeps by project, and the standalone workspace id is not one the daemon knows.
+		...(session.workspaceId !== STANDALONE_WORKSPACE_ID && {
+			action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, t) },
+		}),
 	});
 }
 
-async function retryWorkspaceCleanup(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
+async function retryWorkspaceCleanup(session: WorkspaceSession, t: TFunction) {
 	const { showGlobalToast } = useUiStore.getState();
 	try {
 		const { data, error } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/cleanup", {
 			params: { query: { project: session.workspaceId } },
 		});
 		if (error || !data) throw new Error("cleanup retry refused");
-		if (data.skipped.some((skip) => skip.sessionId === session.id)) {
-			showWorkspaceCleanupNotice(session, errorKey, t);
+		const skip = data.skipped.find(({ sessionId }) => sessionId === session.id);
+		if (skip) {
+			showWorkspaceCleanupNotice(session, skip.code === "dirty" ? "shell.workspaceCleanupDirty" : "shell.workspaceCleanupFailed", t);
 			return;
 		}
 		showGlobalToast(t("settings.project.cleanupRetryResult", {
@@ -255,11 +261,14 @@ async function retryWorkspaceCleanup(session: WorkspaceSession, errorKey: Worksp
 // outcome once, to the person whose archive produced it. Cleanup outlives the
 // kill request, so follow the session in the cache until it settles.
 function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSession, t: TFunction) {
-	const queryKey = workspaceQueryKeyForHost(session.hostId);
+	// The shell always polls a host's session list; the host-wide key only has
+	// data while one of that host's pages is open.
+	const queryKey = session.hostId ? remoteSessionsQueryKey(session.hostId) : workspaceQueryKey;
+	const rows = (): CleanupFacts[] | undefined => session.hostId
+		? queryClient.getQueryData<CleanupFacts[]>(queryKey)
+		: queryClient.getQueryData<WorkspaceSummary[]>(queryKey)?.flatMap((workspace) => workspace.sessions);
 	const settled = () => {
-		const current = queryClient.getQueryData<WorkspaceSummary[]>(queryKey)
-			?.flatMap((workspace) => workspace.sessions)
-			.find(({ id }) => id === session.id);
+		const current = rows()?.find(({ id }) => id === session.id);
 		if (!current?.isTerminated) return true;
 		const cleanup = archiveCleanup(current);
 		if (cleanup === undefined || cleanup === "pending") return false;
@@ -272,8 +281,9 @@ function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSessio
 		unsubscribe();
 		window.clearTimeout(timer);
 	};
-	const unsubscribe = queryClient.getQueryCache().subscribe(() => {
-		if (settled()) stop();
+	const queryHash = hashKey(queryKey);
+	const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryHash === queryHash && settled()) stop();
 	});
 	const timer = window.setTimeout(stop, CLEANUP_REPORT_WINDOW_MS);
 }
