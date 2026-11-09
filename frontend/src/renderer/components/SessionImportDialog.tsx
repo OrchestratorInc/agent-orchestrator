@@ -145,10 +145,10 @@ function ProjectChats({ projectId, onClose }: { projectId: string; onClose: () =
 				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
-				<Button variant="footer" onClick={onClose}>
+				<Button variant="secondary" onClick={onClose}>
 					{t("sessionImport.cancel")}
 				</Button>
-				<Button variant="footer-primary" disabled={importing || !selected.length} onClick={() => void run(selected.map((chat) => chat.id))}>
+				<Button variant="primary" disabled={importing || !selected.length} onClick={() => void run(selected.map((chat) => chat.id))}>
 					{importing ? t("sessionImport.importing") : t("sessionImport.importChats", { count: selected.length })}
 				</Button>
 			</div>
@@ -258,11 +258,11 @@ function Folders({ onClose }: { onClose: () => void }) {
 				<ImportError error={error} failures={failures} />
 			</div>
 			<div className={settingsDialogFooterClass}>
-				<Button variant="footer" onClick={onClose}>
+				<Button variant="secondary" onClick={onClose}>
 					{t("sessionImport.cancel")}
 				</Button>
 				<Button
-					variant="footer-primary"
+					variant="primary"
 					disabled={importing || !chosen.length}
 					onClick={() => {
 						setPicked(selected);
