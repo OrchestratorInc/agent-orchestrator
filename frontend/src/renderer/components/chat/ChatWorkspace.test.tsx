@@ -3416,6 +3416,10 @@ describe("ChatWorkspace timeline", () => {
 			const visible = loadHistory ? { ...snapshot, hasMoreBefore: true, oldestSequence: prompts[80]!.sequence, turns: snapshot.turns.slice(80), items: snapshot.items.filter((item) => item.sequence >= prompts[80]!.sequence) } : snapshot;
 			render(<ChatWorkspace snapshot={visible} />);
 			const log = screen.getByRole("log");
+			// JSDOM omits the browser scroll API used to center the active match.
+			Object.defineProperty(log, "scrollTo", { configurable: true, value: ({ top }: ScrollToOptions) => {
+				log.scrollTop = Math.max(0, Math.min(top ?? log.scrollTop, log.scrollHeight - log.clientHeight));
+			} });
 			log.focus();
 			fireEvent.keyDown(log, { key: "f", metaKey: true });
 			const input = await screen.findByRole("searchbox");
