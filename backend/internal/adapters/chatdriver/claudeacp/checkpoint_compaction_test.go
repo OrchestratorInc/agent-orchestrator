@@ -162,37 +162,90 @@ func TestNativeCheckpointCompactionKeepsSafetyChecks(t *testing.T) {
 	}
 }
 
+// compactionContext is what Claude Code 2.1.306 to 2.1.318 writes between the
+// boundary and the summary when it compacts mid-turn: the instructions,
+// session_context and date attachments, each under the one before.
+func compactionContext(boundary string) []map[string]any {
+	var records []map[string]any
+	parent := boundary
+	for _, kind := range []string{"instructions", "session_context", "date"} {
+		id := "context-" + kind
+		records = append(records, map[string]any{"type": "attachment", "uuid": id, "parentUuid": parent,
+			"attachment": map[string]any{"type": kind}})
+		parent = id
+	}
+	return records
+}
+
 // Compacting in the middle of a turn keeps the turn going after the summary,
-// which carries its prompt ID. Its Stop must still see the turn complete.
+// which carries its prompt ID. Its Stop must still see the turn complete and
+// match the answer Claude writes after the summary.
 func TestNativeCheckpointTurnRunsThroughCompaction(t *testing.T) {
 	toolResult := map[string]any{"type": "user", "uuid": "tool-result-0", "parentUuid": "tool-call-0",
 		"message": map[string]any{"content": []map[string]string{{"type": "tool_result", "tool_use_id": "tool"}}}}
-	transcript := func(end string) string {
-		records := compactionPrompt(0, "", "A")
-		records = append(records,
-			compactionAnswer("tool-call-0", "submission-attachment-0", "checking", "tool_use"),
-			toolResult,
-			compactionBoundary("boundary", "tool-result-0", keptMessages("summary", "tool-call-0", "tool-result-0")),
-			compactionSummary("summary", "boundary", "prompt-0"),
-			compactionAnswer("continued-0", "summary", "answer A", end),
-		)
-		records = append(records, compactionPrompt(1, "continued-0", "B")...)
-		return compactionLines(t, append(records, compactionAnswer("assistant-1", "submission-attachment-1", "answer B", "end_turn"))...)
+	for _, shape := range []struct {
+		name    string
+		context bool
+	}{
+		{name: "summary under the boundary"},
+		{name: "summary under the mid-turn context attachments", context: true},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			transcript := func(end string) string {
+				records := compactionPrompt(0, "", "A")
+				records = append(records,
+					compactionAnswer("tool-call-0", "submission-attachment-0", "checking", "tool_use"),
+					toolResult,
+					compactionBoundary("boundary", "tool-result-0", keptMessages("summary", "tool-call-0", "tool-result-0")),
+				)
+				summaryParent := "boundary"
+				if shape.context {
+					records = append(records, compactionContext("boundary")...)
+					summaryParent = "context-date"
+				}
+				records = append(records,
+					compactionSummary("summary", summaryParent, "prompt-0"),
+					compactionAnswer("continued-0", "summary", "answer A", end),
+				)
+				records = append(records, compactionPrompt(1, "continued-0", "B")...)
+				return compactionLines(t, append(records, compactionAnswer("assistant-1", "submission-attachment-1", "answer B", "end_turn"))...)
+			}
+			events := []domain.NativeCheckpointObservation{
+				submitObservation(0, "A"), stopObservation(0, "answer A"), submitObservation(1, "B"), stopObservation(1, "answer B"),
+			}
+			got, err := verifyCompacted(transcript("end_turn"), events...)
+			if err != nil || got.UserMessageID != "user-1" || got.UserText != "B" || got.AssistantText != "answer B" {
+				t.Fatalf("boundary=%+v error=%v", got, err)
+			}
+			if _, err := verifyCompacted(transcript("tool_use"), events...); !errors.Is(err, ports.ErrChatHistoryUnsettled) {
+				t.Fatalf("unfinished carried turn admitted: %v", err)
+			}
+			events[1] = stopObservation(0, "a different answer")
+			if _, err := verifyCompacted(transcript("end_turn"), events...); !errors.Is(err, ports.ErrChatHistoryUnsettled) ||
+				!strings.Contains(err.Error(), "Stop answer does not match") {
+				t.Fatalf("carried turn's Stop text not checked: %v", err)
+			}
+		})
 	}
-	events := []domain.NativeCheckpointObservation{
-		submitObservation(0, "A"), stopObservation(0, "answer A"), submitObservation(1, "B"), stopObservation(1, "answer B"),
+}
+
+func TestFollowsCompactionCrossesOnlyAttachments(t *testing.T) {
+	records := map[string]checkpointRecord{"boundary": {UUID: "boundary", Type: "system", Subtype: "compact_boundary"}}
+	for _, record := range compactionContext("boundary") {
+		id, parent := record["uuid"].(string), record["parentUuid"].(string)
+		records[id] = checkpointRecord{UUID: id, ParentUUID: parent, Type: "attachment"}
 	}
-	got, err := verifyCompacted(transcript("end_turn"), events...)
-	if err != nil || got.UserMessageID != "user-1" || got.AssistantText != "answer B" {
-		t.Fatalf("boundary=%+v error=%v", got, err)
-	}
-	if _, err := verifyCompacted(transcript("tool_use"), events...); !errors.Is(err, ports.ErrChatHistoryUnsettled) {
-		t.Fatalf("unfinished carried turn admitted: %v", err)
-	}
-	events[1] = stopObservation(0, "a different answer")
-	if _, err := verifyCompacted(transcript("end_turn"), events...); !errors.Is(err, ports.ErrChatHistoryUnsettled) ||
-		!strings.Contains(err.Error(), "Stop answer does not match") {
-		t.Fatalf("carried turn's Stop text not checked: %v", err)
+	records["answer"] = checkpointRecord{UUID: "answer", ParentUUID: "context-date", Type: "assistant"}
+	for parent, want := range map[string]bool{
+		"boundary":     true,  // between turns
+		"context-date": true,  // mid-turn
+		"answer":       false, // an ordinary reply, even one after a compaction
+		"missing":      false,
+		"":             false,
+	} {
+		if got := followsCompaction(records, parent); got != want {
+			t.Errorf("followsCompaction(%q) = %v, want %v", parent, got, want)
+		}
 	}
 }
 

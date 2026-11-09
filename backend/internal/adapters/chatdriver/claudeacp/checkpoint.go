@@ -119,6 +119,27 @@ func (r checkpointRecord) compactBoundary() bool {
 	return r.Type == "system" && r.Subtype == "compact_boundary"
 }
 
+// followsCompaction reports a record whose parent is a compact_boundary, or
+// reaches one only through attachments. Compacting between turns puts the
+// summary right under the boundary. Compacting mid-turn first writes the
+// instructions, session_context and date attachments (Claude Code 2.1.306 to
+// 2.1.318), and the summary hangs under the last of them.
+func followsCompaction(records map[string]checkpointRecord, parent string) bool {
+	for steps := 0; parent != "" && steps <= len(records); steps++ {
+		record, found := records[parent]
+		switch {
+		case !found:
+			return false
+		case record.compactBoundary():
+			return true
+		case record.Type != "attachment":
+			return false
+		}
+		parent = record.ParentUUID
+	}
+	return false
+}
+
 // relinkCompactedTranscript re-parents the messages a compaction kept, the
 // way the Agent SDK's getSessionMessages does before Chat replays the session.
 // A compact_boundary has no parent, and the summary after it (the anchor)
@@ -369,7 +390,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				continue
 			}
 			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice,
-				carried: notice && records[record.ParentUUID].compactBoundary()})
+				carried: notice && followsCompaction(records, record.ParentUUID)})
 			continue
 		}
 		if len(turns) == 0 {
