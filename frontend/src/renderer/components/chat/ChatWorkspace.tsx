@@ -153,7 +153,6 @@ import {
 	isTaskTitleUpdate,
 	isWorkerLead,
 	isDuplicateSpawnAction,
-	piggybackedUpdates,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
@@ -5426,12 +5425,12 @@ const TurnGroup = memo(function TurnGroup({
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
-		// Reports AO batched into this message's (or steer's) provider input travel with it.
-		const carried = batched?.under.get(item.id) ?? [];
 		const updates = workerUpdatesOf(item);
 		// A direct send or steer is one row; a batch of reports is one line that opens to them.
 		if (updates.length > 0 && updates[0]?.state === undefined) {
 			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
+			// Reports a worker's steer carried in travel with it, as their own line.
+			const carried = batched?.under.get(item.id) ?? [];
 			if (carried.length === 0) return rows;
 			drewReportsUnder = true;
 			return [rows, reportsLine(`${run.key}:reports`, carried)];
@@ -5439,10 +5438,8 @@ const TurnGroup = memo(function TurnGroup({
 		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		const reports = [...piggybackedUpdates(item), ...carried];
-		if (reports.length === 0) return renderRun(run);
-		drewReportsUnder = true;
-		return [renderRun(run), reportsLine(`${run.key}:reports`, reports)];
+		// Reports delivered with a human message or steer are not drawn: the message stands alone.
+		return renderRun(run);
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);

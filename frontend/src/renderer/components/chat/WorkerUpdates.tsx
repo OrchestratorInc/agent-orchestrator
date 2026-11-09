@@ -418,9 +418,10 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 }
 
 /**
- * Reports AO delivered together, as one line that opens to their rows: under the
- * human message they travelled with, or alone for a batch that woke the
- * orchestrator. It leads with the first senders' agents, in black and white. A
+ * Reports AO delivered together, as one line that opens to their rows: a batch
+ * that reached the orchestrator on its own, or one a worker's steer carried.
+ * Reports sent with a human message are not drawn. It leads with the first
+ * senders' agents, in black and white. A
  * report whose worker still waits on the user (stuck counts too) keeps its count
  * on the closed line; a newer update from that worker clears it.
  */
