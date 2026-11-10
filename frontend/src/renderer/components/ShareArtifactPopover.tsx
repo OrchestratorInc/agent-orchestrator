@@ -22,7 +22,7 @@ type Phase =
 	| { kind: "limit"; limit: number }
 	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean; unpublished?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
-	| { kind: "published"; share: CloudShareLink; outdated?: OutdatedShare; unpublishing?: "confirm" | "busy"; error?: string }
+	| { kind: "published"; share: CloudShareLink; links?: CloudShareLinks; outdated?: OutdatedShare; unpublishing?: "confirm" | "busy"; error?: string }
 	| { kind: "error"; message: string };
 
 /**
@@ -56,6 +56,11 @@ const pendingShares = new Map<string, PendingShare>();
 
 function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
 	return JSON.stringify([baseUrl, file.sessionId, file.path]);
+}
+
+/** The panel names a file without its extension: `report.html` is `report`. A dotfile keeps its name. */
+export function publishTitle(name: string): string {
+	return name.replace(/(?<=[^.])\.[^.]+$/, "");
 }
 
 /** An error's message, without the wrapper Electron puts around one thrown across IPC. */
@@ -135,7 +140,7 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, child
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor asChild>{children}</PopoverAnchor>
-			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-4" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
 			</PopoverContent>
 		</Popover>
@@ -143,10 +148,11 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, child
 }
 
 /**
- * The Share button beside an open local artifact's other actions. It opens a
- * popover anchored to it: publish the file as a public link, or, once it is
- * published, copy the link, unpublish it, or republish a file that changed
- * since. For a video the button is disabled and says why.
+ * The Publish button beside an open local artifact's other actions. Clicking it
+ * publishes the file as a public link and opens a popover anchored to it with
+ * that link to copy or unpublish, or to republish a file that changed since.
+ * A file that looks like it holds a credential waits for a second Publish. For
+ * a video the button is disabled and says why.
  */
 export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
 	const { t } = useTranslation();
@@ -155,7 +161,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 	const video = VIDEO_FILE.test(file.path);
 	const button = (
 		<Button
-			aria-label={`${t("artifacts.share.menu")}: ${name}`}
+			aria-label={`${t("artifacts.share.publish")}: ${name}`}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
 			disabled={video}
@@ -164,14 +170,14 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{iconOnly ? null : t("artifacts.share.menu")}
+			{iconOnly ? null : t("artifacts.share.publish")}
 		</Button>
 	);
 	const popoverTrigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
 	const trigger = iconOnly ? (
 		<Tooltip>
 			<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
-			<TooltipContent side="bottom">{t("artifacts.share.menu")}</TooltipContent>
+			<TooltipContent side="bottom">{t("artifacts.share.publish")}</TooltipContent>
 		</Tooltip>
 	) : popoverTrigger;
 	// Not offered where the control plane does not serve share links.
@@ -190,7 +196,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			{trigger}
-			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-4" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
 		</Popover>
@@ -219,10 +225,18 @@ function SharePanel({
 	// that changed under it stays on that link, offering the newer version.
 	const settle = (result: CloudSharePublishResult, links: CloudShareLinks, share?: CloudShareLink) => {
 		switch (result.status) {
-			case "published":
-				return setPhase({ kind: "published", share: result.share });
+			case "published": {
+				const published = result.share;
+				setPhase({ kind: "published", share: published });
+				// The plan count now includes this link; it shows once the list says so.
+				void aoBridge.cloudShare.list(baseUrl)
+					.then((latest) => setPhase((current) => current.kind === "published" && current.share.id === published.id && !current.links ? { ...current, links: latest } : current))
+					.catch(() => undefined);
+				return;
+			}
 			case "cancelled":
-				return load();
+				// Back to the file, waiting for Publish: opening it again would only redo the upload just stopped.
+				return load({ publishNow: false });
 			case "limit":
 				return setPhase({ kind: "limit", limit: links.limit });
 			case "changed":
@@ -239,7 +253,11 @@ function SharePanel({
 		}
 	};
 
-	const load = useCallback(() => {
+	// Opening the panel is the Publish click: a file without an active link is
+	// published at once. One that looks like it holds a credential waits for
+	// Publish under its warning, and publishNow false (after a cancel or an
+	// unpublish) waits too.
+	const load = useCallback(({ publishNow = true }: { publishNow?: boolean } = {}) => {
 		if (!signedIn) {
 			setPhase({ kind: "signin" });
 			return () => undefined;
@@ -265,7 +283,7 @@ function SharePanel({
 				// The file changed since it was published here: the link still
 				// serves what it held then.
 				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-				if (current) return setPhase({ kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined });
+				if (current) return setPhase({ kind: "published", share: current, links, outdated: outdated ? { inspection, links } : undefined });
 				// It was published from here, but its link is unpublished now,
 				// usually from somewhere else. Publishing gives it a new link.
 				const unpublished = Boolean(inspection.shareId);
@@ -273,6 +291,7 @@ function SharePanel({
 				// document; the server decides for sure when it uploads.
 				const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
 				if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
+				if (publishNow && inspection.secretFindings.length === 0) return void publish(inspection, links);
 				setPhase({ kind: "publish", inspection, links, unpublished });
 			})
 			.catch((error: unknown) => {
@@ -322,13 +341,14 @@ function SharePanel({
 		}
 	};
 
-	const unpublish = async (share: CloudShareLink, outdated?: OutdatedShare) => {
-		setPhase({ kind: "published", share, outdated, unpublishing: "busy" });
+	const unpublish = async (shown: Extract<Phase, { kind: "published" }>) => {
+		const { share, links, outdated } = shown;
+		setPhase({ kind: "published", share, links, outdated, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
-			load();
+			load({ publishNow: false });
 		} catch (error) {
-			setPhase({ kind: "published", share, outdated, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
+			setPhase({ kind: "published", share, links, outdated, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
 		}
 	};
 
@@ -336,15 +356,15 @@ function SharePanel({
 	// primary action sits at the right; its left holds the plan count, the
 	// progress or Unpublish.
 	const heading = (text: string) => <p className="truncate text-control font-medium text-foreground">{text}</p>;
-	const title = heading(t("artifacts.share.title", { name }));
+	const title = heading(publishTitle(name));
 	const status = (text: string, role?: "alert" | "status") => (
-		<p role={role} className={cn("mt-1 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
+		<p role={role} className={cn("mt-1.5 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
 	);
 	// Buttons and inputs inherit their font (styles.css), so the row sets the
 	// buttons' size and meta() the smaller secondary text. Labels too long for
 	// one line, as with three actions in German, wrap with the actions at the right.
 	const footer = (left: React.ReactNode, right: React.ReactNode) => (
-		<div className="mt-3 flex min-h-control-md flex-wrap items-center justify-between gap-2 text-xs">
+		<div className="mt-4 flex min-h-control-md flex-wrap items-center justify-between gap-2 text-xs">
 			<div className="min-w-0 truncate">{left}</div>
 			<div className="ml-auto flex shrink-0 items-center gap-1.5">{right}</div>
 		</div>
@@ -398,7 +418,7 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					<div className="mt-2.5 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.uploaded", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+					<div className="mt-3.5 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.uploaded", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
 						<div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
 					</div>
 					{footer(
@@ -415,7 +435,7 @@ function SharePanel({
 			);
 		}
 		case "published": {
-			const { share, outdated } = phase;
+			const { share, links, outdated } = phase;
 			const link = artifactShareUrl(share);
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
@@ -426,10 +446,10 @@ function SharePanel({
 						{footer(
 							null,
 							<>
-								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, outdated })} size="sm" type="button" variant="ghost">
+								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, links, outdated })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
 								</Button>
-								<Button disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="destructive">
+								<Button disabled={busy} onClick={() => void unpublish(phase)} size="sm" type="button" variant="destructive">
 									{t("artifacts.share.unpublish")}
 								</Button>
 							</>,
@@ -440,11 +460,11 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					<p className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground">
+					<p className="mt-1.5 flex items-center gap-1.5 text-caption text-muted-foreground">
 						<Globe aria-hidden="true" className="size-3 shrink-0 text-success" />
 						{t("artifacts.share.publicStatus")}
 					</p>
-					<div className="mt-2.5 font-mono text-caption">
+					<div className="mt-3.5 text-caption">
 						<input
 							aria-label={t("artifacts.share.linkLabel")}
 							className="block h-control-md w-full truncate rounded-md bg-muted px-2 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -453,13 +473,18 @@ function SharePanel({
 							value={link}
 						/>
 					</div>
+					{links && !links.unlimited ? (
+						<p className="mt-2 text-caption tabular-nums text-muted-foreground">
+							{t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })}
+						</p>
+					) : null}
 					{outdated ? status(t(outdated.changed ? "artifacts.share.changed" : "artifacts.share.outdated"), "status") : null}
 					{outdated && outdated.inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: outdated.inspection.secretFindings.join(", ") }), "alert") : null}
 					{phase.error ? status(phase.error, "alert") : null}
 					{footer(
 						<Button
 							className="-ml-2.5"
-							onClick={() => setPhase({ kind: "published", share, outdated, unpublishing: "confirm" })}
+							onClick={() => setPhase({ kind: "published", share, links, outdated, unpublishing: "confirm" })}
 							size="sm"
 							type="button"
 							variant="destructive-ghost"

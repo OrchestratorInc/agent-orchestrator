@@ -554,7 +554,7 @@ describe("ArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
 		const dialog = screen.getByRole("dialog", { name });
 		// A cloud session's file is shared as a local one is.
-		expect(within(dialog).getByRole("button", { name: `Share: ${name}` })).toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: `Publish: ${name}` })).toBeInTheDocument();
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		} else {
@@ -573,14 +573,14 @@ describe("ArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		const dialog = await screen.findByRole("dialog", { name: "notes.md" });
 		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
+		expect(within(dialog).queryByRole("button", { name: "Publish: notes.md" })).toBeNull();
 	});
 
-	it("offers Share on a Scratchpad file, which belongs to the Scratchpad workspace", async () => {
+	it("offers Publish on a Scratchpad file, which belongs to the Scratchpad workspace", async () => {
 		renderView();
 		await userEvent.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
 		const dialog = screen.getByRole("dialog", { name: "caching-options.md" });
-		expect(await within(dialog).findByRole("button", { name: "Share: caching-options.md" })).toBeInTheDocument();
+		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
@@ -870,9 +870,9 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
-		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toBeInTheDocument();
+		expect(await modal.findByRole("button", { name: "Publish: pricing.md" })).toBeInTheDocument();
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
-		expect(screen.getByRole("menuitem", { name: "Share" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Publish" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));

@@ -836,12 +836,12 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path: "notes.md" }} session={currentSession} />);
 
 		await screen.findByRole("button", { name: "notes.md" });
-		const share = screen.queryByRole("button", { name: "Share: notes.md" });
+		const share = screen.queryByRole("button", { name: "Publish: notes.md" });
 		if (!shown) {
 			expect(share).not.toBeInTheDocument();
 			return;
 		}
-		expect(share).toHaveTextContent("Share");
+		expect(share).toHaveTextContent("Publish");
 		// After the file's menu and the viewer's own buttons (Edit), before full screen.
 		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 		expect(after(screen.getByRole("button", { name: "notes.md" }), share!)).toBe(true);
@@ -850,20 +850,20 @@ describe("SessionArtifactsView", () => {
 		expect(await screen.findByRole("dialog")).toBeInTheDocument();
 	});
 
-	it("hides Share while the open file is being edited", async () => {
+	it("hides Publish while the open file is being edited", async () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
-		expect(await screen.findByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "start editing" }));
-		expect(screen.queryByRole("button", { name: "Share: notes.md" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Publish: notes.md" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "stop editing" }));
-		expect(screen.getByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Share for a video and says why", async () => {
+	it("disables Publish for a video and says why", async () => {
 		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
