@@ -232,7 +232,7 @@ func (m *Manager) Validate(ctx context.Context, in ImportValidationInput) (Impor
 	}
 	if importKind == ImportKindWorkspace {
 		if root.IsRepo && root.HasOrigin {
-			result.Warning = "This folder is already a Git project. AO will import it as a project instead of a workspace."
+			result.Warning = "This folder is already a Git project. Orchestrator will import it as a project instead of a workspace."
 			result.NextStep = ImportNextStepChooseImportKind
 			return result, nil
 		}
@@ -274,7 +274,7 @@ func (m *Manager) Validate(ctx context.Context, in ImportValidationInput) (Impor
 		}
 	}
 	if root.HasOrigin && len(children) > 0 {
-		result.Warning = "Selected folder has direct child repositories, but because the root repository already has an origin remote AO will import it as a project, not a workspace."
+		result.Warning = "Selected folder has direct child repositories, but because the root repository already has an origin remote Orchestrator will import it as a project, not a workspace."
 	}
 	if len(root.RequiredActions) > 0 {
 		result.NextStep = ImportNextStepPrepareGit
@@ -361,17 +361,17 @@ func validatePreparationTarget(target gitPreparationTarget) error {
 		}
 	}
 	if required[GitPreparationActionCreateRemoteRepository] && target.Input.GitHubRepository == nil && strings.TrimSpace(target.Input.RemoteURL) == "" {
-		return apierr.Invalid("IMPORT_GITHUB_REPOSITORY_REQUIRED", "GitHub repository owner and name are required before AO can create an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
+		return apierr.Invalid("IMPORT_GITHUB_REPOSITORY_REQUIRED", "GitHub repository owner and name are required before Orchestrator can create an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
 	}
 	if required[GitPreparationActionCreateRemoteRepository] && target.Input.GitHubRepository != nil {
 		owner := strings.TrimSpace(target.Input.GitHubRepository.Owner)
 		name := strings.TrimSpace(target.Input.GitHubRepository.Name)
 		if owner == "" || name == "" {
-			return apierr.Invalid("IMPORT_GITHUB_REPOSITORY_REQUIRED", "GitHub repository owner and name are required before AO can create an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
+			return apierr.Invalid("IMPORT_GITHUB_REPOSITORY_REQUIRED", "GitHub repository owner and name are required before Orchestrator can create an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
 		}
 	}
 	if required[GitPreparationActionSetRemote] && strings.TrimSpace(target.Input.RemoteURL) == "" {
-		return apierr.Invalid("IMPORT_REMOTE_URL_REQUIRED", "remoteUrl is required before AO can add an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
+		return apierr.Invalid("IMPORT_REMOTE_URL_REQUIRED", "remoteUrl is required before Orchestrator can add an origin remote.", map[string]any{"repoPath": target.Status.RepoPath})
 	}
 	if required[GitPreparationActionSetRemote] || (required[GitPreparationActionCreateRemoteRepository] && target.Input.GitHubRepository == nil) {
 		if err := validateImportRemoteURL(target.Input.RemoteURL); err != nil {

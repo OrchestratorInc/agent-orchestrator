@@ -23,6 +23,7 @@ export {
 	mobileInterfaceTransitionIsBusy,
 	mobileInterfaceTransitionIsCancellable,
 	mobileInterfaceTransitionRecoveryMessage,
+	mobileInterfaceTransitionStoppingSource,
 } from "./interfaceTransition";
 export type { InterfaceSwitchRecheck } from "./interfaceTransition";
 

@@ -181,6 +181,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Home offers the session import once: until the user imports or dismisses it. */
+	sessionImportOfferClosed: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
@@ -264,6 +266,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	closeSessionImportOffer: () => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
@@ -339,6 +342,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
@@ -372,6 +376,14 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+}
+
+function initialSessionImportOfferClosed() {
+	try {
+		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
+	} catch {
+		return false;
+	}
 }
 
 function initialTerminalCopyOnSelect() {
@@ -442,6 +454,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
@@ -517,6 +530,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
+	},
+	closeSessionImportOffer: () => {
+		try {
+			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
+		} catch {
+			// The offer comes back next launch; the agent page still has the import.
+		}
+		set({ sessionImportOfferClosed: true });
 	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));

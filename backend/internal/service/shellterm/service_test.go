@@ -436,12 +436,13 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 		t.Errorf("argv = %#v, want []string{\"pi\"}", got)
 	}
 	wantRecord := ShellTerminalRecord{
-		HandleID:   "shellterm-test1",
-		WorkingDir: authWorkspace,
-		Title:      "Log in to Pi",
-		AppRunID:   testAppRunID,
-		Transient:  true,
-		CreatedAt:  time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		HandleID:      "shellterm-test1",
+		WorkingDir:    authWorkspace,
+		Title:         "Log in to Pi",
+		TitleExplicit: true,
+		AppRunID:      testAppRunID,
+		Transient:     true,
+		CreatedAt:     time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(st.records, []ShellTerminalRecord{wantRecord}) {
 		t.Errorf("records = %#v, want %#v", st.records, []ShellTerminalRecord{wantRecord})

@@ -144,7 +144,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
 	const visual = artifactVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
-	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
+	const meta = [artifact.shareUrl ? "Public" : "", age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
 	return (
 		<Pressable
 			accessibilityRole="button"

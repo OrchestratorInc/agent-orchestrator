@@ -50,7 +50,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
@@ -82,7 +82,7 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "lucide-react";
+import { File } from "@/components/app-icons";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -117,7 +117,9 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
@@ -172,17 +174,6 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
-
-/**
- * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
- * brief, so the same instruction reaches the agent whether a file was attached at
- * spawn or mid-conversation.
- */
-function withAttachmentReferences(text: string, paths: string[]): string {
-	if (paths.length === 0) return text;
-	const lead = text.trim() === "" ? "" : `${text}\n\n`;
-	return `${lead}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
-}
 
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
@@ -631,10 +622,12 @@ export const ChatComposer = memo(function ChatComposer({
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
-			return attachments.map((attachment, index) => ({
-				...attachment,
-				stagedPath: paths[index],
-			}));
+			return attachments.map((attachment, index) => {
+				const stagedPath = paths[index];
+				// Staging renames the file, and the sent message keeps only that path.
+				if (stagedPath) rememberAttachmentName(stagedPath, attachment.name);
+				return { ...attachment, stagedPath };
+			});
 		},
 		[onStageAttachments],
 	);
@@ -2144,21 +2137,24 @@ export const ChatComposer = memo(function ChatComposer({
 									return (
 									<li
 										key={file.id}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										{preview ? (
-											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
+											<AttachmentThumbnail src={preview} name={file.name} />
 										) : (
 											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
 												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
 											</div>
 										)}
-										<span
-											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.name}
-										>
-											{file.name}
-										</span>
+										{preview ? (
+											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
+												{file.name}
+											</span>
+										) : (
+											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
+												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
+											</span>
+										)}
 										<Button
 											type="button"
 											variant="destructive-ghost"
@@ -2192,7 +2188,7 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
 										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
@@ -2287,7 +2283,7 @@ export const ChatComposer = memo(function ChatComposer({
 					<div className="px-1.5">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="sm"
 							onClick={abandonUncertainSteer}
 						>
@@ -2338,7 +2334,7 @@ export const ChatComposer = memo(function ChatComposer({
 											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
 										}}
 									>
-										<OptionMenuTrigger
+										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
 											disabled={controlsDisabled}

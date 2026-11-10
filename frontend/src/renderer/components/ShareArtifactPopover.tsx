@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Globe, Share } from "lucide-react";
-import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { Check, Copy, Globe, Share } from "@/components/app-icons";
+import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { Button } from "./ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type Phase =
@@ -33,7 +36,7 @@ interface OutdatedShare {
 }
 
 /** Videos are not shared yet: there is no partial-file serving for them. */
-const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
+export const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
 const COPIED_MS = 2_000;
 
 /**
@@ -105,12 +108,47 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 }
 
 /**
+ * The file an artifact is shared as, or undefined where the person cannot
+ * share it: only the person who started a cloud session publishes its files,
+ * and not once they are shared. A Scratchpad file belongs to the Scratchpad
+ * workspace, as in the session view.
+ */
+export function useArtifactShareFile(artifact: Pick<ArtifactRow, "cloud" | "sessionId" | "path" | "projectId"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
+	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	if (!artifact) return undefined;
+	if (artifact.cloud) {
+		const owner = Boolean(cloudUserId) && artifact.cloud.createdByUserId === cloudUserId;
+		if (artifact.cloud.shared || !owner) return undefined;
+		return { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" };
+	}
+	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID };
+}
+
+/** The share panel a menu's Share item opens, anchored to the menu's trigger. */
+export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, children }: {
+	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
+	name: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactElement;
+}) {
+	return (
+		<Popover open={open} onOpenChange={onOpenChange}>
+			<PopoverAnchor asChild>{children}</PopoverAnchor>
+			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+/**
  * The Share button beside an open local artifact's other actions. It opens a
  * popover anchored to it: publish the file as a public link, or, once it is
  * published, copy the link, unpublish it, or republish a file that changed
  * since. For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const available = useShareAvailable();
@@ -121,14 +159,21 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
 			disabled={video}
-			size="sm"
+			size={iconOnly ? "icon-sm" : "sm"}
 			type="button"
 			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{t("artifacts.share.menu")}
+			{iconOnly ? null : t("artifacts.share.menu")}
 		</Button>
 	);
+	const popoverTrigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
+	const trigger = iconOnly ? (
+		<Tooltip>
+			<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
+			<TooltipContent side="bottom">{t("artifacts.share.menu")}</TooltipContent>
+		</Tooltip>
+	) : popoverTrigger;
 	// Not offered where the control plane does not serve share links.
 	if (!available) return null;
 	if (video) {
@@ -144,7 +189,7 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{button}</PopoverTrigger>
+			{trigger}
 			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
@@ -371,7 +416,7 @@ function SharePanel({
 		}
 		case "published": {
 			const { share, outdated } = phase;
-			const link = share.viewerUrl ?? share.contentUrl;
+			const link = artifactShareUrl(share);
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
 				return (

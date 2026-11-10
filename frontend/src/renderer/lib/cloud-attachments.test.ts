@@ -120,7 +120,7 @@ describe("cloud attachment errors and cancellation", () => {
 
 	it("reads an IPC failure as a person would", async () => {
 		requestBinary.mockRejectedValueOnce(new Error("Error invoking remote method 'cloudCp:requestBinary': TypeError: fetch failed"));
-		await expect(fetchCloudAttachment("https://cp", "org", "session", { id: "a1", contentType: "text/plain" })).rejects.toThrow("Couldn’t reach AO Cloud. Check the connection and try again.");
+		await expect(fetchCloudAttachment("https://cp", "org", "session", { id: "a1", contentType: "text/plain" })).rejects.toThrow("Couldn’t reach Orchestrator Cloud. Check the connection and try again.");
 		requestBinary.mockRejectedValueOnce(new Error("Error invoking remote method 'cloudCp:requestBinary': Error: Invalid cloud control-plane request: baseUrl is not the configured AO Cloud control plane."));
 		await expect(fetchCloudAttachment("https://cp", "org", "session", { id: "a1", contentType: "text/plain" })).rejects.toThrow(/^Invalid cloud control-plane request: baseUrl is not the configured/);
 	});

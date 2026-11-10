@@ -1305,6 +1305,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversationId}/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find literal occurrences in the active conversation branch */
+        get: operations["findConversation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversationId}/find-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Load a read-only transcript page around a find result */
+        get: operations["findConversationWindow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/search": {
         parameters: {
             query?: never;
@@ -2383,6 +2417,24 @@ export interface paths {
         put?: never;
         /** Report a reviewer-owned hook signal */
         post: operations["setReviewActivity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/session-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview readable local agent histories from Git folders and Standalone */
+        get: operations["scanSessionImport"];
+        put?: never;
+        /** Import selected histories as idle AO sessions without starting providers */
+        post: operations["importSelectedSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5696,6 +5748,7 @@ export interface components {
             supported: boolean;
         };
         ControllersKillSessionRequest: {
+            callerSessionId?: string;
             deleteArtifacts?: boolean;
         };
         ControllersRemoteHostAccountTokenResponse: {
@@ -5770,6 +5823,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -5797,12 +5851,15 @@ export interface components {
             statusReadiness: "checking" | "ready" | "unavailable";
             terminalGeneration?: string;
             terminalHandleId?: string;
+            terminalTitle?: string;
             terminateOnPrMerge: boolean;
             /** Format: date-time */
             updatedAt: string;
             /** @enum {string} */
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
             workspaceCleanupReportOnly?: boolean;
+            /** @description Whether the session has a recorded workspace that workspace reads can use. */
+            workspacePublished: boolean;
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
@@ -5937,6 +5994,27 @@ export interface components {
             source: components["schemas"]["ChatFileReferenceSource"];
             truncated: boolean;
             workspaceVersion?: string;
+        };
+        ConversationFindOccurrence: {
+            block: number;
+            end: number;
+            messageId: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: int64 */
+            sequence: number;
+            start: number;
+        };
+        ConversationFindResponse: {
+            conversationId: string;
+            initialIndex: number;
+            lastCursor?: string;
+            nextCursor?: string;
+            occurrences: components["schemas"]["ConversationFindOccurrence"][];
+            offset: number;
+            previousCursor?: string;
+            total: number;
+            transcriptRevision: string;
         };
         ConversationImageContentRequest: {
             data: string;
@@ -6736,6 +6814,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinkRefused: boolean;
             accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
@@ -7259,6 +7338,7 @@ export interface components {
             path: string;
             previewUrl?: string;
             rawUrl?: string;
+            shareUrl?: string;
             /** Format: int64 */
             size: number;
             /** Format: date-time */
@@ -7281,6 +7361,34 @@ export interface components {
             at: string;
             harness?: string;
             userRequest: string;
+        };
+        SessionImportCandidate: {
+            folder?: string;
+            harness: string;
+            id: string;
+            /** Format: date-time */
+            lastActivity: string;
+            messageCount: number;
+            projectId?: string;
+            sessionId?: string;
+            shortened?: boolean;
+            title: string;
+        };
+        SessionImportPreview: {
+            candidates: components["schemas"]["SessionImportCandidate"][];
+        };
+        SessionImportRequest: {
+            ids: string[];
+        };
+        SessionImportResponse: {
+            results: components["schemas"]["SessionImportResult"][];
+        };
+        SessionImportResult: {
+            error?: string;
+            id: string;
+            sessionId?: string;
+            /** @enum {string} */
+            status: "created" | "already_imported" | "failed";
         };
         SessionInterfaceTransition: {
             /** Format: date-time */
@@ -7540,6 +7648,8 @@ export interface components {
              * @description Time the local hook process observed the event, before delivery to the daemon.
              */
             observedAt?: string;
+            /** @description The finished tool call probably changed the session's pull request (gh pr merge, git push), so AO re-reads it early. */
+            prMayHaveChanged?: boolean;
             /** @description Process id of the provider process that fired the hook (Claude's CLAUDE_PID). */
             processId?: number;
             /** @description Native main-turn identity reported by the hook, when supported. */
@@ -7683,6 +7793,7 @@ export interface components {
             handleId: string;
             projectId?: string;
             sessionId?: string;
+            terminalTitle?: string;
             title: string;
             workingDir: string;
         };
@@ -7872,10 +7983,12 @@ export interface components {
         SpawnSessionRequest: {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            async?: boolean;
             attachments?: components["schemas"]["AttachmentInput"][];
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
+            displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";
@@ -12814,6 +12927,137 @@ export interface operations {
             };
         };
     };
+    findConversation: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive literal substring in displayed message text (maximum 512 characters). */
+                query?: string;
+                /** @description Opaque continuation bound to query and transcript revision. */
+                cursor?: string;
+                /** @description Start at or after this visible message when cursor is absent. */
+                anchorMessageId?: string;
+                anchorBlock?: number;
+                anchorOffset?: number;
+                /** @description Fallback position when the anchor message was removed. */
+                anchorSequence?: number;
+                /** @description Choose the preceding match if a removed anchor has no following match. */
+                fallbackToPrevious?: boolean;
+            };
+            header?: never;
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationFindResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    findConversationWindow: {
+        parameters: {
+            query: {
+                sequence: number;
+            };
+            header?: never;
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSnapshotResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     searchConversations: {
         parameters: {
             query: {
@@ -16597,6 +16841,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanSessionImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportPreview"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSelectedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

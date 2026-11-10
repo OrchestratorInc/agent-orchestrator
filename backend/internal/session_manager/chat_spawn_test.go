@@ -66,6 +66,9 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 // chat launcher. Anything else means two writers on one conversation.
 
 type recordingLauncher struct {
+	// Empty preserves the default identity used by ordinary Chat fixtures.
+	providerConversationID string
+
 	permissionModes  []ports.PermissionMode
 	preflightErr     error
 	startErr         error
@@ -198,6 +201,9 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
+	}
+	if l.providerConversationID != "" {
+		started.ProviderConversationID = l.providerConversationID
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration

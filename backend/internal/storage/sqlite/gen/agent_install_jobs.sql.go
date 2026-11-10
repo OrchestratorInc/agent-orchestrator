@@ -40,8 +40,8 @@ const interruptActiveAgentInstallJobs = `-- name: InterruptActiveAgentInstallJob
 UPDATE agent_install_jobs
 SET status = 'interrupted',
     error = CASE
-        WHEN error = '' THEN 'AO restarted before this job completed.'
-        ELSE error || '\nAO restarted before this job completed.'
+        WHEN error = '' THEN 'Orchestrator restarted before this job completed.'
+        ELSE error || '\nOrchestrator restarted before this job completed.'
     END,
     finished_at = ?,
     updated_at = ?

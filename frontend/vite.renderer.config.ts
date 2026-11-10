@@ -133,6 +133,7 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		[
 			"connect-src",
 			"'self'",
+			"data:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
 			// Session artifact files are read from the daemon's artifact preview
@@ -258,6 +259,7 @@ export default defineConfig({
 	],
 	test: {
 		environment: "jsdom",
+		silent: "passed-only",
 		testTimeout: 20_000,
 		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
 		// vitest's default "**/node_modules/**" and only matches the root.

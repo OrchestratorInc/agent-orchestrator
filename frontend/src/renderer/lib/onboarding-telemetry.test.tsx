@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const capture = vi.hoisted(() => vi.fn(async (_event: string, _props?: unknown) => undefined));
 vi.mock("./telemetry", () => ({ captureRendererEvent: capture }));
 
-import { reportOnboardingStep, useOnboardingStep } from "./onboarding-telemetry";
+import { completeOnboardingStepIfViewed, reportOnboardingStep, useOnboardingStep } from "./onboarding-telemetry";
 
 describe("onboarding step telemetry", () => {
 	beforeEach(() => {
@@ -18,6 +18,21 @@ describe("onboarding step telemetry", () => {
 		expect(capture.mock.calls).toEqual([["ao.onboarding.step_viewed", { step: "welcome" }]]);
 		// A fresh module load (next launch) reads the persisted record.
 		expect(JSON.parse(window.localStorage.getItem("ao.telemetry.onboardingSteps") ?? "[]")).toEqual(["welcome:viewed"]);
+	});
+
+	it("completes github_auth with the step property once it was viewed, even after the window closed", () => {
+		completeOnboardingStepIfViewed("github_auth");
+		expect(capture).not.toHaveBeenCalled();
+		reportOnboardingStep("github_auth", "viewed");
+		reportOnboardingStep("github_auth", "abandoned");
+		// A later launch observes the sign-in (login resolved, or setup no longer needed).
+		completeOnboardingStepIfViewed("github_auth");
+		completeOnboardingStepIfViewed("github_auth");
+		expect(capture.mock.calls).toEqual([
+			["ao.onboarding.step_viewed", { step: "github_auth" }],
+			["ao.onboarding.step_abandoned", { step: "github_auth" }],
+			["ao.onboarding.step_completed", { step: "github_auth" }],
+		]);
 	});
 
 	it("does not call a completed step abandoned", () => {

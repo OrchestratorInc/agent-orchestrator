@@ -1,4 +1,4 @@
-import { ExternalLink, Loader2, Plus, RefreshCw } from "lucide-react";
+import { ExternalLink, Loader2, Plus, RefreshCw } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -212,7 +212,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						<>
 							<ol className="list-decimal space-y-1 pl-4">
 								<li>{t("settings.coder.tokenStep1", { defaultValue: "Use the button to open your Coder token page. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
-								<li>{t("settings.coder.tokenStep2", { defaultValue: "Give the token a name (for example \"AO\"), set a lifetime, and create it." })}</li>
+								<li>{t("settings.coder.tokenStep2", { defaultValue: "Give the token a name (for example \"Orchestrator\"), set a lifetime, and create it." })}</li>
 								<li>{t("settings.coder.tokenStep3", { defaultValue: "Copy the token, paste it in the field above, then Save and fetch templates." })}</li>
 							</ol>
 							{baseUrl.trim() === "" ? (

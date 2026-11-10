@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
@@ -59,6 +59,8 @@ import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
+import { SessionImportPanel } from "./SessionImportPanel";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -829,6 +831,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+	// Import reads this computer's chat files, so other hosts have no Import tab.
+	const importable = !hostId && selectedDetails !== null && IMPORTABLE_AGENTS.has(selectedDetails.agentId);
 	const detailsOpen = Boolean(selectedDetails);
 	// The list and the open page each scroll on their own, so the layout always
 	// fills the Settings body and the body itself never scrolls. Its scrolling is
@@ -882,11 +886,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
+								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										strokeWidth={1.75}
 										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
 										role="img"
 									/>
@@ -916,11 +919,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab === "import" && !importable ? "account" : detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
 							</TabsList>
 							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
@@ -948,6 +952,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									})()}
 								/>
 							</TabsContent>
+							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
+								<SessionImportPanel harness={selectedDetails.agentId} />
+							</TabsContent> : null}
 						</Tabs>
 					</div>
 				) : null}

@@ -1,7 +1,7 @@
 {
   "name": "@aoagents/cloud-client",
   "version": "0.1.0",
-  "description": "Runtime-neutral TypeScript contracts and client for the public AO Cloud API",
+  "description": "Runtime-neutral TypeScript contracts and client for the public Orchestrator Cloud API",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",

@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { checkProviderKey, removeProviderKey, saveProviderKey, useInvalidateProviderKeys, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -501,14 +502,26 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
+	agentConfig.Permissions = m.importedChatPermissions(ctx, rec, agentConfig.Permissions)
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, ws.Path)
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
 	}
-	env := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	var env map[string]string
+	preparedImportEnv := requireNativeHistory && rec.NeedsImportResume()
+	if preparedImportEnv {
+		rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+		if err != nil {
+			return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
+		}
+	} else {
+		env = m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
+	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
+	m.applyImportedConfigEnv(ctx, rec, env)
+
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
 	if requireNativeHistory {
@@ -519,6 +532,26 @@ func (m *Manager) resumeChatController(
 	}
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
+	}
+	rec, launchPath, err := m.importLaunch(ctx, operation, rec, ws.Path, env, preparedImportEnv)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if rec.NeedsImportResume() && !reconnectOnly {
+		if rec.Metadata.Model == "" && roleOverride(rec.Kind, project.Config).Harness == rec.Harness {
+			rec.Metadata.Model = effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Model
+			agentConfig.Model = rec.Metadata.Model
+		}
+		// An imported chat runs in a folder the provider was never set up in:
+		// install its workspace hooks and pre-launch config before the ACP
+		// controller starts. Relocation can move the native home, so the config
+		// env is applied again first.
+		m.applyImportedConfigEnv(ctx, rec, env)
+		if agent, ok := m.agents.Agent(rec.Harness); ok {
+			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env); err != nil {
+				return RestoreResult{}, relaunchFailed("import workspace preparation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+			}
+		}
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
@@ -538,7 +571,7 @@ func (m *Manager) resumeChatController(
 		Kind:                    rec.Kind,
 		Harness:                 rec.Harness,
 		DataDir:                 m.dataDir,
-		WorkspacePath:           ws.Path,
+		WorkspacePath:           launchPath,
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
@@ -548,6 +581,16 @@ func (m *Manager) resumeChatController(
 		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			if preparedImportEnv {
+				// The import preparer already saw this resolved environment. Only
+				// bind its verifier to the gate's exact owner; do not issue again.
+				prepared, prepareErr := m.persistBrowserCapabilityVerifier(launchCtx, rec, expected, rec.Metadata.BrowserCapabilityVerifier)
+				if prepareErr != nil {
+					return nil, prepareErr
+				}
+				rec = prepared
+				return maps.Clone(env), nil
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, rec, project.Config.Env, expected,
 			)
@@ -557,6 +600,8 @@ func (m *Manager) resumeChatController(
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
 			}
+			m.applyImportedConfigEnv(launchCtx, rec, launchEnv)
+
 			rec = prepared
 			return launchEnv, nil
 		},
@@ -571,7 +616,24 @@ func (m *Manager) resumeChatController(
 		HistoryMode:          historyMode,
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			if rec.NeedsImportResume() && started.ProviderConversationID != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
+				return ChatControllerCommit{}, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the provider did not resume the original conversation"))
+			}
+
 			metadata := rec.Metadata
+			if metadata.ImportSource != nil {
+				adopted := *metadata.ImportSource
+				if !adopted.Adopted {
+					through, err := m.importReplayedThrough(ctx, rec.ID)
+					if err != nil {
+						return ChatControllerCommit{}, err
+					}
+					adopted.HistoryThrough = through
+				}
+				adopted.Adopted = true
+				metadata.ImportSource = &adopted
+			}
+
 			metadata.WorkspacePath = ws.Path
 			metadata.WorkspaceRepoPath = ws.RepoPath
 			if ws.Branch != "" {
@@ -601,6 +663,8 @@ func (m *Manager) resumeChatController(
 				// Chat retains this callback for controller rebuilds. Consume the
 				// reservation after publication so those rebuilds resume normally.
 				providerHandoff = nil
+				// Rebuilds continue the adopted import; its replay boundary is fixed.
+				rec.Metadata.ImportSource = metadata.ImportSource
 			}
 			completionErr = commitErr
 			return ChatControllerCommit{
@@ -615,6 +679,10 @@ func (m *Manager) resumeChatController(
 		if completionErr != nil {
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr))
+		}
+		// Another app can hold an imported conversation after adoption too.
+		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
+			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}

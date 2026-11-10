@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "lucide-react";
+import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -392,7 +392,7 @@ export function AgentModelPicker({
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
-			<OptionMenuTrigger
+			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
 				onPointerEnter={warmCatalogs}

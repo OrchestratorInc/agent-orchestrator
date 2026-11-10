@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Folder } from "lucide-react";
+import { AlertTriangle, Folder } from "@/components/app-icons";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import type { WorkspaceSummary } from "../types/workspace";
 import { SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar";

@@ -62,6 +62,10 @@ export interface CloudShareLink {
 	revokedAt?: string;
 }
 
+export function artifactShareUrl(share: Pick<CloudShareLink, "viewerUrl" | "contentUrl">): string {
+	return share.viewerUrl ?? share.contentUrl;
+}
+
 /** The signed-in user's links and what their plan allows. */
 export interface CloudShareLinks {
 	shares: CloudShareLink[];

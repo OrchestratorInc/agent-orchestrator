@@ -66,6 +66,7 @@ import Search from "lucide-react-native/icons/search";
 import Send from "lucide-react-native/icons/send";
 import Server from "lucide-react-native/icons/server";
 import Settings from "lucide-react-native/icons/settings";
+import Share from "lucide-react-native/icons/share";
 import Shield from "lucide-react-native/icons/shield";
 import ShieldOff from "lucide-react-native/icons/shield-off";
 import Shuffle from "lucide-react-native/icons/shuffle";
@@ -144,6 +145,7 @@ export const glyphs = {
 	"send": Send,
 	"server": Server,
 	"settings": Settings,
+	"share": Share,
 	"shield": Shield,
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,

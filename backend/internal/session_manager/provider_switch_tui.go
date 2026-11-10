@@ -40,6 +40,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if rec.Harness == target {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active"}
 	}
+	if rec.NeedsImportResume() {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "open the imported chat before switching providers"}
+	}
 	if active, err := m.hasActiveInterfaceTransition(ctx, id); err != nil {
 		return err
 	} else if active {
@@ -80,7 +83,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return &domain.ProviderSwitchError{Kind: kind, Detail: err.Error(), Cause: err}
 	}
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "AO could not confirm that the source provider stopped: " + err.Error(), Cause: err}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "Orchestrator could not confirm that the source provider stopped: " + err.Error(), Cause: err}
 	}
 	// Held input has nothing left to reach, and the target's startup queries
 	// on the same terminal must get through.

@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, KeyRound, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "lucide-react";
+import { Activity, Bot, CircleHelp, CreditCard, KeyRound, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";

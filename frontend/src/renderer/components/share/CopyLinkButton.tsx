@@ -1,4 +1,4 @@
-import { Check, Link2 } from "lucide-react";
+import { Check, Link2 } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
@@ -81,7 +81,7 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
 		<Button
 			ref={buttonRef}
 			type="button"
-			variant="footer"
+			variant="secondary"
 			// Wide enough for every label, so the footer doesn't move as it changes.
 			className="min-w-34 gap-1.5 aria-disabled:cursor-default aria-disabled:opacity-50"
 			aria-disabled={!available || undefined}

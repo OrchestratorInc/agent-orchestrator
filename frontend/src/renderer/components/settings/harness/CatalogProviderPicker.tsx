@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { CatalogProvider } from "../../../hooks/useAgentAuth";

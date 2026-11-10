@@ -8,7 +8,6 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileIcon, FileText } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { fetchCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
@@ -17,7 +16,9 @@ import { useUiStore } from "../../stores/ui-store";
 import { PdfPreview } from "../PdfPreview";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
-import { ChatImage } from "./ChatImage";
+import { ChatImage, ChatImageAttachmentRow } from "./ChatImage";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentTypeLabel } from "./messageAttachments";
+import { AttachmentFileCard } from "./StagedAttachmentItems";
 
 type CloudAttachmentSource = { baseUrl: string; orgId: string; sessionId: string };
 
@@ -28,10 +29,9 @@ export function CloudAttachmentSourceProvider({ source, children }: { source: Cl
 	return <CloudAttachmentSourceContext.Provider value={source}>{children}</CloudAttachmentSourceContext.Provider>;
 }
 
-function formatSize(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/** An SVG stays a file chip; it is never rendered as an image. */
+function rendersAsImage(attachment: CloudAttachment): boolean {
+	return attachment.contentType.startsWith("image/") && attachment.contentType !== "image/svg+xml";
 }
 
 function useAttachmentBytes(source: CloudAttachmentSource | undefined, attachment: CloudAttachment, enabled = true) {
@@ -81,15 +81,13 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 			<Pressable
 				onClick={() => setOpen(true)}
 				title={attachment.fileName}
-				className="flex w-44 flex-col overflow-hidden rounded-md border border-border bg-background text-left transition-colors hover:bg-interactive-hover"
+				className={cn(ATTACHMENT_TILE_CLASS, "focus-visible:ring-2 focus-visible:ring-ring")}
 			>
-				<div className="h-32 overflow-hidden">
-					<PdfPreview firstPageOnly load={load} src={`cloud-attachment:${attachment.id}`} path={attachment.fileName} onError={() => setFailed(true)} />
-				</div>
-				<span className="flex items-center gap-1.5 border-t border-border px-2 py-1.5 text-xs text-muted-foreground">
-					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
-					<span className="truncate">{attachment.fileName}</span>
+				<AttachmentFileCard name={attachment.fileName} bytes={attachment.size} />
+				<span inert className="pointer-events-none absolute inset-0 flex flex-col overflow-hidden">
+					<PdfPreview cover load={load} src={`cloud-attachment:${attachment.id}`} path={attachment.fileName} onError={() => setFailed(true)} />
 				</span>
+				<span className={cn(ATTACHMENT_TILE_PILL_CLASS, ATTACHMENT_TILE_OVERLAY_PILL_CLASS)}>{attachmentTypeLabel(attachment.fileName) ?? "PDF"}</span>
 			</Pressable>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
@@ -124,11 +122,9 @@ function CloudFileAttachment({ source, attachment }: { source: CloudAttachmentSo
 			onClick={() => void save()}
 			disabled={!source || saving}
 			title={t("chat.attachment.save", { name: attachment.fileName })}
-			className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover disabled:opacity-60"
+			className={cn(ATTACHMENT_TILE_CLASS, "transition-colors hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60")}
 		>
-			<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-			<span className="truncate">{attachment.fileName}</span>
-			<span className="shrink-0 tabular-nums opacity-70">{formatSize(attachment.size)}</span>
+			<AttachmentFileCard name={attachment.fileName} bytes={attachment.size} />
 		</Pressable>
 	);
 }
@@ -138,18 +134,20 @@ export function CloudMessageAttachments({ attachments, className }: { attachment
 	const source = useContext(CloudAttachmentSourceContext);
 	if (!attachments?.length) return null;
 	return (
-		<ul aria-label={t("chat.attachment.list")} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{attachments.map((attachment) => (
-				<li key={attachment.id} className="max-w-full">
-					{attachment.contentType.startsWith("image/") && attachment.contentType !== "image/svg+xml" ? (
-						<CloudImageAttachment source={source} attachment={attachment} />
-					) : attachment.contentType === "application/pdf" ? (
-						<CloudPdfAttachment source={source} attachment={attachment} />
-					) : (
-						<CloudFileAttachment source={source} attachment={attachment} />
-					)}
-				</li>
-			))}
-		</ul>
+		<ChatImageAttachmentRow>
+			<ul aria-label={t("chat.attachment.list")} className={cn("flex max-w-full flex-wrap gap-2", className)}>
+				{attachments.map((attachment) => (
+					<li key={attachment.id} className="max-w-full">
+						{rendersAsImage(attachment) ? (
+							<CloudImageAttachment source={source} attachment={attachment} />
+						) : attachment.contentType === "application/pdf" ? (
+							<CloudPdfAttachment source={source} attachment={attachment} />
+						) : (
+							<CloudFileAttachment source={source} attachment={attachment} />
+						)}
+					</li>
+				))}
+			</ul>
+		</ChatImageAttachmentRow>
 	);
 }

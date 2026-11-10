@@ -1,4 +1,4 @@
-import { Info, TriangleAlert } from "lucide-react";
+import { Info, TriangleAlert } from "@/components/app-icons";
 import { useEffect, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";

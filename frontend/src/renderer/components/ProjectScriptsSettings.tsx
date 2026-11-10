@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Plus, Trash2 } from "@/components/app-icons";
 import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ProjectSettingsSection } from "@aoagents/product-ui";
