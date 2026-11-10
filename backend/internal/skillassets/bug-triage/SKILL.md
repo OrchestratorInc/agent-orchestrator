@@ -82,7 +82,8 @@ source. Label source findings approximate when the affected build cannot be matc
 
 Do not run `doctor` or `agent ls` as routine evidence collectors: doctor writes files
 and checks remote authentication; agent listing triggers readiness checks.
-`remote-host status` can print the pairing password. Desktop status refresh may start
+`remote-host status --show-password` prints the pairing password; run `status`
+without that flag. Desktop status refresh may start
 a replacement daemon; prefer the CLI status check or already available evidence.
 
 Collect only what helps explain this symptom:
