@@ -1198,7 +1198,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 
-	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	// A caller with a UI to return to gets the session as soon as it is
+	// addressable, in either mode; the worktree and the agent start in the
+	// background (chat_spawn_async.go).
+	asyncStart := cfg.Async && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker) &&
+		(mode == domain.SessionModeTUI || m.chat != nil)
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1215,7 +1219,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		// Visible from its first row: without this, a view that opens the session
 		// before beginAsyncChatSpawn reads a ready session with no controller.
-		if asyncChat {
+		if asyncStart {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
 		if cfg.ClientRequestID != "" {
@@ -1301,7 +1305,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		// A synchronous spawn can be promoted as ready only after the hidden
 		// preparation has finished publishing its worktree. Otherwise its late
 		// publication loses the provisioning-state fence and deletes the worktree.
-		if !asyncChat {
+		if !asyncStart {
 			if _, _, err := m.awaitTaskPreparation(ctx, prep); err != nil && ctx.Err() != nil {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -1317,7 +1321,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
-		if asyncChat {
+		if asyncStart {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
 		rec, err = m.promoteTaskPreparation(ctx, prep, seed)
@@ -1355,7 +1359,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cancelNaming()
 		}
 	}()
-	if !asyncChat {
+	if !asyncStart {
 		taskName, cancelNaming = m.startTaskNaming(cfg, rec, project.Config)
 		releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(cfg.ProjectID))
 		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
@@ -1370,12 +1374,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		branch = DefaultSpawnBranch(id, cfg.Kind, sessionPrefix(project), projectKind, m.dataDir)
 	}
 
-	// An asynchronous Chat spawn stops here and answers the caller. Everything
-	// below — the remote refresh, the worktree, the controller — is the same
-	// work, run in the background while the user already has the session open.
+	// An asynchronous spawn stops here and answers the caller. Everything
+	// below (the remote refresh, the worktree, the agent) is the same work, run
+	// in the background while the user already has the session open.
 	// The attachments are named now (spawnAttachmentRefs is derived, not read
 	// from disk) so the opening prompt is complete before the files land.
-	if asyncChat {
+	if asyncStart {
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 			cfg:               cfg,
 			project:           project,
@@ -1389,6 +1393,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			systemPromptBytes: systemPromptBytes,
 			preparation:       prep,
 			releaseHarness:    releaseHarness,
+			agentConfig:       agentConfig,
+			explicitModel:     explicitModel,
 		})
 		if err == nil {
 			releaseHarness = nil // background start now owns the installer guard
