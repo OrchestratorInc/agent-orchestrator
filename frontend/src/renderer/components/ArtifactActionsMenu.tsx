@@ -317,7 +317,7 @@ export function ArtifactActionsMenu({
 							{canShare ? (
 								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareOpen(true); }}>
 									<Share aria-hidden="true" />
-									{t("artifacts.share.menu")}
+									{t("artifacts.share.publish")}
 								</DropdownMenuItem>
 							) : null}
 							{onTogglePin ? (

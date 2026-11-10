@@ -856,11 +856,13 @@ export function SessionArtifactsView({
 							<ShareArtifactButton
 								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						) : null}
 						<Tooltip>

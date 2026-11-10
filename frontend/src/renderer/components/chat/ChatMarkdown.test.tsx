@@ -511,6 +511,16 @@ describe("ChatMarkdown", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
 		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(document.querySelectorAll("code")).toHaveLength(2);
+	});
+
+	it.each([
+		["`worker-1/plan.md`"],
+		["[`plan.md`](ao://sessions/project/worker-1/artifacts/plan.md)"],
+	])("names a linked artifact in the UI font, not as code: %s", (text) => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		renderWithSessionLinkHandler(text, vi.fn());
+		expect(screen.getByRole("link").querySelector("code")).toBeNull();
 	});
 
 	it.each(["text", "element"])("keeps an unlisted artifact's %s children renderable and copyable", async (kind) => {
