@@ -1801,6 +1801,7 @@
 	"artifacts.deleteDescription": "Isso exclui {{name}} permanentemente da pasta de artefatos desta sessão.",
 	"artifacts.deleteCloudDescription": "Isso exclui {{name}} permanentemente do armazenamento em nuvem da sessão e do seu sandbox.",
 	"artifacts.viewOnly": "Somente visualização. Só quem iniciou esta sessão pode alterar, baixar ou copiar os arquivos dela.",
+	"artifacts.bundleNotDeletable": "Um pacote não pode ser excluído aqui.",
 	"artifacts.fullscreen": "Tela cheia",
 	"artifacts.exitFullscreen": "Sair da tela cheia",
 	"artifacts.history": "Histórico de versões",

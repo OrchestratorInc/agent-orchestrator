@@ -502,6 +502,27 @@ describe("ArtifactsView", () => {
 		expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "mine.md");
 	});
 
+	it("does not let a bundle be selected, since deleting it would remove only one of its files", async () => {
+		const user = userEvent.setup();
+		mocks.workspaces = [{ id: "ao", name: "agent-orchestrator", path: "/code/ao", sessions: [
+			session("ao-1", "Brand kit", [
+				{ name: "brand.icon/mark.png", updatedAt: "2026-10-11T10:00:00Z", kind: "file" },
+				{ name: "brand.icon/icon.json", updatedAt: "2026-10-11T10:00:00Z", kind: "file" },
+				{ name: "notes.md", updatedAt: "2026-10-10T10:00:00Z" },
+			]),
+		] }];
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByRole("checkbox", { name: "Select brand.icon" })).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("1 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 1 artifact" }));
+		await waitFor(() => expect(mocks.del).toHaveBeenCalledTimes(1));
+		expect(mocks.del).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "ao-1" }, query: { path: "notes.md" } } });
+	});
+
 	it("keeps search and the Filter menu while selecting, and Escape in search keeps the selection", async () => {
 		const user = userEvent.setup();
 		renderView();

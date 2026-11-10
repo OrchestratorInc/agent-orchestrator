@@ -66,6 +66,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	artifacts           map[domain.SessionID][]string
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
@@ -379,6 +380,47 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	}
 	r, ok := f.sessions[id]
 	return r, ok, nil
+}
+
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, _ time.Time) ([]string, bool, error) {
+	if _, ok := f.sessions[id]; !ok {
+		return nil, false, nil
+	}
+	if f.artifacts == nil {
+		f.artifacts = map[domain.SessionID][]string{}
+	}
+	for _, registration := range registrations {
+		path := registration.Path
+		if !slices.Contains(f.artifacts[id], path) {
+			f.artifacts[id] = append(f.artifacts[id], path)
+		}
+	}
+	return f.artifacts[id], true, nil
+}
+
+func (f *fakeStore) ListSessionArtifactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
+	out := make(map[domain.SessionID][]domain.SessionArtifactRecord, len(ids))
+	registeredAt := time.Unix(0, 0)
+	for _, id := range ids {
+		paths, ok := f.artifacts[id]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			out[id] = append(out[id], domain.SessionArtifactRecord{ID: "artifact:" + path, SessionID: id, Path: path, RegisteredAt: &registeredAt})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveSessionArtifact(_ context.Context, id domain.SessionID, path string) error {
+	f.artifacts[id] = slices.DeleteFunc(f.artifacts[id], func(p string) bool { return p == path })
+	return nil
+}
+
+func (f *fakeStore) ClearSessionArtifacts(_ context.Context, id domain.SessionID) error {
+	delete(f.artifacts, id)
+	return nil
 }
 
 func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
@@ -5914,7 +5956,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5972,7 +6014,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}

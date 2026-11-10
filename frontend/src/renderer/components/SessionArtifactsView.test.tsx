@@ -98,9 +98,9 @@ vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 }));
 
 const artifacts: SessionArtifact[] = [
-	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
-	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
-	{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-21T00:00:00Z" },
+	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z", registered: true },
+	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+	{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-21T00:00:00Z", registered: true },
 ];
 
 function session(artifactFiles: SessionArtifact[] = artifacts): WorkspaceSession {
@@ -125,8 +125,8 @@ function cloudSession(): WorkspaceSession {
 		id: "cloud-1",
 		cloud: { orgId: "org-1" },
 		artifactFiles: [
-			{ kind: "html", name: "report.html", path: "report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
-			{ kind: "markdown", name: "notes.md", path: "docs/notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
+			{ kind: "html", name: "report.html", path: "report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "notes.md", path: "docs/notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z", registered: true },
 		],
 	} as WorkspaceSession;
 }
@@ -393,7 +393,61 @@ describe("SessionArtifactsView", () => {
 		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "cloud-1", cloud: { orgId: "org-1" } }), true);
 	});
 
-	it("lists every artifact newest first", () => {
+	it("lists only the registered files, and still opens another file by its link", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "html", name: "brand.html", path: "brand.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "draft.md", path: "draft.md", size: 12, updatedAt: "2026-09-24T00:00:00Z" },
+			{ kind: "file", name: "a.png", path: "assets/a.png", size: 20, updatedAt: "2026-09-25T00:00:00Z" },
+		];
+		const { unmount } = renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /^brand\.html/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^draft\.md/ })).not.toBeInTheDocument();
+		unmount();
+
+		renderView(<SessionArtifactsView request={{ key: 1, path: "assets/a.png" }} session={session(files)} />);
+		expect(screen.queryByText("No artifacts")).not.toBeInTheDocument();
+		expect(screen.queryByRole("list")).not.toBeInTheDocument();
+	});
+
+	it("keeps a renamed file open, and opens it by a link from before the rename", () => {
+		const before: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "draft.md", path: "draft.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true },
+		];
+		const after: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "summary.md", path: "final/summary.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true, previousPaths: ["draft.md"] },
+		];
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(before)} />);
+		expect(screen.getByRole("button", { name: "draft.md" })).toBeInTheDocument();
+		view.rerender(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+		view.unmount();
+
+		renderView(<SessionArtifactsView request={{ key: 2, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+	});
+
+	it("falls back to the root files when nothing is registered", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "html", name: "brand.html", path: "brand.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "file", name: "a.png", path: "assets/a.png", size: 20, updatedAt: "2026-09-25T00:00:00Z" },
+		];
+		renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+	});
+
+	it("lists a bundle as one card with no file actions", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "file", name: "icon.json", path: "app.icon/icon.json", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "file", name: "mark.png", path: "app.icon/mark.png", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+		];
+		renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /^app\.icon/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /actions/i })).not.toBeInTheDocument();
+	});
+
+	it("lists every registered artifact newest first", () => {
 		renderView(<SessionArtifactsView session={session()} />);
 
 		expect(within(screen.getByRole("list")).getAllByRole("listitem").map((item) => within(item).getAllByRole("button")[0].textContent)).toEqual([
@@ -739,8 +793,8 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it("offers version history for text and local media files but not for another binary file", async () => {
-		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
-		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
+		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z", registered: true };
+		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z", registered: true };
 		renderView(<SessionArtifactsView session={session([...artifacts, image, archive])} />);
 
 		await userEvent.click(screen.getByRole("button", { name: /^plan\.md/ }));

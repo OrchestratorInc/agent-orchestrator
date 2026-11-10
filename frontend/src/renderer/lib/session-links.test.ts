@@ -66,6 +66,11 @@ describe("session links", () => {
 		expect(resolveSessionLink("ao://sessions/p/s/artifacts/plan.md", workspaces)).toEqual({ projectId: "p", sessionId: "s", isTerminated: true });
 	});
 
+	it("links a path an artifact had before a rename to where it is now", () => {
+		const workspaces = [{ id: "p", sessions: [{ id: "w", artifactFiles: [{ path: "final/plan.md", previousPaths: ["plan.md"] }] }] }];
+		expect(artifactLinkForPath("w/plan.md", workspaces)).toBe("ao://sessions/p/w/artifacts/final/plan.md");
+	});
+
 	it("links paths naming a listed artifact, by session-relative or artifact-directory path", () => {
 		const workspaces = [{ id: "p 1", sessions: [{ id: "w", artifactFiles: [{ path: "plan.md" }, { path: "plans/my plan.md" }] }] }];
 		expect(artifactLinkForPath("w/plan.md", workspaces)).toBe("ao://sessions/p%201/w/artifacts/plan.md");

@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle } from "./ShareArtifactPopover";
+import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, useArtifactShareFile } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -179,6 +181,21 @@ describe("ShareArtifactButton", () => {
 		// Unchanged: the link list is not asked for.
 		expect(listSpy).not.toHaveBeenCalled();
 		expect(screen.queryByRole("button", { name: "Republish: report.html" })).toBeNull();
+	});
+
+	it("says Republish after a pure rename, and one click updates the same link under the new name", async () => {
+		const renamed = { ...file, path: "docs/final.html", artifactId: "art-1" };
+		const { publishSpy } = stub(
+			{ ...inspection, name: "final.html", shareId: SHARE_ID, publishedFingerprint: inspection.fingerprint },
+			{ ...links, shares: [share] },
+			{ status: "published", replaced: true, share: { ...share, name: "final.html" } },
+		);
+		render(<TooltipProvider><ShareArtifactButton file={renamed} name="final.html" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Republish: final.html" }));
+		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({
+			...renamed, baseUrl: "https://cp.test", fingerprint: inspection.fingerprint, shareId: SHARE_ID,
+		}));
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue(share.viewerUrl);
 	});
 
 	it("offers Republish beside Unpublish in the panel when the file changed, and it updates the same link", async () => {
@@ -381,4 +398,14 @@ describe("ShareArtifactButton", () => {
 		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
 	});
 
+});
+
+describe("useArtifactShareFile", () => {
+	it("shares a file by its artifact ID, which a rename keeps, so the renamed file finds its link", () => {
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useArtifactShareFile({ id: "art-1", sessionId: "sess-1", path: "final/report.html", projectId: "proj-1" }), { wrapper });
+		expect(result.current).toEqual({ sessionId: "sess-1", path: "final/report.html", projectId: "proj-1", artifactId: "art-1" });
+		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
+		expect(untracked.result.current).not.toHaveProperty("artifactId");
+	});
 });
