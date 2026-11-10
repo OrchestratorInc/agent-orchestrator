@@ -3,7 +3,6 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
 import { TabSplitMenuContext } from "./TabContextMenu";
@@ -116,8 +115,6 @@ function renderCenterPane(props: Partial<ComponentProps<typeof CenterPane>> = {}
 }
 
 beforeEach(() => {
-	// The simplified top bar is a Developer Mode preview; this suite covers it.
-	useUiStore.setState({ developerMode: true });
 	shortcutMocks.closeListener = undefined;
 	shortcutMocks.nextTabListener = undefined;
 	shortcutMocks.previousTabListener = undefined;
@@ -550,22 +547,6 @@ describe("CenterPane toolbar session label", () => {
 		expect(document.querySelector("[data-tab-scroll-region]")).not.toHaveAttribute("data-fade-end");
 	});
 
-	it("keeps terminal creation with the workspace actions without Developer Mode", () => {
-		useUiStore.setState({ developerMode: false });
-		renderCenterPane({
-			session: worker,
-			tabStripAction: <button type="button">New terminal</button>,
-			topbarActions: <button type="button">Workspace action</button>,
-		});
-
-		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
-		const actionRegion = screen.getByTestId("session-action-region");
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
-		expect(screen.getByTestId("session-terminal-region")).not.toContainElement(screen.getByTestId("session-tab-strip-action"));
-		expect(tablist).toHaveClass("flex-1");
-	});
-
 	it("keeps the tab strip flush with the action controls", () => {
 		renderCenterPane({ session: worker });
 
@@ -852,7 +833,13 @@ describe("CenterPane tab context menu", () => {
 		const onClose = vi.fn();
 		renderCenterPane({
 			session: worker,
-			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+			workspaceTabs: [{
+				key: "file:a.ts",
+				content: <button role="tab" type="button">a.ts</button>,
+				onSelect: vi.fn(),
+				onClose,
+				menu: { kind: "file", tabKey: "file:a.ts", onClose, file: { path: "a.ts", sessionId: "sess-1", remote: false } },
+			}],
 		});
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));

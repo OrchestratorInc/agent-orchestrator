@@ -39,7 +39,7 @@ describe("cloud control-plane binary requests", () => {
 		expect(JSON.parse(new TextDecoder().decode(tooLarge.body))).toEqual({
 			error: "attachment_too_large",
 			code: "attachment_too_large",
-			message: "The file is larger than 32 MiB, the most the app sends to AO Cloud at once.",
+			message: "The file is larger than 32 MiB, the most the app sends to Orchestrator Cloud at once.",
 		});
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
@@ -55,7 +55,7 @@ describe("cloud control-plane binary requests", () => {
 		expect(response.status).toBe(504);
 		expect(JSON.parse(new TextDecoder().decode(response.body))).toMatchObject({
 			code: "request_timeout",
-			message: "AO Cloud did not answer within 0 seconds. Try again.",
+			message: "Orchestrator Cloud did not answer within 0 seconds. Try again.",
 		});
 	});
 
@@ -111,9 +111,9 @@ describe("cloud control-plane URL pinning", () => {
 		const fetchImpl = vi.fn();
 		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
 		for (const baseUrl of elsewhere) {
-			await expect(proxy.request({ ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured AO Cloud control plane/);
-			await expect(proxy.requestBinary({ ...base, baseUrl })).rejects.toThrow(/configured AO Cloud control plane/);
-			await expect(proxy.openStream(sender, { ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured AO Cloud control plane/);
+			await expect(proxy.request({ ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
+			await expect(proxy.requestBinary({ ...base, baseUrl })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
+			await expect(proxy.openStream(sender, { ...base, baseUrl, method: "GET" })).rejects.toThrow(/configured Orchestrator Cloud control plane/);
 		}
 		expect(fetchImpl).not.toHaveBeenCalled();
 		expect(tokenMock).not.toHaveBeenCalled();
@@ -122,8 +122,8 @@ describe("cloud control-plane URL pinning", () => {
 	it("refuses every request while no control plane is configured", async () => {
 		const fetchImpl = vi.fn();
 		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl: async () => null, fetchImpl: fetchImpl as unknown as typeof fetch });
-		await expect(proxy.request({ ...base, method: "GET" })).rejects.toThrow(/no AO Cloud control plane/);
-		await expect(proxy.requestBinary(base)).rejects.toThrow(/no AO Cloud control plane/);
+		await expect(proxy.request({ ...base, method: "GET" })).rejects.toThrow(/no Orchestrator Cloud control plane/);
+		await expect(proxy.requestBinary(base)).rejects.toThrow(/no Orchestrator Cloud control plane/);
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 

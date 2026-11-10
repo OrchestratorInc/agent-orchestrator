@@ -124,6 +124,54 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	}
 }
 
+// A request that carries no password is not a guess. Opening the tunnel URL in a
+// browser fetches the page, its favicon and touch icons without one, and every
+// device behind the same public IP shares the visitor's lockout. Counting those
+// locked the phone out before it sent the correct password (#7980).
+func TestTokenlessRequestsDoNotCountTowardLockout(t *testing.T) {
+	h, lock := newAuthUnderTest("secret12", time.Now)
+	tunnelReq := func(path, auth string) *http.Request {
+		r := reqTo(http.MethodGet, path, auth)
+		r.RemoteAddr = "127.0.0.1:5555"
+		r.Header.Set("CF-Connecting-IP", "198.51.100.7")
+		return r
+	}
+	for _, path := range []string{"/", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/", "/", "/"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, tunnelReq(path, ""))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("tokenless %s: got %d want 401", path, w.Code)
+		}
+	}
+	// A preview file with no cookie and an empty bearer carry no password either.
+	for _, r := range []*http.Request{
+		tunnelReq("/api/v1/sessions/s1/preview/files/index.html", ""),
+		tunnelReq("/api/v1/sessions", "Bearer "),
+	} {
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if lock.blocked("198.51.100.7") {
+		t.Fatal("tokenless requests triggered the lockout")
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, tunnelReq("/api/v1/sessions", "Bearer secret12"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("correct password after tokenless requests: got %d want 200", w.Code)
+	}
+
+	// Wrong passwords still count, and tokenless requests in between neither
+	// add to nor clear the count.
+	for i := range 5 {
+		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/api/v1/sessions", fmt.Sprintf("Bearer wrong%d", i)))
+		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/favicon.ico", ""))
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, tunnelReq("/api/v1/sessions", "Bearer secret12"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("after five wrong passwords: got %d want 429", w.Code)
+	}
+}
+
 func TestValidTunnelClientSurvivesAnotherClientsLockout(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	for range 5 {

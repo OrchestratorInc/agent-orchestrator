@@ -93,7 +93,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
 	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"] },
 	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
-	{ id: "simplified-topbar", section: "general", label: "settings.simplifiedTopbar", keywords: ["top bar", "topbar", "toolbar", "floating", "tabs"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login"] },

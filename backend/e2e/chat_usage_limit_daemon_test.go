@@ -140,9 +140,26 @@ func serveUsageLimitProvider(harness string) error {
 			if harness == "claude-code" {
 				result := map[string]any{"stopReason": "end_turn"}
 				if refused {
+					if err := notify("session/update", map[string]any{"sessionId": nativeSession, "update": map[string]any{
+						"sessionUpdate": "usage_update", "used": 1, "size": 200000,
+						"_meta": map[string]any{"_claude/rateLimit": map[string]any{
+							"status": "rejected", "rateLimitType": "five_hour", "resetsAt": resets[text].Unix(),
+							"overageStatus": "rejected", "isUsingOverage": false,
+						}},
+					}}); err != nil {
+						return err
+					}
+					zone, err := time.LoadLocation("Asia/Calcutta")
+					if err != nil {
+						return err
+					}
+					clock := resets[text].In(zone).Format("3:04pm")
+					if resets[text].Minute() == 0 {
+						clock = resets[text].In(zone).Format("3pm")
+					}
 					result["_meta"] = map[string]any{"jetbrains": map[string]any{"air": map[string]any{"version": 1, "sessionFailure": map[string]any{
 						"id": "quota-refusal", "revision": 1, "category": "limit", "severity": "error",
-						"title": "You've hit your session limit; resets " + resets[text].Format(time.RFC3339), "actions": []any{},
+						"title": "You've hit your 5-hour limit · resets " + clock + " (Asia/Calcutta)", "actions": []any{},
 					}}}}
 				} else if err := notify("session/update", map[string]any{"sessionId": nativeSession, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "AUTOMATIC-RESUME-COMPLETED"}}}); err != nil {
 					return err

@@ -40,7 +40,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("opencodev2.GetAgentHooks: inspect plugin: %w", err)
 	}
 	if exists && !managed {
-		return fmt.Errorf("opencodev2.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+		return fmt.Errorf("opencodev2.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 	}
 	if err := removeV2ManagedPlugin(filepath.Join(filepath.Dir(path), v1PluginFileName), v1PluginSentinel); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: remove managed OpenCode 1 plugin: %w", err)

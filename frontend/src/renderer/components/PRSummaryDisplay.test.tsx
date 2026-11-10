@@ -62,7 +62,7 @@ describe("PRSummaryParts", () => {
 			/>,
 		);
 		expect(screen.getByRole("link", { name: "ada" })).toHaveAttribute("href", "https://github.com/ada");
-		expect(screen.getByText("via AO")).toBeInTheDocument();
+		expect(screen.getByText("via Orchestrator")).toBeInTheDocument();
 		expect(screen.queryByText("ao-by-untrivial")).not.toBeInTheDocument();
 
 		// Without a connected GitHub account, the AO name shows, unlinked.

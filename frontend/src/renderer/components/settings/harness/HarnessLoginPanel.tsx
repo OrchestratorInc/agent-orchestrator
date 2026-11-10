@@ -1,4 +1,4 @@
-import { Building2, Check, ChevronDown, Copy, ExternalLink, KeyRound, LoaderCircle, Smartphone, Terminal, UserRound } from "lucide-react";
+import { Building2, Check, ChevronDown, Copy, ExternalLink, KeyRound, LoaderCircle, Smartphone, Terminal, UserRound } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";

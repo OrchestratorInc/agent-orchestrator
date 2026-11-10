@@ -43,7 +43,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	path := piExtensionPath(cfg.WorkspacePath)
 	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // caller-owned workspace path
 		if !strings.Contains(string(data), piExtensionSentinel) {
-			return fmt.Errorf("pi.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+			return fmt.Errorf("pi.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("pi.GetAgentHooks: read managed extension: %w", err)

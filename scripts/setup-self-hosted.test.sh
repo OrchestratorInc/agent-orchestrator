@@ -35,7 +35,7 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'        enable) if [ "$TEST_AO_TUNNEL_PAIRING" = unavailable ]; then' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel unavailable: cloudflared missing\nPassword: test-secret\n"' \
 	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = linked ]; then' \
-	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an AO account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an Orchestrator account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
 	'                else' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPassword: test-secret\n"' \
 	'                fi ;;' \
@@ -407,7 +407,7 @@ PY
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'On your laptop: Settings → Remote hosts → Add host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			grep -q 'The host is not linked to an AO account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'The host is not linked to an Orchestrator account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
 			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;

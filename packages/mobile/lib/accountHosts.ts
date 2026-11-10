@@ -166,14 +166,21 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 			// Connecting saves the machine's advertised routes beside the listed
 			// address. Keep them while that address is still one of them: resetting
 			// to the listed address alone restarted the connection on every sync.
-			if (existing && existing.accountUserId === account.id && existing.token === item.token &&
-				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address))) return;
+			const routesCurrent = !!existing && existing.accountUserId === account.id && existing.token === item.token &&
+				existing.endpoints.some((candidate) => JSON.stringify(candidate) === JSON.stringify(address));
+			// The name follows the account's label until the phone renames the
+			// machine. A machine saved before labels were tracked takes the
+			// label once: its name can't be told apart from a stale one.
+			const label = item.label.trim();
+			const followsAccount = !existing || existing.accountLabel === undefined || existing.name === existing.accountLabel;
+			const name = label && followsAccount ? label : existing?.name ?? item.label;
+			const accountLabel = label || existing?.accountLabel;
+			if (routesCurrent && existing.name === name && existing.accountLabel === accountLabel) return;
 			await saveHost({
-				// Directory labels seed new machines; a phone's chosen name and icon
-				// remain local preferences when remote credentials/routes rotate.
-				id: item.hostId, name: existing?.name ?? item.label, platform: existing?.platform ?? "unknown",
+				// The icon is a phone preference and survives rotated credentials and routes.
+				id: item.hostId, name, accountLabel, platform: existing?.platform ?? "unknown",
 				appearance: existing?.appearance,
-				endpoints: [address], token: item.token,
+				endpoints: routesCurrent ? existing.endpoints : [address], token: item.token,
 				lastConnected: existing?.lastConnected ?? 0,
 				accountUserId: account.id,
 			} satisfies Host);

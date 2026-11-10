@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -20,15 +22,19 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const (
 	// fetchTimeout bounds the whole upstream round-trip. A hover preview must
 	// not hang the daemon's per-request budget on a slow origin.
 	fetchTimeout = 8 * time.Second
-	// maxBodyBytes caps how much of a page is read; OG tags live in the head,
-	// so anything past this is irrelevant to the preview.
+	// maxBodyBytes caps how much of a page is read when it never closes its
+	// head; a page that does close it is read only that far.
 	maxBodyBytes = 2 << 20 // 2 MiB
+	// readChunkBytes is the read size while scanning for the end of the head.
+	readChunkBytes = 32 << 10
 	// maxRedirects bounds redirect chains so a loop cannot burn the timeout.
 	maxRedirects = 10
 	// userAgent identifies as a crawler: many sites only emit OG tags to bots.
@@ -36,9 +42,11 @@ const (
 
 	// successTTL is how long a fetched preview is reused.
 	successTTL = 30 * time.Minute
-	// failureTTL is the shorter window for cached failures, so a transient
+	// fetchFailureTTL is the window for cached fetch failures, so a transient
 	// origin error neither hammers the site nor hides a recovery for long.
-	failureTTL = 2 * time.Minute
+	fetchFailureTTL = 30 * time.Second
+	// notHTMLTTL is longer: a URL that serves a binary rarely stops doing so.
+	notHTMLTTL = 2 * time.Minute
 	// maxCacheEntries bounds the in-memory cache; URLs are user-driven, so the
 	// map must not grow without limit.
 	maxCacheEntries = 256
@@ -84,6 +92,9 @@ type cacheEntry struct {
 type Service struct {
 	client *http.Client
 
+	// fetchTimeout bounds one detached fetch; tests shorten it.
+	fetchTimeout time.Duration
+
 	// now defaults to time.Now; tests override it so TTL assertions are fast.
 	now func() time.Time
 
@@ -110,17 +121,22 @@ func New(client *http.Client) *Service {
 		}
 	}
 	return &Service{
-		client:  client,
-		now:     time.Now,
-		entries: map[string]cacheEntry{},
+		client:       client,
+		fetchTimeout: fetchTimeout,
+		now:          time.Now,
+		entries:      map[string]cacheEntry{},
 	}
 }
 
 // Preview returns the cached or freshly fetched metadata for rawURL. rawURL
 // must be an absolute http or https URL; anything else is a 400-class error.
 // Failures are cached under a shorter TTL than successes. Concurrent calls
-// for the same URL share a single upstream fetch via singleflight; that fetch
-// runs under the first caller's context.
+// for the same URL share a single upstream fetch via singleflight.
+//
+// The shared fetch is detached from every caller: leaving a link cancels only
+// that caller's wait, so one hover ending cannot fail another hover that joined
+// it, cannot cache a failure for a healthy page, and still warms the cache for
+// the next hover.
 func (s *Service) Preview(ctx context.Context, rawURL string) (Preview, error) {
 	pageURL, err := validateURL(rawURL)
 	if err != nil {
@@ -130,19 +146,27 @@ func (s *Service) Preview(ctx context.Context, rawURL string) (Preview, error) {
 	if e, ok := s.lookup(key); ok {
 		return e.result()
 	}
-	v, err, _ := s.flight.Do(key, func() (any, error) {
-		p, failure, fetchErr := s.fetch(ctx, pageURL)
+	fetchCtx := context.WithoutCancel(ctx)
+	results := s.flight.DoChan(key, func() (any, error) {
+		detached, cancel := context.WithTimeout(fetchCtx, s.fetchTimeout)
+		defer cancel()
+		p, failure, fetchErr := s.fetchRecovered(detached, pageURL)
 		s.store(key, cacheEntry{preview: p, failure: failure, fetchedAt: s.now()})
 		return p, fetchErr
 	})
-	if err != nil {
-		return Preview{}, err
+	select {
+	case <-ctx.Done():
+		return Preview{}, ctx.Err()
+	case result := <-results:
+		if result.Err != nil {
+			return Preview{}, result.Err
+		}
+		p, ok := result.Val.(Preview)
+		if !ok {
+			return Preview{}, apierr.Internal("INTERNAL_ERROR", "unexpected link preview result type")
+		}
+		return p, nil
 	}
-	p, ok := v.(Preview)
-	if !ok {
-		return Preview{}, apierr.Internal("INTERNAL_ERROR", "unexpected link preview result type")
-	}
-	return p, nil
 }
 
 // result replays a cached entry as a (Preview, error) pair.
@@ -162,10 +186,35 @@ func validateURL(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, apierr.Invalid("INVALID_URL", "url must be an absolute http or https URL", nil)
 	}
+	// A fragment never reaches the server, so links to different anchors of one
+	// page (GitHub comment links, for example) share one fetch and cache entry.
+	u.Fragment, u.RawFragment = "", ""
 	return u, nil
 }
 
 var errNotHTML = apierr.NotFound("LINK_PREVIEW_NOT_FOUND", "The URL does not serve an HTML page to preview")
+
+// fetchRecovered turns a panic into an ordinary failure. The shared fetch runs
+// on singleflight's own goroutine, out of reach of the HTTP server's recover,
+// and DoChan re-raises a panic where nothing can catch it, so untrusted page
+// content could otherwise end the daemon.
+func (s *Service) fetchRecovered(ctx context.Context, pageURL *url.URL) (p Preview, failure failureKind, err error) {
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			return
+		}
+		kind := telemetrymeta.PanicKind(rec)
+		log.Printf("link preview fetch panic: %v\n%s", rec, debug.Stack())
+		sentryobs.CapturePanic(context.Background(), map[string]string{
+			"component":  "linkpreview",
+			"operation":  "fetch_panic",
+			"panic_kind": kind,
+		}, telemetrymeta.Fingerprint("linkpreview", "fetch_panic", kind), telemetrymeta.SafeRoute{}, telemetrymeta.CurrentFailureSite())
+		p, failure, err = Preview{}, failureFetch, fmt.Errorf("%w: fetch panicked", ErrFetchFailed)
+	}()
+	return s.fetch(ctx, pageURL)
+}
 
 // fetch retrieves the page and extracts its metadata. The returned error is
 // already the value the controller should render.
@@ -194,7 +243,7 @@ func (s *Service) fetch(ctx context.Context, pageURL *url.URL) (Preview, failure
 	if err != nil || (mediatype != "text/html" && mediatype != "application/xhtml+xml") {
 		return Preview{}, failureNotFound, errNotHTML
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := readHead(resp.Body)
 	if err != nil {
 		return Preview{}, failureFetch, fmt.Errorf("%w: %w", ErrFetchFailed, err)
 	}
@@ -219,6 +268,30 @@ func (s *Service) fetch(ctx context.Context, pageURL *url.URL) (Preview, failure
 		p.FaviconURL = base.Scheme + "://" + base.Host + "/favicon.ico"
 	}
 	return p, failureNone, nil
+}
+
+// readHead reads the page until its head closes, so a heavy or slow body costs
+// nothing, and stops at maxBodyBytes for a page that never closes it. It stops
+// at </head only: parseHead would keep looking past a "<body" inside a script.
+func readHead(r io.Reader) ([]byte, error) {
+	var doc []byte
+	chunk := make([]byte, readChunkBytes)
+	for len(doc) < maxBodyBytes {
+		n, err := r.Read(chunk[:min(len(chunk), maxBodyBytes-len(doc))])
+		// Rescan the tail of the previous chunk: the marker can straddle two reads.
+		from := max(len(doc)-len(headClose), 0)
+		doc = append(doc, chunk[:n]...)
+		if indexFold(doc[from:], headClose) >= 0 {
+			return doc, nil
+		}
+		if errors.Is(err, io.EOF) {
+			return doc, nil
+		}
+		if err != nil {
+			return doc, err
+		}
+	}
+	return doc, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -282,11 +355,18 @@ func (s *Service) store(key string, e cacheEntry) {
 }
 
 func entryTTL(f failureKind) time.Duration {
-	if f == failureNone {
+	switch f {
+	case failureNone:
 		return successTTL
+	case failureNotFound:
+		return notHTMLTTL
+	default:
+		return fetchFailureTTL
 	}
-	return failureTTL
 }
+
+// headClose marks the end of the only region the scanner reads.
+const headClose = "</head"
 
 // --- head scanning ------------------------------------------------------------
 //
@@ -359,7 +439,7 @@ func parseHead(doc []byte) headMeta {
 // headRegion cuts the document at </head> (or <body> when the head was never
 // closed) so a 2 MiB body is not scanned for tags that cannot be there.
 func headRegion(doc []byte) []byte {
-	if i := indexFold(doc, "</head"); i >= 0 {
+	if i := indexFold(doc, headClose); i >= 0 {
 		return doc[:i]
 	}
 	if i := indexFold(doc, "<body"); i >= 0 {

@@ -132,6 +132,19 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	/**
+	 * Where the turn's group sorts when that is not its first loaded item: a
+	 * turn whose prompt is above the loaded part of a history began before
+	 * every prompt in it, so it sorts ahead of them (between the sequence
+	 * before the loaded events and their first).
+	 */
+	anchorSequence?: number;
+	/**
+	 * The key of the turn's group, held while its first loaded item changes
+	 * (older history loading above it brings in its prompt), so the reader's
+	 * view stays on it. Without one the group is keyed by its first item.
+	 */
+	groupKey?: string;
 	errorMessage?: string;
 	failureCode?: "provider_key_missing";
 	usageLimit?: ConversationUsageLimit;
@@ -392,7 +405,9 @@ export interface McpToolDetail {
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */
 	namespace?: string;
+	/** Codex and Hermes send the call's arguments here; other ACP agents send `input`. */
 	arguments?: unknown;
+	input?: unknown;
 	result?: unknown;
 	/** Structured provider content, including native ACP read output. */
 	content?: unknown;

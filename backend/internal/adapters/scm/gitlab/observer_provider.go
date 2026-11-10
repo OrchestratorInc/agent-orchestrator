@@ -674,6 +674,11 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA stri
 		return ports.SCMCIObservation{}, fmt.Errorf("fetch pipeline jobs: %w", err)
 	}
 
+	// Canceling a pipeline does not undo a required job that already failed.
+	if latest.Status == "canceled" && len(failedChecks) > 0 {
+		ciState = domain.CIFailing
+	}
+
 	fp := gitlabFailedFingerprint(headSHA, failedChecks)
 
 	return ports.SCMCIObservation{
@@ -1016,7 +1021,7 @@ func pipelineStatusToCI(status string) domain.CIState {
 	switch status {
 	case "success":
 		return domain.CIPassing
-	case "failed", "canceled":
+	case "failed":
 		return domain.CIFailing
 	case "running", "pending", "created", "waiting_for_resource", "preparing", "scheduled":
 		return domain.CIPending
@@ -1045,7 +1050,7 @@ func jobStatusToCheckStatus(status string) domain.PRCheckStatus {
 }
 
 func isFailingCheckStatus(s domain.PRCheckStatus) bool {
-	return s == domain.PRCheckFailed || s == domain.PRCheckCancelled
+	return s == domain.PRCheckFailed
 }
 
 func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMergeabilityObservation {

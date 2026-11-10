@@ -44,7 +44,7 @@ it("does not expose saved hosts or pairing controls before account sign-in", () 
 	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
 	renderSettings();
 	// The row names the requirement; the action is a short ghost "Sign in".
-	expect(screen.getByText("AO Cloud")).toBeVisible();
+	expect(screen.getByText("Orchestrator Cloud")).toBeVisible();
 	expect(screen.getByText("Sign in to connect remote hosts.")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
 	expect(screen.queryByRole("button", { name: "Edit Box A" })).toBeNull();
@@ -88,7 +88,7 @@ it("explains an incompatible host without adding it", async () => {
 	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
 	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
 	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
-	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Update AO"));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Update Orchestrator"));
 	expect(saved.entries).toEqual([]);
 });
 

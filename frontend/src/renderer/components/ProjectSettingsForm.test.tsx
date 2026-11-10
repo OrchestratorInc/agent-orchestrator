@@ -545,7 +545,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
-		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
+		const orchestrator = screen.getByRole("button", { name: "Orchestrator agent approval" });
 		expect(worker).toHaveTextContent("Bypass permissions");
 		expect(orchestrator).toHaveTextContent("Use Claude permissions");
 		await userEvent.click(worker);
@@ -771,7 +771,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		const toggle = await screen.findByRole("switch", { name: "Workers request a built-in review" });
 		expect(toggle).not.toBeChecked();
 
 		await userEvent.click(toggle);
@@ -796,7 +796,7 @@ describe("ProjectSettingsForm", () => {
 			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
 		});
 		renderSettings("proj-1", undefined, "general");
-		await screen.findByRole("switch", { name: "Workers request AO review" });
+		await screen.findByRole("switch", { name: "Workers request a built-in review" });
 		expect(screen.queryByRole("switch", { name: "Credit Orchestrator on commits" })).toBeNull();
 		expect(screen.queryByRole("switch", { name: "Sign PRs" })).toBeNull();
 	});

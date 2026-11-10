@@ -27,7 +27,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "No sessions need attention",
 		"tray.more": "More",
 		"tray.show": "Show Orchestrator",
-		"tray.quit": "Quit AO Completely",
+		"tray.quit": "Quit Orchestrator Completely",
 		"zone.merge": "Ready to merge",
 		"zone.action": "Needs you"
 	},
@@ -40,7 +40,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "没有会话需要关注",
 		"tray.more": "更多",
 		"tray.show": "显示 Orchestrator",
-		"tray.quit": "完全退出 AO",
+		"tray.quit": "完全退出 Orchestrator",
 		"zone.merge": "可合并",
 		"zone.action": "需要你处理"
 	},
@@ -53,7 +53,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "対応が必要なセッションはありません",
 		"tray.more": "その他",
 		"tray.show": "Orchestrator を表示",
-		"tray.quit": "AO を完全に終了",
+		"tray.quit": "Orchestrator を完全に終了",
 		"zone.merge": "マージ準備完了",
 		"zone.action": "対応が必要"
 	},
@@ -66,7 +66,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "확인이 필요한 세션이 없습니다",
 		"tray.more": "더 보기",
 		"tray.show": "Orchestrator 표시",
-		"tray.quit": "AO 완전히 종료",
+		"tray.quit": "Orchestrator 완전히 종료",
 		"zone.merge": "병합 준비 완료",
 		"zone.action": "조치 필요"
 	},
@@ -79,7 +79,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "No hay sesiones que requieran atención",
 		"tray.more": "Más",
 		"tray.show": "Mostrar Orchestrator",
-		"tray.quit": "Salir completamente de AO",
+		"tray.quit": "Salir completamente de Orchestrator",
 		"zone.merge": "Listo para fusionar",
 		"zone.action": "Te necesita",
 		"tray.attentionTooltip_many": "{{count}} sesiones requieren atención"
@@ -93,7 +93,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "Aucune session ne nécessite votre attention",
 		"tray.more": "Plus",
 		"tray.show": "Afficher Orchestrator",
-		"tray.quit": "Quitter complètement AO",
+		"tray.quit": "Quitter complètement Orchestrator",
 		"zone.merge": "Prêt à fusionner",
 		"zone.action": "Action requise",
 		"tray.attentionTooltip_many": "{{count}} sessions nécessitent votre attention"
@@ -107,7 +107,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "Keine Sitzungen benötigen Aufmerksamkeit",
 		"tray.more": "Mehr",
 		"tray.show": "Orchestrator anzeigen",
-		"tray.quit": "AO vollständig beenden",
+		"tray.quit": "Orchestrator vollständig beenden",
 		"zone.merge": "Bereit zum Mergen",
 		"zone.action": "Ihre Aktion nötig"
 	},
@@ -120,7 +120,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "Nenhuma sessão precisa de atenção",
 		"tray.more": "Mais",
 		"tray.show": "Mostrar Orchestrator",
-		"tray.quit": "Sair completamente do AO",
+		"tray.quit": "Sair completamente do Orchestrator",
 		"zone.merge": "Pronto para merge",
 		"zone.action": "Precisa de você",
 		"tray.attentionTooltip_many": "{{count}} sessões precisam de atenção"
@@ -134,7 +134,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.empty": "Нет сессий, требующих внимания",
 		"tray.more": "Ещё",
 		"tray.show": "Показать Orchestrator",
-		"tray.quit": "Полностью выйти из AO",
+		"tray.quit": "Полностью выйти из Orchestrator",
 		"zone.merge": "Готово к слиянию",
 		"zone.action": "Требуется ваше действие",
 		"tray.attentionTooltip_few": "{{count}} сессии требуют внимания",

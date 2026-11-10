@@ -1,4 +1,4 @@
-import { Pencil, Server, Trash2 } from "lucide-react";
+import { Pencil, Server, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
@@ -142,15 +142,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 
 	return <>
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
-			<SettingsRow
-				label={t("remote.enable")}
-				description={
-					<>
-						{t("remote.enableDescription")}
-						<span className="mt-1 block">{t("remote.connectionDescription")}</span>
-					</>
-				}
-			>
+			<SettingsRow label={t("remote.enable")} description={t("remote.enableDescription")}>
 				<Switch aria-label={t("remote.enable")} checked={enabled} onCheckedChange={setEnabled} />
 			</SettingsRow>
 		</SettingsSection>

@@ -56,24 +56,31 @@ type sessionRenameRequest struct {
 }
 
 type sessionDTO struct {
-	ID           string          `json:"id"`
-	ProjectID    string          `json:"projectId"`
-	IssueID      string          `json:"issueId,omitempty"`
-	Kind         string          `json:"kind"`
-	Harness      string          `json:"harness,omitempty"`
-	DisplayName  string          `json:"displayName,omitempty"`
-	Activity     sessionActivity `json:"activity"`
-	IsTerminated bool            `json:"isTerminated"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
-	Status       string          `json:"status"`
-	Branch       string          `json:"branch,omitempty"`
-	BranchState  *branchStateDTO `json:"branchState,omitempty"`
-	PRs          []sessionPRDTO  `json:"prs"`
-	Mode         string          `json:"mode,omitempty"`
+	ID            string               `json:"id"`
+	ProjectID     string               `json:"projectId"`
+	IssueID       string               `json:"issueId,omitempty"`
+	Kind          string               `json:"kind"`
+	Harness       string               `json:"harness,omitempty"`
+	DisplayName   string               `json:"displayName,omitempty"`
+	Activity      sessionActivity      `json:"activity"`
+	IsTerminated  bool                 `json:"isTerminated"`
+	CreatedAt     time.Time            `json:"createdAt"`
+	UpdatedAt     time.Time            `json:"updatedAt"`
+	Status        string               `json:"status"`
+	Branch        string               `json:"branch,omitempty"`
+	BranchState   *branchStateDTO      `json:"branchState,omitempty"`
+	PRs           []sessionPRDTO       `json:"prs"`
+	Mode          string               `json:"mode,omitempty"`
+	ArtifactFiles []sessionArtifactDTO `json:"artifactFiles,omitempty"`
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+}
+
+type sessionArtifactDTO struct {
+	Path     string `json:"path"`
+	Kind     string `json:"kind,omitempty"`
+	ShareURL string `json:"shareUrl,omitempty"`
 }
 
 type branchStateDTO struct {
@@ -117,6 +124,12 @@ type sessionResponse struct {
 
 type deleteSessionResponse struct {
 	SessionID string `json:"sessionId"`
+}
+
+// killSessionRequest names the AO session running the command, so the session
+// that spawned the killed one shows the termination only when it asked for it.
+type killSessionRequest struct {
+	CallerSessionID string `json:"callerSessionId,omitempty"`
 }
 
 type killSessionResponse struct {
@@ -336,7 +349,7 @@ func newSessionExitAgentCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "exit-agent <id>",
-		Short: "Exit an agent without terminating its AO session",
+		Short: "Exit an agent without terminating its Orchestrator-managed session",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -355,7 +368,7 @@ func newSessionResumeAgentCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "resume-agent <id>",
-		Short: "Resume an exited agent in its existing AO session",
+		Short: "Resume an exited agent in its existing Orchestrator-managed session",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -410,7 +423,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
-		Long: "Permanently delete a terminated session's record and its AO history (conversation, PR facts, attachments and artifacts). " +
+		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts, attachments and artifacts). " +
 			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -434,7 +447,7 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 		Short: "Attach an existing PR to a session",
 		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
 			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.",
-		Example: `  # From inside an AO worker session
+		Example: `  # From inside a worker session
   ao session claim-pr 88
 
   # Target a session explicitly
@@ -713,7 +726,8 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 		}
 	}
 	var res killSessionResponse
-	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", struct{}{}, &res); err != nil {
+	req := killSessionRequest{CallerSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID"))}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", req, &res); err != nil {
 		return err
 	}
 	if res.CleanupPending {
@@ -1171,6 +1185,20 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	}
 	if !sess.UpdatedAt.IsZero() {
 		if _, err := fmt.Fprintf(out, "updated: %s\n", sess.UpdatedAt.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if len(sess.ArtifactFiles) > 0 {
+		if _, err := fmt.Fprintln(out, "artifacts:"); err != nil {
+			return err
+		}
+	}
+	for _, artifact := range sess.ArtifactFiles {
+		line := "  " + artifact.Path
+		if artifact.ShareURL != "" {
+			line += " (public link: " + artifact.ShareURL + ")"
+		}
+		if _, err := fmt.Fprintln(out, line); err != nil {
 			return err
 		}
 	}

@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Coffee, TriangleAlert } from "lucide-react";
+import { Coffee, TriangleAlert } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { isMacPlatform } from "../lib/platform";

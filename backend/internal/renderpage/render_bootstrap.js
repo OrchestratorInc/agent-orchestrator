@@ -1,8 +1,9 @@
 // Runs before the page's own styles and scripts. It hands the page the host
 // theme and display mode, reports the page's content height, and asks the host
-// to open links. A host that zooms the page (the artifact viewer) gets its
-// pinch and Cmd+=/-/0 forwarded, hears when the pointer nears the bottom edge
-// where its zoom controls float, and sets the page zoom.
+// to open links and, when the host asks for them, clicked images. A host that
+// zooms the page (the artifact viewer) gets its pinch and Cmd+=/-/0 forwarded,
+// hears when the pointer nears the bottom edge where its zoom controls float,
+// and sets the page zoom.
 // The messages are the MCP Apps postMessage methods T3 Code also uses, so this
 // host could later show upstream MCP apps.
 (function () {
@@ -21,6 +22,14 @@
   (document.head || document.documentElement).appendChild(zoomStyle);
   var framed = window.parent !== window;
   var seq = 0;
+  var images = document.createElement("style");
+  images.id = "ao-images";
+  (document.head || document.documentElement).appendChild(images);
+  var openImages = false;
+  function setOpenImages(next) {
+    openImages = framed && next === true;
+    images.textContent = openImages ? "img:not(a[href] img,button img){cursor:zoom-in}" : "";
+  }
   // Fullscreen gives the page the whole dialog width: center a top-level block
   // that has a max width, and show the scrollbar. A scrollable page (AO's own
   // field) scrolls inside a capped inline frame, so it shows the scrollbar
@@ -52,7 +61,10 @@
     if (m) {
       var initial = JSON.parse(decodeURIComponent(m[1]));
       apply(initial);
-      if (initial) setDisplay(initial.displayMode, initial.scrollable, initial.wrapContent);
+      if (initial) {
+        setDisplay(initial.displayMode, initial.scrollable, initial.wrapContent);
+        setOpenImages(initial.openImages);
+      }
       history.replaceState(history.state, "", location.pathname + location.search);
     }
   } catch (e) {}
@@ -84,6 +96,7 @@
         d.method !== "ui/notifications/host-context-changed" || !p) return;
     // MCP Apps context updates may be partial; an absent field is unchanged.
     setDisplay(p.displayMode, p.scrollable, p.wrapContent);
+    if (p.openImages !== undefined) setOpenImages(p.openImages);
     if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
     if (p.zoomable !== undefined) zoomable = p.zoomable === true;
     if (typeof p.zoomRevealPx === "number" && p.zoomRevealPx >= 0) revealPx = p.zoomRevealPx;
@@ -126,6 +139,13 @@
     e.preventDefault();
     window.parent.postMessage({ jsonrpc: "2.0", id: "ao-link-" + (++seq), method: "ui/open-link", params: { url: url.href } }, "*");
   }, true);
+  window.addEventListener("click", function (e) {
+    var img = e.target;
+    if (!openImages || !e.isTrusted || e.defaultPrevented || !img || img.tagName !== "IMG" || img.closest("a[href],button")) return;
+    var src = img.currentSrc || img.src;
+    if (!/^data:image\//i.test(src)) return;
+    window.parent.postMessage({ jsonrpc: "2.0", method: "ao/open-image", params: { src: src, alt: img.alt } }, "*");
+  });
   var last;
   function report() {
     var r = document.documentElement;

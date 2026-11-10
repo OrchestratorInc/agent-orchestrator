@@ -45,6 +45,25 @@ describe("parseArtifacts", () => {
 		])).toEqual([]);
 		expect(parseArtifacts(undefined)).toEqual([]);
 	});
+
+	it("keeps a published file's http(s) link and drops anything else", () => {
+		const link = "https://orchestrator.inc/s/3f2a9c";
+		expect(parseArtifacts([
+			{ path: "report.html", kind: "html", shareUrl: link },
+			{ path: "local.html", kind: "html", shareUrl: "http://localhost:8787/s/abc" },
+			{ path: "script.html", kind: "html", shareUrl: "javascript:alert(1)" },
+			{ path: "relative.html", kind: "html", shareUrl: "/s/abc" },
+			{ path: "long.html", kind: "html", shareUrl: `https://orchestrator.inc/s/${"a".repeat(600)}` },
+			{ path: "empty.html", kind: "html", shareUrl: "" },
+		]).map(({ path, shareUrl }) => ({ path, shareUrl }))).toEqual([
+			{ path: "report.html", shareUrl: link },
+			{ path: "local.html", shareUrl: "http://localhost:8787/s/abc" },
+			{ path: "script.html", shareUrl: undefined },
+			{ path: "relative.html", shareUrl: undefined },
+			{ path: "long.html", shareUrl: undefined },
+			{ path: "empty.html", shareUrl: undefined },
+		]);
+	});
 });
 
 describe("sortArtifacts", () => {
@@ -158,6 +177,12 @@ describe("artifactMenuActions", () => {
 	it("leaves out Open in the viewer and Copy for text too large to load, but keeps Ask and History", () => {
 		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["ask", "copy", "history", "delete"]);
 		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "ask", "history", "delete"]);
+	});
+
+	it("offers Share link and Copy link for a published file, in the gallery and the viewer", () => {
+		const shareUrl = "https://orchestrator.inc/s/3f2a9c";
+		expect(artifactMenuActions({ path: "report.html", kind: "html", size: 10, shareUrl })).toEqual(["open", "share-link", "copy-link", "ask", "copy", "history", "delete"]);
+		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10, shareUrl }, { inViewer: true })).toEqual(["share-link", "copy-link", "ask", "delete"]);
 	});
 });
 

@@ -70,7 +70,7 @@ describe("MobileDevicesSection", () => {
 		renderSection();
 
 		const removeButton = await screen.findByRole("button", { name: /remove iPhone/i });
-		expect(removeButton.querySelector(".lucide-trash-2")).toBeInTheDocument();
+		expect(removeButton.querySelector(".icon-trash-2")).toBeInTheDocument();
 		fireEvent.click(removeButton);
 
 		// The row turns into a "removed · Undo" row right away; nothing is sent yet.
@@ -183,7 +183,7 @@ describe("MobileDevicesSection", () => {
 		renderSection();
 
 		expect(await screen.findByText(/Device registry unavailable/i)).toBeInTheDocument();
-		expect(screen.getByText(/AO could not read your saved devices/i)).toBeInTheDocument();
+		expect(screen.getByText(/Orchestrator could not read your saved devices/i)).toBeInTheDocument();
 		expect(screen.queryByText(/No devices paired yet/i)).not.toBeInTheDocument();
 	});
 

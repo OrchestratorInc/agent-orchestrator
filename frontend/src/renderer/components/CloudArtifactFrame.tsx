@@ -25,7 +25,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	onAccessGranted?: () => void;
 	onNavigate?: (path: string) => void;
 	/** Scale only the page; gallery fallbacks keep the card's normal size. */
-	thumbnail?: { width: number; fallback: ReactNode };
+	thumbnail?: { width: number; height?: number; fallback: ReactNode };
 	/** The artifact viewer's zoom, 1 at fit. */
 	zoom?: number;
 }) {
@@ -62,7 +62,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 		<iframe
 			className={thumbnail ? "absolute left-0 top-0 origin-top-left border-0 bg-white" : "block h-full w-full border-0 bg-white"}
 			style={thumbnail
-				? { width: 1000, height: 625, transform: `scale(${thumbnail.width / 1000})` }
+				? { width: 1000, height: thumbnail.height ?? 625, transform: `scale(${thumbnail.width / 1000})` }
 				: zoom !== 1 ? { width: `${100 / zoom}%`, height: `${100 / zoom}%`, transform: `scale(${zoom})`, transformOrigin: "0 0" } : undefined}
 			referrerPolicy="no-referrer"
 			sandbox="allow-scripts allow-forms"

@@ -7,6 +7,8 @@ import {
 	type WorkspaceSession,
 } from "../types/workspace";
 import { CloudCpError } from "./cloud-cp/errors";
+import { fileMediaKind } from "./file-media";
+import { isSvgPath } from "./image-files";
 import { isArchivedSession } from "./standalone-archive";
 
 /** One artifact file in the Artifacts list, with the session that wrote it. */
@@ -106,25 +108,61 @@ export function artifactCount(groups: readonly ArtifactGroup[]): number {
 	return groups.reduce((total, group) => total + group.rows.length, 0);
 }
 
+/** Where an artifact lives: written on this machine or in a cloud session. */
+export type ArtifactLocation = "local" | "cloud";
+
+/** The file type the Artifacts page filters by; pages, Markdown, PDFs and other files are documents. */
+export type ArtifactType = "image" | "video" | "document";
+
+export const ARTIFACT_TYPES: readonly ArtifactType[] = ["image", "video", "document"];
+
+/** An artifact's file type, from its extension. */
+export function artifactType(row: Pick<ArtifactRow, "path">): ArtifactType {
+	const media = fileMediaKind(row.path);
+	if (media === "image" || isSvgPath(row.path)) return "image";
+	if (media === "video") return "video";
+	return "document";
+}
+
+/** Whether a row lives in a cloud session; a Cloud project's rows always do. */
+export function artifactLocation(row: Pick<ArtifactRow, "cloud">, group: Pick<ArtifactGroup, "cloud">): ArtifactLocation {
+	return group.cloud || row.cloud ? "cloud" : "local";
+}
+
+export type ArtifactFilters = {
+	query: string;
+	/** Empty for every project. */
+	projectId: string;
+	/** Undefined for both locations. */
+	location?: ArtifactLocation;
+	/** Undefined for every type. */
+	type?: ArtifactType;
+};
+
 /**
- * Keeps groups matching the project filter, and rows whose project, file name
- * or session title contains the query. Groups left without rows are dropped.
+ * Keeps groups matching the project filter, and rows matching the location
+ * and type filters whose project, file name or session title contains the
+ * query. Groups left without rows are dropped.
  */
-export function filterArtifactGroups(groups: readonly ArtifactGroup[], query: string, projectId: string, scratchpadName?: string): ArtifactGroup[] {
-	const needle = query.trim().toLocaleLowerCase();
+export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
+	const { projectId, location, type } = filters;
+	const needle = filters.query.trim().toLocaleLowerCase();
 	return groups
 		.filter((group) => !projectId || group.id === projectId)
-		.map((group) => ({
-			...group,
-			rows: needle && !group.name.toLocaleLowerCase().includes(needle)
-				&& !(group.isScratchpad && scratchpadName?.toLocaleLowerCase().includes(needle))
-				? group.rows.filter(
-						(row) =>
-							row.name.toLocaleLowerCase().includes(needle) ||
-							row.sessionTitle.toLocaleLowerCase().includes(needle),
-					)
-				: group.rows,
-		}))
+		.map((group) => {
+			const groupMatches = !needle || group.name.toLocaleLowerCase().includes(needle)
+				|| Boolean(group.isScratchpad && scratchpadName?.toLocaleLowerCase().includes(needle));
+			return {
+				...group,
+				rows: group.rows.filter((row) =>
+					(!location || artifactLocation(row, group) === location)
+					&& (!type || artifactType(row) === type)
+					&& (groupMatches
+						|| row.name.toLocaleLowerCase().includes(needle)
+						|| row.sessionTitle.toLocaleLowerCase().includes(needle)),
+				),
+			};
+		})
 		.filter((group) => group.rows.length > 0);
 }
 

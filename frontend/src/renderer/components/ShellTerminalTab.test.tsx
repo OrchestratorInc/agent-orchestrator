@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
@@ -36,17 +37,20 @@ function renderTab(overrides: Partial<Parameters<typeof ShellTerminalTab>[0]> = 
 	const onSelect = vi.fn();
 	const onClose = vi.fn();
 	const onRename = vi.fn();
+	// A tab's menu looks up session actions, which need a query client.
 	render(
-		<TooltipProvider>
-			<ShellTerminalTab
-				isActive={false}
-				onClose={onClose}
-				onRename={onRename}
-				onSelect={onSelect}
-				shell={shell}
-				{...overrides}
-			/>
-		</TooltipProvider>,
+		<QueryClientProvider client={new QueryClient()}>
+			<TooltipProvider>
+				<ShellTerminalTab
+					isActive={false}
+					onClose={onClose}
+					onRename={onRename}
+					onSelect={onSelect}
+					shell={shell}
+					{...overrides}
+				/>
+			</TooltipProvider>
+		</QueryClientProvider>,
 	);
 	return { onSelect, onClose, onRename };
 }

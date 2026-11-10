@@ -1,7 +1,7 @@
 # ao remote-host
 
 Turn this machine into a remote host that the user's other devices can use, and
-link it to their AO account so it shows up on every desktop and phone signed in
+link it to their Orchestrator account so it shows up on every desktop and phone signed in
 to that account.
 
 ## Syntax
@@ -20,7 +20,7 @@ ao remote-host link [--label NAME] [--no-qr]
 | `status` | Show the host ID, addresses, and whether the address is fixed. It also prints the pairing password. |
 | `enable` | Turn on the authenticated remote listener. `--tunnel-only` serves it only through a Cloudflare tunnel. |
 | `disable` | Turn off remote access. Sessions keep running. |
-| `link` | Print a sign-in link and a QR code, wait up to 5 minutes for the user to sign in from any device, then add this machine to their AO account with a fixed `https://h-….useao.dev` address. Turns on tunnel-only remote access if it is off, and adds a Cloudflare tunnel to a LAN-only listener. Safe to run again: the same account keeps its credential and the name it set, unless `--label` gives a new one. |
+| `link` | Print a sign-in link and a QR code, wait up to 5 minutes for the user to sign in from any device, then add this machine to their Orchestrator account with a fixed `https://h-….useao.dev` address. Turns on tunnel-only remote access if it is off, and adds a Cloudflare tunnel to a LAN-only listener. Safe to run again: the same account keeps its credential and the name it set, unless `--label` gives a new one. |
 
 ## Rules
 
@@ -36,7 +36,7 @@ ao remote-host link [--label NAME] [--no-qr]
 The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
 `sudo`. No inbound ports.
 
-1. Install AO and its service. With no terminal the installer skips sign-in and
+1. Install Orchestrator and its service. With no terminal the installer skips sign-in and
    prints pairing details; do not repeat its `Password:` line. `pipefail` makes
    a failed download exit non-zero:
 
@@ -70,7 +70,7 @@ while its window is open.
 
 | Symptom | Fix |
 |---|---|
-| Not listed on the user's desktop | The AO window must be open and signed in to the same account. On the host, `status` shows `Fixed address`. |
+| Not listed on the user's desktop | The Orchestrator window must be open and signed in to the same account. On the host, `status` shows `Fixed address`. |
 | Listed but does not connect, on a desktop that paired by hand earlier | The host's password changed since. The user removes the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
 | Link expired | Run `ao remote-host link` again. |
 

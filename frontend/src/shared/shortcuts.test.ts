@@ -13,9 +13,12 @@ import {
 	matchesPreviousTabShortcut,
 	defaultShortcutBindings,
 	matchesShortcutBinding,
+	shortcutBindingAccelerator,
 	shortcutBindingKeys,
 	shortcutBindingLabel,
 	shortcutBindingValidationError,
+	type AppShortcutId,
+	type ShortcutBinding,
 	type ShortcutChord,
 } from "./shortcuts";
 
@@ -126,6 +129,7 @@ describe("default shortcuts", () => {
 	// [id, chord] pairs a user can press on macOS. ⌘⇧[ reports key "{" with
 	// code BracketLeft, so those chords carry the physical code like Electron does.
 	it.each([
+		["find-in-chat", chord({ key: "f", meta: true })],
 		["new-session", chord({ key: "n", meta: true })],
 		["new-shell-terminal", chord({ key: "t", meta: true })],
 		["close-shell-terminal", chord({ key: "w", meta: true })],
@@ -330,7 +334,7 @@ describe("shortcut binding matching and validation", () => {
 
 	it("keeps Windows/Linux defaults off bare terminal-owned chords other than the yielding ones", () => {
 		const readline = ["a", "e", "k", "u", "w", "r", "p", "n", "b", "f", "l", "y", "t", "d", "c", "z"];
-		const yielding = new Set(["k", "p", "w", "t", "b"]);
+		const yielding = new Set(["k", "p", "w", "t", "b", "f"]);
 		for (const key of readline) {
 			if (yielding.has(key)) continue;
 			for (const { id } of APP_SHORTCUTS) {
@@ -377,5 +381,33 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutBindingValidationError(chord({ key: "q", meta: true }), true)).not.toBeNull();
 		expect(shortcutBindingValidationError(chord({ key: "F4", alt: true }), false)).not.toBeNull();
 		expect(shortcutBindingValidationError(chord({ key: "j", meta: true }), true)).toBeNull();
+	});
+});
+
+describe("shortcutBindingAccelerator", () => {
+	const bound = (key: string, modifiers: Partial<ShortcutBinding> = {}): ShortcutBinding => ({
+		key, ctrl: false, meta: false, shift: false, alt: false, ...modifiers,
+	});
+
+	it("uses the macOS default bindings of the menu commands", () => {
+		const accelerator = (id: AppShortcutId) => shortcutBindingAccelerator(defaultShortcutBindings(id, true)[0]);
+		expect(accelerator("toggle-sidebar")).toBe("Command+B");
+		expect(accelerator("toggle-inspector")).toBe("Shift+Command+B");
+		expect(accelerator("open-orchestrator")).toBe("Shift+Command+O");
+		expect(accelerator("history-back")).toBe("Command+[");
+	});
+
+	it("names special keys the way Electron spells them", () => {
+		expect(shortcutBindingAccelerator(bound("ArrowUp", { meta: true, alt: true }))).toBe("Alt+Command+Up");
+		expect(shortcutBindingAccelerator(bound("+", { meta: true }))).toBe("Command+Plus");
+	});
+
+	it("falls back to the physical key for a character Option typed", () => {
+		expect(shortcutBindingAccelerator(bound("∫", { alt: true, code: "KeyB" }))).toBe("Alt+B");
+	});
+
+	it("has no accelerator for the 1-9 family or an unnameable key", () => {
+		expect(shortcutBindingAccelerator(bound("1-9", { meta: true }))).toBeUndefined();
+		expect(shortcutBindingAccelerator(bound("∫", { alt: true }))).toBeUndefined();
 	});
 });

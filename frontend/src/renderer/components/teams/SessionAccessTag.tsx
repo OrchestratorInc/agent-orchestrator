@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, PencilLine } from "lucide-react";
+import { Eye, PencilLine } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";

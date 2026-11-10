@@ -34,7 +34,7 @@
 	--muted-foreground: oklch(0.720 0.002 250);
 	--accent: oklch(0.295 0.002 250);
 	--accent-foreground: oklch(0.970 0.002 250);
-	--destructive: oklch(0.704 0.191 22.216);
+	--destructive: #fb4934; /* Shared Gruvbox red across palettes. */
 	/* Hairlines separate, they do not decorate: below the shadcn dark default of
 	 * 10% so column rules and card edges recede behind content. */
 	--border: oklch(1 0 0 / 7%);
@@ -408,6 +408,7 @@
 	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
+	--shadow-control-inset: inset 0 1px 0 oklch(100% 0 0 / 6%), inset 0 -1px 0 oklch(0% 0 0 / 10%);
 	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
@@ -498,8 +499,6 @@
 	--size-settings-inline-input-height: 28px;
 	--size-settings-row-value-max: 20rem;
 	--size-settings-row-value-max-percent: 55%;
-	--size-settings-footer-button-padding-x: 20px;
-	--color-settings-footer-button-primary-fg: var(--primary-foreground);
 	--size-settings-dialog: 575px;
 	--size-settings-dialog-wide: 920px;
 	--size-settings-dialog-height: 680px;
@@ -701,7 +700,7 @@
 	--muted-foreground: oklch(0.48 0 0);
 	--accent: oklch(0.945 0 0);
 	--accent-foreground: oklch(0.18 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
+	--destructive: #9d0006;
 	/* Translucent like dark: hairlines and input wells are overlays on whatever
 	 * surface they sit on, so a card edge never reads as an opaque gray stroke. */
 	--border: oklch(0 0 0 / 8%);

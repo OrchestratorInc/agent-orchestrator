@@ -1,5 +1,5 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "lucide-react";
+import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -8,8 +8,8 @@ import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { TabContextMenu, TabRenameItem } from "./TabContextMenu";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { TabContextMenu } from "./TabContextMenu";
+import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
@@ -65,7 +65,10 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const title = agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title;
+	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
+	// An agent's name is display only, so renaming starts from the real title.
+	const renameBase = terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -79,7 +82,7 @@ export function ShellTerminalTab({
 
 	const beginEdit = () => {
 		if (!canEdit || isEditing) return;
-		setDraft(shell.title);
+		setDraft(renameBase);
 		setIsEditing(true);
 	};
 
@@ -118,12 +121,13 @@ export function ShellTerminalTab({
 		if (!isEditing) return;
 		setIsEditing(false);
 		const next = draft.trim();
-		if (next && next !== shell.title) onRename?.(next);
+		// Confirming unchanged must not pin a program's title as the tab's name.
+		if (next && next !== renameBase) onRename?.(next);
 	};
 
 	const cancel = () => {
 		setIsEditing(false);
-		setDraft(shell.title);
+		setDraft(renameBase);
 	};
 
 	const closeControl = {
@@ -145,7 +149,7 @@ export function ShellTerminalTab({
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
-				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+				className={terminalTabRenameInputClassName}
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
@@ -163,11 +167,8 @@ export function ShellTerminalTab({
 		) : undefined;
 		return (
 			<TabContextMenu
-				closeShortcut={isActive}
 				disabled={isEditing || shell.optimistic}
-				items={<TabRenameItem ariaLabel={t("terminal.rename", { title })} onRename={canEdit ? beginEdit : undefined} />}
-				onClose={onClose}
-				tabKey={shell.handleId}
+				spec={{ kind: "shell", tabKey: shell.handleId, title, onRename: canEdit ? beginEdit : undefined, onClose, closeShortcut: isActive }}
 			>
 				<TerminalTabFrame
 					wide={Boolean(agent)}
@@ -187,6 +188,7 @@ export function ShellTerminalTab({
 					}}
 					buttonRef={ref}
 					editingContent={editingContent}
+					editingValue={draft}
 					icon={
 						agent ? (
 							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
@@ -195,7 +197,7 @@ export function ShellTerminalTab({
 						)
 					}
 					label={title}
-					trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
+					trailing={agent ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 				/>
 			</TabContextMenu>
 		);

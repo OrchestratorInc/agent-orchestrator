@@ -41,7 +41,7 @@ when a separate deliverable is useful, prefer one consolidated report over
 individual logs. Ordinary progress updates and concise final answers do not
 need separate artifact files.
 
-Saving a local artifact or attaching its reference to an AO report is not
+Saving a local artifact or attaching its reference to an Orchestrator report is not
 external publishing authorization. Publish externally only within the
 user-authorized scope.
 

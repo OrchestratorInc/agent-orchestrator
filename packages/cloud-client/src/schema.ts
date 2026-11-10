@@ -4975,6 +4975,13 @@ export interface components {
              * @description Highest sequence returned, or the supplied after cursor when the page is empty.
              */
             nextAfter: number;
+            /** @description Only on a page read with before: events older than the page remain above the after cursor. Absent, the control plane read forward and ignored before. */
+            hasOlder?: boolean;
+            /**
+             * Format: int64
+             * @description Only on a page read with before: the before cursor for the next older page, the lowest sequence returned or the supplied before cursor when the page is empty.
+             */
+            nextBefore?: number;
         };
         /** @enum {string} */
         TerminalKind: "agent" | "workspace";
@@ -7826,6 +7833,22 @@ export interface operations {
                 limit?: components["parameters"]["EventLimit"];
                 /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
                 types?: components["parameters"]["EventTypes"];
+                /** @description Read back from this sequence instead of forward from after: the
+                 *     newest events with after < sequence < before (at most limit), oldest
+                 *     first. Must be greater than after, or it is refused with 400.
+                 *     9007199254740991 reads the newest page. The page then extends back,
+                 *     once, to the prompt of every turn and the first step of every Setup
+                 *     or Cleanup run among those events, by at most 1000 events and never
+                 *     to after or below. What that brings in can begin partway through an
+                 *     earlier turn or run (a prompt queued while another turn ran sits
+                 *     inside that turn); the next older page holds the rest. Such a page
+                 *     carries hasOlder and nextBefore; a control plane that predates this
+                 *     parameter ignores it and answers with a page after `after` without
+                 *     them.
+                 *      */
+                before?: number;
+                /** @description With before only: read only events created at or after this time (still at most limit, and still extended back to where their turns start). Without before it is refused with 400. */
+                since?: string;
             };
             header?: never;
             path: {
@@ -7836,7 +7859,9 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Client-visible events after the supplied sequence. */
+            /** @description Client-visible events after the supplied sequence or, with before,
+             *     the newest events below it.
+             *      */
             200: {
                 headers: {
                     [name: string]: unknown;

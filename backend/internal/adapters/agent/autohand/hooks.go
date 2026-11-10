@@ -146,7 +146,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		entries = append(entries, autohandHookEntry{
 			Event:       spec.Event,
 			Command:     command,
-			Description: "AO activity hook",
+			Description: "Orchestrator activity hook",
 			Enabled:     true,
 			Timeout:     autohandHookTimeout,
 		})

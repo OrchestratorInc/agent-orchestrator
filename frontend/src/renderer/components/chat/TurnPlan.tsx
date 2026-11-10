@@ -20,7 +20,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronDown, ListChecks } from "lucide-react";
+import { ChevronDown, ListChecks } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";

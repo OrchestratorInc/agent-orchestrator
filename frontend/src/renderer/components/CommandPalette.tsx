@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
 import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -765,6 +765,17 @@ export function CommandPalette() {
 					case "open-orchestrator":
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
+					case "open-archive": {
+						// The project's board opens its archive once it is on screen.
+						useUiStore.getState().requestArchiveOpen(action.projectId, params.hostId);
+						if (params.hostId) {
+							void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: params.hostId, projectId: action.projectId } });
+						} else {
+							void navigate({ to: "/projects/$projectId", params: { projectId: action.projectId } });
+						}
+						closePalette();
+						break;
+					}
 				}
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
@@ -775,7 +786,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -1064,6 +1075,7 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":
 			return true;
@@ -1123,7 +1135,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

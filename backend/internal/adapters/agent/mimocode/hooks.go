@@ -120,7 +120,7 @@ func mimoAgentSource(cfg ports.WorkspaceHookConfig) ([]byte, error) {
 		prompt = string(data)
 	}
 	var b strings.Builder
-	b.WriteString("---\n# " + mimoAgentSentinel + "\ndescription: AO-managed session instructions\nmode: primary\n")
+	b.WriteString("---\n# " + mimoAgentSentinel + "\ndescription: Orchestrator-managed session instructions\nmode: primary\n")
 	b.WriteString(mimoAgentPermission(cfg.Config.Permissions))
 	b.WriteString("---\n")
 	b.WriteString(strings.TrimSpace(prompt))
@@ -134,7 +134,7 @@ func writeManagedFile(path, sentinel string, body []byte) error {
 		return err
 	}
 	if _, err := os.Stat(path); err == nil && !managed {
-		return fmt.Errorf("refusing to overwrite non-AO file at %s", path)
+		return fmt.Errorf("refusing to overwrite non-Orchestrator file at %s", path)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -180,7 +180,7 @@ func installUsingAOSkill(workspace string) error {
 			return readErr
 		}
 		if !managed {
-			return fmt.Errorf("refusing to overwrite non-AO skill at %s", skillDir)
+			return fmt.Errorf("refusing to overwrite non-Orchestrator skill at %s", skillDir)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err

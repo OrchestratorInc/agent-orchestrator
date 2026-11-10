@@ -104,10 +104,14 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 				return;
 			}
 			const detail = query.data;
-			const repo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo
-				? detail.repo
-				: project.workspaceRepos?.[0]?.repo;
-			const avatar = repo ? repositoryOwnerAvatar(repo) : null;
+			const ownRepo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo ? detail.repo : undefined;
+			const repo = ownRepo ?? project.workspaceRepos?.[0]?.repo;
+			// After a GitHub rename or transfer the remote's owner is stale; the
+			// avatar URL then changes, so the old cached image is not reused.
+			const canonical = ownRepo && detail && "canonicalRepo" in detail
+				? { repo: detail.canonicalRepo, ownerAvatarUrl: detail.canonicalOwnerAvatarUrl }
+				: undefined;
+			const avatar = repo ? repositoryOwnerAvatar(repo, canonical) : null;
 			if (avatar) map.set(project.id, avatar.url);
 		});
 		return map;

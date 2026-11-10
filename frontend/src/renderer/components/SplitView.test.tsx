@@ -1,7 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { SplitDivider, SplitGroupTab } from "./SplitView";
-import { TabMenuBody } from "./TabContextMenu";
 import { TooltipProvider } from "./ui/tooltip";
 import { useShellAgentStore } from "../stores/shell-agent-store";
 
@@ -53,7 +53,7 @@ it.each([true, false])("marks the group tab's frame as the selected tab only whi
 	const member = (key: string, label: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn() });
 	const { container } = render(
 		<TooltipProvider>
-			<SplitGroupTab active={active} focusedKey="session" members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]} onUngroup={vi.fn()} />
+			<SplitGroupTab active={active} focusedKey="session" members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]} menu={{ kind: "group", onUngroup: vi.fn() }} />
 		</TooltipProvider>,
 	);
 	const frame = container.querySelector("[data-terminal-tab-frame]");
@@ -66,7 +66,7 @@ it("names a grouped shell by the agent running in it and keeps the agent watch o
 	const member = (key: string, label: string, agentHandleId?: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn(), agentHandleId });
 	const { getByText, container } = render(
 		<TooltipProvider>
-			<SplitGroupTab active focusedKey="sh-1" members={[member("session", "Greeting"), member("sh-1", "Terminal 1", "sh-1")]} onUngroup={vi.fn()} />
+			<SplitGroupTab active focusedKey="sh-1" members={[member("session", "Greeting"), member("sh-1", "Terminal 1", "sh-1")]} menu={{ kind: "group", onUngroup: vi.fn() }} />
 		</TooltipProvider>,
 	);
 	expect(getByText("Claude Code")).toBeInTheDocument();
@@ -78,15 +78,16 @@ it("names a grouped shell by the agent running in it and keeps the agent watch o
 it("lists the focused member's tab menu below Ungroup", () => {
 	const member = (key: string, label: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn() });
 	const { container, getAllByRole } = render(
-		<TooltipProvider>
-			<SplitGroupTab
-				active
-				focusedKey="sh-1"
-				members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]}
-				menuItems={<TabMenuBody onClose={vi.fn()} />}
-				onUngroup={vi.fn()}
-			/>
-		</TooltipProvider>,
+		<QueryClientProvider client={new QueryClient()}>
+			<TooltipProvider>
+				<SplitGroupTab
+					active
+					focusedKey="sh-1"
+					members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]}
+					menu={{ kind: "group", onUngroup: vi.fn(), member: { kind: "plain", tabKey: "sh-1", onClose: vi.fn() } }}
+				/>
+			</TooltipProvider>
+		</QueryClientProvider>,
 	);
 	fireEvent.contextMenu(container.querySelector("[data-terminal-tab-frame]")!);
 

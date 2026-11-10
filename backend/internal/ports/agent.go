@@ -825,6 +825,11 @@ type WorkspaceHookConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Restore fields are empty for fresh launches. NativeSessionID is the exact
+	// selected identity after imported-session preparation, never a guessed id;
+	// ImportConfigDir is set only while that identity is an import's.
+	NativeSessionID string
+	ImportConfigDir string
 }
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.

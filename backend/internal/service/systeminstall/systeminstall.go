@@ -1848,7 +1848,7 @@ func (s *Service) planTmux() Plan {
 	case "windows":
 		return Plan{
 			Target: TargetTmux, Unsupported: true,
-			Reason: "tmux is not required on Windows; AO uses the built-in ConPTY terminal runtime instead.",
+			Reason: "tmux is not required on Windows; Orchestrator uses the built-in ConPTY terminal runtime instead.",
 		}
 	case "darwin":
 		return s.planBrew(TargetTmux, "tmux")
@@ -2029,7 +2029,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {
-				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; Orchestrator will not use sudo.", prefix)
 			}
 			return plan
 		}
@@ -2097,7 +2097,7 @@ func (s *Service) planOpencode() Plan {
 	}
 	return Plan{
 		Target: TargetOpencode, Unsupported: true, Method: "manual",
-		Reason: "AO does not automatically execute opencode's mutable remote installer script.",
+		Reason: "Orchestrator does not automatically execute opencode's mutable remote installer script.",
 	}
 }
 
@@ -2150,7 +2150,7 @@ func (p requestPlanner) planHomebrew(target Target, pkg string, cask bool) Plan 
 			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: "Homebrew's installation prefix could not be resolved."}
 		}
 		if !homebrew.PrefixWritable {
-			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; AO will not use sudo.", prefix)}
+			return Plan{Target: target, Unsupported: true, Method: "homebrew", Reason: fmt.Sprintf("Homebrew's prefix %s is not writable by the current user. Repair Homebrew ownership; Orchestrator will not use sudo.", prefix)}
 		}
 		if cask {
 			installed = homebrewPackageInstalled(homebrew.Casks, pkg)
@@ -2223,7 +2223,7 @@ func (s *Service) planLinuxPackage(target Target, pkgFor func(mgr string) string
 		argv := linuxInstallArgv(mgr, pkgFor(mgr))
 		return Plan{
 			Target: target, Command: argv, Manager: mgr, NeedsRoot: true, Unsupported: true,
-			Reason: "AO cannot ask for your administrator password. Run the command below in a terminal.",
+			Reason: "Orchestrator cannot ask for your administrator password. Run the command below in a terminal.",
 		}
 	}
 	return Plan{

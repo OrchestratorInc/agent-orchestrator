@@ -9,6 +9,7 @@ import {
 	ChatHostId,
 	HumanMessage,
 	LiveResponseStatus,
+	liveTaskLabel,
 	ProviderSwitchMarker,
 	TurnOutcome,
 } from "./ChatTimelineItems";
@@ -737,6 +738,51 @@ describe("HumanMessage", () => {
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
 	});
+
+	describe("attachments", () => {
+		const attached = (paths: string[], body = "") =>
+			`${body ? `${body}\n\n` : ""}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+		const apiBaseUrl = "http://127.0.0.1:3002";
+
+		// jsdom has no layout: every element reports a height far over the fold.
+		beforeEach(() => {
+			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
+		});
+
+		// A normal screenshot is taller than the fold, so inside it every image was cut off.
+		it("keeps them above the bubble and outside a long message's fold", () => {
+			const { container } = render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-ab12.png"], "a long folded message") })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			const toggle = screen.getByRole("button", { name: "Show more" });
+			const fold = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+			const list = screen.getByRole("list", { name: "Attached files" });
+			const bubble = container.querySelector(".cursor-chat-human-message")!;
+			expect(fold).toContainElement(screen.getByText("a long folded message"));
+			expect(fold).not.toContainElement(list);
+			expect(bubble).not.toContainElement(list);
+			expect(list.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		});
+
+		it("draws no bubble or fold for a message that is only attachments, and keeps its actions", () => {
+			const { container } = render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-only.png"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			expect(screen.getByRole("img", { name: "Image 1" })).toBeInTheDocument();
+			expect(container.querySelector(".cursor-chat-human-message")).toBeNull();
+			expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Copy user message" })).toBeInTheDocument();
+			expect(screen.getByLabelText(/^Sent /)).toBeInTheDocument();
+		});
+
+		it("shows every image and file at the one tile height", () => {
+			render(
+				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.pdf"]) })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
+			);
+			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-16");
+			expect(screen.getByText("attachment-b.pdf").closest("li")).toHaveClass("h-16");
+		});
+	});
 });
 
 describe("ProviderSwitchMarker", () => {
@@ -756,5 +802,67 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+});
+
+describe("MCP tool rows", () => {
+	const base = { kind: "activity", sequence: 1, revision: 1, createdAt: "2026-11-08T00:00:00Z", activityKind: "mcp_tool" } as const;
+	const content = (text: string) => [{ type: "content", content: { type: "text", text } }];
+
+	it("names a Claude Code page preview in plain words and opens onto its console errors", () => {
+		const report = JSON.stringify({ width: 720, contentHeight: 87, consoleMessages: [{ level: "error", text: "test error" }] });
+		render(
+			<ActivityRow activity={{
+				...base, id: "preview", status: "completed", summary: "mcp__ao__html_preview",
+				detail: { providerToolName: "mcp__ao__html_preview", input: { html: "<p>x</p>" }, content: content(report) },
+			}} />,
+		);
+		const row = screen.getByRole("button", { name: /Previewed the page/ });
+		expect(row).toHaveTextContent("1 console error");
+		expect(screen.queryByText(/mcp__ao__/)).toBeNull();
+		fireEvent.click(row);
+		expect(screen.getByText("test error")).toBeInTheDocument();
+		expect(screen.queryByText(/720/)).toBeNull();
+	});
+
+	it("draws nothing for a shown page and keeps a failed one", () => {
+		const { container } = render(
+			<ActivityRow activity={{
+				...base, id: "render", status: "completed", summary: "Called ao/html_render",
+				detail: { server: "ao", toolName: "html_render", result: { content: [{ type: "text", text: "Shown above your reply (render r1)." }] } },
+			}} />,
+		);
+		expect(container.textContent).toBe("");
+
+		render(
+			<ActivityRow activity={{
+				...base, id: "render-failed", status: "completed", summary: "Called ao/html_render",
+				detail: {
+					server: "ao", toolName: "html_render",
+					result: { content: [{ type: "text", text: "invalid render: the page is empty (RENDER_INVALID) [request h/x-1]" }] },
+				},
+			}} />,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Couldn't show the page" }));
+		expect(screen.getByText("Invalid render: the page is empty")).toBeInTheDocument();
+	});
+
+	it("titles another server's tool as tool · server and shows Claude Code's arguments", () => {
+		render(
+			<ActivityRow activity={{
+				...base, id: "guide", status: "completed", summary: "mcp__claude_ai_Claude_Docs__guide",
+				detail: { providerToolName: "mcp__claude_ai_Claude_Docs__guide", input: { items: ["topic.index"] }, content: content("index") },
+			}} />,
+		);
+		const row = screen.getByRole("button", { name: /guide/ });
+		expect(row).toHaveTextContent("guide· claude_ai_Claude_Docs");
+		fireEvent.click(row);
+		expect(screen.getByText("Arguments")).toBeInTheDocument();
+		expect(screen.getByText(/topic\.index/)).toBeInTheDocument();
+	});
+
+	it("says what a running AO call is doing on the live line", () => {
+		expect(liveTaskLabel({ ...base, id: "p", status: "running", summary: "mcp__ao__html_preview", detail: { providerToolName: "mcp__ao__html_preview" } })).toBe("Previewing the page");
+		expect(liveTaskLabel({ ...base, id: "g", status: "running", summary: "Called linear/create_issue" })).toBe("create_issue");
 	});
 });

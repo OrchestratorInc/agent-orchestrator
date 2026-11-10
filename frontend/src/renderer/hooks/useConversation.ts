@@ -29,7 +29,7 @@ import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
-import { resumeAgentErrorMessage } from "./useCanResumeAgent";
+import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
 import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
@@ -943,7 +943,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				},
 			);
 			if (error)
-				throw new Error(resumeAgentErrorMessage(error, response.status));
+				throw resumeAgentError(error, response.status);
 			return data;
 		},
 		onSuccess: () => {
@@ -1349,6 +1349,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
+		resumeOpenElsewhere: resumeOpenElsewhere(resume.error),
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
