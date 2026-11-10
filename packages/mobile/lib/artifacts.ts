@@ -276,18 +276,53 @@ export function artifactFormatLabel(artifact: Pick<SessionArtifact, "path" | "si
  */
 export const ARTIFACT_PROBE_BYTES = 64 * 1024;
 
+/** Downloaded artifacts kept in the cache at most, all files together. */
+export const MAX_ARTIFACT_CACHE_BYTES = 200 * 1024 * 1024;
+
 /**
- * The cache file name a downloaded artifact is kept under: one per file and
- * version, so a rewritten file downloads again and an unchanged one does not.
+ * Where a downloaded artifact is kept in the cache: `prefix` names the file
+ * (session and path), `name` that version of it. An unchanged file opens from
+ * the cache; a rewritten one downloads under a new name, and the old copy goes
+ * (artifactCacheEvictions).
  */
-export function artifactCacheName(sessionId: string, path: string, version: string): string {
+export type ArtifactCacheEntry = { prefix: string; name: string };
+
+function hashText(text: string): string {
 	let hash = 0x811c9dc5;
-	for (const char of `${sessionId}\n${path}\n${version}`) {
-		hash ^= char.charCodeAt(0);
+	for (let index = 0; index < text.length; index += 1) {
+		hash ^= text.charCodeAt(index);
 		hash = Math.imul(hash, 0x01000193);
 	}
+	return (hash >>> 0).toString(36);
+}
+
+export function artifactCacheEntry(sessionId: string, path: string, version: string): ArtifactCacheEntry {
+	// The separator keeps "hash + length" unambiguous: no two files share a prefix by concatenation.
+	const prefix = `${hashText(`${sessionId}\n${path}`)}_${path.length.toString(36)}`;
 	const ext = /\.([a-z0-9]{1,6})$/i.exec(path)?.[1]?.toLowerCase() ?? "bin";
-	return `${(hash >>> 0).toString(36)}-${path.length.toString(36)}.${ext}`;
+	return { prefix, name: `${prefix}-${hashText(version)}.${ext}` };
+}
+
+/** A file in the download cache, as the viewer finds it there. */
+export type CachedArtifactFile = { name: string; size: number; modified: number };
+
+/**
+ * The cache files to delete once `keep` has downloaded: every other version
+ * of the same file (and an interrupted download of one), then, while the cache
+ * is over `maxBytes`, the least recently written other files. A download still
+ * in progress is never deleted.
+ */
+export function artifactCacheEvictions(files: readonly CachedArtifactFile[], keep: ArtifactCacheEntry, inProgress: (name: string) => boolean, maxBytes = MAX_ARTIFACT_CACHE_BYTES): string[] {
+	const busy = (file: CachedArtifactFile) => file.name === keep.name || inProgress(file.name.replace(/\.part$/, ""));
+	const evicted = new Set(files.filter((file) => !busy(file) && file.name.startsWith(`${keep.prefix}-`)).map((file) => file.name));
+	let total = files.reduce((sum, file) => evicted.has(file.name) ? sum : sum + file.size, 0);
+	const others = files.filter((file) => !busy(file) && !evicted.has(file.name)).sort((a, b) => a.modified - b.modified);
+	for (const file of others) {
+		if (total <= maxBytes) break;
+		evicted.add(file.name);
+		total -= file.size;
+	}
+	return [...evicted];
 }
 
 function timeOf(value: string): number {

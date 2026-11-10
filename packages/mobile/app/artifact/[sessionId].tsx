@@ -90,7 +90,8 @@ function ArtifactViewerContent() {
 	// The page on screen: the file the route opened, until a swipe moves on, or
 	// a link replaces the route's path (below).
 	const [currentPath, setCurrentPath] = useState(path);
-	// An unlisted file has no modified time: the time the viewer opened stands in, so it is fetched fresh each time.
+	// An unlisted file has no modified time: the time the viewer opened stands in, so it is fetched fresh each
+	// time. A downloaded copy (an Android PDF) then replaces the one kept from the last open, never adds one.
 	const [openedAt] = useState(() => new Date().toISOString());
 	const [openedPath, setOpenedPath] = useState(path);
 	// The pages keep the order they had on open: the list is newest first, so a
