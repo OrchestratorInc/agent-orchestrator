@@ -67,7 +67,9 @@ function isLoopbackRedirect(redirectUri: string): boolean {
 // website's page, orchestrator.inc/app/auth/return/ (the trailing slash is part
 // of the URL WorkOS has registered). Only the production WorkOS environment lists
 // that page, so any other client, such as the baked default, which belongs to
-// the staging environment, keeps the control plane's page at api.aoagents.dev.
+// the staging environment, keeps the control plane's page at api.orchestrator.inc
+// (older builds used the same page at api.aoagents.dev; both stay registered
+// in WorkOS until those builds age out).
 //
 // A development build doesn't claim ao-app:// by default (see
 // registerCloudProtocol): owning it would take the scheme away from the
@@ -81,7 +83,7 @@ function isLoopbackRedirect(redirectUri: string): boolean {
 // VITE_WORKOS_CLIENT_ID repository variable.
 const PRODUCTION_WORKOS_CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
 const DEFAULT_PACKAGED_REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
-const CONTROL_PLANE_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
+const CONTROL_PLANE_PACKAGED_REDIRECT_URI = "https://api.orchestrator.inc/app/auth/return";
 const LOOPBACK_REDIRECT_URI = "http://127.0.0.1:3000/callback";
 
 /** The redirect_uri a build sends to WorkOS when it starts a sign-in. */

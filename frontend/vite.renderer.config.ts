@@ -89,8 +89,16 @@ const DEV_BUILD_INFO = {
 // developer's AO_CLOUD_CONTROL_PLANE_URL override so a custom control plane
 // keeps a working terminal in packaged builds too.
 // The hosted cloud control planes, plus AO_CLOUD_CONTROL_PLANE_URL when set.
+// Each is served under orchestrator.inc and, until released builds age out,
+// under its older aoagents.dev name; both stay allowed so an override to
+// either keeps working.
 const CLOUD_CP_ORIGINS = (() => {
-	const origins = ["https://staging-api.aoagents.dev", "https://api.aoagents.dev"];
+	const origins = [
+		"https://staging-api.orchestrator.inc",
+		"https://api.orchestrator.inc",
+		"https://staging-api.aoagents.dev",
+		"https://api.aoagents.dev",
+	];
 	const override = process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim();
 	if (!override) return origins;
 	let url: URL;

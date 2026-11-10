@@ -5,9 +5,12 @@ import * as WebBrowser from "expo-web-browser";
 // The production AuthKit client (auth.orchestrator.inc), the same one desktop
 // release builds get from the VITE_WORKOS_CLIENT_ID repository variable, so a
 // phone signs in to the same AO account as the desktop. The HTTPS callback
-// returns to ao-app://callback; mobile registers that scheme as well.
+// returns to ao-app://callback; mobile registers that scheme as well. It is
+// the website's page, the one desktop release builds use; released phones
+// still send the control plane's page at api.aoagents.dev, which stays
+// registered in WorkOS until they age out.
 const CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
-const REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
+const REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
 const APP_CALLBACK = "ao-app://callback";
 const AUTH_URL = "https://api.workos.com/user_management/authorize";
 const TOKEN_URL = "https://api.workos.com/user_management/authenticate";

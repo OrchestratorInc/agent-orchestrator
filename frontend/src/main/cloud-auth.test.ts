@@ -118,7 +118,7 @@ describe("native WorkOS authentication", () => {
         provider: "authkit",
         prompt: "login",
         maxAge: 0,
-        redirectUri: "https://api.aoagents.dev/app/auth/return",
+        redirectUri: "https://api.orchestrator.inc/app/auth/return",
       }),
     );
 
@@ -822,7 +822,7 @@ describe("the sign-in redirect each build sends", () => {
   // The baked default, which belongs to the staging WorkOS environment.
   const STAGING_CLIENT = "client_01KZ3VRKC374HS91XGRDPT3671";
   const WEBSITE_PAGE = "https://orchestrator.inc/app/auth/return/";
-  const CONTROL_PLANE_PAGE = "https://api.aoagents.dev/app/auth/return";
+  const CONTROL_PLANE_PAGE = "https://api.orchestrator.inc/app/auth/return";
   const LOOPBACK = "http://127.0.0.1:3000/callback";
 
   it.each([
