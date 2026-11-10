@@ -13,7 +13,6 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -546,7 +545,6 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
@@ -562,7 +560,7 @@ export function CenterPane({
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+							className="flex h-full min-w-0 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
@@ -720,6 +718,8 @@ type SessionPaneTabProps = {
 	session?: WorkspaceSession;
 	/** The agent shown without a session; its mark is the icon and its name joins the label. */
 	provider?: string;
+	/** Off where the agent's name is enough (the chat tab): the name still joins the label. */
+	providerIcon?: boolean;
 	icon?: ReactNode;
 	title?: string;
 	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
@@ -741,6 +741,7 @@ export function SessionPaneTab({
 	onRenamed,
 	session,
 	provider = session?.provider,
+	providerIcon = true,
 	icon,
 	title,
 	tabAction,
@@ -752,7 +753,7 @@ export function SessionPaneTab({
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = provider ? agentLabel(provider) : undefined;
-	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
+	const tabIcon = provider && providerIcon ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project

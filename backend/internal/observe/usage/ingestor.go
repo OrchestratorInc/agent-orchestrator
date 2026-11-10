@@ -42,6 +42,7 @@ type IngestorConfig struct {
 	Clock            func() time.Time
 	Pricing          *pricing.Manager
 	OnPricingError   func(error)
+	SQLiteChunkRows  int
 	// RequestAttributionRepair asks for a legacy repair pass. See
 	// notifyLateRouteEvidence for the one window it closes.
 	RequestAttributionRepair func()
@@ -59,13 +60,14 @@ type IngestResult struct {
 	ReplacementSourceID int64
 }
 
-// Ingestor incrementally processes registered transcript files when the
-// watcher, a hook, startup reconciliation, or a retry timer requests work.
+// Ingestor incrementally processes registered transcript files when a usage
+// read, a finalizing session, or a retry timer requests work.
 type Ingestor struct {
 	store            ingestorStore
 	chunkBytes       int64
 	recordBytes      int
 	finalizationWait time.Duration
+	sqliteChunkRows  int
 	now              func() time.Time
 	pricing          *pricing.Manager
 	onPricingError   func(error)
@@ -85,6 +87,9 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 	if cfg.FinalizationWait <= 0 {
 		cfg.FinalizationWait = defaultFinalizationWait
 	}
+	if cfg.SQLiteChunkRows <= 0 {
+		cfg.SQLiteChunkRows = defaultSQLiteChunkRows
+	}
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
@@ -96,6 +101,7 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 		chunkBytes:       cfg.ChunkBytes,
 		recordBytes:      cfg.RecordBytes,
 		finalizationWait: cfg.FinalizationWait,
+		sqliteChunkRows:  cfg.SQLiteChunkRows,
 		now:              cfg.Clock,
 		pricing:          cfg.Pricing,
 		onPricingError:   cfg.OnPricingError,
@@ -105,8 +111,8 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 }
 
 // Ingest processes one source from its durable cursor. It never loops on an
-// incomplete trailing record; a later filesystem event will enqueue the source
-// again after the provider finishes the record.
+// incomplete trailing record; the next read after the provider finishes the
+// record picks it up.
 func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, error) {
 	if err := ctx.Err(); err != nil {
 		return IngestResult{}, err
@@ -129,6 +135,9 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			now,
 			fmt.Errorf("decode parser state: %w", err),
 		)
+	}
+	if sqliteUsageSource(source.Source.Kind) {
+		return i.ingestSQLite(ctx, source, parserState, now)
 	}
 	file, err := i.openTranscript(source.Source.ArtifactPath) //nolint:gosec // path was validated at registration.
 	if err != nil {
@@ -309,6 +318,27 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			errors.New("transcript changed during ingestion"),
 		)
 	}
+	fileSnapshot := &conflictSnapshotV1{Size: snapshot.size, ModTime: snapshot.modTime}
+	if done, err := i.applyParsedChunk(ctx, source, &parsed, fileSnapshot, &result, now); err != nil || done {
+		return result, err
+	}
+	i.notifyLateRouteEvidence(ctx, source.Source.ID)
+	result.Reconcile = parsed.newCodexChild
+	if parsed.Cursor.State == domain.UsageSourceComplete {
+		return result, i.completeBinding(ctx, source.Source.BindingID, now)
+	}
+	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
+	return result, nil
+}
+
+func (i *Ingestor) applyParsedChunk(
+	ctx context.Context,
+	source domain.UsageSourceContext,
+	parsed *parseResult,
+	conflict *conflictSnapshotV1,
+	result *IngestResult,
+	now time.Time,
+) (done bool, err error) {
 	apply := func() error {
 		return i.store.ApplyUsageChunk(
 			ctx,
@@ -323,6 +353,9 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 		apply = func() error {
 			return i.pricing.WithSnapshot(ctx, func(snapshot *pricing.Snapshot) error {
 				for index := range parsed.Events {
+					if parsed.Events[index].Costs.EstimatedCostNanos != nil {
+						continue
+					}
 					// Live ingestion prices only what the transcript or the
 					// binding's route hint named outright. Resolving the model
 					// against the catalog would turn "one catalog lists this
@@ -362,14 +395,12 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			// same revision check used for a successful chunk.
 			conflictState, stateErr := decodeParserState(source.Source)
 			if stateErr != nil {
-				return result, errors.Join(err, stateErr)
+				return true, errors.Join(err, stateErr)
 			}
-			conflictState.Integrity.ConflictSnapshot = &conflictSnapshotV1{
-				Size: snapshot.size, ModTime: snapshot.modTime,
-			}
+			conflictState.Integrity.ConflictSnapshot = conflict
 			encoded, stateErr := json.Marshal(conflictState)
 			if stateErr != nil {
-				return result, errors.Join(err, stateErr)
+				return true, errors.Join(err, stateErr)
 			}
 			conflictCursor := cursorFromSource(source.Source, source.Source.ByteOffset, now)
 			conflictCursor.State = domain.UsageSourceComplete
@@ -383,25 +414,19 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 				conflictCursor,
 				nil,
 			); markErr != nil {
-				return result, errors.Join(err, markErr)
+				return true, errors.Join(err, markErr)
 			}
 			// Retrying cannot resolve a conflict, so drop any finalization
 			// quiet-period retry scheduled above.
 			result.RetryAt = nil
 			if source.BindingState == domain.UsageBindingFinalizing {
-				return result, i.completeBinding(ctx, source.Source.BindingID, now)
+				return true, i.completeBinding(ctx, source.Source.BindingID, now)
 			}
-			return result, nil
+			return true, nil
 		}
-		return result, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
+		return true, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
 	}
-	i.notifyLateRouteEvidence(ctx, source.Source.ID)
-	result.Reconcile = parsed.newCodexChild
-	if parsed.Cursor.State == domain.UsageSourceComplete {
-		return result, i.completeBinding(ctx, source.Source.BindingID, now)
-	}
-	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
-	return result, nil
+	return false, nil
 }
 
 // notifyLateRouteEvidence asks for a repair pass when a chunk landed

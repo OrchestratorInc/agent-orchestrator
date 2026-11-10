@@ -228,67 +228,69 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</div>
 				</div>
 			)}
-			<div className="flex shrink-0 flex-col gap-3">
-				{newFolders.length ? (
-					<p className="text-xs text-muted-foreground">
-						{t("sessionImport.addsProjects", {
-							count: newFolders.length,
-							names: newFolders.map(folderName).join(", "),
-						})}
-					</p>
-				) : null}
-				{results.length ? (
-					<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-						<p role="status" className="text-sm">
-							{summarize(results)}
+			{preview.isPending ? null : (
+				<div className="flex shrink-0 flex-col gap-3">
+					{newFolders.length ? (
+						<p className="text-xs text-muted-foreground">
+							{t("sessionImport.addsProjects", {
+								count: newFolders.length,
+								names: newFolders.map(folderName).join(", "),
+							})}
 						</p>
-						{created.length === 1 ? (
-							<Button size="sm" variant="secondary" onClick={() => openSession(created[0].candidate, created[0].sessionId)}>
-								{t("sessionImport.openChat")}
-							</Button>
-						) : onlyProject ? (
-							<Button
-								size="sm"
-								variant="secondary"
-								onClick={() => {
-									closeSettings();
-									void navigate(projectNavigateTarget(onlyProject));
-								}}
-							>
-								{t("sessionImport.showProject")}
-							</Button>
-						) : null}
+					) : null}
+					{results.length ? (
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+							<p role="status" className="text-sm">
+								{summarize(results)}
+							</p>
+							{created.length === 1 ? (
+								<Button size="sm" variant="secondary" onClick={() => openSession(created[0].candidate, created[0].sessionId)}>
+									{t("sessionImport.openChat")}
+								</Button>
+							) : onlyProject ? (
+								<Button
+									size="sm"
+									variant="secondary"
+									onClick={() => {
+										closeSettings();
+										void navigate(projectNavigateTarget(onlyProject));
+									}}
+								>
+									{t("sessionImport.showProject")}
+								</Button>
+							) : null}
+						</div>
+					) : null}
+					<div className="flex items-center justify-between gap-3">
+						<Button
+							variant="ghost"
+							onClick={() => {
+								setError(undefined);
+								keepChoicesRef.current = false;
+								// A rescan with an unchanged list keeps preview.data's identity, so the
+								// effect would not run: reset here.
+								setResults([]);
+								void preview.refetch().then(({ data }) => {
+									if (data && !keepChoicesRef.current) {
+										setSelected(new Set(data.candidates.filter((c) => !c.sessionId).map((c) => c.id)));
+									}
+								});
+							}}
+							disabled={importing || preview.isFetching}
+						>
+							{t("sessionImport.scanAgain")}
+						</Button>
+						<Button
+							onClick={() => void importSelected()}
+							disabled={!selectedVisible.length || importing}
+						>
+							{importing
+								? t("sessionImport.importing")
+								: t("sessionImport.import", { count: selectedVisible.length })}
+						</Button>
 					</div>
-				) : null}
-				<div className="flex items-center justify-between gap-3">
-					<Button
-						variant="ghost"
-						onClick={() => {
-							setError(undefined);
-							keepChoicesRef.current = false;
-							// A rescan with an unchanged list keeps preview.data's identity, so the
-							// effect would not run: reset here.
-							setResults([]);
-							void preview.refetch().then(({ data }) => {
-								if (data && !keepChoicesRef.current) {
-									setSelected(new Set(data.candidates.filter((c) => !c.sessionId).map((c) => c.id)));
-								}
-							});
-						}}
-						disabled={importing || preview.isFetching}
-					>
-						{t("sessionImport.scanAgain")}
-					</Button>
-					<Button
-						onClick={() => void importSelected()}
-						disabled={!selectedVisible.length || importing}
-					>
-						{importing
-							? t("sessionImport.importing")
-							: t("sessionImport.import", { count: selectedVisible.length })}
-					</Button>
 				</div>
-			</div>
+			)}
 		</div>
 	);
 }

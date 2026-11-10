@@ -46,6 +46,14 @@ beforeEach(() => {
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
 });
+it("shows only the reading status until the first scan returns", async () => {
+	api.GET.mockReturnValue(new Promise(() => {}));
+	renderPanel();
+	expect(await screen.findByText("Reading local histories…")).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /^Import \d+/ })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Scan again" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("checkbox", { name: "Select all shown conversations" })).not.toBeInTheDocument();
+});
 it("lists OMP chats for import", async () => {
 	api.GET.mockResolvedValue({
 		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },

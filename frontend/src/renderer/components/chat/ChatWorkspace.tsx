@@ -9,7 +9,6 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
-import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
@@ -154,9 +153,6 @@ import {
 	isTaskTitleUpdate,
 	isWorkerLead,
 	isDuplicateSpawnAction,
-	OrchestratorReply,
-	piggybackedUpdates,
-	quietWorkerReply,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
@@ -164,6 +160,11 @@ import {
 	TaskNamedLine,
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
+	BatchedReportsContext,
+	type BatchedReports,
+	placeBatchedReports,
+	ReportsLine,
+	type WorkerUpdate,
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
@@ -187,6 +188,7 @@ import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
+import { agentAccountProviderFor } from "../../hooks/useAgentAccounts";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
@@ -200,6 +202,7 @@ import {
 	fullQueuedTurnOrder,
 	hiddenTimelineTurnIds,
 	isUserQueuePrompt,
+	needsReauth,
 	queuedTurnIds,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -906,6 +909,7 @@ function ChatWorkspaceContent({
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
+	const signInRequired = needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud;
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -2026,7 +2030,7 @@ function ChatWorkspaceContent({
 				>
 				<HoldWhileHidden hidden={reviewerActive || shellActive}>
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId}
 							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
 					{!draftPersistenceAvailable ? (
@@ -2053,6 +2057,7 @@ function ChatWorkspaceContent({
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
+							signInRequired={signInRequired}
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
@@ -2254,7 +2259,9 @@ function ChatWorkspaceContent({
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
 														? "Reconnecting to the agent…"
-														: undefined
+														: signInRequired && snapshot.controller.state === "stopped"
+															? t("chat.reauth.composerPlaceholder")
+															: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2567,7 +2574,6 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
@@ -2583,7 +2589,7 @@ function ChatHeader({
 			tabs={
 					<div
 						aria-label="Chat tabs"
-						className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+						className="flex h-full min-w-0 items-stretch"
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						ref={tabListRef}
 						role="tablist"
@@ -2601,6 +2607,7 @@ function ChatHeader({
 											label={label}
 											onSelect={timelineActive ? undefined : onSelectChat}
 											onRenamed={onSessionRenamed}
+											providerIcon={false}
 											session={session}
 											tabAction={sessionTabAction}
 											tabActionPinned={sessionTabActionPinned}
@@ -2611,6 +2618,7 @@ function ChatHeader({
 											label={label}
 											onSelect={timelineActive ? undefined : onSelectChat}
 											provider={snapshot.harness}
+											providerIcon={false}
 											title={label}
 										/>
 									)}
@@ -2689,6 +2697,7 @@ function ControllerBanner({
 	openingShell,
 	shellError,
 	quietConnect = false,
+	signInRequired = false,
 }: {
 	controller: { state: ControllerState; error?: string };
 	/** The chat already shows the opening brief as working; connecting needs no banner. */
@@ -2709,6 +2718,7 @@ function ControllerBanner({
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
+	signInRequired?: boolean;
 }) {
 	const { t } = useTranslation();
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
@@ -2773,6 +2783,7 @@ function ControllerBanner({
 	if (!shown) return null;
 	const loading = controller.state === "connecting" || waking || restarting;
 	const actionable = controller.state === "stopped" && !waking && !restarting;
+	if (actionable && !terminated && signInRequired) return null;
 
 	return (
 		<div
@@ -3929,23 +3940,31 @@ export function Timeline({
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
+	const batchedReports = useMemo(
+		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
+		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
+	);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		const groups = groupByTurn({ ...snapshot, items: timelineItems })
-				.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
-				.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
-					? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
-					: group);
+		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
+		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
+		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const groups = groupByTurn({ ...snapshot, items })
+			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
+				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
+				: group);
 		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return groups;
-		return groups
+		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
+		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return placed;
+		return placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [batchedReports, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
@@ -4876,12 +4895,11 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<BatchedReportsContext.Provider value={batchedReports}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
 									workerUpdates={workerUpdates}
-									// Consecutive quiet worker turns read as one list of rows, not separate turns.
-									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -4924,6 +4942,7 @@ export function Timeline({
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -5207,7 +5226,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup,
 	onSelectAnnotation,
 	workerUpdates = false,
-	tight = false,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -5250,9 +5268,9 @@ const TurnGroup = memo(function TurnGroup({
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
-	tight?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
+	const batched = useContext(BatchedReportsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -5403,20 +5421,40 @@ const TurnGroup = memo(function TurnGroup({
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
 	// report batch, or reports folded into the user's message) draws as rows, and
 	// AO's task-naming prompt as the name it produced.
+	const reportsLine = (key: string, updates: readonly WorkerUpdate[]) => (
+		<ReportsLine
+			key={key}
+			updates={updates}
+			open={Boolean(activityDisclosureOverrides[key])}
+			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
+		/>
+	);
+	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
+	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
-		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		// A direct send or steer is one row; a batch of reports is one line that opens to them.
+		if (updates.length > 0 && updates[0]?.state === undefined) {
+			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
+			// Reports a worker's steer carried in travel with it, as their own line.
+			const carried = batched?.under.get(item.id) ?? [];
+			if (carried.length === 0) return rows;
+			drewReportsUnder = true;
+			return [rows, reportsLine(`${run.key}:reports`, carried)];
+		}
+		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		const piggybacked = piggybackedUpdates(item);
-		if (piggybacked.length === 0) return renderRun(run);
-		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+		// Reports delivered with a human message or steer are not drawn: the message stands alone.
+		return renderRun(run);
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
+	// The reports line under the prompt takes the prompt's action row itself.
+	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -5440,9 +5478,6 @@ const TurnGroup = memo(function TurnGroup({
 			</LiveResponseStatus>
 		) : null;
 	const outcome = group.outcome;
-	// A settled worker turn whose answer asks the user nothing draws that answer as
-	// one line under the rows, with the work folded into it instead of "Worked for".
-	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
 	// nothing to open, so it is the same words without the chevron. As the turn
@@ -5451,8 +5486,13 @@ const TurnGroup = memo(function TurnGroup({
 	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
+	// Agents the turn spawned are part of its work, so they fold with its steps.
+	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
+	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
 	const showsWorked = Boolean(
-		outcome && !quietReply && !onlyRead && (foldedRuns.length > 0 || workedDurationMs !== undefined),
+		outcome && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -5460,7 +5500,7 @@ const TurnGroup = memo(function TurnGroup({
 	const promptBubble = group.items.some(
 		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
 	);
-	const reservesActionRow = promptBubble && !quietReply && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
+	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	// The empty row is exactly as tall as "Worked for", which takes its place as the
 	// turn settles, so the handover moves nothing. Only one of the two is ever in the
 	// DOM, so the turn's row gap is never counted twice.
@@ -5482,7 +5522,7 @@ const TurnGroup = memo(function TurnGroup({
 						open={Boolean(activityDisclosureOverrides[disclosureKey])}
 						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 					>
-						{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
+						{hasFoldedWork ? foldedWork() : undefined}
 					</TurnWorkSummary>
 				</motion.div>
 			) : null}
@@ -5493,28 +5533,13 @@ const TurnGroup = memo(function TurnGroup({
 	// a step keeps its element as later ones land under it and an image the reader
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
-	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (quietReply && finalRun) {
-		body.push(
-			<OrchestratorReply
-				key={finalRun.key}
-				message={quietReply}
-				work={foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
-				workOpen={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onWorkOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-				onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
-				rollbackDisabled={rollbackDisabled}
-			/>,
-		);
-	} else if (finalRun) {
-		body.push(renderRun(finalRun));
-	}
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
+	// Settled steers still carry the reports they delivered.
+	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
+	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
-		<div className={cn("relative flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
+		<div className="relative flex min-w-0 flex-col gap-2.5">
 			{body}
 			{/* The live row comes straight after the steps, so the step it names sits
 			    under the work it continues, and the plan reads below it. Once the turn
@@ -6286,26 +6311,19 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
 
-const quietWorkerGroups = new WeakMap<TimelineGroup, boolean>();
+const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
 
-/**
- * A settled worker turn that draws only rows and a quiet reply, so it can sit
- * tight against its neighbours. Groups keep their identity while unchanged, so
- * each is judged once rather than on every streamed delta.
- */
-function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
-	if (!group) return false;
-	let quiet = quietWorkerGroups.get(group);
-	if (quiet === undefined) {
-		quiet = group.outcome?.state === "completed"
-			&& !group.plan
-			&& !group.diff
-			&& quietWorkerReply(group.items) !== undefined
-			&& !group.items.some(isNoticeItem)
-			&& spawnedSessionIds(group.items).length === 0;
-		quietWorkerGroups.set(group, quiet);
+const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
+
+/** An AO action filed under a turn the timeline drops, as a turn-less row; anything else unchanged. */
+function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): ConversationItem {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || !item.turnId || !dropped.has(item.turnId)) return item;
+	let detached = detachedActions.get(item);
+	if (!detached) {
+		detached = { ...item, turnId: undefined };
+		detachedActions.set(item, detached);
 	}
-	return quiet;
+	return detached;
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */

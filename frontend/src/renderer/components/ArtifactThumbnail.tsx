@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { File, FileText, Globe, Image, Table2, Video, Workflow } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -140,7 +140,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const content = file.data && !file.data.binary ? file.data.content : "";
 	const preview = isMarkdown ? stripMarkdownFrontmatter(content) : content;
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
-	const Icon = imagePath ? Image : video ? Video : row.kind === "html" ? Globe : table ? Table2 : mermaid ? Workflow : isMarkdown || plainText || pdf ? FileText : File;
+	const Icon = artifactFileIcon(row);
 	const accessPending = cloud && cloudPreviewable && !access.data && access.fetchStatus === "fetching";
 	const imagePending = checkImage && imageStatus.isPending;
 	const unavailable = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400)))

@@ -1997,6 +1997,10 @@ func mapSessionError(err error) error {
 			})
 		}
 		return apierr.Conflict("SESSION_MODE_UNSUPPORTED", err.Error(), nil)
+	case errors.As(err, &relaunchErr) && errors.Is(err, ports.ErrChatAuthRequired):
+		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
+	case errors.As(err, &relaunchErr) && errors.Is(err, ports.ErrAgentAuthRequired):
+		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrChatRecoveryInconclusive):
 		// Checked before the envelope's transient mapping: a recovery that cannot
 		// safely take over a still-running provider fails the same way on every

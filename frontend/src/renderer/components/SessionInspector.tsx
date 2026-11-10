@@ -1,6 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -1172,17 +1173,14 @@ function ArtifactSummaryRow({
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 }) {
+	const KindIcon = artifactFileIcon(artifact);
 	return (
 		<Pressable
 			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
 			onClick={() => onOpenArtifact?.({ path: artifact.path })}
 			title={artifact.path}
 		>
-			{artifact.kind === "html" ? (
-				<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-			) : (
-				<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-			)}
+			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
 			{artifact.updatedAt ? (
 				<time
