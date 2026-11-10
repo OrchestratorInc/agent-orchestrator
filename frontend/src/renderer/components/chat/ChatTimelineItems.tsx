@@ -888,8 +888,9 @@ function ProseWithInlineImages({
 
 /** An inline image chip, drawn from the composer's copy while the file was just sent. */
 function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	// A local copy that fails to draw hands the chip to the daemon's copy.
 	const local = useSentAttachmentPreview(path);
-	return <ChatImage inline src={local ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} />;
+	return <ChatImage inline src={local.url ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} onError={local.onError} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
