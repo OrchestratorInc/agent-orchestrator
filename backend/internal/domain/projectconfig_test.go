@@ -2,6 +2,32 @@ package domain
 
 import "testing"
 
+func TestProjectConfigValidateDefaultBranch(t *testing.T) {
+	for _, branch := range []string{
+		"", DefaultBranchAuto, "main", "release/2026", "origin/main",
+		"feature/topic-1", "topic@work", "@", "unicode/日本語", "feature/-dash",
+		"feature./topic", "feature.LOCK", "feature\u00a0topic",
+	} {
+		t.Run("valid/"+branch, func(t *testing.T) {
+			if err := (ProjectConfig{DefaultBranch: branch}).Validate(); err != nil {
+				t.Fatalf("valid default branch %q rejected: %v", branch, err)
+			}
+		})
+	}
+	for _, branch := range []string{
+		"bad..name", "space branch", "tab\tbranch", "line\nbreak", "control\x01", "delete\x7f",
+		"feature~1", "feature^1", "feature:part", "feature?", "feature*", "feature[1]",
+		`feature\topic`, "@{1}", "-dash", "HEAD", ".hidden", "feature/.hidden",
+		"feature.lock", "feature.lock/topic", "ends.", "/leading", "trailing/", "double//slash",
+	} {
+		t.Run("invalid/"+branch, func(t *testing.T) {
+			if err := (ProjectConfig{DefaultBranch: branch}).Validate(); err == nil {
+				t.Fatalf("invalid default branch %q accepted", branch)
+			}
+		})
+	}
+}
+
 func TestProjectConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string

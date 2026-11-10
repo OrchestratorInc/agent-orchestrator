@@ -156,6 +156,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao project add":            {},
 	"ao project rm":             {},
 	"ao project set-config":     {},
+	"ao project update":         {},
 	"ao remote-host":            {},
 	"ao remote-host status":     {},
 	"ao remote-host enable":     {},

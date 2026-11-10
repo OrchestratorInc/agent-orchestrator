@@ -1906,7 +1906,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update selected project config fields; empty strings clear, null leaves unchanged */
+        patch: operations["updateProjectConfig"];
         trace?: never;
     };
     "/api/v1/projects/{id}/permissions": {
@@ -6945,6 +6946,11 @@ export interface components {
             worker?: components["schemas"]["RoleOverride"];
             workersRequestReview?: boolean;
         };
+        ProjectConfigChange: {
+            from: string;
+            path: string;
+            to: string;
+        };
         ProjectGetResponse: {
             project: components["schemas"]["ProjectOrDegraded"];
             /** @enum {string} */
@@ -8235,6 +8241,18 @@ export interface components {
         };
         UpdateHarnessDefaultRequest: {
             disabledModels: null | string[];
+        };
+        UpdateProjectConfigInput: {
+            /** @description Upstream repository URL. An empty string clears it; null or omission leaves it unchanged. */
+            canonicalRepoURL?: null | string;
+            /** @description Base branch. An empty string restores automatic inference; null or omission leaves it unchanged. */
+            defaultBranch?: null | string;
+            dryRun?: boolean;
+        };
+        UpdateProjectConfigResult: {
+            changes: components["schemas"]["ProjectConfigChange"][];
+            dryRun: boolean;
+            project: null | components["schemas"]["Project"];
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -15014,6 +15032,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateProjectConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectConfigInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateProjectConfigResult"];
                 };
             };
             /** @description Bad Request */
