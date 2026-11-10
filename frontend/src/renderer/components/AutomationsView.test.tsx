@@ -122,7 +122,7 @@ describe("AutomationsView", () => {
 		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("");
 	});
 
-	it("introduces the starters above the empty state and leaves them to the menu once automations exist", () => {
+	it("keeps the starters at the top of the page before and after automations exist", () => {
 		const { unmount } = renderView();
 		expect(screen.getByRole("heading", { name: "Start with a template" })).toBeInTheDocument();
 		expect(screen.getByText("Pick a starting point, make it yours, and let your agent take it from there.")).toBeInTheDocument();
@@ -132,9 +132,13 @@ describe("AutomationsView", () => {
 		unmount();
 		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
 		renderView();
-		expect(screen.getByRole("heading", { name: "Morning triage" })).toBeInTheDocument();
-		expect(screen.queryByRole("heading", { name: "Start with a template" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "PR review inbox" })).not.toBeInTheDocument();
+		const row = screen.getByRole("heading", { name: "Morning triage" });
+		const starters = screen.getByRole("heading", { name: "Start with a template" });
+		expect(screen.getByRole("button", { name: "PR review inbox" })).toBeInTheDocument();
+		// Starters stay first; the list and its toolbar follow them.
+		expect(starters.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(starters.compareDocumentPosition(screen.getByRole("button", { name: "Filter automations" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryByText("No automations yet")).not.toBeInTheDocument();
 	});
 
 	it("preselects the project's resolved default worker like New Task", async () => {
@@ -728,7 +732,7 @@ describe("AutomationsView", () => {
 			{ ...base, id: "c", displayName: "Charlie", enabled: true, nextRunAt: "2026-11-11T09:00:00Z" },
 		];
 		renderView();
-		const names = () => screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+		const names = () => screen.getAllByRole("article").map((row) => within(row).getByRole("heading", { level: 2 }).textContent);
 		expect(names()).toEqual(["Charlie", "Bravo", "Alpha"]);
 		await userEvent.click(screen.getByRole("button", { name: "Sort" }));
 		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Name" }));
@@ -744,7 +748,7 @@ describe("AutomationsView", () => {
 	])("shows the complete schedule from a canonical daemon rule %s", (rule, label) => {
 		mocks.automations = [{ id: "canonical", projectId: "demo", displayName: "Scheduled review", prompt: "Review", kind: "worker", rrule: `DTSTART;TZID=Asia/Kolkata:20261001T183600\nRRULE:${rule}`, timezone: "Asia/Kolkata", enabled: true }];
 		renderView();
-		expect(screen.getByText(label)).toBeInTheDocument();
+		expect(within(screen.getByRole("article")).getByText(label)).toBeInTheDocument();
 	});
 
 	it("exposes details with expansion state and surfaces failed toggles", async () => {

@@ -174,7 +174,6 @@ export function AutomationsView() {
 		sort,
 	);
 	const hasAutomations = automations.length > 0;
-	const showListTools = hasAutomations;
 	const clearFilters = () => {
 		setSearch("");
 		setStatus("all");
@@ -186,84 +185,6 @@ export function AutomationsView() {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>} />
-			{showListTools ? <div className="shrink-0 pt-3 pr-4 pl-(--space-4_5)">
-				<div className="flex min-h-control-md items-center gap-2">
-					<div className="ms-auto flex shrink-0 items-center gap-0.5">
-						<ToolbarSearch label={t("automations.search")} query={search} onQueryChange={setSearch} />
-						<DropdownMenu>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<DropdownMenuTrigger asChild>
-										<Button type="button" size="icon-sm" variant="quiet" aria-label={filterLabel} data-active={status !== "all" || projectId ? "true" : undefined}>
-											<Filter aria-hidden="true" className="size-icon-sm" />
-										</Button>
-									</DropdownMenuTrigger>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{filterLabel}</TooltipContent>
-							</Tooltip>
-							<DropdownMenuContent align="end" className="max-h-96 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
-								<DropdownMenuLabel>{t("automations.filter.status")}</DropdownMenuLabel>
-								<DropdownMenuRadioGroup value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
-									{STATUS_FILTERS.map((value) => (
-										<DropdownMenuRadioItem key={value} value={value}>
-											<span className="flex-1">{t(`automations.filter.${value}`)}</span>
-											<span className="text-caption tabular-nums text-passive">{value === "all" ? automations.length : automations.filter((item) => value === "enabled" ? item.enabled : !item.enabled).length}</span>
-										</DropdownMenuRadioItem>
-									))}
-								</DropdownMenuRadioGroup>
-								{projectOptions.length > 1 ? (
-									<>
-										<DropdownMenuSeparator />
-										<DropdownMenuLabel>{t("automations.filter.project")}</DropdownMenuLabel>
-										<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
-											<DropdownMenuRadioItem value="">{t("automations.filter.allProjects")}</DropdownMenuRadioItem>
-											{projectOptions.map((option) => <DropdownMenuRadioItem key={option.id} value={option.id}><span className="truncate">{option.name}</span></DropdownMenuRadioItem>)}
-										</DropdownMenuRadioGroup>
-									</>
-								) : null}
-							</DropdownMenuContent>
-						</DropdownMenu>
-						<DropdownMenu>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<DropdownMenuTrigger asChild>
-										<Button type="button" size="icon-sm" variant="quiet" aria-label={t("automations.sort.label")}>
-											<ArrowDownUp aria-hidden="true" className="size-icon-sm" />
-										</Button>
-									</DropdownMenuTrigger>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("automations.sort.label")}</TooltipContent>
-							</Tooltip>
-							<DropdownMenuContent align="end" className="min-w-44" data-browser-native-overlay="true">
-								<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as SortOrder)}>
-									{SORT_ORDERS.map((value) => <DropdownMenuRadioItem key={value} value={value}>{t(`automations.sort.${value}`)}</DropdownMenuRadioItem>)}
-								</DropdownMenuRadioGroup>
-							</DropdownMenuContent>
-						</DropdownMenu>
-						<NewAutomationMenu onCreate={openCreate} />
-					</div>
-				</div>
-				{status !== "all" || projectId ? (
-					<div className="mt-2 flex flex-wrap items-center gap-1.5">
-						{status !== "all" ? (
-							<FilterChip
-								label={t("automations.filter.status")}
-								value={statusLabel}
-								removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.status")}: ${statusLabel}` })}
-								onRemove={() => setStatus("all")}
-							/>
-						) : null}
-						{projectId ? (
-							<FilterChip
-								label={t("automations.filter.project")}
-								value={projectName(projectId)}
-								removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.project")}: ${projectName(projectId)}` })}
-								onRemove={() => setProjectId("")}
-							/>
-						) : null}
-					</div>
-				) : null}
-			</div> : null}
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
@@ -271,33 +192,113 @@ export function AutomationsView() {
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
+					{!query.isLoading && !query.error ? (
+						<section aria-labelledby="automation-templates">
+							<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
+							<p className="mt-1 mb-3 text-xs text-muted-foreground">{t("automations.templates.description")}</p>
+							<TemplateGrid onSelect={openCreate} />
+						</section>
+					) : null}
 					{!query.isLoading && !query.error && !hasAutomations ? (
-						<>
-							<section aria-labelledby="automation-templates">
-								<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
-								<p className="mt-1 mb-3 text-xs text-muted-foreground">{t("automations.templates.description")}</p>
-								<TemplateGrid onSelect={openCreate} />
-							</section>
-							<div className="mt-6 flex flex-col items-center gap-3 border-t border-border pt-12 pb-8 text-center">
-								<Clock aria-hidden="true" className="size-5 text-passive" />
-								<p className="text-control text-muted-foreground">{t("automations.empty.title")}</p>
-								<Button type="button" size="sm" variant="secondary" onClick={() => openCreate()}>{t("automations.new")}</Button>
-							</div>
-						</>
+						<div className="mt-6 flex flex-col items-center gap-3 border-t border-border pt-12 pb-8 text-center">
+							<Clock aria-hidden="true" className="size-5 text-passive" />
+							<p className="text-control text-muted-foreground">{t("automations.empty.title")}</p>
+							<Button type="button" size="sm" variant="secondary" onClick={() => openCreate()}>{t("automations.new")}</Button>
+						</div>
 					) : null}
 					{hasAutomations ? (
-						visibleAutomations.length > 0 ? (
-							<div className="divide-y divide-border">
-								{visibleAutomations.map((item) => (
-									<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
-								))}
+						<section aria-label={t("automations.title")} className="mt-6 border-t border-border pt-3">
+							<div className="mb-2">
+								<div className="flex min-h-control-md items-center gap-2">
+									<div className="ms-auto flex shrink-0 items-center gap-0.5">
+										<ToolbarSearch label={t("automations.search")} query={search} onQueryChange={setSearch} />
+										<DropdownMenu>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<DropdownMenuTrigger asChild>
+														<Button type="button" size="icon-sm" variant="quiet" aria-label={filterLabel} data-active={status !== "all" || projectId ? "true" : undefined}>
+															<Filter aria-hidden="true" className="size-icon-sm" />
+														</Button>
+													</DropdownMenuTrigger>
+												</TooltipTrigger>
+												<TooltipContent side="bottom">{filterLabel}</TooltipContent>
+											</Tooltip>
+											<DropdownMenuContent align="end" className="max-h-96 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+												<DropdownMenuLabel>{t("automations.filter.status")}</DropdownMenuLabel>
+												<DropdownMenuRadioGroup value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
+													{STATUS_FILTERS.map((value) => (
+														<DropdownMenuRadioItem key={value} value={value}>
+															<span className="flex-1">{t(`automations.filter.${value}`)}</span>
+															<span className="text-caption tabular-nums text-passive">{value === "all" ? automations.length : automations.filter((item) => value === "enabled" ? item.enabled : !item.enabled).length}</span>
+														</DropdownMenuRadioItem>
+													))}
+												</DropdownMenuRadioGroup>
+												{projectOptions.length > 1 ? (
+													<>
+														<DropdownMenuSeparator />
+														<DropdownMenuLabel>{t("automations.filter.project")}</DropdownMenuLabel>
+														<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+															<DropdownMenuRadioItem value="">{t("automations.filter.allProjects")}</DropdownMenuRadioItem>
+															{projectOptions.map((option) => <DropdownMenuRadioItem key={option.id} value={option.id}><span className="truncate">{option.name}</span></DropdownMenuRadioItem>)}
+														</DropdownMenuRadioGroup>
+													</>
+												) : null}
+											</DropdownMenuContent>
+										</DropdownMenu>
+										<DropdownMenu>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<DropdownMenuTrigger asChild>
+														<Button type="button" size="icon-sm" variant="quiet" aria-label={t("automations.sort.label")}>
+															<ArrowDownUp aria-hidden="true" className="size-icon-sm" />
+														</Button>
+													</DropdownMenuTrigger>
+												</TooltipTrigger>
+												<TooltipContent side="bottom">{t("automations.sort.label")}</TooltipContent>
+											</Tooltip>
+											<DropdownMenuContent align="end" className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as SortOrder)}>
+													{SORT_ORDERS.map((value) => <DropdownMenuRadioItem key={value} value={value}>{t(`automations.sort.${value}`)}</DropdownMenuRadioItem>)}
+												</DropdownMenuRadioGroup>
+											</DropdownMenuContent>
+										</DropdownMenu>
+										<NewAutomationMenu onCreate={openCreate} />
+									</div>
+								</div>
+								{status !== "all" || projectId ? (
+									<div className="mt-2 flex flex-wrap items-center gap-1.5">
+										{status !== "all" ? (
+											<FilterChip
+												label={t("automations.filter.status")}
+												value={statusLabel}
+												removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.status")}: ${statusLabel}` })}
+												onRemove={() => setStatus("all")}
+											/>
+										) : null}
+										{projectId ? (
+											<FilterChip
+												label={t("automations.filter.project")}
+												value={projectName(projectId)}
+												removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.project")}: ${projectName(projectId)}` })}
+												onRemove={() => setProjectId("")}
+											/>
+										) : null}
+									</div>
+								) : null}
 							</div>
-						) : (
-							<div className="flex flex-col items-center gap-1 py-16 text-center">
-								<p className="text-control font-medium text-foreground">{t("automations.noMatches")}</p>
-								<Button variant="quiet" size="sm" onClick={clearFilters}>{t("automations.clearFilters")}</Button>
-							</div>
-						)
+							{visibleAutomations.length > 0 ? (
+								<div className="divide-y divide-border">
+									{visibleAutomations.map((item) => (
+										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
+									))}
+								</div>
+							) : (
+								<div className="flex flex-col items-center gap-1 py-16 text-center">
+									<p className="text-control font-medium text-foreground">{t("automations.noMatches")}</p>
+									<Button variant="quiet" size="sm" onClick={clearFilters}>{t("automations.clearFilters")}</Button>
+								</div>
+							)}
+						</section>
 					) : null}
 				</div>
 				</ScrollArea.Viewport>
