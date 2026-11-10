@@ -103,7 +103,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
 	// The outcome event reads this start's steps from the request's trace.
 	bg = carrySpawnTrace(ctx, bg)
-	NoteSpawnLaunch(ctx, domain.SessionModeChat, true)
+	NoteSpawnLaunch(ctx, in.cfg.RequestedMode, true)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -341,6 +341,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 func (m *Manager) startAsyncChatController(ctx context.Context, in asyncChatSpawn, record domain.SessionRecord, ws ports.WorkspaceInfo, workspaceProject *ports.WorkspaceProjectInfo, releaseWorkspaceGate func()) error {
 	id := in.record.ID
 	stageStarted := time.Now()
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	if _, err := m.launchChatController(ctx, chatSpawn{
 		cfg:              in.cfg,
 		project:          in.project,

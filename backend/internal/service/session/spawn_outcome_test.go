@@ -28,11 +28,16 @@ type asyncCommander struct {
 	// settleDuringSpawn settles the start before Spawn answers (a fast start).
 	settleDuringSpawn  domain.SessionProvisionState
 	spawnErrAfterAsync error
+	spawnContext       context.Context
 }
 
 func (a *asyncCommander) SetProvisionObserver(fn sessionmanager.ProvisionObserver) { a.observer = fn }
 
 func (a *asyncCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	a.spawnContext = ctx
+	if cfg.RequestedMode == domain.SessionModeTUI {
+		sessionmanager.NoteSpawnLaunch(ctx, cfg.RequestedMode, true)
+	}
 	rec := domain.SessionRecord{ID: "chat-1", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, ProvisionState: domain.SessionProvisionProvisioning}
 	a.clock.advance(a.answerIn)
 	a.observer(ctx, rec, domain.SessionProvisionProvisioning, nil)
@@ -300,5 +305,56 @@ func TestSpawnDurationClockKeepsTheMonotonicReading(t *testing.T) {
 	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore()})
 	if got := svc.monoNow().String(); !strings.Contains(got, "m=") {
 		t.Fatalf("spawn duration clock %q has no monotonic reading", got)
+	}
+}
+
+func TestAsyncTerminalOutcomeIncludesFinalTimingsOnce(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			svc, cmd, sink, _, _ := newAsyncSpawnService(t)
+			_, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+				RequestedMode: domain.SessionModeTUI, Async: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.events) != 0 {
+				t.Fatalf("acceptance emitted events: %#v", sink.events)
+			}
+			state := domain.SessionProvisionReady
+			var cause error
+			if failed {
+				state = domain.SessionProvisionFailed
+				cause = fmt.Errorf("%w: agent exited", sessionmanager.ErrRuntimeCreate)
+			}
+			for _, step := range []string{sessionmanager.SpawnStepWorktree, sessionmanager.SpawnStepSetup} {
+				sessionmanager.BeginSpawnStep(cmd.spawnContext, step)(nil)
+			}
+			sessionmanager.BeginSpawnStep(cmd.spawnContext, sessionmanager.SpawnStepAgentStart)(cause)
+			cmd.clock.advance(9 * time.Second)
+			settle(cmd, state, cause)
+			settle(cmd, state, cause)
+			name := "ao.sessions.spawned"
+			if failed {
+				name = "ao.sessions.spawn_failed"
+			}
+			events := named(sink, name)
+			if len(events) != 1 {
+				t.Fatalf("events = %#v", sink.events)
+			}
+			p := events[0].Payload
+			if p["async"] != true || p["mode"] != "terminal" || p["spawn_duration_ms"] != int64(9065) {
+				t.Fatalf("outcome facts = %#v", p)
+			}
+			for _, key := range []string{"worktree_ms", "setup_ms", "agent_start_ms"} {
+				if _, ok := p[key].(int64); !ok {
+					t.Fatalf("missing timing %s: %#v", key, p)
+				}
+			}
+			if failed && (p["failed_step"] != "agent_start" || p["cause"] != "exited") {
+				t.Fatalf("failure classification = %#v", p)
+			}
+		})
 	}
 }

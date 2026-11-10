@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -388,5 +389,42 @@ func TestAutomationTerminalLaunchStaysSynchronous(t *testing.T) {
 	if len(*deferred) != 0 || rt.created != 1 || len(msg.msgs) != 1 || !st.sessions[rec.ID].AutomationLaunchCompleted {
 		t.Fatalf("background=%d runtimes=%d prompts=%d launched=%t, want a completed synchronous launch",
 			len(*deferred), rt.created, len(msg.msgs), st.sessions[rec.ID].AutomationLaunchCompleted)
+	}
+}
+
+func TestSpawnAsyncTerminal_CarriesOutcomeTrace(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			rt := &fakeRuntime{}
+			if fail {
+				rt.createErr = errors.New("agent exited")
+			}
+			m, _, _, _ := newAsyncTerminalManager(rt, &fakeMessenger{})
+			deferred := deferredBackground(m)
+			startCtx, trace := WithSpawnTrace(context.Background())
+			if _, _, _, err := m.Spawn(startCtx, asyncTerminalConfig("fix it")); err != nil {
+				t.Fatal(err)
+			}
+			before := trace.Facts()
+			if before.Mode != domain.SessionModeTUI || !before.Async {
+				t.Fatalf("accepted facts = %#v", before)
+			}
+			if _, ok := before.StepMs[SpawnStepAgentStart+"_ms"]; ok {
+				t.Fatal("agent timing recorded before background launch")
+			}
+			(*deferred)[0]()
+			after := trace.Facts()
+			for _, step := range []string{SpawnStepWorktree, SpawnStepSetup, SpawnStepAgentStart} {
+				if _, ok := after.StepMs[step+"_ms"]; !ok {
+					t.Fatalf("missing %s in %#v", step, after)
+				}
+			}
+			if fail && after.FailedStep != SpawnStepAgentStart {
+				t.Fatalf("failed step = %q", after.FailedStep)
+			}
+			if !fail && after.FailedStep != "" {
+				t.Fatalf("success failed step = %q", after.FailedStep)
+			}
+		})
 	}
 }

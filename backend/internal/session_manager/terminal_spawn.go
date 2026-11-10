@@ -143,12 +143,14 @@ func (m *Manager) launchTerminalAgent(ctx context.Context, in terminalSpawn) (do
 		return rec, terminalLaunchFailure{prepared: true}, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	defer releaseCodexAdmission()
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,
 		Argv:          argv,
 		Env:           env,
 	})
+	started(err)
 	if err != nil {
 		return rec, terminalLaunchFailure{prepared: true}, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
 	}
