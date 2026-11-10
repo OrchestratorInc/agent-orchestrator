@@ -186,6 +186,15 @@ it("edits the worker and orchestrator instructions", async () => {
 	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: { orchestratorRules: "Split work by repository." } });
 });
 
+it("says when changed instructions reach sessions that are already running", async () => {
+	mocks.get.mockResolvedValue({ project: project({}) });
+	renderWith(<CloudProjectInstructionsSettings projectId="p" cloudOrgId="org-1" />);
+	await screen.findByLabelText("Worker instructions");
+	expect(screen.getAllByText(
+		"New sessions start with these instructions. Running sessions pick up changes with their next Chat message, or when their terminal agent restarts.",
+	)).toHaveLength(2);
+});
+
 it("blocks instructions over 16 KB", async () => {
 	mocks.get.mockResolvedValue({ project: project({}) });
 	renderWith(<CloudProjectInstructionsSettings projectId="p" cloudOrgId="org-1" />);

@@ -606,6 +606,9 @@ export interface CloudCpPutOrgCoderConfigRequest {
 	protectSecretFiles?: boolean;
 }
 
+/** How a session's agent gets project instructions changed after it started (`Session.outdatedInstructions`). */
+export type CloudCpOutdatedInstructions = "restart" | "next_start";
+
 export interface CloudCpSession {
 	id: string;
 	orgId: string;
@@ -627,6 +630,15 @@ export interface CloudCpSession {
 	currentModel?: string;
 	/** The reasoning effort its turns run with now; absent for the model's default. */
 	currentReasoningEffort?: string;
+	/**
+	 * Set while the project's instructions for the session's role changed
+	 * after its agent started and the agent does not run with them yet:
+	 * "restart" when restarting the agent (restartSessionAgent with
+	 * applyInstructions) applies them and keeps the conversation, "next_start"
+	 * when its worker applies them only the next time its agent starts.
+	 * Absent when current, for a session in Chat, and on older control planes.
+	 */
+	outdatedInstructions?: CloudCpOutdatedInstructions;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;

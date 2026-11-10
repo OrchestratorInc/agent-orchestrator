@@ -481,15 +481,23 @@ export class CloudClient {
     );
   }
 
-  /** Starts a live session's exited terminal agent again in its worker. */
+  /**
+   * Starts a live session's exited terminal agent again in its worker. With
+   * applyInstructions it restarts a running agent too, so it starts with the
+   * project's current instructions and keeps its conversation.
+   */
   restartSessionAgent(
     orgId: string,
     sessionId: string,
-    options: RequestOptions = {},
+    options: RequestOptions & { applyInstructions?: boolean } = {},
   ): Promise<{ requested: boolean }> {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/agent/restart`),
-      { method: "POST", signal: options.signal },
+      {
+        method: "POST",
+        ...(options.applyInstructions ? { body: { applyInstructions: true } } : {}),
+        signal: options.signal,
+      },
     );
   }
 

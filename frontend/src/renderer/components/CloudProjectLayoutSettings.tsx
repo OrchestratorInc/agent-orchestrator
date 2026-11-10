@@ -270,6 +270,7 @@ function InstructionsForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const box = (id: string, label: string, hint: string, value: string, onChange: (next: string) => void) => (
 		<Field label={label} htmlFor={id} hint={<>
 			<p>{hint}</p>
+			<p>{t("settings.cloudProject.instructionsApplyHint")}</p>
 			{utf8Bytes(value) > MAX_PROJECT_RULES_BYTES ? <p role="alert" className="text-error">{t("settings.cloudProject.instructionsTooLong", { defaultValue: "Instructions must be at most 16 KB." })}</p> : null}
 		</>}>
 			<textarea className="settings-field-control min-h-40 w-full px-4 py-3 text-sm" disabled={locked} id={id} value={value}
