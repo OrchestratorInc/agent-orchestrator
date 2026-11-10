@@ -677,11 +677,39 @@ describe("ChatMarkdown", () => {
 		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/s1/report.html");
 		expect(onLinkOpen).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("link", { name: "plan" }));
-		expect(onFileOpen).toHaveBeenLastCalledWith("/workspace/.ao/worker/artifacts/s1/plan.md?raw");
+		expect(onFileOpen).toHaveBeenLastCalledWith("/workspace/.ao/worker/artifacts/s1/plan.md");
 		// Any other HTML file still opens as a page.
 		await userEvent.click(screen.getByRole("link", { name: "site" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("/workspace/repository/site/index.html");
 		expect(onFileOpen).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens an HTML page in this session's artifact directory with the file opener when a workspace file shares its name", async () => {
+		// A Cloud chat's file list holds the checkout's top-level files once "@"
+		// is used; an artifact named like one of them is still the artifact.
+		const onLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" workspacePaths={["index.html"]} onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[page](/workspace/.ao/worker/artifacts/s1/index.html)" />
+		</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "page" }));
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/s1/index.html");
+		expect(onLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it("opens this session's artifact by the link's file path: no query or fragment, an encoded # or ? kept", async () => {
+		// A link's query and fragment are cut while its target is still encoded,
+		// so a name's own "#" or "?" (written %23, %3F) is not taken for one.
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[raw](/workspace/.ao/worker/artifacts/s1/plan.md?raw), [setup](/workspace/.ao/worker/artifacts/s1/guide.md#setup) and [issue](/workspace/.ao/worker/artifacts/s1/issue%20%2342%3F.md)" />
+		</ChatLinkProvider>);
+		for (const name of ["raw", "setup", "issue"]) await userEvent.click(screen.getByRole("link", { name }));
+		expect(onFileOpen.mock.calls.map(([path]) => path)).toEqual([
+			"/workspace/.ao/worker/artifacts/s1/plan.md",
+			"/workspace/.ao/worker/artifacts/s1/guide.md",
+			"/workspace/.ao/worker/artifacts/s1/issue #42?.md",
+		]);
 	});
 
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
@@ -703,6 +731,21 @@ describe("ChatMarkdown", () => {
 		} finally {
 			copy.mockRestore();
 		}
+	});
+
+	it("links an artifact named with a # or ? in inline code and in a worker report, by its whole name", () => {
+		// Inline code and a report's artifact line are file paths, not link
+		// targets: "#" and "?" there are part of the name.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "issue#42.md" }, { path: "why?.md" }] }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="See `worker-1/why?.md`." />
+			<WorkerUpdateRows updates={[{
+				key: "report-1", state: "done", name: "Worker", sessionId: "worker-1", projectId: "project",
+				body: "Filed it\nartifact: issue#42.md", createdAt: "2026-10-28T12:00:00Z",
+			}]} />
+		</ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "worker-1/why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
+		expect(screen.getByRole("link", { name: "issue#42.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/issue%2342.md");
 	});
 
 	it("keeps a worker report renderable when its artifact is removed from the catalog", async () => {

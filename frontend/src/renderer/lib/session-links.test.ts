@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactLinkForPath, findPlainReferences, findSessionLinks, hasArtifactDirectorySegment, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink, sessionArtifactPath } from "./session-links";
+import { artifactLinkForPath, artifactLinkForTarget, findPlainReferences, findSessionLinks, hasArtifactDirectorySegment, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink, sessionArtifactPath } from "./session-links";
 
 describe("session links", () => {
 	it.each([
@@ -100,17 +100,31 @@ describe("session links", () => {
 		expect(hasArtifactDirectorySegment("/workspace/src/plan.md?from=/artifacts/x")).toBe(false);
 	});
 
+	it("reads text naming an artifact as a file path, and a link target as a link", () => {
+		const workspaces = [{ id: "p", sessions: [{ id: "w", artifactFiles: [{ path: "issue#42.md" }, { path: "plan.md" }] }] }];
+		// Text (inline code, a report's artifact line): "#" is part of the name.
+		expect(artifactLinkForPath("w/issue#42.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
+		expect(artifactLinkForPath("w/plan.md#L3", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
+		// A link target: "#" starts its fragment, which never names the file.
+		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue%2342.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
+		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue#42.md", workspaces)).toBeUndefined();
+		expect(artifactLinkForTarget("/repo/src/notes.md?from=/artifacts/w/plan.md", workspaces)).toBeUndefined();
+	});
+
+	it("names an artifact whose file name holds a # or ? by its whole name", () => {
+		// A file opener gets file paths (a link's own query and fragment are cut
+		// before its escapes are decoded), and "#" and "?" are file name characters.
+		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/issue #42?.md", "session-1")).toBe("issue #42?.md");
+	});
+
 	it("names a file in one session's artifact directory by its place there", () => {
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/notes/Migration Guide.md", "session-1")).toBe("notes/Migration Guide.md");
 		expect(sessionArtifactPath("/home/coder/.ao/worker/artifacts/session-1/plan.md", "session-1")).toBe("plan.md");
-		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/plan.md?raw", "session-1")).toBe("plan.md");
-		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/plan.md#top", "session-1")).toBe("plan.md");
 		expect(sessionArtifactPath("C:\\ao\\artifacts\\session-1\\report.html", "session-1")).toBe("report.html");
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-2/plan.md", "session-1")).toBeUndefined();
 		expect(sessionArtifactPath("/workspace/repository/artifacts/plan.md", "session-1")).toBeUndefined();
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/../../repository/.env", "session-1")).toBeUndefined();
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/", "session-1")).toBeUndefined();
-		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/?raw", "session-1")).toBeUndefined();
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts//plan.md", "")).toBeUndefined();
 	});
 

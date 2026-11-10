@@ -1862,12 +1862,16 @@ describe("CloudSessionChatSurface", () => {
 		expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: cloudSessionsQueryKey });
 		expect(onOpenFile).not.toHaveBeenCalled();
 
-		// A listed one opens without a read, linked with a query or not.
+		// A listed one opens without a read. (A link's query is cut where the link
+		// is read, in ChatMarkdown; this opener gets file paths.)
 		openFile("/workspace/.ao/worker/artifacts/session-1/plan.md");
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "plan.md", source: "artifact" });
-		openFile("/workspace/.ao/worker/artifacts/session-1/plan.md?raw");
-		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "plan.md", source: "artifact" });
 		expect(invalidate).toHaveBeenCalledTimes(1);
+
+		// "#" and "?" in a file name are part of it.
+		openFile("/workspace/.ao/worker/artifacts/session-1/issue #42?.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "issue #42?.md", source: "artifact" });
+		expect(invalidate).toHaveBeenCalledTimes(2);
 
 		// A session shared with this person is listed with the shared projects.
 		view.rerender(surface({ orgId: "org-1", shared: true }));

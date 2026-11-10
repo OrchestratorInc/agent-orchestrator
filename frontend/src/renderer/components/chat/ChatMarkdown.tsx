@@ -49,7 +49,7 @@ import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
-import { artifactLinkForPath, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
+import { artifactLinkForPath, artifactLinkForTarget, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
 import type { WorkspaceSummary } from "../../types/workspace";
 import {
@@ -428,7 +428,7 @@ function MarkdownLink(props: MarkdownLinkProps) {
  * view cannot read it. Its path actions still name the file linked.
  */
 function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
-	const artifact = artifactLinkForPath(props.href, useChatLinkWorkspaces());
+	const artifact = artifactLinkForTarget(props.href, useChatLinkWorkspaces());
 	return artifact
 		? <MarkdownLinkTarget {...props} href={artifact} menuPath={props.menuPath ?? explicitWorkspaceFilePath(props.href)} />
 		: <MarkdownLinkTarget {...props} />;
@@ -444,8 +444,12 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
 	// An HTML file opens as a page in the Browser, except one in this session's
 	// artifact directory: the file opener shows it in Artifacts, listed or not.
-	const ownArtifact = Boolean(filePath && sessionId && sessionArtifactPath(filePath, sessionId));
-	const openInFiles = filePath && href && (ownArtifact || !/\.html?$/i.test(filePath)) ? workspaceFileOpenTarget(href, filePath) : undefined;
+	// That file is named by the link's own path, never by a workspace file that
+	// shares its name, and the link's query or fragment is cut while the target
+	// is still encoded, so a name's own "#" or "?" (%23, %3F) stays.
+	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
+	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
+	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
@@ -460,7 +464,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			href={href}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
-			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
+			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}
 			menuPath={menuPath ?? (href && (filePath || isPotentialWorkspaceFileLink(href)) ? normalizeWorkspaceFileReference(href) : undefined)}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink

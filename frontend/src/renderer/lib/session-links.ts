@@ -59,32 +59,44 @@ type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifac
 const ARTIFACT_DIRECTORY_MARKER = `/${ARTIFACT_SEGMENT}/`;
 
 /**
- * The forms a file reference can name an artifact by: as written, then with
- * its percent escapes decoded (Markdown encodes a link's target, a space as
- * %20, while a session lists the name as written). Each drops a query or
- * fragment (`?raw`, `#L10`) and uses forward slashes, so a Windows path
- * matches too.
+ * The forms a link target can name an artifact by: as written, then with its
+ * percent escapes decoded (Markdown encodes a link's target, a space as %20,
+ * while a session lists the name as written). Each drops the link's query or
+ * fragment (`?raw`, `#L10`) before decoding, so a name's own "#" or "?"
+ * (%23, %3F) stays, and uses forward slashes, so a Windows path matches too.
  */
-function artifactReferenceForms(value: string): string[] {
+function linkTargetForms(value: string): string[] {
 	const written = value.trim().split(/[?#]/, 1)[0]!;
 	return [...new Set([written, decodePath(written)].map((form) => form.replace(/\\/g, "/")))];
 }
 
-/** True when a file reference has an artifact directory segment, `.../artifacts/...`. */
+/** True when a link target has an artifact directory segment, `.../artifacts/...`. */
 export function hasArtifactDirectorySegment(value: string): boolean {
-	return artifactReferenceForms(value).some((form) => form.includes(ARTIFACT_DIRECTORY_MARKER));
+	return linkTargetForms(value).some((form) => form.includes(ARTIFACT_DIRECTORY_MARKER));
 }
 
 /**
- * The artifact route for text naming a listed session artifact, either as
- * `{session}/{path}` or as a path containing `/artifacts/{session}/{path}`.
+ * The artifact route for a link target naming a listed session artifact, as
+ * `{session}/{path}` or as a path containing `/artifacts/{session}/{path}`,
+ * read as a link: without its query or fragment, as written or decoded.
  */
-export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
-	for (const form of artifactReferenceForms(value)) {
+export function artifactLinkForTarget(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
+	for (const form of linkTargetForms(value)) {
 		const link = listedArtifactLink(form, workspaces);
 		if (link) return link;
 	}
 	return undefined;
+}
+
+/**
+ * The artifact route for text naming a listed session artifact (inline code,
+ * a worker report's artifact line), either as `{session}/{path}` or as a path
+ * containing `/artifacts/{session}/{path}`. The text is a file path, where
+ * "#" and "?" are part of the name, so it is matched as written first; then as
+ * a link target, for a line or query written after it.
+ */
+export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
+	return listedArtifactLink(value.trim().replace(/\\/g, "/"), workspaces) ?? artifactLinkForTarget(value, workspaces);
 }
 
 function listedArtifactLink(normalized: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
@@ -107,12 +119,13 @@ function listedArtifactLink(normalized: string, workspaces: ArtifactPathWorkspac
 
 /**
  * A file path's place in one session's artifact directory (the worker writes
- * a session's artifacts under `.../artifacts/{session}/`), without a query or
- * fragment. Undefined for any other path, and for one that steps out of the
- * directory.
+ * a session's artifacts under `.../artifacts/{session}/`). Undefined for any
+ * other path, and for one that steps out of the directory. The path is a file
+ * path, not a link: "#" and "?" are part of the name, so a link's query or
+ * fragment is cut before its escapes are decoded, by whoever reads the link.
  */
 export function sessionArtifactPath(path: string, sessionId: string): string | undefined {
-	const normalized = path.trim().split(/[?#]/, 1)[0]!.replace(/\\/g, "/");
+	const normalized = path.trim().replace(/\\/g, "/");
 	const marker = `${ARTIFACT_DIRECTORY_MARKER}${sessionId}/`;
 	const index = normalized.indexOf(marker);
 	if (!sessionId || index < 0) return undefined;
