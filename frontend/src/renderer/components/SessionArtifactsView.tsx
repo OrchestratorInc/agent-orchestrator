@@ -939,7 +939,14 @@ export function SessionArtifactsView({
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
 				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
-			{artifacts.length === 0 ? (
+			{/* A file opened by its path (a chat link to one the agent just wrote)
+			    shows once the session lists it; until then, say so rather than
+			    leave the gallery as if nothing was asked. */}
+			{selectedPath ? (
+				<PanelMessage action={<Button onClick={() => setSelectedPath(null)} size="sm" type="button" variant="secondary">{t("artifacts.back")}</Button>}>
+					{t("artifacts.notListedYet", { name: selectedPath })}
+				</PanelMessage>
+			) : artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
 				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">

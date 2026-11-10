@@ -1,5 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
@@ -19,10 +21,20 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 	},
 }));
 
-const linkSource = vi.hoisted(() => ({ workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
-vi.mock("../../lib/use-session-link-navigation", () => ({
-	useSessionLinkSource: () => ({ ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces }),
-}));
+const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
+// Like the real source, this reads through the query client, so a render
+// without one fails here as it would in the app.
+vi.mock("../../lib/use-session-link-navigation", async () => {
+	const { useQueryClient } = await import("@tanstack/react-query");
+	return {
+		useSessionLinkSource: () => {
+			useQueryClient();
+			linkSource.reads += 1;
+			// A real source with no data answers a fresh [] on every render.
+			return { ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces.length > 0 ? linkSource.workspaces : [] };
+		},
+	};
+});
 
 // Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
 // let MermaidBlock.test.tsx own the block's states.
@@ -33,7 +45,15 @@ vi.mock("../../lib/mermaid-diagram", () => ({
 
 beforeEach(() => {
 	vi.mocked(renderMermaidDiagram).mockClear();
+	linkSource.workspaces = [];
+	linkSource.reads = 0;
 });
+
+/** Render inside a query client, which a chat's link workspaces are read through. */
+function renderWithQueries(ui: ReactElement) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(ui, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+}
 
 // The point of these is that the SYNTAX stops being visible. Every case here is a
 // shape agents actually emit, and the assertion is that structure replaced markup.
@@ -52,7 +72,7 @@ function renderWithLinkHandler(
 }
 
 function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: string) => void) {
-	return render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
+	return renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
 }
 
 describe("ChatMarkdown", () => {
@@ -513,7 +533,7 @@ describe("ChatMarkdown", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "conductor-migration-guide.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
 			<ChatMarkdown text="See the [migration guide](/workspace/.ao/worker/artifacts/worker-1/conductor-migration-guide.md)." />
 		</ChatLinkProvider>);
 		const link = screen.getByRole("link", { name: "migration guide" });
@@ -530,7 +550,7 @@ describe("ChatMarkdown", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "Migration Guide.md" }, { path: "notes/résumé.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={onFileOpen}>
 			<ChatMarkdown text="[guide](</workspace/.ao/worker/artifacts/worker-1/Migration Guide.md>) and [cv](/workspace/.ao/worker/artifacts/worker-1/notes/résumé.md)" />
 		</ChatLinkProvider>);
 		expect(screen.getByRole("link", { name: "guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/Migration%20Guide.md");
@@ -544,7 +564,7 @@ describe("ChatMarkdown", () => {
 		// A file literally named "50%25-done.md": Markdown keeps a valid escape as
 		// written, so the target matches as it is, before any decoding.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "50%25-done.md" }] }] }];
-		render(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
 			<ChatMarkdown text="[half](/workspace/.ao/worker/artifacts/worker-1/50%25-done.md)" />
 		</ChatLinkProvider>);
 		expect(screen.getByRole("link", { name: "half" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/50%2525-done.md");
@@ -553,7 +573,7 @@ describe("ChatMarkdown", () => {
 	it("leaves a Markdown link to an unlisted artifact path as a file link", async () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={vi.fn()}>
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onFileOpen={vi.fn()}>
 			<ChatMarkdown text="[other](/workspace/.ao/worker/artifacts/worker-1/other.md)" />
 		</ChatLinkProvider>);
 		expect(screen.getByRole("link", { name: "other" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/other.md");
@@ -564,12 +584,104 @@ describe("ChatMarkdown", () => {
 		// Automation reports, review comments and other agents' messages link only
 		// what they wrote as an ao:// link; their file links stay text.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
-		const { container } = render(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
 			<ChatMarkdown safeOrigin text="[Approve deployment](/workspace/.ao/worker/artifacts/worker-1/guide.md) or [the guide](ao://sessions/project/worker-1/artifacts/guide.md)" />
 		</ChatLinkProvider>);
 		expect(container).toHaveTextContent("Approve deployment or the guide");
 		expect(screen.queryByRole("link", { name: "Approve deployment" })).not.toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "the guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/guide.md");
+	});
+
+	it("opens a listed artifact's file linked with a line, a query or a Windows path as that artifact", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown text={"[line](/workspace/.ao/worker/artifacts/worker-1/plan.md#L10), [raw](/workspace/.ao/worker/artifacts/worker-1/plan.md?raw) and [windows](C:\\ao\\artifacts\\worker-1\\plan.md)"} />
+		</ChatLinkProvider>);
+		for (const name of ["line", "raw", "windows"]) {
+			expect(screen.getByRole("link", { name })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+		}
+	});
+
+	it("keeps the linked file's path actions on a link opened as an artifact", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		try {
+			renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+				<ChatMarkdown text="[the guide](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+			</ChatLinkProvider>);
+			const link = screen.getByRole("link", { name: "the guide" });
+			expect(link).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/guide.md");
+			fireEvent.contextMenu(link);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		} finally {
+			copy.mockRestore();
+		}
+	});
+
+	it("keeps a listed artifact's file link a file link in a chat that cannot open artifact links", async () => {
+		// A new chat or a starting orchestrator has no session link handler: an
+		// artifact link there would do nothing when clicked.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider onFileOpen={onFileOpen}>
+			<ChatMarkdown text="[the guide](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+		</ChatLinkProvider>);
+		const link = screen.getByRole("link", { name: "the guide" });
+		expect(link).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		await userEvent.click(link);
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/worker-1/guide.md");
+	});
+
+	it("renders a link to an artifact's file without a query client, as a file link", () => {
+		// An isolated tree (a test, another root) has no query client to read
+		// the session list with; the link stays what it was written as.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		render(<>
+			<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+				<ChatMarkdown text="[in a chat](/workspace/.ao/worker/artifacts/worker-1/guide.md) and `worker-1/guide.md`" />
+			</ChatLinkProvider>
+			<ChatMarkdown text="[on its own](/workspace/.ao/worker/artifacts/worker-1/guide.md)" />
+		</>);
+		expect(screen.getByRole("link", { name: "in a chat" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+		expect(screen.getByRole("link", { name: "on its own" })).toHaveAttribute("href", "/workspace/.ao/worker/artifacts/worker-1/guide.md");
+	});
+
+	it("reads the chat's link workspaces once for all its links, and not at all without one", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "a.md" }, { path: "b.md" }, { path: "c.md" }] }] }];
+		const link = (name: string) => `[${name}](/workspace/.ao/worker/artifacts/worker-1/${name}.md)`;
+		const chat = (text: string) => <ChatLinkProvider onSessionLinkOpen={vi.fn()}><ChatMarkdown text={text} /></ChatLinkProvider>;
+		const plain = renderWithQueries(chat("No links here."));
+		expect(linkSource.reads).toBe(0);
+		plain.unmount();
+
+		const one = renderWithQueries(chat(link("a")));
+		expect(screen.getByRole("link", { name: "a" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/a.md");
+		const readsForOne = linkSource.reads;
+		one.unmount();
+		linkSource.reads = 0;
+		renderWithQueries(chat(`${link("a")}, ${link("b")} and ${link("c")}`));
+		expect(screen.getByRole("link", { name: "c" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/c.md");
+		expect(linkSource.reads).toBe(readsForOne);
+	});
+
+	it("opens a file in this session's artifact directory with the file opener, an HTML page too", async () => {
+		// The file opener shows it in Artifacts, listed or not; the Browser
+		// cannot show a Cloud sandbox file, so the click would do nothing.
+		const onLinkOpen = vi.fn();
+		const onFileOpen = vi.fn();
+		renderWithQueries(<ChatLinkProvider sessionId="s1" onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown text="[report](/workspace/.ao/worker/artifacts/s1/report.html), [plan](/workspace/.ao/worker/artifacts/s1/plan.md?raw) and [site](/workspace/repository/site/index.html)" />
+		</ChatLinkProvider>);
+		await userEvent.click(screen.getByRole("link", { name: "report" }));
+		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/workspace/.ao/worker/artifacts/s1/report.html");
+		expect(onLinkOpen).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("link", { name: "plan" }));
+		expect(onFileOpen).toHaveBeenLastCalledWith("/workspace/.ao/worker/artifacts/s1/plan.md?raw");
+		// Any other HTML file still opens as a page.
+		await userEvent.click(screen.getByRole("link", { name: "site" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("/workspace/repository/site/index.html");
+		expect(onFileOpen).toHaveBeenCalledTimes(2);
 	});
 
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
@@ -601,7 +713,7 @@ describe("ChatMarkdown", () => {
 			body: "Finished planning\nartifact: plan.md", createdAt: "2026-10-28T12:00:00Z",
 		}]} /></ChatLinkProvider>;
 		try {
-			const view = render(report());
+			const view = renderWithQueries(report());
 			expect(screen.getByRole("link", { name: "plan.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
 			linkSource.workspaces = [];
 			view.rerender(report());

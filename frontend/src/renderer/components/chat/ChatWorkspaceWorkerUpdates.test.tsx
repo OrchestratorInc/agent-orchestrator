@@ -10,7 +10,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
-import { useChatLinkWorkspaces } from "./ChatMarkdown";
+import { ChatLinkProvider, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { usePlainReferences } from "./WorkerUpdates";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
@@ -287,7 +287,8 @@ describe("agent messages in a worker chat", () => {
 	it("shares one plugin list until the set of sessions changes, so session events do not re-parse messages", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(workspaceQueryKey, workspaces);
-		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		// A chat reads its link workspaces once, in its link provider.
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}><ChatLinkProvider>{children}</ChatLinkProvider></QueryClientProvider>;
 		const { result } = renderHook(() => ({ plugins: usePlainReferences(), workspaces: useChatLinkWorkspaces() }), { wrapper });
 		const first = result.current.plugins;
 		expect(renderHook(usePlainReferences, { wrapper }).result.current).toBe(first);

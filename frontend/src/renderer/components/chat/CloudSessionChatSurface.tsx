@@ -15,6 +15,7 @@ import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
 import { useUiStore } from "../../stores/ui-store";
+import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
@@ -978,20 +979,6 @@ export async function cloudWorkspaceFilePath(
 	return candidates.sort((a, b) => b.length - a.length)[0];
 }
 
-/**
- * The artifact a sandbox path names: the worker writes a session's artifacts
- * under .../artifacts/<session>/, outside the checkout, so the path is the
- * file's place in that directory. Undefined for any other path, and for one
- * that steps out of the directory.
- */
-export function cloudSessionArtifactPath(path: string, sessionId: string): string | undefined {
-	const marker = `/artifacts/${sessionId}/`;
-	const index = path.indexOf(marker);
-	if (index < 0) return undefined;
-	const artifact = path.slice(index + marker.length);
-	return artifact.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..") ? artifact : undefined;
-}
-
 function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
 }
@@ -1618,7 +1605,7 @@ export function CloudSessionChatSurface({
 	// is read again now rather than at its next poll.
 	const openFileFromChat = useCallback((path: string) => {
 		if (!onOpenFile) return;
-		const artifact = cloudSessionArtifactPath(path, session.id);
+		const artifact = sessionArtifactPath(path, session.id);
 		if (artifact) {
 			if (!session.artifactFiles?.some((file) => file.path === artifact)) {
 				void queryClient.invalidateQueries({ queryKey: cloud?.shared ? sharedCloudWorkspacesQueryKey : cloudSessionsQueryKey });

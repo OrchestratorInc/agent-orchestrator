@@ -1735,6 +1735,7 @@
 	"shell.moreArtifacts": "他 {{count}} 件",
 	"shell.openArtifactsInInspector": "インスペクターで開く",
 	"artifacts.sessionEmpty": "このセッションにはまだアーティファクトがありません。",
+	"artifacts.notListedYet": "{{name}} はまだこのセッションのアーティファクトにありません。セッションに表示されると、ここで開きます。",
 	"artifacts.unavailable": "このファイルは利用できなくなりました。",
 	"artifacts.accessError": "このセッションのアーティファクトを読み込めませんでした。もう一度お試しください。",
 	"artifacts.back": "アーティファクトに戻る",

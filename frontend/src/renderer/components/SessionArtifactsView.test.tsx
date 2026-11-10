@@ -662,6 +662,25 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: /^notes\.md/ })).toBeInTheDocument();
 	});
 
+	it("says a requested file is not listed yet, and opens it once the session lists it", () => {
+		// A chat link to a file the agent just wrote opens Artifacts before the
+		// session's list has it.
+		const request = { key: 1, path: "notes/fresh.md" };
+		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
+		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+
+		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+	});
+
+	it("returns to the gallery from a requested file that is not listed", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "missing.md" }} session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^notes\.md/ })).toBeInTheDocument();
+	});
+
 	it("opens a file card directly in the artifact viewer", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));

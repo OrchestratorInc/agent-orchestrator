@@ -1719,6 +1719,7 @@
 	"shell.moreArtifacts": "另外 {{count}} 个",
 	"shell.openArtifactsInInspector": "在检查器中打开",
 	"artifacts.sessionEmpty": "此会话还没有产物。",
+	"artifacts.notListedYet": "{{name}} 还不在此会话的产物中。会话列出后会在这里打开。",
 	"artifacts.unavailable": "此文件已不可用。",
 	"artifacts.accessError": "无法加载此会话的产物，请重试。",
 	"artifacts.back": "返回产物",
