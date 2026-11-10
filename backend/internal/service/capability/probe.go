@@ -116,6 +116,16 @@ func (p *ChatDriverProbe) ProbeCapabilities(
 		return snapshot, nil
 	}
 
+	if request.Mode == domain.SessionModeTUI {
+		// A terminal launch runs the harness's own CLI; it never opens a chat
+		// controller, so a handshake would be both irrelevant and a side effect
+		// nobody asked for (it starts a provider process). The installation and
+		// credential facts above are the whole observation, and every chat feature
+		// stays unknown because nothing negotiated one.
+		snapshot.ReasonCode = ports.CapabilityReasonNotProbed
+		return snapshot, nil
+	}
+
 	driver, err := p.driver(request.Harness)
 	if err != nil {
 		// No driver is not a negative capability claim: the harness has no chat driver

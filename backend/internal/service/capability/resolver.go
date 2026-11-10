@@ -211,7 +211,13 @@ func (r *Resolver) observe(
 		// controller that could not report its generation) is a refusal, not an observation.
 		// Storing it would overwrite the harness row with cleared features — turning one
 		// unanswered session question into lost harness evidence — so it is not recorded.
-		if r.recorder != nil && request.Profile == "" && snapshot.Profile == "" && (!request.SessionScoped() || snapshot.SessionScoped()) {
+		//
+		// A TUI-shaped request is the same kind of narrowing: it deliberately skips the
+		// handshake, so its all-unknown feature set describes less than the harness row
+		// already holds. Recording it would downgrade that evidence, so it is not recorded
+		// either; the durable row stays the last full observation.
+		recordable := request.Mode != domain.SessionModeTUI
+		if r.recorder != nil && recordable && request.Profile == "" && snapshot.Profile == "" && (!request.SessionScoped() || snapshot.SessionScoped()) {
 			// Recording is best effort: losing the memo must not fail a live read,
 			// because the evidence in hand is still valid.
 			_ = r.recorder.RecordCapabilities(ctx, snapshot)

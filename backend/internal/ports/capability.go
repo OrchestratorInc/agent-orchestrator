@@ -89,6 +89,12 @@ type CapabilityProbeRequest struct {
 	Profile    string
 	Model      string
 	Effort     string
+	// Mode names the launch being authorized, so a probe can observe the facts
+	// that launch actually depends on. An empty Mode asks the general
+	// (Chat-shaped) question. A TUI launch must not be gated on a provider
+	// handshake it will never use, and its observation must not overwrite the
+	// handshake evidence a later Chat launch relies on.
+	Mode domain.SessionMode
 }
 
 // SessionScoped reports whether the request asks about one specific session.

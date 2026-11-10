@@ -393,7 +393,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if cfg.ProjectID == "" && cfg.Kind != domain.KindWorker {
 		return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_WORKER_REQUIRED", "Standalone sessions must be workers", nil)
 	}
-	if cfg.Kind == domain.KindOrchestrator {
+	if cfg.Kind == domain.KindOrchestrator && !cfg.IndependentOrchestrator {
 		cfg.Async = true
 		unlock := s.lockOrchestratorProject(cfg.ProjectID)
 		defer unlock()
@@ -851,9 +851,17 @@ func (s *Service) SpawnOrchestrator(
 	return sess, nil
 }
 
+// activeOrchestrators 只选择主编排器，保证旧入口的复用和替换不影响独立会话。
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {
 	active := true
-	return s.List(ctx, ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+	sessions, err := s.List(ctx, ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+	primary := sessions[:0]
+	for _, sess := range sessions {
+		if !sess.IndependentOrchestrator {
+			primary = append(primary, sess)
+		}
+	}
+	return primary, err
 }
 
 const orchestratorRetireNotice = "AO is replacing this project orchestrator. Stop coordinating new work now; a fresh orchestrator will take over in a new workspace."
@@ -1316,7 +1324,7 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	if !ok {
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
-	if rec.Kind == domain.KindOrchestrator {
+	if rec.Kind == domain.KindOrchestrator && !rec.IndependentOrchestrator {
 		return apierr.Invalid("ORCHESTRATOR_RENAME_UNSUPPORTED", "The project orchestrator cannot be renamed", nil)
 	}
 	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
@@ -1772,6 +1780,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var capabilityRefusal *domain.CapabilityRefusal
 	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
@@ -1951,6 +1960,19 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.As(err, &capabilityRefusal):
+		// The refusal names the exact fact that was missing. Reporting it as a
+		// generic internal failure hid the difference between "the provider is not
+		// signed in" and "this daemon never probed it". The refusal stays in the
+		// cause chain so errors.Is still matches the domain sentinel.
+		mapped := apierr.Conflict("CAPABILITY_EVIDENCE_INSUFFICIENT",
+			"Insufficient capability evidence to start this session: "+capabilityRefusal.Error(),
+			map[string]any{
+				"reason":         capabilityRefusal.Code,
+				"observedReason": capabilityRefusal.ObservedReasonCode,
+			})
+		mapped.Cause = err
+		return mapped
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -1976,6 +1998,13 @@ func toSpawnAPIError(err error) error {
 	var already *apierr.Error
 	if errors.As(err, &already) {
 		return already
+	}
+	// A capability refusal is more specific than the spawn stage that wrapped it:
+	// the manager reports it as "spawn: create: ...", so classifying by stage first
+	// would collapse it back into an unexplained internal failure.
+	var capabilityRefusal *domain.CapabilityRefusal
+	if errors.As(err, &capabilityRefusal) {
+		return toAPIError(err)
 	}
 	if mapped := toAPIError(err); !errors.Is(mapped, err) {
 		return mapped

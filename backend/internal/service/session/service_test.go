@@ -6540,3 +6540,40 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 		t.Fatalf("failed delete err = %v, want it reported", err)
 	}
 }
+
+// TestToAPIErrorNamesTheCapabilityFactThatWasMissing pins the diagnostic half of
+// the TUI admission fix: the refusal used to reach the client as an opaque 500
+// "spawn: create: capability evidence is insufficient ...", which hid whether the
+// provider was not signed in, not installed, or simply never probed.
+func TestToAPIErrorNamesTheCapabilityFactThatWasMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		refusal  *domain.CapabilityRefusal
+		wantCode string
+	}{
+		{"surface never observed", &domain.CapabilityRefusal{Code: domain.LaunchRefusalSurfaceNotObserved, ObservedReasonCode: ports.CapabilityReasonNotProbed}, domain.LaunchRefusalSurfaceNotObserved},
+		{"credential unverified", &domain.CapabilityRefusal{Code: domain.LaunchRefusalAuthUnverified, ObservedReasonCode: ports.CapabilityReasonAuthUnverified}, domain.LaunchRefusalAuthUnverified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The spawn stage prefix the manager adds must not change the classification.
+			err := fmt.Errorf("spawn: create: %w", tc.refusal)
+			mapped := toSpawnAPIError(err)
+			var apiErr *apierr.Error
+			if !errors.As(mapped, &apiErr) {
+				t.Fatalf("mapped = %v, want a structured API error", mapped)
+			}
+			if apiErr.Kind != apierr.KindConflict || apiErr.Code != "CAPABILITY_EVIDENCE_INSUFFICIENT" {
+				t.Fatalf("mapped = %s/%v, want conflict CAPABILITY_EVIDENCE_INSUFFICIENT", apiErr.Code, apiErr.Kind)
+			}
+			if apiErr.Details["reason"] != tc.wantCode {
+				t.Fatalf("details.reason = %v, want %q", apiErr.Details["reason"], tc.wantCode)
+			}
+			if apiErr.Details["observedReason"] != tc.refusal.ObservedReasonCode {
+				t.Fatalf("details.observedReason = %v, want the probe's own reason", apiErr.Details["observedReason"])
+			}
+			if !errors.Is(mapped, domain.ErrCapabilityEvidenceInsufficient) {
+				t.Fatal("the sentinel must survive the mapping")
+			}
+		})
+	}
+}

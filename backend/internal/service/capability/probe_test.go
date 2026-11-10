@@ -681,3 +681,49 @@ func TestResolverAcceptsTheProbeAndGatesOnIt(t *testing.T) {
 		t.Fatalf("an unadvertised feature was authorized: %+v", unknown)
 	}
 }
+
+// TestChatDriverProbeTUIReportsInstallationWithoutAHandshake pins the other half
+// of the TUI admission defect: a terminal launch never opens a chat controller, so
+// the probe must answer from the install facts and must not start a provider.
+func TestChatDriverProbeTUIReportsInstallationWithoutAHandshake(t *testing.T) {
+	readiness := &fakeReadiness{
+		installation:   domain.AgentInstallationInstalled,
+		authentication: domain.AgentAuthenticationAuthorized,
+	}
+	driver := &fakeDriver{harness: domain.HarnessCodex, caps: ports.ChatCapabilities{
+		ports.ChatCapabilityStreaming: true,
+	}}
+	registry := &fakeRegistry{drivers: map[domain.AgentHarness]ports.ChatDriver{
+		domain.HarnessCodex: driver,
+	}}
+	probe := NewChatDriverProbe(nil, registry, readiness, func() time.Time { return probeNow }, time.Minute)
+
+	snapshot, err := probe.ProbeCapabilities(context.Background(), ports.CapabilityProbeRequest{
+		Harness: domain.HarnessCodex,
+		Mode:    domain.SessionModeTUI,
+	})
+	if err != nil {
+		t.Fatalf("ProbeCapabilities: %v", err)
+	}
+	if driver.calls != 0 {
+		t.Fatalf("a terminal launch probed the chat driver %d times", driver.calls)
+	}
+	if snapshot.Source != domain.CapabilitySourceLocalProbe {
+		t.Fatalf("source = %q, want local_probe for a terminal launch", snapshot.Source)
+	}
+	if snapshot.Readiness != domain.CapabilityReady || snapshot.AuthState != domain.AgentAuthenticationAuthorized {
+		t.Fatalf("readiness/auth = %q/%q, want the observed install facts", snapshot.Readiness, snapshot.AuthState)
+	}
+	if snapshot.Surfaces != domain.CapabilitySurfaceUnknown {
+		t.Fatalf("surfaces = %q, want unknown: nothing was negotiated", snapshot.Surfaces)
+	}
+	if snapshot.Streaming != domain.CapabilityStateUnknown {
+		t.Fatalf("streaming = %q, want unknown for a terminal launch", snapshot.Streaming)
+	}
+	if err := domain.AuthorizeLaunch(snapshot, domain.HarnessCodex, domain.SessionModeTUI, probeNow); err != nil {
+		t.Fatalf("terminal launch must be authorized by install facts alone: %v", err)
+	}
+	if err := domain.AuthorizeLaunch(snapshot, domain.HarnessCodex, domain.SessionModeChat, probeNow); err == nil {
+		t.Fatal("the same evidence must not authorize a chat launch")
+	}
+}

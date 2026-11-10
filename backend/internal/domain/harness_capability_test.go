@@ -387,3 +387,143 @@ func TestCapabilityModelChoiceValidate(t *testing.T) {
 		})
 	}
 }
+
+// launchFixture is an admissible Chat observation for Codex, and each test below
+// removes exactly the one fact it is about.
+func launchFixture(now time.Time) HarnessCapabilitySnapshot {
+	snapshot := NewHarnessCapabilitySnapshot(HarnessCodex, CapabilitySourceProviderHandshake, now, time.Minute)
+	snapshot.AuthState = AgentAuthenticationAuthorized
+	snapshot.Readiness = CapabilityReady
+	snapshot.Surfaces = CapabilitySurfaceChat
+	return snapshot
+}
+
+// TestAuthorizeLaunchChatNeedsAHandshake covers the Chat rule: a provider
+// handshake that observed the chat surface, plus a usable credential.
+func TestAuthorizeLaunchChatNeedsAHandshake(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		mutate func(*HarnessCapabilitySnapshot)
+		want   string
+	}{
+		{"admissible", func(*HarnessCapabilitySnapshot) {}, ""},
+		{"confirmed runtime", func(s *HarnessCapabilitySnapshot) {
+			s.Source = CapabilitySourceConfirmedRuntime
+		}, ""},
+		{"static reading", func(s *HarnessCapabilitySnapshot) { s.Source = CapabilitySourceStatic }, LaunchRefusalStaticEvidence},
+		{"local probe only", func(s *HarnessCapabilitySnapshot) {
+			s.Source = CapabilitySourceLocalProbe
+		}, LaunchRefusalStaticEvidence},
+		{"no observed surface", func(s *HarnessCapabilitySnapshot) {
+			s.Surfaces = CapabilitySurfaceUnknown
+		}, LaunchRefusalSurfaceNotObserved},
+		{"terminal surface only", func(s *HarnessCapabilitySnapshot) {
+			s.Surfaces = CapabilitySurfaceTUI
+		}, LaunchRefusalSurfaceNotObserved},
+		{"blocked binary", func(s *HarnessCapabilitySnapshot) {
+			s.Readiness = CapabilityBlockedBinary
+		}, LaunchRefusalNotReady},
+		{"credential unverified", func(s *HarnessCapabilitySnapshot) {
+			s.AuthState = AgentAuthenticationConfigured
+		}, LaunchRefusalAuthUnverified},
+		{"credential rejected", func(s *HarnessCapabilitySnapshot) {
+			s.AuthState = AgentAuthenticationUnauthorized
+		}, LaunchRefusalAuthUnverified},
+		{"expired", func(s *HarnessCapabilitySnapshot) {
+			s.ObservedAt = now.Add(-2 * time.Hour)
+			s.ExpiresAt = now.Add(-time.Hour)
+		}, LaunchRefusalEvidenceExpired},
+		{"observed in the future", func(s *HarnessCapabilitySnapshot) {
+			s.ObservedAt = now.Add(time.Minute)
+			s.ExpiresAt = now.Add(time.Hour)
+		}, LaunchRefusalEvidenceFromFuture},
+		{"another harness", func(s *HarnessCapabilitySnapshot) { s.Harness = HarnessClaudeCode }, LaunchRefusalHarnessMismatch},
+		{"session scoped", func(s *HarnessCapabilitySnapshot) {
+			s.ObservedSessionID = "p1-1"
+			s.Generation = "gen-1"
+		}, LaunchRefusalSessionScoped},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			snapshot := launchFixture(now)
+			tt.mutate(&snapshot)
+			err := AuthorizeLaunch(snapshot, HarnessCodex, SessionModeChat, now)
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("AuthorizeLaunch() = %v, want nil", err)
+				}
+				return
+			}
+			var refusal *CapabilityRefusal
+			if !errors.As(err, &refusal) || refusal.Code != tt.want {
+				t.Fatalf("AuthorizeLaunch() = %v, want refusal %q", err, tt.want)
+			}
+			if !errors.Is(err, ErrCapabilityEvidenceInsufficient) {
+				t.Fatalf("refusal %q must still match the sentinel", refusal.Code)
+			}
+		})
+	}
+}
+
+// TestAuthorizeLaunchTUIReadsInstallationNotAHandshake pins the defect this rule
+// fixes: no probe reports a terminal surface, so requiring one refused every TUI
+// launch. A local probe that observed a working install is the whole of what a
+// terminal launch needs.
+func TestAuthorizeLaunchTUIReadsInstallationNotAHandshake(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	local := NewHarnessCapabilitySnapshot(HarnessClaudeCode, CapabilitySourceLocalProbe, now, time.Minute)
+	local.AuthState = AgentAuthenticationAuthorized
+	local.Readiness = CapabilityReady
+	local.Surfaces = CapabilitySurfaceUnknown
+	if err := AuthorizeLaunch(local, HarnessClaudeCode, SessionModeTUI, now); err != nil {
+		t.Fatalf("a locally probed, authorized install must authorize a TUI launch: %v", err)
+	}
+	// The same evidence cannot authorize a Chat launch: nothing negotiated one.
+	if err := AuthorizeLaunch(local, HarnessClaudeCode, SessionModeChat, now); err == nil {
+		t.Fatal("local probe evidence must not authorize a Chat launch")
+	}
+	// Static reading still authorizes nothing.
+	static := local
+	static.Source = CapabilitySourceStatic
+	if err := AuthorizeLaunch(static, HarnessClaudeCode, SessionModeTUI, now); err == nil {
+		t.Fatal("static reading must not authorize a TUI launch")
+	}
+	// A terminal launch still needs a credential it could actually use.
+	unverified := local
+	unverified.AuthState = AgentAuthenticationConfigured
+	if err := AuthorizeLaunch(unverified, HarnessClaudeCode, SessionModeTUI, now); err == nil {
+		t.Fatal("an unverified credential must not authorize a terminal launch")
+	}
+}
+
+// TestAuthorizeLaunchForProfileRefusesAnUnobservedRoute covers the profile rule:
+// a profile carries its own credential, so an observation of another route cannot
+// authorize the launch.
+func TestAuthorizeLaunchForProfileRefusesAnUnobservedRoute(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	snapshot := launchFixture(now)
+	snapshot.Profile = "profile/default"
+	if err := AuthorizeLaunchForProfile(snapshot, HarnessCodex, "profile/default", SessionModeChat, now); err != nil {
+		t.Fatalf("matching profile: %v", err)
+	}
+	var refusal *CapabilityRefusal
+	if err := AuthorizeLaunchForProfile(snapshot, HarnessCodex, "profile/other", SessionModeChat, now); !errors.As(err, &refusal) || refusal.Code != LaunchRefusalProfileMismatch {
+		t.Fatalf("mismatched profile = %v, want %q", err, LaunchRefusalProfileMismatch)
+	}
+}
+
+// TestAuthorizeLaunchRejectsAnUnknownMode keeps a zero mode from silently passing
+// the mode switch, which would authorize a launch nobody described.
+func TestAuthorizeLaunchRejectsAnUnknownMode(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	var refusal *CapabilityRefusal
+	if err := AuthorizeLaunch(launchFixture(now), HarnessCodex, SessionMode(""), now); !errors.As(err, &refusal) || refusal.Code != LaunchRefusalInvalidEvidence {
+		t.Fatalf("empty mode = %v, want %q", err, LaunchRefusalInvalidEvidence)
+	}
+}

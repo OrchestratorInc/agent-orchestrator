@@ -470,6 +470,150 @@ func (s HarnessCapabilitySnapshot) Gates(feature CapabilityFeature) bool {
 	return s.Source.AllowsSessionGating() && feature.Valid()
 }
 
+// Offers reports whether this surface observation may authorize the given mode.
+// Both covers a harness observed to answer on either interface.
+func (s CapabilitySurface) Offers(mode SessionMode) bool {
+	switch mode {
+	case SessionModeChat:
+		return s == CapabilitySurfaceChat || s == CapabilitySurfaceBoth
+	case SessionModeTUI:
+		return s == CapabilitySurfaceTUI || s == CapabilitySurfaceBoth
+	default:
+		return false
+	}
+}
+
+// Launch refusal codes. They are wire-visible so a client can tell "the provider
+// is signed out" from "nobody ever asked", and they are stable identifiers rather
+// than prose.
+const (
+	// LaunchRefusalInvalidEvidence means the snapshot itself is malformed.
+	LaunchRefusalInvalidEvidence = "invalid_evidence"
+	// LaunchRefusalHarnessMismatch means the evidence describes another harness.
+	LaunchRefusalHarnessMismatch = "harness_mismatch"
+	// LaunchRefusalProfileMismatch means the evidence describes another provider
+	// profile, whose credential and routing were never observed.
+	LaunchRefusalProfileMismatch = "profile_mismatch"
+	// LaunchRefusalEvidenceFromFuture means the observation is stamped after now,
+	// so it cannot be a measurement of the present.
+	LaunchRefusalEvidenceFromFuture = "evidence_from_future"
+	// LaunchRefusalEvidenceExpired means the observation is past its TTL.
+	LaunchRefusalEvidenceExpired = "evidence_expired"
+	// LaunchRefusalSessionScoped means a harness-level launch was answered with a
+	// per-session observation, which cannot authorize a new session.
+	LaunchRefusalSessionScoped = "session_scoped_evidence"
+	// LaunchRefusalStaticEvidence means only source reading backs the decision.
+	LaunchRefusalStaticEvidence = "static_evidence"
+	// LaunchRefusalNotReady means installation/authentication is not usable.
+	LaunchRefusalNotReady = "capability_not_ready"
+	// LaunchRefusalAuthUnverified means a credential exists but was never proven.
+	LaunchRefusalAuthUnverified = "capability_auth_unverified"
+	// LaunchRefusalSurfaceNotObserved means the mode's interaction surface was
+	// never observed for this harness.
+	LaunchRefusalSurfaceNotObserved = "surface_not_observed"
+)
+
+// CapabilityRefusal explains why launch evidence was insufficient. It wraps
+// ErrCapabilityEvidenceInsufficient so existing errors.Is callers keep working,
+// while carrying the specific reason a user or log can act on.
+type CapabilityRefusal struct {
+	Code string
+	// ObservedReasonCode is the snapshot's own explanation (for example
+	// probe_auth_unverified), preserved so the refusal never hides the probe's
+	// verdict behind a generic message.
+	ObservedReasonCode string
+}
+
+// Error renders the refusal without leaking anything beyond enum values.
+func (r *CapabilityRefusal) Error() string {
+	if r == nil {
+		return ErrCapabilityEvidenceInsufficient.Error()
+	}
+	if r.ObservedReasonCode != "" {
+		return ErrCapabilityEvidenceInsufficient.Error() + ": " + r.Code + " (" + r.ObservedReasonCode + ")"
+	}
+	return ErrCapabilityEvidenceInsufficient.Error() + ": " + r.Code
+}
+
+// Unwrap keeps the sentinel in the chain for errors.Is.
+func (r *CapabilityRefusal) Unwrap() error { return ErrCapabilityEvidenceInsufficient }
+
+// AuthorizeLaunch is the single launch-admission rule shared by the scheduler
+// service and the store transaction. The store re-runs it deliberately: the
+// service is trusted, but a decision that authorizes work is re-derived from the
+// untrusted-by-construction evidence it persists.
+//
+// # Why the mode matters
+//
+// A Chat launch is authorized by a provider handshake, which is exactly what a
+// chat driver can prove. A TUI launch runs the harness's own terminal, so the
+// only evidence that speaks to it is local installation and authentication: no
+// probe reports a terminal surface, and demanding one made every TUI spawn
+// impossible. The two modes therefore read different facts out of one snapshot;
+// neither may borrow the other's.
+func AuthorizeLaunch(snapshot HarnessCapabilitySnapshot, harness AgentHarness, mode SessionMode, now time.Time) error {
+	return authorizeLaunch(snapshot, harness, "", mode, now, false)
+}
+
+// AuthorizeLaunchForProfile is AuthorizeLaunch with an explicit provider profile.
+// The profile must match the observation exactly, because a profile carries its
+// own credential and routing: a mismatch would authorize work on a route nobody
+// observed. Callers that cannot name the expected profile use AuthorizeLaunch and
+// check profile identity themselves against the trustworthy source (the task row).
+func AuthorizeLaunchForProfile(snapshot HarnessCapabilitySnapshot, harness AgentHarness, wantProfile string, mode SessionMode, now time.Time) error {
+	return authorizeLaunch(snapshot, harness, wantProfile, mode, now, true)
+}
+
+func authorizeLaunch(snapshot HarnessCapabilitySnapshot, harness AgentHarness, wantProfile string, mode SessionMode, now time.Time, checkProfile bool) error {
+	if !mode.Valid() {
+		return &CapabilityRefusal{Code: LaunchRefusalInvalidEvidence}
+	}
+	if err := snapshot.Validate(); err != nil {
+		return &CapabilityRefusal{Code: LaunchRefusalInvalidEvidence}
+	}
+	refusal := func(code string) error {
+		return &CapabilityRefusal{Code: code, ObservedReasonCode: snapshot.ReasonCode}
+	}
+	if snapshot.Harness != harness {
+		return refusal(LaunchRefusalHarnessMismatch)
+	}
+	if checkProfile && snapshot.Profile != wantProfile {
+		return refusal(LaunchRefusalProfileMismatch)
+	}
+	if snapshot.ObservedAt.After(now) {
+		return refusal(LaunchRefusalEvidenceFromFuture)
+	}
+	if snapshot.Expired(now) {
+		return refusal(LaunchRefusalEvidenceExpired)
+	}
+	if snapshot.SessionScoped() {
+		return refusal(LaunchRefusalSessionScoped)
+	}
+	if snapshot.Readiness != CapabilityReady {
+		return refusal(LaunchRefusalNotReady)
+	}
+	if snapshot.AuthState != AgentAuthenticationAuthorized && snapshot.AuthState != AgentAuthenticationNotApplicable {
+		return refusal(LaunchRefusalAuthUnverified)
+	}
+	switch mode {
+	case SessionModeChat:
+		if !snapshot.Source.AllowsSessionGating() {
+			return refusal(LaunchRefusalStaticEvidence)
+		}
+		if !snapshot.Surfaces.Offers(SessionModeChat) {
+			return refusal(LaunchRefusalSurfaceNotObserved)
+		}
+	case SessionModeTUI:
+		// A local probe observed that this host has a usable installation and
+		// credential, which is the whole of what a terminal launch needs. Static
+		// reading observed nothing and still may not authorize.
+		if snapshot.Source == CapabilitySourceStatic {
+			return refusal(LaunchRefusalStaticEvidence)
+		}
+	}
+	return nil
+}
+
 // validCapabilityAuthState reuses the readiness layer's closed set rather than
 // declaring a parallel one. "configured" is a member precisely so it can be
 // rejected as a ready signal by callers while remaining a valid observation.
