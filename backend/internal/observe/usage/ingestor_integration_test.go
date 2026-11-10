@@ -1289,7 +1289,6 @@ func (c *fenceAdmissionContext) Err() error {
 
 func testPricingSnapshot(t *testing.T, openAIInputRate string) *pricing.Snapshot {
 	t.Helper()
-	root := t.TempDir()
 	upstream := []byte(`{
   "anthropic/claude-test": {
     "litellm_provider": "anthropic",
@@ -1311,13 +1310,7 @@ func testPricingSnapshot(t *testing.T, openAIInputRate string) *pricing.Snapshot
     "output_cost_per_token": 0
   }
 }`)
-	_, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	})
-	mustNoError(t, err)
-	catalog, err := pricing.NewCache(root).Load(t.Context())
+	catalog, err := catalogsync.Catalog(upstream)
 	mustNoError(t, err)
 	return catalog.Snapshot()
 }

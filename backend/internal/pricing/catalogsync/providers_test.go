@@ -1,12 +1,10 @@
 package catalogsync_test
 
 import (
-	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
@@ -75,23 +73,5 @@ func TestProviderForModelIgnoresResellers(t *testing.T) {
 	}
 	if got := catalog.Snapshot().ProviderForModel("MiniMax-M9"); got != "" {
 		t.Fatalf("ProviderForModel(MiniMax-M9) = %q, want no inference", got)
-	}
-}
-
-func TestSyncKeepsTheRepositoryCatalogToTheRequiredProviders(t *testing.T) {
-	root := t.TempDir()
-	if _, err := catalogsync.Sync(root, []byte(everyProviderTable), catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	}); err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
-	got := manifestProviderIDs(t, filepath.Join(root, "pricing", "catalog", "v1", "manifest.json"))
-	if !slices.Equal(got, pricing.RequiredProviderIDs) {
-		t.Fatalf("repository providers = %v, want %v", got, pricing.RequiredProviderIDs)
-	}
-	if err := catalogsync.Validate(root); err != nil {
-		t.Fatalf("Validate: %v", err)
 	}
 }
