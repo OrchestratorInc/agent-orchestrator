@@ -101,6 +101,21 @@ vi.mock("./CuesDialog", () => ({
 	),
 }));
 
+// Project settings › Sharing opens the whole project's share dialog; its
+// contents have their own suites.
+vi.mock("./ShareSessionDialog", () => ({
+	ShareSessionDialog: (props: { open: boolean; orgId: string; projectId: string; sessionId?: string; projectName?: string; people?: boolean }) => (props.open ? (
+		<div
+			data-testid="project-share-dialog"
+			data-org={props.orgId}
+			data-project={props.projectId}
+			data-session={props.sessionId ?? ""}
+			data-project-name={props.projectName ?? ""}
+			data-people={String(props.people)}
+		/>
+	) : null),
+}));
+
 vi.mock("./ProjectScriptsSettings", () => ({
 	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
 	CloudProjectScriptsSettings: ({ projectId, cloudOrgId }: { projectId: string; cloudOrgId: string }) => <div data-testid="cloud-project-scripts-settings">{cloudOrgId}/{projectId}</div>,
@@ -345,6 +360,46 @@ describe("SettingsDialog", () => {
 			expect(screen.getByRole("button", { name: section })).toBeInTheDocument();
 		}
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
+	});
+
+	it("offers Sharing in a cloud project's settings, which opens the whole project's share dialog", async () => {
+		teamsGate.cloudEnabled = true;
+		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+		await userEvent.click(within(nav).getByRole("button", { name: "Sharing" }));
+		expect(await screen.findByText("Share this project")).toBeInTheDocument();
+		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
+		expect(screen.queryByTestId("project-share-dialog")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Share" }));
+		const dialog = await screen.findByTestId("project-share-dialog");
+		// The whole project, with no session in it, in a build with Teams: people and links.
+		expect(dialog.dataset).toMatchObject({ org: "org-1", project: "cloud-1", session: "", projectName: "ao-landing", people: "true" });
+	});
+
+	it("has no Sharing page where the project's organization can't share it", async () => {
+		// Sharing is off for the organization (or Cloud is), as for a session's Share.
+		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1");
+		const first = renderSettingsDialog();
+		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Sharing" })).not.toBeInTheDocument();
+		first.unmount();
+
+		// A project of another organization than the one signed in.
+		teamsGate.cloudEnabled = true;
+		useUiStore.getState().openProjectSettings("cloud-2", { cloudOrgId: "org-2" });
+		renderSettingsDialog();
+		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Sharing" })).not.toBeInTheDocument();
+
+		// A local project.
+		localWorkspacesState.ids = ["proj-1"];
+		act(() => useUiStore.getState().openProjectSettings("proj-1"));
+		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Sharing" })).not.toBeInTheDocument();
 	});
 
 	it("opens a cloud project's Scripts page from the control plane", async () => {

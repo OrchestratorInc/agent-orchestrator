@@ -234,13 +234,15 @@ function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefi
  * beside Done. Picking someone turns the dialog into a short confirm step
  * that names what will happen to whom. Against a control plane from before
  * teams, or in a build without Teams, it is General access and Copy link only.
+ * Without a session (Project settings) it shares the whole project only.
  */
 export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	orgId: string;
 	projectId: string;
-	sessionId: string;
+	/** The session to share; without one the dialog shares the whole project only. */
+	sessionId?: string;
 	/** The session's title, for "Share \"<title>\"". */
 	sessionName?: string;
 	/** The project's name, for "Session in <project>". */
@@ -261,7 +263,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const personal = isPersonalWorkspace(workspace);
 	const queryClient = useQueryClient();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
-	const [scope, setScope] = useState<ShareScope>("session");
+	// Opened for a project rather than a session: there is no session to go back to.
+	const projectOnly = !sessionId;
+	const [scope, setScope] = useState<ShareScope>(projectOnly ? "project" : "session");
 	const [view, setView] = useState<"main" | "settings">("main");
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
@@ -319,7 +323,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		[baseUrl, open, queryClient],
 	);
 	const peopleAvailable = teams && (access.data === undefined ? !knownUnavailable : access.data !== null);
-	const links = useLinkAccess({ orgId, projectId, sessionId, scope, enabled: open });
+	const links = useLinkAccess({ orgId, projectId, sessionId: sessionId ?? "", scope, enabled: open });
 	const entries = access.data?.entries ?? [];
 	const ownEntries = entries.filter((entry) => entry.scope === scope);
 	const unavailable = useMemo(() => {
@@ -464,7 +468,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		setStaged([]);
 		setStagedRole("viewer");
 		setStagedCap("read-only");
-		setScope("session");
+		setScope(projectOnly ? "project" : "session");
 		setView("main");
 		setConfirm(null);
 		setAnnouncement("");
@@ -739,16 +743,23 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 											? t("share.projectIncludes")
 											: projectName ? t("share.sessionIn", { project: projectName }) : t("share.sessionInProject")}
 									</span>
-									<span aria-hidden="true">·</span>
-									<Button
-										type="button"
-										variant="link"
-										className="text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
-										onClick={() => switchScope(scope === "project" ? "session" : "project")}
-										data-share-switch-scope={scope === "project" ? "session" : "project"}
-									>
-										{scope === "project" ? t("share.backToSession") : t("share.shareProjectInstead")}
-									</Button>
+									{projectOnly ? null : (
+										<>
+											<span aria-hidden="true">·</span>
+											{/* A dotted underline, as Add Project's "Start without a repo", so it
+											    reads as an action. Keyboard focus brightens it as hover does: the
+											    app draws no focus rings (styles.css). */}
+											<Button
+												type="button"
+												variant="link"
+												className="text-xs font-medium text-muted-foreground decoration-dotted decoration-muted-foreground/60 underline-offset-4 hover:text-foreground hover:decoration-foreground focus-visible:text-foreground focus-visible:decoration-foreground"
+												onClick={() => switchScope(scope === "project" ? "session" : "project")}
+												data-share-switch-scope={scope === "project" ? "session" : "project"}
+											>
+												{scope === "project" ? t("share.backToSession") : t("share.shareProjectInstead")}
+											</Button>
+										</>
+									)}
 								</>
 							)}
 						</p>
