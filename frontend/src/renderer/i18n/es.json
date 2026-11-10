@@ -3780,6 +3780,8 @@
 	"usage.projectFilter": "Proyecto",
 	"usage.allProjects": "Todos los proyectos",
 	"usage.refresh": "Actualizar",
+	"usage.filter": "Filtrar",
+	"usage.removeFilter": "Quitar filtro {{filter}}",
 	"usage.loading": "Cargando uso",
 	"usage.empty.title": "Sin uso en este periodo",
 	"usage.empty.body": "El uso aparece aquí cuando una sesión de agente termina un turno.",

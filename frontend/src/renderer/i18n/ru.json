@@ -4061,6 +4061,8 @@
 	"usage.projectFilter": "Проект",
 	"usage.allProjects": "Все проекты",
 	"usage.refresh": "Обновить",
+	"usage.filter": "Фильтр",
+	"usage.removeFilter": "Убрать фильтр {{filter}}",
 	"usage.loading": "Загрузка использования",
 	"usage.empty.title": "За этот период использования нет",
 	"usage.empty.body": "Использование появится здесь, когда сессия агента завершит ход.",

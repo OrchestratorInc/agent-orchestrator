@@ -3713,6 +3713,8 @@
 	"usage.projectFilter": "프로젝트",
 	"usage.allProjects": "모든 프로젝트",
 	"usage.refresh": "새로 고침",
+	"usage.filter": "필터",
+	"usage.removeFilter": "{{filter}} 필터 제거",
 	"usage.loading": "사용량을 불러오는 중",
 	"usage.empty.title": "이 기간에는 사용량이 없습니다",
 	"usage.empty.body": "에이전트 세션이 턴을 마치면 여기에 사용량이 표시됩니다.",

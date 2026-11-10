@@ -3695,6 +3695,8 @@
 	"usage.projectFilter": "项目",
 	"usage.allProjects": "所有项目",
 	"usage.refresh": "刷新",
+	"usage.filter": "筛选",
+	"usage.removeFilter": "移除筛选条件 {{filter}}",
 	"usage.loading": "正在加载用量",
 	"usage.empty.title": "此时间段内没有用量",
 	"usage.empty.body": "代理会话完成一轮后，用量会显示在这里。",
