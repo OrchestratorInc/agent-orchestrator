@@ -1393,14 +1393,17 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 	if prep != nil {
 		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, prep)
-		prepared(err)
 		if err != nil && ctx.Err() != nil {
+			prepared(err)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
 			cancel()
 			m.cleanupArtifactDir(id)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
+		// A preparation that failed on its own is not the spawn's failure: the
+		// worktree is created afresh below, which records its own outcome.
+		prepared(nil)
 	}
 	if ws.Path == "" {
 		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)

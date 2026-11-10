@@ -161,8 +161,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	if in.preparation != nil {
 		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, in.preparation)
-		prepared(err)
 		if err != nil && ctx.Err() != nil {
+			prepared(err)
 			in.preparation.cancel()
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
 			// The claimed preparation has no timer or cache entry. Keep owning its
@@ -173,6 +173,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 			}
 			return
 		}
+		// A preparation that failed on its own falls back to a fresh worktree
+		// below; only that attempt's outcome is the spawn's.
+		prepared(nil)
 	}
 	// The foreground response must not wait behind Git, but the background
 	// workspace lifecycle still serializes with spawn, restore and cleanup.
