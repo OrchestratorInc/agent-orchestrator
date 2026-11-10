@@ -13,7 +13,6 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -546,7 +545,6 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
@@ -562,7 +560,7 @@ export function CenterPane({
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+							className="flex h-full min-w-0 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
