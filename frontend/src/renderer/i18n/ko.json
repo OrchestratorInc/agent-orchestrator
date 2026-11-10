@@ -1725,7 +1725,6 @@
 	"archiveModal.searchPlaceholder": "보관된 세션 검색",
 	"archiveModal.empty": "보관된 세션이 없습니다",
 	"archiveModal.restore": "복원",
-	"archiveModal.delete": "삭제",
 	"shell.board": "보드",
 	"shell.closeInspector": "인스펙터 패널 닫기",
 	"shell.cloudProjectBadge": "클라우드",

@@ -2062,7 +2062,6 @@
 	"archiveModal.searchPlaceholder": "Search archived sessions",
 	"archiveModal.empty": "No archived sessions",
 	"archiveModal.restore": "Restore",
-	"archiveModal.delete": "Delete",
 	"shell.board": "Board",
 	"shell.closeInspector": "Close inspector panel",
 	"shell.cloudProjectBadge": "Cloud",

@@ -2124,7 +2124,6 @@
 	"archiveModal.searchPlaceholder": "Поиск по архивным сессиям",
 	"archiveModal.empty": "Нет архивных сессий",
 	"archiveModal.restore": "Восстановить",
-	"archiveModal.delete": "Удалить",
 	"shell.board": "Доска",
 	"shell.closeInspector": "Закрыть панель инспектора",
 	"shell.cloudProjectBadge": "Облако",

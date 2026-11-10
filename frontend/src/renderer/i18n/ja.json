@@ -1725,7 +1725,6 @@
 	"archiveModal.searchPlaceholder": "アーカイブ済みセッションを検索",
 	"archiveModal.empty": "アーカイブ済みセッションはありません",
 	"archiveModal.restore": "復元",
-	"archiveModal.delete": "削除",
 	"shell.board": "ボード",
 	"shell.closeInspector": "インスペクターパネルを閉じる",
 	"shell.cloudProjectBadge": "クラウド",

@@ -1750,7 +1750,6 @@
 	"archiveModal.searchPlaceholder": "Buscar sesiones archivadas",
 	"archiveModal.empty": "No hay sesiones archivadas",
 	"archiveModal.restore": "Restaurar",
-	"archiveModal.delete": "Eliminar",
 	"shell.board": "Tablero",
 	"shell.closeInspector": "Cerrar panel del inspector",
 	"shell.cloudProjectBadge": "Nube",

@@ -1750,7 +1750,6 @@
 	"archiveModal.searchPlaceholder": "Pesquisar sessões arquivadas",
 	"archiveModal.empty": "Nenhuma sessão arquivada",
 	"archiveModal.restore": "Restaurar",
-	"archiveModal.delete": "Excluir",
 	"shell.board": "Quadro",
 	"shell.closeInspector": "Fechar painel do inspetor",
 	"shell.cloudProjectBadge": "Nuvem",

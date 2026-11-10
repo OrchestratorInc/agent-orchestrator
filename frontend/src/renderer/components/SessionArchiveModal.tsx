@@ -215,21 +215,15 @@ export function SessionArchiveModal({
 		if (["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) setKeyboardSelecting(true);
 		if (event.nativeEvent.isComposing) return;
 		const mod = isMac ? event.metaKey : event.ctrlKey;
-		if (!mod || (event.key !== "Enter" && event.key !== "Backspace")) return;
+		if (!mod || event.key !== "Enter") return;
 		// cmdk owns the selection; ask the list which card it has.
 		const selectedId = event.currentTarget.closest("[cmdk-root]")
 			?.querySelector("[cmdk-item][aria-selected='true']")?.getAttribute("data-value");
 		const selectedSession = shown.find((session) => session.id === selectedId) ?? shown[0];
 		if (!selectedSession) return;
-		if (event.key === "Enter") {
-			event.preventDefault();
-			event.stopPropagation();
-			void restore(selectedSession);
-		} else if (event.key === "Backspace" && canDelete(selectedSession)) {
-			event.preventDefault();
-			event.stopPropagation();
-			setDeleteTarget(selectedSession);
-		}
+		event.preventDefault();
+		event.stopPropagation();
+		void restore(selectedSession);
 	};
 
 	const onListScroll = (event: UIEvent<HTMLDivElement>) => {
@@ -301,7 +295,6 @@ export function SessionArchiveModal({
 					{shown.length > 0 && restoreAvailable ? (
 						<FooterHint keys={[MOD_KEY, "Enter"]} label={t("archiveModal.restore")} />
 					) : null}
-					{shown.length > 0 ? <FooterHint keys={[MOD_KEY, "⌫"]} label={t("archiveModal.delete")} /> : null}
 					<FooterHint keys={["Esc"]} label={t("command.close")} />
 				</CommandFooter>
 			</CommandDialog>
