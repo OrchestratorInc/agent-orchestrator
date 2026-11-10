@@ -703,30 +703,7 @@ function toResourcePresentation(
  */
 function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const [open, setOpen] = useState(false);
-	const [deleting, setDeleting] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
-	const confirmDelete = async () => {
-		setDeleting(true);
-		setError(null);
-		try {
-			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
-				params: { path: { sessionId: session.id }, query: { cleanup: true } },
-			});
-			if (deleteError) {
-				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
-				return;
-			}
-			setOpen(false);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-		} catch (err) {
-			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
-		} finally {
-			setDeleting(false);
-		}
-	};
 	return (
 		<>
 			<Tooltip>
@@ -740,7 +717,6 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 							disabled={isDisabled}
 							onClick={(event) => {
 								event.stopPropagation();
-								setError(null);
 								setOpen(true);
 							}}
 							type="button"
@@ -751,19 +727,67 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 				</TooltipTrigger>
 				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
 			</Tooltip>
-			<ConfirmDialog
-				busy={deleting}
-				confirmAriaLabel={t("deleteSession.confirmAria")}
-				confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-				description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
-				destructive
-				error={error}
-				onConfirm={() => void confirmDelete()}
-				onOpenChange={setOpen}
-				open={open}
-				title={t("deleteSession.dialog")}
-			/>
+			<DeleteArchivedSessionDialog onOpenChange={setOpen} open={open} session={session} />
 		</>
+	);
+}
+
+/** The confirm behind every "delete permanently" on an archived session. */
+export function DeleteArchivedSessionDialog({
+	onDeleted,
+	onOpenChange,
+	open,
+	session,
+}: {
+	onDeleted?: () => void;
+	onOpenChange: (open: boolean) => void;
+	open: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Each opening starts without the last attempt's error.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) setError(null);
+	}
+	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const confirmDelete = async () => {
+		setDeleting(true);
+		setError(null);
+		try {
+			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
+				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+			});
+			if (deleteError) {
+				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
+				return;
+			}
+			onOpenChange(false);
+			onDeleted?.();
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
+		} finally {
+			setDeleting(false);
+		}
+	};
+	return (
+		<ConfirmDialog
+			busy={deleting}
+			confirmAriaLabel={t("deleteSession.confirmAria")}
+			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
+			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			destructive
+			error={error}
+			onConfirm={() => void confirmDelete()}
+			onOpenChange={onOpenChange}
+			open={open}
+			title={t("deleteSession.dialog")}
+		/>
 	);
 }
 

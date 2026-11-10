@@ -1,20 +1,11 @@
 import {
 	Fragment,
 	forwardRef,
-	memo,
-	startTransition,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-	useState,
 	type HTMLAttributes,
-	type ReactElement,
 	type ReactNode,
 } from "react";
-import { motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
-	ChevronIcon,
 	GitBranchIcon,
 	GitPullRequestIcon,
 	LoaderCircleIcon,
@@ -633,162 +624,6 @@ function lifecycleClassName(state: BoardPullRequestState): string {
 			return "text-success";
 	}
 }
-
-/**
- * Collapsed archive toggle height. The overlay bar and the board's bottom
- * padding must stay in lockstep so the archive neither overlaps lanes nor
- * leaves a gap.
- */
-export const ARCHIVE_TOGGLE_HEIGHT_PX = 58;
-export const archiveToggleHeightClassName = "h-[58px]";
-export const archiveToggleOffsetClassName = "pb-[58px]";
-
-/**
- * Archive lives in its own memo'd component so expand/collapse state does not
- * re-render the kanban columns. Card mount is deferred via startTransition on
- * first open; after that the sheet stays mounted and open/close only tweens
- * Motion height 0↔auto (collapsed: inert / non-interactive). Overlay
- * positioning keeps lane height stable while expanded.
- */
-export const SessionsArchiveView = memo(function SessionsArchiveView<
-	TSession extends BoardSessionPresentation,
->({
-	labels,
-	renderSessionCard,
-	resetKey,
-	sessions,
-	trailing,
-}: {
-	labels: {
-		archive: string;
-		archiveAria: string;
-		archivedSessions: string;
-	};
-	renderSessionCard: (session: TSession) => ReactNode;
-	/** Collapse and drop deferred cards when the board scope changes (e.g. projectId). */
-	resetKey?: string;
-	sessions: TSession[];
-	/** Right-aligned status in the bar, outside the toggle (e.g. memory pressure). */
-	trailing?: ReactNode;
-}) {
-	const prefersReducedMotion = useReducedMotion();
-	const [expanded, setExpanded] = useState(false);
-	const [cardsReady, setCardsReady] = useState(false);
-	const archiveRef = useRef<HTMLDivElement>(null);
-
-	// Clip the lanes behind the sheet without resizing their scroll viewports.
-	// A clear archive must reveal the window material, not the active cards.
-	useLayoutEffect(() => {
-		const archive = archiveRef.current;
-		const board = archive?.parentElement;
-		if (!archive || !board) return;
-		const updateHeight = () => {
-			board.style.setProperty("--sessions-archive-height", `${archive.getBoundingClientRect().height}px`);
-		};
-		updateHeight();
-		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateHeight);
-		observer?.observe(archive);
-		return () => {
-			observer?.disconnect();
-			board.style.removeProperty("--sessions-archive-height");
-		};
-	}, [sessions.length > 0 || Boolean(trailing)]);
-
-	useEffect(() => {
-		setExpanded(false);
-		setCardsReady(false);
-	}, [resetKey]);
-
-	useEffect(() => {
-		if (!expanded || cardsReady) return;
-		let cancelled = false;
-		const id = requestAnimationFrame(() => {
-			startTransition(() => {
-				if (!cancelled) setCardsReady(true);
-			});
-		});
-		return () => {
-			cancelled = true;
-			cancelAnimationFrame(id);
-		};
-	}, [expanded, cardsReady]);
-
-	if (sessions.length === 0 && !trailing) return null;
-
-	return (
-		<div ref={archiveRef} className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
-			<div className={cn("flex items-center gap-2", archiveToggleHeightClassName)}>
-				{/* Full-row hit target: the control stretches edge-to-edge so empty
-				    space beside the label toggles archive too. Height must match
-				    archiveToggleOffsetClassName on the board. */}
-				{sessions.length > 0 ? (
-					<button
-						aria-expanded={expanded}
-						aria-label={labels.archiveAria}
-						className={cn(
-							"group flex h-full min-w-0 flex-1 items-center gap-2 py-0 text-muted-foreground transition-colors hover:text-foreground",
-							expanded ? "min-h-11" : "min-h-row-md",
-						)}
-						onClick={() => setExpanded((open) => !open)}
-						type="button"
-					>
-						<ChevronIcon
-							className={cn(
-								"size-icon-2xs shrink-0 transition-transform duration-[140ms] ease-[cubic-bezier(0.25,0.46,0.45,0.94)]",
-								prefersReducedMotion && "transition-none",
-								expanded && "rotate-90",
-							)}
-							direction="right"
-						/>
-						<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
-						<span className="ml-1.5 font-sans text-micro text-passive">{sessions.length}</span>
-					</button>
-				) : (
-					<div className="min-w-0 flex-1" />
-				)}
-				{trailing ? <div className="flex shrink-0 items-center">{trailing}</div> : null}
-			</div>
-			{/* Keep the sheet mounted after first open; height tracks `expanded`. */}
-			{cardsReady ? (
-				<motion.div
-					initial={prefersReducedMotion ? false : { height: 0 }}
-					animate={{ height: expanded ? "auto" : 0 }}
-					transition={
-						prefersReducedMotion
-							? { duration: 0 }
-							: { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }
-					}
-					style={{ overflow: "hidden" }}
-				>
-					<div
-						aria-hidden={!expanded}
-						aria-label={expanded ? labels.archivedSessions : undefined}
-						className={cn(
-							"scrollbar-none grid max-h-[28vh] grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-2 overflow-y-auto pb-3",
-							!expanded && "pointer-events-none",
-						)}
-						inert={!expanded ? true : undefined}
-						role="list"
-					>
-						{sessions.map((session) => (
-							<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
-						))}
-					</div>
-				</motion.div>
-			) : null}
-		</div>
-	);
-}) as <TSession extends BoardSessionPresentation>(props: {
-	labels: {
-		archive: string;
-		archiveAria: string;
-		archivedSessions: string;
-	};
-	renderSessionCard: (session: TSession) => ReactNode;
-	resetKey?: string;
-	sessions: TSession[];
-	trailing?: ReactNode;
-}) => ReactElement | null;
 
 function sameLabel(a: string, b: string): boolean {
 	const normalize = (value: string) =>

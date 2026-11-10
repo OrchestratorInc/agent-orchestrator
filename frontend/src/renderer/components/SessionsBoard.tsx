@@ -1,17 +1,15 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-	SessionsArchiveView,
 	SessionsBoardGridView,
-	archiveToggleOffsetClassName,
 	chipTone,
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, RotateCw } from "@/components/app-icons";
+import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
@@ -30,7 +28,6 @@ import {
 } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
@@ -43,9 +40,7 @@ import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
-import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
-import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
@@ -62,10 +57,10 @@ import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
 import { Button } from "./ui/button";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
-	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
+import { SessionArchiveModal } from "./SessionArchiveModal";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -215,6 +210,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
+	const [archiveOpen, setArchiveOpen] = useState(false);
+	useEffect(() => setArchiveOpen(false), [scopeKey]);
 
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
@@ -298,12 +295,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				</div>
 			) : null}
 
-			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
-			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div
-				className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}
-				style={hasArchive ? { clipPath: "inset(0 0 var(--sessions-archive-height, 58px) 0)" } : undefined}
-			>
+			<div className="min-h-0 flex-1 overflow-hidden">
 				{projectId && !guest && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -369,130 +361,34 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			</div>
 
 			{hasArchive ? (
-				<BoardArchivePanel
-					activeScopeRef={activeScopeRef}
-					hostId={hostId}
-					scopeKey={scopeKey}
-					connected={!hostId || connected}
-					sessions={archived}
-				/>
+				<div className="flex h-9 shrink-0 items-center border-t border-border px-2">
+					<Button
+						aria-haspopup="dialog"
+						aria-label={t("shell.archiveSessionsAria", { count: archived.length })}
+						data-testid="board-archive-button"
+						onClick={() => setArchiveOpen(true)}
+						size="xs"
+						type="button"
+						variant="quiet"
+					>
+						<Archive className="size-icon-sm" aria-hidden="true" />
+						{t("shell.archive")}
+						<span className="tabular-nums text-passive">{archived.length}</span>
+					</Button>
+				</div>
 			) : null}
+			{/* Stays mounted while open even if the last archived session goes. */}
+			<SessionArchiveModal
+				connected={!hostId || connected}
+				hostId={hostId}
+				onOpenChange={setArchiveOpen}
+				onOpenSession={openSession}
+				open={archiveOpen}
+				resetKey={scopeKey}
+				sessions={archived}
+				showProject={!projectId}
+			/>
 			{showStartup ? <DaemonStartupLoader /> : null}
 		</div>
 	);
 }
-
-/**
- * Restore state lives here so expand/collapse in SessionsArchiveView does not
- * re-render the kanban columns. In-flight restores are invalidated on project
- * change or unmount so completion cannot navigate after the user left.
- */
-const BoardArchivePanel = memo(function BoardArchivePanel({
-	activeScopeRef,
-	hostId,
-	scopeKey,
-	connected,
-	sessions,
-}: {
-	activeScopeRef: React.MutableRefObject<string>;
-	hostId?: string;
-	scopeKey: string;
-	connected: boolean;
-	sessions: WorkspaceSession[];
-}) {
-	const { t } = useTranslation();
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
-	const restoreSessionById = useRestoreSession();
-	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
-	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
-	const [restoreUnavailableSession, setRestoreUnavailableSession] = useState<WorkspaceSession | undefined>();
-	const restoreGenerationRef = useRef(0);
-
-	useEffect(() => {
-		setRestoringSessionId(undefined);
-		setRestoreErrors({});
-		setRestoreUnavailableSession(undefined);
-		restoreGenerationRef.current += 1;
-	}, [scopeKey]);
-
-	useEffect(() => {
-		const generation = restoreGenerationRef.current;
-		return () => {
-			// Invalidate in-flight restores if this panel unmounts (e.g. project with
-			// no archive) so completion cannot navigate after the user left.
-			if (restoreGenerationRef.current === generation) {
-				restoreGenerationRef.current += 1;
-			}
-		};
-	}, []);
-
-	const restoreArchivedSession = async (event: MouseEvent<HTMLButtonElement>, session: WorkspaceSession) => {
-		event.stopPropagation();
-		if (restoringSessionId) return;
-		const restoreScopeKey = scopeKey;
-		const generation = restoreGenerationRef.current;
-		const isStillActiveProject = () =>
-			generation === restoreGenerationRef.current &&
-			activeScopeRef.current === restoreScopeKey;
-		setRestoringSessionId(session.id);
-		setRestoreErrors((current) => {
-			const next = { ...current };
-			delete next[session.id];
-			return next;
-		});
-		try {
-			const result = await restoreSessionById(session.id, hostId);
-			if (!isStillActiveProject()) return;
-			if (result.status === "success") {
-				void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
-				return;
-			}
-			if (result.status === "not_resumable") {
-				setRestoreUnavailableSession(session);
-				return;
-			}
-			setRestoreErrors((current) => ({ ...current, [session.id]: result.message }));
-		} finally {
-			if (isStillActiveProject()) {
-				setRestoringSessionId(undefined);
-			}
-		}
-	};
-
-	return (
-		<>
-			<SessionsArchiveView
-				labels={{
-					archive: t("shell.archive"),
-					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
-					archivedSessions: t("shell.archivedSessions"),
-				}}
-				renderSessionCard={(session) => (
-					<ArchivedSessionCardAdapter
-						isRestoreDisabled={!connected || restoringSessionId !== undefined}
-						isRestoring={restoringSessionId === session.id}
-						restoreAction={(event) => void restoreArchivedSession(event, session)}
-						restoreError={restoreErrors[session.id]}
-						session={session}
-					/>
-				)}
-				resetKey={scopeKey}
-				sessions={sessions}
-			/>
-			{restoreUnavailableSession ? (
-				<RestoreUnavailableDialog
-					open={true}
-					session={restoreUnavailableSession}
-					hostId={hostId}
-					onOpenChange={(open) => {
-						if (!open) setRestoreUnavailableSession(undefined);
-					}}
-					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-					}}
-				/>
-			) : null}
-		</>
-	);
-});
