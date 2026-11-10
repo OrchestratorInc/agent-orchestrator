@@ -30,7 +30,7 @@ when the bundle changes, tracked by `Assets.car.sha256`.
 | `frontend/assets/icon.png`, `icon.ico` | Linux packages and window icon, Windows installer and executable. |
 | `frontend/assets/icon-dev.png` | Dock icon of unpackaged (dev) runs, with the DEV badge. |
 | `frontend/assets/ao-mascot.svg` | App UI: sidebar brand, startup loader, first run. Padded so Ruto fills 80% of the slot. |
-| `frontend/assets/ao-logo.svg`, `assets/ao-logo.svg` | Docs Open Graph images; the copy the website mirrors. Tight square crop. |
+| `frontend/assets/ao-logo.svg`, `assets/ao-logo.svg`, `frontend/src/docs/public/docs/ao-logo.svg` | Docs Open Graph images, the docs header logo, and the copy the website mirrors. Tight square crop. |
 | `frontend/assets/tray*Template*.png` | Menu bar template icons, drawn by `frontend/scripts/generate-awake-tray-icon.swift` from a silhouette the script passes it. |
 | `frontend/src/renderer/assets/ao-qr-logo.png` | Centre of the Connect Mobile QR code. |
 | `frontend/src/browser-extension/icons/icon-*.png` | AO Browser Bridge extension. |
@@ -54,8 +54,8 @@ each pixel's alpha, so they carry the same glass shading as the app icon.
 These still show the previous artwork and need a manual update from the
 outputs above:
 
-- orchestrator.inc: `/ao-logo.svg` (docs header logo) and `/favicon.svg` (docs
-  favicon), from `assets/ao-logo.svg`.
+- orchestrator.inc: `/ao-logo.svg` and `/favicon.svg` (docs favicon), from
+  `assets/ao-logo.svg`.
 - The X and GitHub organization avatars
   ([`assets/social/ruto-twitter-avatar.png`](../social/ruto-twitter-avatar.png)
   is a separate, hand-made upload asset).
