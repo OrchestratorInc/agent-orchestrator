@@ -1069,8 +1069,9 @@ describe("startAutoUpdates", () => {
       expect(module.getUpdateStatus()).not.toHaveProperty("releaseNotes");
 
       // Background stable checks must also forget the old nightly offer.
-      autoUpdater.checkForUpdates.mockResolvedValueOnce({
-        isUpdateAvailable: false, updateInfo: { version: "1.0.0" },
+      autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        updaterEvents.get("checking-for-update")?.();
+        return { isUpdateAvailable: false, updateInfo: { version: "1.0.0" } };
       });
       await module.startAutoUpdates(stateDir);
       expect(module.getUpdateStatus()).toMatchObject({ state: "not-available" });
