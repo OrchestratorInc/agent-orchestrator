@@ -703,11 +703,12 @@ export function CenterPane({
 }
 
 // The interface switch arrives as a shared topbar control (28px button, or a
-// 28px status with a cancel button). In the tab's icon slot it is resized to
-// match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
+// 28px status with a cancel button). In the slot after the tab's title it is
+// resized to match the close and menu controls: a 16px box, 13px glyph, 28px
+// hit area. Like them it is a pure ghost: the quiet button's hover pill
+// (its ::before) loses its fill, and ::before stays as the hit area.
 const sessionTabActionClassName = cn(
-	// Ghost like the other tab controls: no fill on hover, focus or open, the quiet switch button included.
-	"grid place-items-center [&_svg]:size-icon-sm [&_button]:bg-transparent!",
+	"grid place-items-center [&_svg]:size-icon-sm [&_button]:before:bg-transparent!",
 	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );
@@ -782,7 +783,8 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
+			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
 			actionPosition="end"
 			actionPinned={tabActionPinned}
 			wide={session ? "session" : undefined}
