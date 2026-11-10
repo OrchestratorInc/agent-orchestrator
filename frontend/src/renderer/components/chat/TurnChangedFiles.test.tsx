@@ -226,7 +226,7 @@ describe("TurnChangedFiles", () => {
 
 	it("says the list was cut rather than presenting it as the whole change", () => {
 		render(<TurnChangedFiles diff={diff({ truncated: true })} onReview={() => {}} />);
-		expect(screen.getByText(/changed more files than AO lists/i)).toBeInTheDocument();
+		expect(screen.getByText(/changed more files than Orchestrator lists/i)).toBeInTheDocument();
 		expect(screen.getByText(/Use Review for the whole change/i)).toBeInTheDocument();
 	});
 
@@ -260,33 +260,36 @@ describe("TurnChangedFiles", () => {
 });
 
 describe("ActivityRow command output", () => {
-	it("bounds a multi-megabyte log preview while preserving its latest output", () => {
+	it("bounds a multi-megabyte log preview while preserving its latest output", async () => {
 		const output = "BEGIN_OVERSIZE\n" + "Oversized output integrity check.\n".repeat(160_000) + "END_OVERSIZE";
 		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		const shown = container.querySelector("pre")!.textContent!;
 		expect(shown.split("\n").length).toBeLessThanOrEqual(400);
 		expect(shown.length).toBeLessThanOrEqual(64 * 1024);
 		expect(shown).toContain("END_OVERSIZE");
 		expect(shown).not.toContain("BEGIN_OVERSIZE");
 		expect(screen.getByText("Showing the end of this large output.")).toBeInTheDocument();
-		expect(screen.queryByText(/printed more than AO stores/i)).not.toBeInTheDocument();
+		expect(screen.queryByText(/printed more than Orchestrator stores/i)).not.toBeInTheDocument();
 	});
 
-	it("bounds single-line output without splitting a surrogate pair", () => {
+	it("bounds single-line output without splitting a surrogate pair", async () => {
 		const output = "head" + "😀" + "x".repeat(64 * 1024 - 1);
 		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		expect(container.querySelector("pre")?.textContent).toBe("x".repeat(64 * 1024 - 1));
 	});
 
-	it("updates the bounded preview as a running command prints more", () => {
+	it("updates the bounded preview as a running command prints more", async () => {
 		const output = "start\n".repeat(1_000);
 		const { container, rerender } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		rerender(<TooltipProvider><ActivityRow activity={commandActivity({ output: output + "latest failure" }, "running")} /></TooltipProvider>);
 		expect(container.querySelector("pre")?.textContent).toMatch(/latest failure$/);
 		expect(container.querySelector("pre")!.textContent!.split("\n").length).toBeLessThanOrEqual(400);
 	});
 
-	it("opens itself while a command is still printing", () => {
+	it("stays one line while a command is still printing, until the reader opens it", async () => {
 		const { container } = render(
 			<ActivityRow
 				activity={commandActivity(
@@ -295,14 +298,17 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
-		// No click: live output that needs a click is not live. Read off the <pre>
-		// rather than via getByText, which normalizes the runs of whitespace that
-		// real command output is full of.
-		const pre = container.querySelector("pre");
-		expect(pre?.textContent).toBe("ok  pkg/a\n");
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+		expect(container.querySelector("pre")).toBeNull();
+
+		await userEvent.click(screen.getByRole("button"));
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+		// Read off the <pre> rather than via getByText, which normalizes the runs of
+		// whitespace that real command output is full of.
+		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
-	it("does not add provider provenance below streamed output", () => {
+	it("does not add provider provenance below streamed output", async () => {
 		render(
 			<ActivityRow
 				activity={commandActivity(
@@ -311,6 +317,7 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
+		await userEvent.click(screen.getByRole("button"));
 		expect(screen.getByText("tick-2")).toBeInTheDocument();
 		expect(screen.queryByText(/Streamed live as the command runs/i)).not.toBeInTheDocument();
 	});
@@ -342,7 +349,7 @@ describe("ActivityRow command output", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/printed more than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/printed more than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	it("keeps a finished command collapsed so the timeline stays readable", () => {
@@ -367,8 +374,8 @@ describe("ActivityRow command output", () => {
 	});
 });
 
-// A run collapses consecutive tool calls to one line. Without the same auto-open
-// rule, a command streaming output inside a run is live to nobody.
+// A run collapses consecutive tool calls to one line, and a command printing
+// inside it does not open it: the reader decides.
 describe("ActivityRun with a streaming command", () => {
 	function plan(id: string): ConversationActivity {
 		return {
@@ -383,7 +390,7 @@ describe("ActivityRun with a streaming command", () => {
 		};
 	}
 
-	it("opens itself so live output inside it is visible", () => {
+	it("stays folded while a command inside it prints", () => {
 		render(
 			<ActivityRun
 				activities={[
@@ -395,10 +402,10 @@ describe("ActivityRun with a streaming command", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
-	it("opens the matching subgroup when a grouped command is streaming", () => {
+	it("keeps the subgroup of a streaming command folded when the reader opens the run", async () => {
 		const completedCommand = commandActivity({ command: "pwd" }, "completed");
 		completedCommand.id = "act-2";
 		completedCommand.sequence = 2;
@@ -416,7 +423,9 @@ describe("ActivityRun with a streaming command", () => {
 			/>,
 		);
 
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button")[0]!);
+		expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
 	it("stays collapsed when nothing inside it is printing", () => {
@@ -485,7 +494,8 @@ describe("ActivityRow command labels", () => {
 				)}
 			/>,
 		);
-		expect(screen.getByText("Read files")).toBeInTheDocument();
+		expect(screen.getByText("Read 2 files")).toBeInTheDocument();
+		expect(screen.getByText("SKILL.md, SKILL.md")).toBeInTheDocument();
 		expect(screen.queryByText(/sed -n/)).not.toBeInTheDocument();
 	});
 
@@ -496,10 +506,10 @@ describe("ActivityRow command labels", () => {
 				activity={commandActivity({ command: "go test ./...", output: "ok" }, "completed")}
 			/>,
 		);
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
+		expect(screen.getByText("Ran tests")).toBeInTheDocument();
 		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: /Ran command/ }));
+		await user.click(screen.getByRole("button", { name: /Ran tests/ }));
 		expect(screen.getByText("go test ./...")).toBeInTheDocument();
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
@@ -512,7 +522,7 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 
-		const row = screen.getByRole("button", { name: /Ran command/ });
+		const row = screen.getByRole("button", { name: /Ran printf/ });
 		expect(row).toBeEnabled();
 		expect(screen.queryByText(`printf "%s" "hello world"`)).not.toBeInTheDocument();
 
@@ -531,16 +541,30 @@ describe("ActivityRow command labels", () => {
 		);
 		const row = screen.getByRole("button");
 		expect(row).toHaveClass("py-0.5", "gap-1.5", "select-none");
-		expect(screen.getByText("Checked repository")).toHaveClass(
+		expect(screen.getByText("Checked git status")).toHaveClass(
 			"text-xs",
 			"font-normal",
 			"text-muted-foreground",
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
-		expect(container.querySelector(".lucide-square-terminal")).toBeNull();
+		// One small mark for what the step did, not the bordered rows' icon column.
+		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
+		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
-		expect(row.textContent).toMatch(/^Checked repositoryexit 1/);
+		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
+	});
+
+	it("does not claim the result of a step that failed", () => {
+		const { unmount } = render(
+			<ActivityRow activity={commandActivity({ command: "git push", output: "rejected", exitCode: 1 }, "failed")} />,
+		);
+		expect(screen.getByRole("button").textContent).toMatch(/^Pushing changesexit 1/);
+		unmount();
+
+		// A test run that fails did run.
+		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
+		expect(screen.getByRole("button").textContent).toMatch(/^Ran testsexit 1/);
 	});
 
 	it("keeps command failures without exit metadata destructive", () => {

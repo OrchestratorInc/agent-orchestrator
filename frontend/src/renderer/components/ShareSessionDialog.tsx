@@ -1,5 +1,5 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, Info, Settings2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, Info, Settings2 } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -873,10 +873,10 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 							{/* Where "Notify people" goes once sharing sends email; for now they find it in the app. */}
 							<p className="self-center text-xs text-muted-foreground" data-share-in-app="">{t("share.inAppNotice")}</p>
 							<div className="flex shrink-0 gap-2">
-								<Button type="button" variant="footer" onClick={cancelStaging}>
+								<Button type="button" variant="secondary" onClick={cancelStaging}>
 									{t("confirm.cancel")}
 								</Button>
-								<Button type="button" variant="footer-primary" onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
+								<Button type="button" variant="primary" onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
 									{share.isPending ? t("share.sharing") : t("share.shareAction")}
 								</Button>
 							</div>
@@ -887,12 +887,12 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} onAsk={askCopy} buttonRef={copyButtonRef} />
 							) : <span />}
 							{view === "settings" ? (
-								<Button type="button" variant="footer-primary" onClick={closeSettings} data-share-done="">
+								<Button type="button" variant="primary" onClick={closeSettings} data-share-done="">
 									{t("share.done")}
 								</Button>
 							) : (
 								<DialogClose asChild>
-									<Button type="button" variant="footer-primary" data-share-done="">
+									<Button type="button" variant="primary" data-share-done="">
 										{t("share.done")}
 									</Button>
 								</DialogClose>

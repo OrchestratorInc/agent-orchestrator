@@ -258,7 +258,7 @@ describe("macOS differential update policy", () => {
       ]),
     );
     expect(telemetryMessages().at(-1)?.payload).toMatchObject({
-      event: "ao.renderer.update_downloaded",
+      event: "ao.updates.downloaded",
       transfer_mode: "differential",
       fallback: true,
       transferred_bytes: 250,
@@ -855,7 +855,7 @@ describe("startAutoUpdates", () => {
       // The user still learns an update exists, from what discovery already found.
       expect(statusMessages().at(-1)?.payload).toMatchObject({
         state: "available",
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) {
@@ -1356,7 +1356,7 @@ describe("startAutoUpdates", () => {
     // the signal.
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",
@@ -1765,7 +1765,7 @@ describe("startAutoUpdates", () => {
     expect(statusMessages()).toEqual([]);
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",
@@ -4016,7 +4016,7 @@ describe("quitAndInstallUpdate", () => {
         updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
         return transfer.promise;
       });
-      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
       await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(180_000);
       await assertion;
@@ -5083,8 +5083,8 @@ it("recovers a timed-out native preparation when its native success arrives late
     updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
     await vi.advanceTimersByTimeAsync(3 * 60_000);
     expect(module.getUpdateStatus()).toMatchObject({ state: "error", staged: { ready: false } });
-    expect(module.getUpdateStatus().message).toContain("Relaunch AO");
-    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+    expect(module.getUpdateStatus().message).toContain("Relaunch Orchestrator");
+    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     nativeUpdaterEvents.get("update-downloaded")?.({}, "notes", "2.0.0");
     expect(module.getUpdateStatus().state).toBe("downloaded");
@@ -5445,7 +5445,7 @@ describe("disk preflight refusal (#6607)", () => {
       expect(module.getUpdateStatus()).toMatchObject({
         state: "error",
         message: DISK_MESSAGE,
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) Object.defineProperty(process, "resourcesPath", originalResourcesPath);

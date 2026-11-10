@@ -2,11 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { CalendarClock, ChevronRight, Clock3, History, GitPullRequest, ListChecks, FileText, Search, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import {
 	Dialog,
@@ -105,7 +104,7 @@ export function AutomationsView() {
 						<p className="hidden min-w-0 truncate text-xs text-muted-foreground @2xl:block">{t("automations.description")}</p>
 					</>
 				}
-				actions={<TopbarButton variant="primary" className="topbar-control--labeled" onClick={() => openCreate()}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>}
+				actions={<Button type="button" size="sm" variant="primary" onClick={() => openCreate()}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</Button>}
 			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
@@ -211,7 +210,7 @@ function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, o
 					<div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground"><span>{t("automations.timezone", { timezone: item.timezone })}</span><span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")} · {item.kind}</span></span><span>{t("automations.latestState")}: <span className="capitalize">{item.latestRun?.status ?? t("automations.neverRun")}</span></span></div>
 					<p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("automations.field.prompt")}</p><p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
 					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
-					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
+					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
 				</div>
 			</motion.div> : null}
 		</AnimatePresence>
@@ -310,7 +309,7 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		if (!automation) void captureRendererEvent("ao.renderer.automation_create_opened");
+		if (!automation) void captureRendererEvent("ao.automations.create_opened");
 		setProjectId(automation?.projectId ?? "");
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");
@@ -690,7 +689,7 @@ function AutomationFormDialog({
 					</div>
 
 					<div className={cn(onboardingFooterActionsEndClass, "px-4 pb-4")}>
-						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
 						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>

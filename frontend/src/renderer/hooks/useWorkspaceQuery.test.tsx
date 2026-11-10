@@ -229,7 +229,7 @@ describe("useWorkspaceQuery", () => {
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error).toEqual(new Error("AO daemon API is not ready"));
+		expect(result.current.error).toEqual(new Error("Orchestrator daemon API is not ready"));
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -513,6 +513,32 @@ describe("useWorkspaceQuery", () => {
 			provisionError: "Agent failed to start",
 			provisionSteps: [{ id: "agent", status: "running", startedAt: "2026-06-10T16:15:00Z" }],
 		});
+	});
+
+	// Imported chats that were never opened have no workspace; the session
+	// surfaces rely on this flag to skip workspace requests.
+	it("keeps needsResume on imported chats in projects and in Scratchpad", async () => {
+		respondWith({
+			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
+			sessions: {
+				data: {
+					sessions: [
+						{ id: "imported-1", projectId: "proj-1", harness: "codex", status: "idle", isTerminated: false, needsResume: true, updatedAt: "2026-10-18T10:00:00Z" },
+						{ id: "standalone-1", harness: "claude-code", status: "idle", isTerminated: false, needsResume: true, updatedAt: "2026-10-18T10:00:00Z" },
+					],
+				},
+				error: undefined,
+			},
+		});
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		const sessions = result.current.data?.flatMap((workspace) => workspace.sessions) ?? [];
+		expect(sessions.map((session) => [session.id, session.needsResume])).toEqual([
+			["imported-1", true],
+			["standalone-1", true],
+		]);
 	});
 
 	it("localizes the standalone workspace name", async () => {

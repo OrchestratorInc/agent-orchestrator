@@ -4,7 +4,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState }
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
 import { EditProvider } from "@pierre/diffs/react";

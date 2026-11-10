@@ -9,7 +9,7 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";

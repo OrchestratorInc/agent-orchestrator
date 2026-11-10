@@ -1,5 +1,6 @@
 import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { useUiStore } from "../stores/ui-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
@@ -77,6 +78,11 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 	};
 }
 
+// Program titles label sessions only in Developer Mode while they are previewed.
+function developerTerminalTitle(terminalTitle: string | undefined): string | undefined {
+	return useUiStore.getState().developerMode ? terminalTitle : undefined;
+}
+
 export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
@@ -96,7 +102,7 @@ export function toWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId: project.id,
 		workspaceName: project.name,
-		title: session.displayName ?? session.issueId ?? session.id,
+		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -117,6 +123,7 @@ export function toWorkspaceSession(
 		displayStatus: session.displayStatus || undefined,
 		statusReadiness,
 		provisionState: session.provisionState,
+		...(typeof session.workspacePublished === "boolean" ? { workspacePublished: session.workspacePublished } : {}),
 		provisionError: session.provisionError || undefined,
 		provisionSteps: session.provisionSteps?.map((step) => ({
 			id: step.id,
@@ -131,6 +138,7 @@ export function toWorkspaceSession(
 		workspaceCleanup: session.workspaceCleanup,
 		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		chatProviderPreserved: session.chatProviderPreserved,
+		needsResume: session.needsResume,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -154,7 +162,7 @@ export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
-const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
+export const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
@@ -202,7 +210,7 @@ function toLocalWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId,
 		workspaceName,
-		title: session.displayName ?? session.issueId ?? session.id,
+		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -224,6 +232,7 @@ function toLocalWorkspaceSession(
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
 		provisionState: session.provisionState,
+		...(typeof session.workspacePublished === "boolean" ? { workspacePublished: session.workspacePublished } : {}),
 		provisionError: session.provisionError || undefined,
 		provisionSteps: session.provisionSteps?.map((step) => ({
 			id: step.id,
@@ -236,6 +245,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		needsResume: session.needsResume,
 		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -265,7 +275,7 @@ type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
 class DaemonNotReadyError extends Error {
 	constructor() {
-		super("AO daemon API is not ready");
+		super("Orchestrator daemon API is not ready");
 		markApiError(this);
 	}
 }

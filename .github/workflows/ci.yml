@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      lanes: ${{ steps.pick.outputs.lanes }}
+      frontend: ${{ steps.pick.outputs.frontend }}
+      full: ${{ steps.pick.outputs.full }}
+      vitest: ${{ steps.pick.outputs.vitest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick lanes
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node scripts/ci-lanes.mjs >> "$GITHUB_OUTPUT"
+
+  go:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.lanes), 'go')
+    uses: ./.github/workflows/go.yml
+    with:
+      windows: ${{ needs.changes.outputs.full == 'true' }}
+
+  cli-e2e:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.lanes), 'cli-e2e')
+    uses: ./.github/workflows/cli-e2e.yml
+    with:
+      native: ${{ needs.changes.outputs.full == 'true' }}
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/frontend.yml
+    with:
+      lanes: ${{ needs.changes.outputs.lanes }}
+      vitest: ${{ needs.changes.outputs.vitest }}
+
+  mobile:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.lanes), 'mobile')
+    uses: ./.github/workflows/mobile.yml
+
+  config:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.lanes), 'config')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Test CI scripts
+        run: node --test scripts/ci-lanes.test.mjs scripts/ci-sharding.test.mjs scripts/create-migration.test.mjs
+
+  ci-ok:
+    if: always()
+    needs: [changes, go, cli-e2e, frontend, mobile, config]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check lane results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq 'map_values(.result)' <<< "$NEEDS"
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS"

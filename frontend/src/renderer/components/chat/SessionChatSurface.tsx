@@ -3,6 +3,7 @@ import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
+import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -15,7 +16,7 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  * preview and live data here.
  */
 
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
@@ -42,7 +43,6 @@ import { useConversationPromptSuggestion } from "../../hooks/useConversationProm
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
-import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
@@ -64,37 +64,6 @@ export interface ConversationWorkState {
 	controllerBusy: boolean;
 	hasRunningTurn: boolean;
 	queuedTurnCount: number;
-}
-
-const HTTP_LINK_PATTERN = /https?:\/\/[^\s<>()\[\]{}"']+/i;
-const autoOpenedLinkSessions = new Set<string>();
-
-interface AssistantLinkState {
-	revision: number;
-	sequence: number;
-	streaming: boolean;
-}
-
-interface ConversationLinkBaseline {
-	latestSequence: number;
-	messages: Map<string, AssistantLinkState>;
-	pendingCompleted: Map<string, number>;
-}
-
-function cleanExtractedLink(value: string): string {
-	return value.replace(/[.,!?;:`\\]+$/, "");
-}
-
-function firstBrowserLink(text: string, workspacePaths: string[]): string | undefined {
-	const candidates: Array<{ index: number; value: string }> = [];
-	const webMatch = HTTP_LINK_PATTERN.exec(text);
-	if (webMatch) candidates.push({ index: webMatch.index, value: cleanExtractedLink(webMatch[0]) });
-	const markdownLink = /\[[^\]]+\]\(([^)\s]+)\)/.exec(text);
-	if (markdownLink?.[1]) candidates.push({ index: markdownLink.index, value: cleanExtractedLink(markdownLink[1]) });
-	for (const candidate of candidates.sort((a, b) => a.index - b.index)) {
-		if (isWebLink(candidate.value) || isWorkspaceHtmlLink(candidate.value, workspacePaths)) return candidate.value;
-	}
-	return undefined;
 }
 
 export const SessionChatSurface = memo(function SessionChatSurface({
@@ -136,8 +105,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	accountMoving,
+	accountMoveQueues,
 	agentResuming,
 	controllerResumeError,
+	controllerResumeOpenElsewhere,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
@@ -193,9 +164,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerTransitioning?: boolean;
 	/** The handoff is an account move; see ChatWorkspace. */
 	accountMoving?: boolean;
+	accountMoveQueues?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
+	/** controllerResumeError says another app still holds this chat. */
+	controllerResumeOpenElsewhere?: boolean;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** A switch from the terminal is under way and the conversation is not readable yet. */
@@ -222,6 +196,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -432,7 +407,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
 		rememberChatSkills(skillsHarness, hostId, skills);
 	}, [hostId, session.kind, skills, skillsHarness]);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
@@ -520,66 +495,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	};
 
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
-	// Links opened on the user's behalf stay quiet about a file the session does
-	// not own; only a click earns the explanation in the file pane.
-	const autoOpenLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
-	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
-	useEffect(() => {
-		if (!snapshot || isLoading) return;
-		const previous = conversationLinkBaselines.current.get(uiSessionId);
-		const isInitialSnapshot = !previous;
-		const latestUserMessage = snapshot.items
-			.filter((item) => item.kind === "message" && item.role === "user")
-			.at(-1);
-		const messages = new Map<string, AssistantLinkState>();
-		const pendingCompleted = new Map(previous?.pendingCompleted);
-		let latestSequence = Math.max(previous?.latestSequence ?? -1, snapshot.latestSequence);
-		for (const item of snapshot.items) {
-			latestSequence = Math.max(latestSequence, item.sequence);
-			if (item.kind !== "message" || item.role !== "assistant") continue;
-			const prior = previous?.messages.get(item.id);
-			messages.set(item.id, {
-				revision: item.revision,
-				sequence: item.sequence,
-				streaming: item.streaming,
-			});
-			if (item.streaming) {
-				pendingCompleted.delete(item.id);
-				continue;
-			}
-			const completedCurrentTurnOnMount =
-				isInitialSnapshot && latestUserMessage && item.sequence > latestUserMessage.sequence;
-			const newlyCompleted = previous
-				? prior
-					? prior.streaming && item.revision >= prior.revision
-					: item.sequence > previous.latestSequence
-				: completedCurrentTurnOnMount;
-			if (newlyCompleted) pendingCompleted.set(item.id, item.revision);
-			else if (pendingCompleted.get(item.id) !== item.revision) pendingCompleted.delete(item.id);
-		}
-		conversationLinkBaselines.current.set(uiSessionId, { latestSequence, messages, pendingCompleted });
-		if (autoOpenedLinkSessions.has(uiSessionId)) return;
-		// Do not surprise users by opening links from history when a session is first
-		// mounted. The exception is the current turn: a fast agent can finish before
-		// the first conversation request resolves, so its response is already present
-		// in the initial snapshot and must not be mistaken for old history.
-		for (const item of snapshot.items) {
-			if (
-				item.kind !== "message" ||
-				item.role !== "assistant" ||
-				item.streaming ||
-				pendingCompleted.get(item.id) !== item.revision
-			) continue;
-			const url = firstBrowserLink(item.text, paths);
-			if (url) {
-				autoOpenedLinkSessions.add(uiSessionId);
-				pendingCompleted.delete(item.id);
-				autoOpenLinkInBrowser(url);
-				break;
-			}
-		}
-	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
@@ -712,6 +628,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				newWorkDisabled={newWorkDisabled || hostUnreachable}
 				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
 				savedCopy={hostUnreachable}
+				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
@@ -743,6 +660,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
 				accountMoving={accountMoving}
+				accountMoveQueues={accountMoveQueues}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
@@ -857,6 +775,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
+				resumeOpenElsewhere={commands.resumeError ? commands.resumeOpenElsewhere : controllerResumeOpenElsewhere}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

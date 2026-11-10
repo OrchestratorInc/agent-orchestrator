@@ -2,7 +2,7 @@ import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Smartphone, Trash2 } from "lucide-react";
+import { Loader2, Smartphone, Trash2 } from "@/components/app-icons";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { Button } from "../ui/button";

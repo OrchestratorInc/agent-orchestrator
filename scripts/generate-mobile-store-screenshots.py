@@ -139,7 +139,7 @@ def draw_brand(draw: ImageDraw.ImageDraw, canvas: Image.Image, x: int, y: int, s
     if ICON.exists():
         icon = Image.open(ICON).convert("RGBA").resize((icon_size, icon_size), Image.Resampling.LANCZOS)
         canvas.alpha_composite(icon, (x, y))
-    draw.text((x + icon_size + int(18 * scale), y + int(8 * scale)), "AO - Mobile", font=font(int(34 * scale), "bold"), fill="#f6f8ff")
+    draw.text((x + icon_size + int(18 * scale), y + int(8 * scale)), "Orchestrator - Mobile", font=font(int(34 * scale), "bold"), fill="#f6f8ff")
 
 
 def portrait(target: str, w: int, h: int, item: dict[str, str]) -> Image.Image:

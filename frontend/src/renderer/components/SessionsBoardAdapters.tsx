@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -37,6 +37,7 @@ import {
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
+import { appI18n } from "../i18n";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -75,6 +76,14 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-exited)",
 				}
 			: undefined;
+	const importStatus = session.needsResume && !session.isTerminated
+		? {
+				className: "text-status-idle",
+				indicatorClassName: "bg-status-idle",
+				label: appI18n.t("session.importedNotOpened"),
+				tone: "var(--color-status-idle)",
+			}
+		: undefined;
 	return {
 		activity: session.activity,
 		branch: sessionBranchPresentation(session).branch,
@@ -85,7 +94,7 @@ export function toBoardSessionPresentation(
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
-		statusPresentation: provisioningStatus ?? failedStartStatus,
+		statusPresentation: provisioningStatus ?? failedStartStatus ?? importStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,

@@ -1,6 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useState, type ReactNode } from "react";
-import { ActionSheetIOS, Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActionSheetIOS, Alert, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { deleteArtifact, getArtifactText } from "./api";
 import { artifactMenuActions, looksBinary, type ArtifactMenuAction, type SessionArtifact } from "./artifacts";
 import { userFacingError } from "./connectionError";
@@ -13,6 +13,8 @@ import { space, type } from "./tokens";
 
 const LABELS: Record<ArtifactMenuAction, string> = {
 	open: "Open",
+	"share-link": "Share link",
+	"copy-link": "Copy link",
 	ask: "Ask the agent",
 	copy: "Copy contents",
 	history: "Version history",
@@ -21,6 +23,8 @@ const LABELS: Record<ArtifactMenuAction, string> = {
 
 const GLYPHS: Record<ArtifactMenuAction, FeatherIconName> = {
 	open: "eye",
+	"share-link": "share",
+	"copy-link": "link",
 	ask: "message-square-plus",
 	copy: "copy",
 	history: "clock",
@@ -33,10 +37,11 @@ const AFTER_CLOSE_MS = 180;
 type OpenMenu = { artifact: SessionArtifact; actions: ArtifactMenuAction[]; run: (action: ArtifactMenuAction) => void };
 
 /**
- * Open, Copy, History and Delete for one session's artifacts, shared by the gallery's
+ * Open, the public link, Copy, History and Delete for one session's artifacts, shared by the gallery's
  * long-press menu and the viewer's header menu. iOS shows a native action
  * sheet. Android shows `menu`, an in-app list like the worker row's options:
- * an Android alert holds at most three buttons. Callers render `menu`.
+ * an Android alert holds at most three buttons. A published file's menu shows
+ * its link under the name. Callers render `menu`.
  * `onDeleted` runs once the daemon has removed the file.
  */
 export function useArtifactActions(sessionId: string, onDeleted?: (artifact: SessionArtifact) => void) {
@@ -55,6 +60,24 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 			Alert.alert("Couldn't copy the artifact", userFacingError(cause));
 		}
 	}, [config, sessionId]);
+
+	const copyLink = useCallback(async (url: string) => {
+		try {
+			await Clipboard.setStringAsync(url);
+			haptics.success();
+		} catch (cause) {
+			haptics.error();
+			Alert.alert("Couldn't copy the link", userFacingError(cause));
+		}
+	}, []);
+
+	const shareLink = useCallback((artifact: SessionArtifact, url: string) => {
+		// iOS shares a URL as a link; Android's share sheet takes it as text.
+		void Share.share(Platform.OS === "ios" ? { url } : { message: url, title: artifact.name }).catch((cause: unknown) => {
+			haptics.error();
+			Alert.alert("Couldn't open the share sheet", userFacingError(cause));
+		});
+	}, []);
 
 	const confirmDelete = useCallback((artifact: SessionArtifact) => {
 		haptics.warning();
@@ -87,6 +110,8 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 		haptics.select();
 		const run = (action: ArtifactMenuAction) => {
 			if (action === "open") onOpen?.();
+			else if (action === "share-link") { if (artifact.shareUrl) shareLink(artifact, artifact.shareUrl); }
+			else if (action === "copy-link") { if (artifact.shareUrl) void copyLink(artifact.shareUrl); }
 			else if (action === "ask") onAsk?.();
 			else if (action === "copy") void copy(artifact);
 			else if (action === "history") onHistory?.();
@@ -97,6 +122,7 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 			ActionSheetIOS.showActionSheetWithOptions(
 				{
 					title: artifact.name,
+					message: artifact.shareUrl,
 					options: [...actions.map((action) => LABELS[action]), "Cancel"],
 					cancelButtonIndex: actions.length,
 					destructiveButtonIndex: destructiveButtonIndex >= 0 ? destructiveButtonIndex : undefined,
@@ -109,7 +135,7 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 			return;
 		}
 		setOpen({ artifact, actions, run });
-	}, [confirmDelete, copy]);
+	}, [confirmDelete, copy, copyLink, shareLink]);
 
 	const close = useCallback(() => setOpen(null), []);
 	const menu: ReactNode = open ? <ArtifactActionModal menu={open} onClose={close} /> : null;
@@ -132,6 +158,7 @@ function ArtifactActionModal({ menu, onClose }: { menu: OpenMenu; onClose(): voi
 				<Pressable accessibilityLabel="Dismiss artifact actions" onPress={onClose} style={StyleSheet.absoluteFill} />
 				<View accessibilityViewIsModal style={styles.menu}>
 					<Text numberOfLines={2} style={styles.title}>{menu.artifact.name}</Text>
+					{menu.artifact.shareUrl ? <Text numberOfLines={2} selectable style={styles.link}>{menu.artifact.shareUrl}</Text> : null}
 					<View style={styles.list}>
 						{menu.actions.map((action) => {
 							const destructive = action === "delete";
@@ -169,6 +196,7 @@ const makeStyles = (t: Theme) =>
 		scrim: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xxl, backgroundColor: "rgba(0, 0, 0, 0.58)" },
 		menu: { width: "100%", maxWidth: 340, padding: space.xl, gap: space.sm, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, backgroundColor: t.bgElevated, elevation: 12 },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600" },
+		link: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		list: { marginTop: space.xs, marginHorizontal: -8 },
 		row: { minHeight: 48, paddingHorizontal: space.sm, flexDirection: "row", alignItems: "center", gap: space.md, borderRadius: 8 },
 		rowText: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },

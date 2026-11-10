@@ -180,7 +180,7 @@ func (s *Service) checkTmux() Requirement {
 		// terminal runtime on Windows instead, so this always passes there.
 		return Requirement{
 			ID: "tmux", Label: "tmux", Satisfied: true, Required: true,
-			Detail: "Not required on Windows — AO uses the built-in ConPTY terminal runtime instead of tmux.",
+			Detail: "Not required on Windows — Orchestrator uses the built-in ConPTY terminal runtime instead of tmux.",
 		}
 	}
 	configured := strings.TrimSpace(os.Getenv("AO_TMUX_BINARY"))
@@ -188,7 +188,7 @@ func (s *Service) checkTmux() Requirement {
 	if err != nil || resolution.Path == "" {
 		detail := "tmux was not found on PATH; it is required on macOS/Linux to start sessions."
 		if configured != "" {
-			detail = "AO's bundled tmux is missing or not executable: " + configured
+			detail = "Orchestrator's bundled tmux is missing or not executable: " + configured
 		}
 		return Requirement{
 			ID: "tmux", Label: "tmux", Required: true,
@@ -240,7 +240,7 @@ func (s *Service) checkGH() Requirement {
 	if err != nil || path == "" {
 		return Requirement{
 			ID: "gh", Label: "gh",
-			Detail: "gh was not found on PATH. It lets agent sessions open pull requests and read issues, but AO runs fine without it.",
+			Detail: "gh was not found on PATH. It lets agent sessions open pull requests and read issues, but Orchestrator runs fine without it.",
 		}
 	}
 	return Requirement{ID: "gh", Label: "gh", Satisfied: true, Detail: path}

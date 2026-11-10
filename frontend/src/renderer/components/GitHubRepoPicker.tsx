@@ -1,4 +1,4 @@
-import { ChevronsUpDown, Link2, Lock, LoaderCircle } from "lucide-react";
+import { ChevronsUpDown, Link2, Lock, LoaderCircle } from "@/components/app-icons";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
