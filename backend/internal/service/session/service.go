@@ -225,6 +225,7 @@ type Service struct {
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
 	asyncSpawns         asyncSpawnAttempts
+	autoSpawns          autoSpawnBreaker
 	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
@@ -423,7 +424,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return newestSession(existing), 0, 0, nil
 		}
 	}
-	return s.spawn(ctx, cfg)
+	return s.spawnUnlessAutoPaused(ctx, cfg, func() (domain.Session, int, int, error) { return s.spawn(ctx, cfg) })
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {

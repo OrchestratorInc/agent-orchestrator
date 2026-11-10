@@ -190,6 +190,7 @@ func (s *Service) abandonAsyncSpawn(acc *spawnAcceptance) bool {
 }
 
 func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawnAttempt, ready bool, cause error) {
+	s.settleAutoSpawn(rec, ready, cause)
 	elapsed := s.monoNow().Sub(attempt.start).Milliseconds()
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)
