@@ -132,17 +132,22 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Splits text at known chip wires. A wire counts only as a whole word: at the start
- * or after whitespace, and followed by the end, whitespace, or closing punctuation.
- * So `/reviewer`, `a/review`, `@review` and `/Users/me` stay text.
+ * Builds a splitter for text at known chip wires, compiled once per token set. A
+ * wire counts only as a whole word: at the start or after whitespace, and followed
+ * by the end, whitespace, or closing punctuation. So `/reviewer`, `a/review`,
+ * `@review` and `/Users/me` stay text.
  */
-export function splitComposerTokens(text: string, tokens: readonly ComposerSentToken[]): ComposerTokenSegment[] {
-	if (tokens.length === 0 || !text) return [{ text }];
+export function composerTokenSplitter(tokens: readonly ComposerSentToken[]): (text: string) => ComposerTokenSegment[] {
 	const byWire = new Map<string, ComposerSentToken>();
 	for (const token of tokens) if (!byWire.has(token.wire)) byWire.set(token.wire, token);
+	if (byWire.size === 0) return (text) => [{ text }];
 	// Longest first, so a wire that extends another wins.
 	const alternatives = [...byWire.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp);
 	const pattern = new RegExp(`(?<=^|\\s)(?:${alternatives.join("|")})(?=$|\\s|[.,;:!?)\\]]+(?:$|\\s))`, "g");
+	return (text) => (text ? splitAt(text, pattern, byWire) : [{ text }]);
+}
+
+function splitAt(text: string, pattern: RegExp, byWire: ReadonlyMap<string, ComposerSentToken>): ComposerTokenSegment[] {
 	const code = [...text.matchAll(CODE_SPANS)].map((match) => [match.index, match.index + match[0].length] as const);
 	const segments: ComposerTokenSegment[] = [];
 	let cursor = 0;
@@ -177,12 +182,14 @@ export type ComposerTokenRenderer = (text: string, renderPlain?: (text: string) 
  */
 export function useComposerTokenRenderer(sessionId: string, text: string): ComposerTokenRenderer | undefined {
 	const skills = useContext(ChatTokenSkills);
-	const recorded = useSentComposerTokens([sessionTokenScope(sessionId), messageTokenScope(text)]);
+	const textScope = useMemo(() => messageTokenScope(text), [text]);
+	const recorded = useSentComposerTokens([sessionTokenScope(sessionId), textScope]);
 	return useMemo(() => {
 		const tokens = skills.length > 0 ? [...recorded, ...skills.map(skillToken)] : recorded;
 		if (tokens.length === 0) return undefined;
+		const split = composerTokenSplitter(tokens);
 		return (run: string, renderPlain: (text: string) => ReactNode = (plain) => plain) => {
-			const segments = splitComposerTokens(run, tokens);
+			const segments = split(run);
 			if (segments.length === 1 && !segments[0]?.token) return renderPlain(run);
 			return segments.map((segment, index) =>
 				segment.token ? (
