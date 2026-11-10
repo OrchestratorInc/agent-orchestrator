@@ -346,7 +346,9 @@ function useGrabbingCursor(active: boolean) {
 /** How the sidebar collapses. Only the "icon" mode shows a rail where every list
  *  must be fully open; "offcanvas" slides the whole sidebar away, and its lists
  *  must keep their open/closed and Show more state while it is hidden. */
-const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
+// Asserted rather than annotated: an annotation narrows to "offcanvas" inside
+// the memoized Sidebar, and the "icon" branches would no longer typecheck.
+const SIDEBAR_COLLAPSIBLE = "offcanvas" as "offcanvas" | "icon";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
 /** Floor/ceiling for sidebar resize — pass the same values to useResizable. */
 export const SIDEBAR_MIN_WIDTH = 200;
@@ -712,7 +714,9 @@ export {
 
 // Built on shadcn's sidebar primitives (components/ui/sidebar): the provider in
 // _shell owns the persistent open state. Collapsed sidebars move fully off-canvas.
-export function Sidebar({
+// Memoized: the shell re-renders several times per route change, and each
+// sidebar render reaches every project row's presence wrapper and footer.
+export const Sidebar = memo(function Sidebar({
 	underTopbar = true,
 	topbarOffset = "toolbar",
 	workspaceError,
@@ -767,15 +771,12 @@ export function Sidebar({
 			.filter((path): path is string => Boolean(path)),
 		[workspaces],
 	);
-	const openExistingProject = useCallback(
-		(path: string) => {
-			const workspace = workspaces.find(
-				(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.path === path,
-			);
-			if (workspace) selection.goProject(workspace.id);
-		},
-		[selection, workspaces],
-	);
+	const openExistingProject = useLatestCallback((path: string) => {
+		const workspace = workspaces.find(
+			(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.path === path,
+		);
+		if (workspace) selection.goProject(workspace.id);
+	});
 	const initialActiveSessionProjectId = useRef(
 		selection.activeSessionId ? selection.activeProjectId : undefined,
 	).current;
@@ -794,7 +795,9 @@ export function Sidebar({
 	const [dismissedInitialActiveProjectIds, setDismissedInitialActiveProjectIds] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
-	const toggleProjectDisclosure = useCallback((id: string) => {
+	// Every project row gets this handler: a new one per toggle would re-render
+	// all of them to open or close one.
+	const toggleProjectDisclosure = useLatestCallback((id: string) => {
 		const routeFallbackActive =
 			initialActiveSessionProjectId === id && !dismissedInitialActiveProjectIds.has(id);
 		const currentlyExpanded = expandedIds.has(id) || routeFallbackActive;
@@ -812,7 +815,7 @@ export function Sidebar({
 			currentlyExpanded ? next.add(id) : next.delete(id);
 			return next;
 		});
-	}, [dismissedInitialActiveProjectIds, expandedIds, initialActiveSessionProjectId]);
+	});
 	const importedProjects = useSessionImportStore((state) => state.importedCounts);
 	const revealedImports = useRef(new Set<string>());
 	useEffect(() => {
@@ -1050,7 +1053,9 @@ export function Sidebar({
 		if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
 		else selection.goSession(target.workspaceId, target.id);
 	});
-	const handlePinnedSessionKilled = useCallback(
+	// Pinned rows are memoized; the route is read when a kill lands, so a route
+	// change does not re-render them.
+	const handlePinnedSessionKilled = useLatestCallback(
 		(killedSession: WorkspaceSession) => {
 			if (killedSession.hostId) {
 				if (selection.activeRemoteHostId !== killedSession.hostId || selection.activeRemoteSessionId !== killedSession.id) return;
@@ -1070,7 +1075,6 @@ export function Sidebar({
 				selection.goProject(killedSession.workspaceId);
 			}
 		},
-		[onOpenRemoteProject, remoteNavigate, remoteWorkspaces, selection, workspaces],
 	);
 
 	return (
@@ -1522,7 +1526,7 @@ export function Sidebar({
 			/>
 		</SidebarRoot>
 	);
-}
+});
 
 type Selection = ReturnType<typeof useSelection>;
 
