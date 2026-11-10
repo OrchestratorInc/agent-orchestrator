@@ -20,10 +20,12 @@ class FakeSocket {
 function setup(ticket: () => Promise<{ ticket: string; expiresIn: number; scopes: string[] }>) {
 	const sockets: FakeSocket[] = [];
 	const timers: Array<() => void> = [];
+	const cleared = new Set<number>();
+	let nextTimer = 0;
 	const deps: TerminalDeps = {
 		createSocket: (url) => { const socket = new FakeSocket(url); sockets.push(socket); return socket as never; },
-		setTimeout: (callback) => { timers.push(callback); return timers.length; },
-		clearTimeout: () => {},
+		setTimeout: (callback) => { const id = ++nextTimer; timers.push(() => { if (!cleared.has(id)) callback(); }); return id; },
+		clearTimeout: (id) => { cleared.add(id as number); },
 	};
 	const handlers = { onStatus: vi.fn(), onOutput: vi.fn(), onReset: vi.fn(), onRefused: vi.fn(), onAccess: vi.fn() };
 	const client = { createTerminalTicket: vi.fn(ticket), terminalUrl: (value: string) => `wss://x/terminal?ticket=${value}` };
@@ -91,6 +93,24 @@ describe("cloud terminal", () => {
 		t.sockets[0].drop(1006);
 		expect(t.handlers.onStatus).toHaveBeenLastCalledWith("closed");
 		expect(t.timers).toHaveLength(0);
+	});
+
+	// A replacement terminal view reconnects by hand while the drop's retry is still waiting.
+	it("cancels the waiting retry when reconnected by hand, so closing reaches the only socket", async () => {
+		let n = 0;
+		const t = setup(async () => ({ ticket: `t${++n}`, expiresIn: 300, scopes: [] }));
+		await t.flush();
+		t.sockets[0].open();
+		t.sockets[0].drop(1011, "interrupted");
+		t.connection.reconnect();
+		await t.flush();
+		expect(t.sockets).toHaveLength(2);
+		for (const fire of t.timers.splice(0)) fire();
+		await t.flush();
+		expect(t.sockets).toHaveLength(2);
+		t.sockets[1].open();
+		t.connection.close();
+		expect(t.sockets[1].readyState).toBe(3);
 	});
 
 	it("decodes base64 to bytes", () => {

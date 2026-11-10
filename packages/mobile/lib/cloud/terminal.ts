@@ -192,6 +192,10 @@ export function connectCloudTerminal(input: {
 		},
 		reconnect() {
 			if (closed) return;
+			// A drop's retry may still be waiting; left armed, it would open a
+			// second socket that close() can no longer reach.
+			if (timer !== undefined) deps.clearTimeout(timer);
+			timer = undefined;
 			attempt = 0;
 			generation++;
 			try { socket?.close(); } catch { /* already closed */ }
