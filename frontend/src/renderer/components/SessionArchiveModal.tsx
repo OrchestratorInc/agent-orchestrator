@@ -8,6 +8,7 @@ import { agentLabel } from "../lib/agent-options";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
+import { cn } from "../lib/utils";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
@@ -72,6 +73,9 @@ export function SessionArchiveModal({
 	const [query, setQuery] = useState("");
 	const deferredQuery = useDeferredValue(query);
 	const [selected, setSelected] = useState("");
+	// The pointer's hover is the card's own CSS, as on the board. Selection is
+	// only drawn while the arrow keys move it, and clears once the pointer moves.
+	const [keyboardSelecting, setKeyboardSelecting] = useState(false);
 	const [limit, setLimit] = useState(PAGE_SIZE);
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
@@ -89,6 +93,7 @@ export function SessionArchiveModal({
 			setQuery("");
 			setSelected("");
 			setLimit(PAGE_SIZE);
+			setKeyboardSelecting(false);
 		}
 	}
 
@@ -160,6 +165,7 @@ export function SessionArchiveModal({
 	};
 
 	const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+		if (["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) setKeyboardSelecting(true);
 		if (event.nativeEvent.isComposing || !selectedSession) return;
 		const mod = isMac ? event.metaKey : event.ctrlKey;
 		if (!mod) return;
@@ -186,8 +192,9 @@ export function SessionArchiveModal({
 				onOpenChange={onOpenChange}
 				title={t("shell.archivedSessions")}
 				description={t("archiveModal.searchPlaceholder")}
-				// Wider than the palette so cards sit at least three to a row.
-				className="w-[min(1200px,calc(100vw-4rem))]!"
+				// Wider than the palette so cards sit at least three to a row, on the
+				// board's own background so the cards read exactly as they do there.
+				className="w-[min(1200px,calc(100vw-4rem))]! bg-background!"
 				commandProps={{
 					shouldFilter: false,
 					value: selected,
@@ -214,6 +221,9 @@ export function SessionArchiveModal({
 				/>
 				<CommandList
 					onScroll={onListScroll}
+					onPointerMove={() => {
+						if (keyboardSelecting) setKeyboardSelecting(false);
+					}}
 					className="max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:items-start [&_[cmdk-list-sizer]]:gap-2"
 				>
 					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
@@ -226,13 +236,17 @@ export function SessionArchiveModal({
 							onSelect={() => openSession(session)}
 							data-testid="session-archive-card"
 							// The arrow-key selection looks like the board card's own hover.
-							className="rounded-lg outline-none data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover"
+							className={cn(
+								"rounded-lg outline-none",
+								keyboardSelecting && "data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover",
+							)}
 						>
 							{/* The card opens itself on click, so clicks stop here; keys from
 							    its controls and from its menus and dialogs (portals bubble
 							    through React) must not reach the list either. */}
 							<div onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
 								<ArchivedSessionCardAdapter
+									hidePullRequestProgress
 									hideTerminatedStatus
 									isRestoreDisabled={!restoreAvailable}
 									isRestoring={restoringSessionId === session.id}

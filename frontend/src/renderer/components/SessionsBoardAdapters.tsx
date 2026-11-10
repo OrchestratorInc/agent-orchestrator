@@ -155,6 +155,7 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 }
 
 export function ArchivedSessionCardAdapter({
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
 	onDelete,
@@ -164,6 +165,8 @@ export function ArchivedSessionCardAdapter({
 	restoreError,
 	session,
 }: {
+	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
 	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
@@ -179,6 +182,7 @@ export function ArchivedSessionCardAdapter({
 	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
@@ -215,6 +219,7 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
 	memory,
@@ -229,6 +234,7 @@ function DesktopSessionCard({
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
 	memory?: SessionMemoryReading;
@@ -332,7 +338,7 @@ function DesktopSessionCard({
 			labels={{
 				formatTime: formatTimeCompact,
 				intakeIssue: (id) => t("shell.intakeIssue", { id }),
-				pr: pullRequestLabels(t),
+				pr: hidePullRequestProgress ? { ...pullRequestLabels(t), progress: undefined } : pullRequestLabels(t),
 				updatedAt: (timestamp: string) =>
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}

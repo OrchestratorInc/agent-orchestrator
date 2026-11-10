@@ -1053,7 +1053,8 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("ao/dead-worker")).toBeInTheDocument();
 		// Everything here is archived, so the card does not say so.
 		expect(within(card).queryByText("Terminated")).not.toBeInTheDocument();
-		expect(within(card).getByTestId("session-pr-progress")).toHaveTextContent("1 of 2 PRs merged · 1 open");
+		// The PR links already carry their state; the "n of m merged" line is dropped.
+		expect(within(card).queryByTestId("session-pr-progress")).not.toBeInTheDocument();
 		expect(within(card).getByRole("link", { name: "PR #42 merged" })).toHaveAttribute(
 			"href",
 			"https://github.com/example/radic/pull/42",
