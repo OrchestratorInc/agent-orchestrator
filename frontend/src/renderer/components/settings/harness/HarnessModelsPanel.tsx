@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentModelsQueryOptions } from "../../../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
 import { useSettings, useUpdateHarnessDefault } from "../../../hooks/useSettings";
 import { agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../../lib/agent-model-choices";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
@@ -35,11 +35,29 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	onOpenAccount: () => void;
 }) {
 	const { i18n, t } = useTranslation();
+	const queryClient = useQueryClient();
 	const options = agentModelsQueryOptions(agentId, "", hostId, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	// The saved catalog lists without waiting on readiness; only its refresh
 	// (refreshModelsOnOpen) and the daemon's discovery wait for readiness.
 	const catalog = useQuery(options);
+	// The manual refresh runs the harness's own discovery against its configured
+	// providers and replaces the list in place, without a loading state.
+	const [refreshing, setRefreshing] = useState(false);
+	const [refreshError, setRefreshError] = useState<string | undefined>(undefined);
+	const refreshCatalog = async () => {
+		if (refreshing) return;
+		setRefreshing(true);
+		setRefreshError(undefined);
+		try {
+			const refreshed = await refreshAgentModels(agentId, "", hostId, true);
+			queryClient.setQueryData(options.queryKey, refreshed);
+		} catch (error) {
+			setRefreshError(error instanceof Error ? error.message : t("settings.harness.models.loadFailed"));
+		} finally {
+			setRefreshing(false);
+		}
+	};
 	const [page, setPage] = useState(0);
 	const [modelSearch, setModelSearch] = useState("");
 	const scope = `${hostId ?? LOCAL_HOST}:${agentId}`;
@@ -169,15 +187,25 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 			{allModelIds.length ? <span className="text-xs tabular-nums text-settings-muted">{t("settings.harness.models.enabledSummary", families
 				? { enabled: families.filter((family) => idsOf(family.id).some(isModelEnabled)).length, total: families.length }
 				: { enabled: enabledCount, total: allModelIds.length })}</span> : null}
-			{bulkModelIds.length > 1 ? <span className="ml-auto flex items-center gap-1">
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-					disabled={bulkModelIds.every(isModelEnabled)}
-					onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
-					disabled={!bulkModelIds.some((id) => id !== keptOnId && isModelEnabled(id))}
-					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnId)}>{t("settings.harness.models.disableAll")}</Button>
-			</span> : null}
+			<span className="ml-auto flex items-center gap-1">
+				<Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 gap-1 px-2 text-caption"
+					disabled={refreshing}
+					aria-busy={refreshing}
+					onClick={() => void refreshCatalog()}>
+					{refreshing ? <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-3.5" aria-hidden="true" />}
+					{t(refreshing ? "settings.harness.models.refreshingModels" : "settings.harness.models.refreshModels")}
+				</Button>
+				{bulkModelIds.length > 1 ? <>
+					<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+						disabled={bulkModelIds.every(isModelEnabled)}
+						onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
+					<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+						disabled={!bulkModelIds.some((id) => id !== keptOnId && isModelEnabled(id))}
+						onClick={() => setModelsEnabled(bulkModelIds, false, keptOnId)}>{t("settings.harness.models.disableAll")}</Button>
+				</> : null}
+			</span>
 		</div>
+		{refreshError ? <p role="alert" className="text-xs text-error">{refreshError}</p> : null}
 		{disabledModelsError ? <p role="alert" className="text-xs text-error">{disabledModelsError}</p> : null}
 		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
 			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />

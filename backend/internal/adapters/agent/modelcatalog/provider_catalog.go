@@ -30,7 +30,10 @@ func hasLocalProviderCatalog(agentID string) bool {
 	return false
 }
 
-// listsRunnableModels 标识原生命令仅列出当前可用模型的 Harness，避免把全量缓存当成可用列表。
+// listsRunnableModels marks harnesses whose native command lists only the models
+// they can run right now, while their provider cache names every model the build
+// knows about. The non-native remainder is browse-only; for OMP,
+// ompLimitCatalog also drops the cached providers this installation did not set up.
 func listsRunnableModels(agentID string) bool {
 	switch agentID {
 	case "opencode", "kilocode", "mimo-code", "omp":
@@ -309,11 +312,21 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 		path := filepath.Join(piCatalogDir(agentID, env), "models.db")
 		paths = []string{path, path + "-wal"}
 	}
+	if agentID == "omp" {
+		// The enabled provider set comes from models.yml, so editing it must
+		// invalidate the cached catalog the way a changed cache does.
+		return ompStatFingerprint(paths) + ";" + fingerprintConfigPaths([]string{filepath.Join(piCatalogDir(agentID, env), "models.yml")})
+	}
 	if agentID == "pi" || agentID == "kimchi" {
 		// Pi and Kimchi rewrite these files with the same contents on every
 		// --list-models, so a modification time would invalidate every discovery.
 		return ";" + fingerprintConfigPaths(paths)
 	}
+	return ompStatFingerprint(paths)
+}
+
+// ompStatFingerprint stamps each path with its size and modification time.
+func ompStatFingerprint(paths []string) string {
 	var stamp strings.Builder
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil {

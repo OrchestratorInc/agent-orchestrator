@@ -293,7 +293,7 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
 	});
 
-	it("lists model metadata without a manual refresh button", async () => {
+	it("lists model metadata and refreshes the catalog on demand", async () => {
 		mockInstalledOperations("npm");
 		const models = {
 			agentId: "codex", lastSuccessAt: "2026-10-08T09:00:00Z",
@@ -327,8 +327,13 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).queryByRole("button", { name: "Default model" })).toBeNull();
 		expect(within(page).queryByRole("button", { name: "Save defaults" })).toBeNull();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
-		expect(within(page).queryByRole("button", { name: /Refresh/ })).toBeNull();
+		// Opening the page refreshes once; the button asks again without leaving the tab.
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined, catalogOnly: true } } });
+		const refreshButton = within(page).getByRole("button", { name: "Refresh models" });
+		const callsBefore = vi.mocked(apiClient.POST).mock.calls.length;
+		await userEvent.click(refreshButton);
+		await waitFor(() => expect(vi.mocked(apiClient.POST).mock.calls.length).toBeGreaterThan(callsBefore));
+		expect(vi.mocked(apiClient.POST).mock.calls.at(-1)?.[0]).toBe("/api/v1/agents/{agent}/models/refresh");
 	});
 
 

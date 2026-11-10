@@ -4139,7 +4139,7 @@ func selectConfigOption(id, name, category, current string, values ...string) ac
 	}}
 }
 
-func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
+func TestDiscoverModelsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
 		selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "opus"),
 	}}
@@ -4151,11 +4151,11 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}, slog.New(slog.DiscardHandler))
 	driver.useTestProcess(fakeSpawn(agent))
 
-	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	got, err := driver.discoverModels(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Category != "model" || got[0].Current.Select != "sonnet" || len(got[0].Choices) != 2 {
+	if len(got) != 2 || got[0].ID != "sonnet" || !got[0].IsDefault || got[1].ID != "opus" {
 		t.Fatalf("options = %#v", got)
 	}
 	if agent.promptParams.Prompt != nil {

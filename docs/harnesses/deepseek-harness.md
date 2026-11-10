@@ -18,16 +18,13 @@ The harness id is `deepseek-harness`; the binary AO resolves is `dsh`.
 Chat is the complete path. AO launches `dsh --profile acp` and reads the session's
 own configuration catalog, so the model picker offers exactly the models that
 session accepts, and the reasoning-effort selector offers the levels that model
-advertises (`off`, `low`, `high`, `max`).
+advertises. Discovery reads each model separately, since custom providers can offer different levels.
 
 Model values are opaque: DeepSeek Harness encodes each choice as a JSON array
 string, for example `["deepseek-official","deepseek-v4-flash"]`. AO passes the
 value through unchanged, and the project model field accepts the same string.
 
-AO's own effort vocabulary is mapped onto the four Harness levels before it is
-sent — `none`/`minimal`/`off` become `off`, `low` stays `low`, `medium`/`high`
-become `high`, and `xhigh`/`max` become `max` — so an effort configured for
-another harness does not fail a Harness session.
+AO preserves the selected native effort value, including custom-provider levels such as `minimal`, `medium`, and `xhigh`. Only the legacy `none` alias becomes `off`. The live session catalog validates the chosen model and effort before AO sends them.
 
 AO standing instructions ride the first turn as a text block, because
 `session/new` reads only the working directory. The block is delivered when a

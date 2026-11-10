@@ -1,7 +1,9 @@
 package acp
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -11,12 +13,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func normalizeAdditionalDirectories(cwd string, directories []string, supported bool) ([]string, error) {
+// normalizeAdditionalDirectories 先排除主目录已覆盖的真实子目录，再检查外部目录能力，保留符号链接的访问边界。
+func normalizeAdditionalDirectories(ctx context.Context, cwd string, directories []string, supported bool) ([]string, error) {
 	if len(directories) == 0 {
 		return nil, nil
 	}
-	if !supported {
-		return nil, fmt.Errorf("ACP agent does not support additional workspace directories")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	root, rootErr := os.OpenRoot(cwd)
+	if rootErr == nil {
+		defer func() { _ = root.Close() }()
 	}
 	seen := map[string]struct{}{filepath.Clean(cwd): {}}
 	out := make([]string, 0, len(directories))
@@ -29,7 +36,15 @@ func normalizeAdditionalDirectories(cwd string, directories []string, supported 
 			continue
 		}
 		seen[clean] = struct{}{}
+		if rel, err := filepath.Rel(cwd, clean); err == nil && filepath.IsLocal(rel) && rootErr == nil {
+			if info, err := root.Stat(rel); err == nil && info.IsDir() {
+				continue
+			}
+		}
 		out = append(out, clean)
+	}
+	if len(out) > 0 && !supported {
+		return nil, fmt.Errorf("ACP agent does not support additional workspace directories")
 	}
 	return out, nil
 }

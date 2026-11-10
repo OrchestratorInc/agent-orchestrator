@@ -20,11 +20,11 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 // stores. OMP has no non-interactive `auth status` command: unknown positional
 // arguments launch its interactive agent and must never be used as probes.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
+	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := ompLocalAuthStatus(ctx); err != nil {
+	if status, ok, err := ompLocalAuthStatus(ctx, binary); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	} else if ok {
 		return status, nil
@@ -32,13 +32,17 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-func ompLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+// ompLocalAuthStatus 优先验证自定义默认模型的实际路由，再检查原生账号存储。
+func ompLocalAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	configDir, ok := ompConfigDir()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
+	}
+	if status, handled, err := ompModelsAuthStatus(ctx, binary, configDir); handled || err != nil {
+		return status, handled, err
 	}
 	dbPath := filepath.Join(configDir, "agent.db")
 	if status, ok, err := ompAgentDBAuthStatus(ctx, dbPath); err != nil {

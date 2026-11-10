@@ -249,7 +249,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 // Discoverer implements the model-discovery port for production daemon wiring.
 type Discoverer struct {
 	CodexModels       CodexModelListFunc
-	ACPOptions        map[string]ACPOptionListFunc
+	ACPModels         map[string]ACPModelListFunc
 	ClaudeModels      ClaudeModelListFunc
 	ClaudeFingerprint ClaudeFingerprintFunc
 }
@@ -258,11 +258,8 @@ type Discoverer struct {
 // opening a provider thread.
 type CodexModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error)
 
-// ACPOptionListFunc obtains a harness's provider-owned model choices from the
-// ACP configuration catalog advertised by session/new. It is keyed by harness
-// id because each agent reaches that catalog through its own command line, and
-// the value a session accepts is exactly the value the catalog advertised.
-type ACPOptionListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error)
+// ACPModelListFunc 返回 ACP 会话逐模型报告的目录，保留模型自己的思考档位。
+type ACPModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error)
 
 // ClaudeModelListFunc obtains the Claude model IDs the configured provider
 // actually serves, in that provider's own ID format. It returns an error
@@ -298,8 +295,8 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "codex" {
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
-	if list := d.ACPOptions[request.AgentID]; list != nil {
-		catalog, err := discoverACPOptionCatalog(ctx, request, list)
+	if list := d.ACPModels[request.AgentID]; list != nil {
+		catalog, err := discoverACPModelCatalog(ctx, request, list)
 		if err == nil {
 			return catalog, nil
 		}
@@ -423,6 +420,10 @@ func applyClaudeConfiguredDefault(models []ports.AgentModelInfo, configured stri
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	if d.ACPModels[request.AgentID] != nil || commandSpecs[request.AgentID].parser != nil {
+		// 旧目录未保留原生思考档位，升级后必须重新发现。
+		fingerprint += ":model-efforts-v1"
+	}
 	if request.AgentID == "fx" && request.CredentialType == "" {
 		return fingerprint + ":shared-providers-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
@@ -430,7 +431,13 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 		// Replace older task-only snapshots through the normal background refresh.
 		if listsRunnableModels(request.AgentID) {
 			// Snapshots from before RunnableModels lack it.
-			return fingerprint + ":shared-providers-v1:runnable-v1"
+			suffix := ":shared-providers-v1:runnable-v1"
+			if request.AgentID == "omp" {
+				// Snapshots from before OMP was limited to its enabled providers
+				// carried every provider in the models.dev cache.
+				suffix += ":enabled-providers-v1"
+			}
+			return fingerprint + suffix
 		}
 		if request.AgentID == "pi" || request.AgentID == "kimchi" {
 			// Snapshots from before Pi's thinking levels were read lack them.
@@ -488,17 +495,25 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	if err != nil {
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
+	// The model command lists what the harness can run now, before any local
+	// catalog widens the list to providers it merely knows about.
+	native := normalize(models)
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
 		// The model command lists what it can run; the provider cache, every model.
 		if listsRunnableModels(agentID) {
-			for _, model := range normalize(models) {
+			for _, model := range native {
 				base.RunnableModels = append(base.RunnableModels, model.ID)
 			}
 		}
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)
+	}
+	if agentID == "omp" {
+		// OMP's cache is the models.dev snapshot for every provider its build
+		// ships; only the providers this installation enabled are worth listing.
+		models, base.Providers = ompLimitCatalog(ctx, env, native, models, base.Providers)
 	}
 	models = normalize(models)
 	if len(models) == 0 && len(base.Providers) == 0 {
@@ -693,42 +708,16 @@ func compareVersions(a, b []int) int {
 	return 0
 }
 
-func discoverACPOptionCatalog(
+// discoverACPModelCatalog 保留 ACP 发现层按模型采集的能力，并沿用共享排序规则。
+func discoverACPModelCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
-	list ACPOptionListFunc,
+	list ACPModelListFunc,
 ) (ports.AgentModelCatalog, error) {
 	base := Base(request.AgentID)
-	options, err := list(ctx, request)
+	models, err := list(ctx, request)
 	if err != nil {
 		return base, fmt.Errorf("%s ACP model discovery: %w", request.AgentID, err)
-	}
-	var models []ports.AgentModelInfo
-	for _, option := range options {
-		if option.Type != ports.ChatConfigOptionSelect ||
-			(option.Category != "model" && option.ID != "model") {
-			continue
-		}
-		for _, choice := range option.Choices {
-			id := strings.TrimSpace(choice.Value)
-			if id == "" {
-				continue
-			}
-			label := strings.TrimSpace(choice.Name)
-			if label == "" {
-				label = id
-			}
-			provider := strings.TrimSpace(choice.Group)
-			if provider == "" {
-				if prefix, _, ok := strings.Cut(id, "/"); ok {
-					provider = prefix
-				}
-			}
-			models = append(models, ports.AgentModelInfo{
-				ID: id, Label: label, Provider: provider,
-				IsDefault: id == strings.TrimSpace(option.Current.Select),
-			})
-		}
 	}
 	models = normalize(models)
 	if len(models) == 0 {
@@ -1311,6 +1300,7 @@ func looksLikeModelID(value string) bool {
 	}
 }
 
+// parseJSONModels 解析 CLI 的模型记录，只采用其明确报告的能力。
 func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 	var root any
 	if err := json.Unmarshal(output, &root); err != nil {
@@ -1350,6 +1340,7 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 					IsDefault:     firstBool(node, "isDefault", "is_default", "default"),
 					ContextWindow: catalogContextWindow(node),
 					Inputs:        catalogInputs(node),
+					Efforts:       catalogThinkingLevels(node),
 				})
 			}
 			for key, child := range node {
@@ -1372,6 +1363,7 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 									IsDefault:     firstBool(modelNode, "isDefault", "is_default", "default"),
 									ContextWindow: catalogContextWindow(modelNode),
 									Inputs:        catalogInputs(modelNode),
+									Efforts:       catalogThinkingLevels(modelNode),
 								})
 								continue
 							}

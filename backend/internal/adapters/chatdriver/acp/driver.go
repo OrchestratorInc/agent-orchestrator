@@ -214,22 +214,21 @@ func New(cfg Config, log *slog.Logger) *Driver {
 	return driver
 }
 
-// DiscoverConfigOptions opens a short-lived ACP session and returns the
-// provider-owned configuration catalog advertised by session/new. It sends no
-// prompt and closes the process immediately after the handshake.
-func DiscoverConfigOptions(
+// DiscoverModels 在独立短会话中读取各模型的能力，不发送 prompt 或操作已有会话。
+func DiscoverModels(
 	ctx context.Context,
 	launch Launch,
 	workingDir string,
 	log *slog.Logger,
-) ([]ports.ChatConfigOption, error) {
+) ([]ports.AgentModelInfo, error) {
 	driver := New(Config{
 		Launch: func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
 	}, log)
-	return driver.discoverConfigOptions(ctx, workingDir)
+	return driver.discoverModels(ctx, workingDir)
 }
 
-func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) ([]ports.ChatConfigOption, error) {
+// discoverModels 在同一发现会话中切换模型，避免把默认模型的档位套用到其他模型。
+func (d *Driver) discoverModels(ctx context.Context, workingDir string) ([]ports.AgentModelInfo, error) {
 	if !filepath.IsAbs(workingDir) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", workingDir)
 	}
@@ -246,7 +245,8 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = conv.Close() }()
+	// 发现会话不需要恢复，关闭该会话并回收本次探测启动的独立进程。
+	defer func() { _ = conv.Terminate() }()
 
 	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
@@ -257,7 +257,10 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	conv.mu.Lock()
+	conv.sessionID = string(resp.SessionId)
+	conv.mu.Unlock()
+	return discoverSessionModels(openCtx, conv.conn, resp)
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
@@ -327,7 +330,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// sessions; it just cannot be resumed after a disconnect. The resume
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
+	additional, err := normalizeAdditionalDirectories(ctx, cfg.WorkspacePath, cfg.AdditionalDirectories,
 		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
 	if err != nil {
 		conv.discard()
@@ -538,7 +541,7 @@ func (d *Driver) resumeSession(
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
+	additional, err := normalizeAdditionalDirectories(ctx, cfg.WorkspacePath, cfg.AdditionalDirectories,
 		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
 	if err != nil {
 		conv.discard()

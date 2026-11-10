@@ -68,6 +68,10 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			// Falling back to legacy JSON then could revive removed credentials.
 			if agentID == "omp" {
 				if providers, ok := ompConfiguredProviders(ctx, filepath.Join(dir, "agent.db")); ok {
+					// models.yml declares API-key providers that hold no database row.
+					declared, _ := ompDeclaredProviders(filepath.Join(dir, "models.yml"))
+					providers = uniqueProviders(append(providers, declared...))
+					sort.Strings(providers)
 					return providers
 				}
 			}

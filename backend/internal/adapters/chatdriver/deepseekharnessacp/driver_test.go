@@ -48,14 +48,15 @@ func TestPromptFailureCodeOnlyRecognizesDeepSeekMissingRouteKey(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsCarryModelAndMappedEffort(t *testing.T) {
+// TestSessionOptionsCarryModelAndNativeEffort 防止供应商原生档位在生成 ACP 请求前被旧映射改写。
+func TestSessionOptionsCarryModelAndNativeEffort(t *testing.T) {
 	got := sessionOptions(ports.ChatTurnSettings{
-		Model:  `["deepseek-official","deepseek-v4-flash"]`,
+		Model:  `["codegpt","cn:deepseek-v4.1-flash"]`,
 		Effort: "xhigh",
 	})
 	want := []acpdriver.SessionOption{
-		{ID: "model", Value: `["deepseek-official","deepseek-v4-flash"]`},
-		{ID: "reasoning_effort", Value: "max"},
+		{ID: "model", Value: `["codegpt","cn:deepseek-v4.1-flash"]`},
+		{ID: "reasoning_effort", Value: "xhigh"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options\nwant: %#v\n got: %#v", want, got)
@@ -68,21 +69,19 @@ func TestSessionOptionsOmitUnsetSettings(t *testing.T) {
 	}
 }
 
-// TestSessionOptionsMapAOVocabularyOntoHarnessLevels covers the mapping that
-// keeps a project-level effort configured for another harness from breaking a
-// DeepSeek Harness session: Harness accepts only off, low, high, and max.
-func TestSessionOptionsMapAOVocabularyOntoHarnessLevels(t *testing.T) {
+// TestSessionOptionsRetainNativeLevels 只兼容 none 别名，其余档位原样交由会话校验。
+func TestSessionOptionsRetainNativeLevels(t *testing.T) {
 	cases := map[string]string{
 		"none":    "off",
-		"minimal": "off",
+		"minimal": "minimal",
 		"off":     "off",
 		"low":     "low",
-		"medium":  "high",
+		"medium":  "medium",
 		"high":    "high",
-		"xhigh":   "max",
+		"xhigh":   "xhigh",
 		"max":     "max",
-		// AO values are matched case-insensitively.
-		"HIGH": "high",
+		// 原生值由实时目录校验，不在此改变大小写。
+		"HIGH": "HIGH",
 	}
 	for input, want := range cases {
 		options := sessionOptions(ports.ChatTurnSettings{Effort: input})
@@ -99,39 +98,6 @@ func TestSessionOptionsPassThroughUnknownEffort(t *testing.T) {
 	options := sessionOptions(ports.ChatTurnSettings{Effort: "turbo"})
 	if len(options) != 1 || options[0].Value != "turbo" {
 		t.Fatalf("options = %#v, want the value passed through", options)
-	}
-}
-
-func TestValidateTurnSettings(t *testing.T) {
-	cases := []struct {
-		name    string
-		effort  string
-		wantErr bool
-	}{
-		{name: "empty effort defers to Harness", effort: ""},
-		{name: "harness level", effort: "high"},
-		{name: "mapped AO level", effort: "medium"},
-		{name: "unmappable level", effort: "turbo", wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateTurnSettings(ports.PermissionModeDefault, ports.ChatTurnSettings{Effort: tc.effort})
-			if tc.wantErr != (err != nil) {
-				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestValidateTurnSettingsAcceptsOpaqueModelValues keeps AO out of Harness's
-// model vocabulary: a session's model is the JSON array string its own catalog
-// advertised, not a provider/model pair.
-func TestValidateTurnSettingsAcceptsOpaqueModelValues(t *testing.T) {
-	err := validateTurnSettings(ports.PermissionModeDefault, ports.ChatTurnSettings{
-		Model: `["deepseek-official","deepseek-v4-pro"]`,
-	})
-	if err != nil {
-		t.Fatalf("err = %v, want the opaque value accepted", err)
 	}
 }
 

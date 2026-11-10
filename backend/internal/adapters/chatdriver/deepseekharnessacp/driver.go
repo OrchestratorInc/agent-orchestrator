@@ -5,7 +5,6 @@ package deepseekharnessacp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -26,13 +25,13 @@ const acpProfile = "acp"
 // credentials; AO adds no environment overlay of its own.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
-		Harness:              domain.HarnessDeepSeek,
-		Configure:            configure,
-		SessionOptions:       sessionOptions,
-		PromptFailureCode:    promptFailureCode,
-		SessionPreamble:      SessionPreamble,
-		PermissionPolicy:     permissionPolicy,
-		ValidateTurnSettings: validateTurnSettings,
+		Harness:                  domain.HarnessDeepSeek,
+		Configure:                configure,
+		SessionOptions:           sessionOptions,
+		PromptFailureCode:        promptFailureCode,
+		SessionPreamble:          SessionPreamble,
+		PermissionPolicy:         permissionPolicy,
+		RequireAdvertisedOptions: true,
 	}, log)
 }
 
@@ -56,23 +55,6 @@ func promptFailureCode(err error) domain.ConversationFailureCode {
 
 func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	return []string{"--profile", acpProfile}, nil, nil
-}
-
-// deepseekEfforts maps AO's provider-neutral reasoning-effort vocabulary onto
-// the levels DeepSeek Harness advertises (off, low, high, max). Harness has no
-// middle level, so AO's "medium" takes Harness's own default balance. Values not
-// listed here pass through unchanged: a model that grows a level keeps working,
-// and an unrecognized value is rejected by the agent rather than silently
-// replaced.
-var deepseekEfforts = map[string]string{
-	"none":    "off",
-	"minimal": "off",
-	"off":     "off",
-	"low":     "low",
-	"medium":  "high",
-	"high":    "high",
-	"xhigh":   "max",
-	"max":     "max",
 }
 
 // sessionOptions maps AO's per-turn choices onto DeepSeek Harness's ACP config
@@ -110,31 +92,12 @@ func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	)}
 }
 
-// deepseekEffort resolves one AO effort value to a Harness level, passing an
-// already-native or unknown value through untouched.
+// deepseekEffort 只兼容关闭思考的旧别名，原生档位由会话实时目录校验。
 func deepseekEffort(effort string) string {
-	if mapped, ok := deepseekEfforts[strings.ToLower(effort)]; ok {
-		return mapped
+	if strings.EqualFold(effort, "none") {
+		return "off"
 	}
 	return effort
-}
-
-// ValidateTurnSettings rejects a turn setting that cannot reach the session, so
-// the failure surfaces before DAO creates durable state rather than part-way
-// through the first turn. Harness model values are the opaque strings its own
-// session catalog advertises, so the model is only checked for presence; the
-// effort must resolve to one of the four advertised levels.
-func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
-	effort := strings.TrimSpace(settings.Effort)
-	if effort == "" {
-		return nil
-	}
-	switch deepseekEffort(effort) {
-	case "off", "low", "high", "max":
-		return nil
-	default:
-		return fmt.Errorf("%w: DeepSeek Harness reasoning effort %q is not one of off, low, high, max", ports.ErrChatConfigOptionInvalid, settings.Effort)
-	}
 }
 
 // permissionPolicy is AO's side of accept-edits and auto. DeepSeek Harness asks

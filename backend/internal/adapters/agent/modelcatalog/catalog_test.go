@@ -782,18 +782,8 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 }
 
 func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
-	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"cline": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-		return []ports.ChatConfigOption{
-			{
-				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
-				Current: ports.ChatConfigOptionValue{Select: "anthropic/claude-sonnet-4-6"},
-				Choices: []ports.ChatConfigOptionChoice{
-					{Value: "anthropic/claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Group: "anthropic", GroupName: "Anthropic"},
-					{Value: "openai/gpt-5.4", Name: "GPT-5.4", Group: "openai", GroupName: "OpenAI"},
-				},
-			},
-			{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect},
-		}, nil
+	discoverer := Discoverer{ACPModels: map[string]ACPModelListFunc{"cline": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", IsDefault: true}, {ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "openai"}}, nil
 	}}}
 	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: "/bin/cline"})
 	if err != nil {
@@ -811,21 +801,8 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 }
 
 func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
-	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"devin": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-		return []ports.ChatConfigOption{
-			{
-				ID: "permissionMode", Name: "Permission Mode", Type: ports.ChatConfigOptionSelect,
-				Choices: []ports.ChatConfigOptionChoice{{Value: "accept-edits", Name: "Code"}},
-			},
-			{
-				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
-				Current: ports.ChatConfigOptionValue{Select: "swe-1-6-slow"},
-				Choices: []ports.ChatConfigOptionChoice{
-					{Value: "swe-1-6-slow", Name: "SWE-1.6 Slow"},
-					{Value: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
-				},
-			},
-		}, nil
+	discoverer := Discoverer{ACPModels: map[string]ACPModelListFunc{"devin": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{{ID: "swe-1-6-slow", Label: "SWE-1.6 Slow", IsDefault: true}, {ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6"}}, nil
 	}}}
 	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "devin", Binary: "devin"})
 	if err != nil {
@@ -1311,8 +1288,8 @@ func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
 	boom := errors.New("workspace path must be absolute")
 	for _, agentID := range []string{"deepseek-harness", "devin"} {
 		t.Run(agentID, func(t *testing.T) {
-			discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
-				agentID: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			discoverer := Discoverer{ACPModels: map[string]ACPModelListFunc{
+				agentID: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 					return nil, boom
 				},
 			}}

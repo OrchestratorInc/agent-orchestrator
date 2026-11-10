@@ -44,6 +44,14 @@ Project configuration has typed fields for the base branch, session prefix, envi
 
 See [Projects](/configuration/projects) for the current field reference.
 
+## 调度与容量
+
+在 **设置 → 调度与容量** 中调整全局或各代理的并发上限，范围为 1–10。默认全局为 3、单个代理为 2；编排器和工作会话共用这些名额，空闲但尚未终止的会话仍占用名额。页面同时显示当前占用与动态容量，工作流的“预算与容量”页提供相同配置。
+
+全局策略的“资源限制”开关控制是否根据 CPU 和可用内存限制新增会话。开启时可调整 CPU 恢复、软限流和硬限制阈值，以及内存可用比例的软/硬阈值和最低保留 GiB。默认可用内存低于 25% 会逐步降低容量，低于 15% 或不足 2 GiB 会停止新增准入。关闭后，资源负载或采样不可用不会阻止启动；全局/单代理并发上限、授权和预算检查继续生效。
+
+保存会沿用桌面审批流程，并立即更新当前 daemon 的策略，无需重启。策略持久化保存在该 daemon 的数据库中；降低并发不会终止已有会话，只会限制后续启动。关闭资源限制后，启动前需要自行留意机器负载。
+
 ## Daemon environment
 
 The primary daemon listener is always loopback-only and unauthenticated. Its bind host is not configurable. Useful environment variables include:

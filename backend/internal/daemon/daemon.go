@@ -516,23 +516,23 @@ func Run(buildVersion string) error {
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
 		},
-		ACPOptions: map[string]modelcatalog.ACPOptionListFunc{
-			"cline": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+		ACPModels: map[string]modelcatalog.ACPModelListFunc{
+			"cline": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+				return chatdriveracp.DiscoverModels(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"--acp"},
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
-			"deepseek-harness": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+			"deepseek-harness": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+				return chatdriveracp.DiscoverModels(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"--profile", "acp"},
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
-			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+				return chatdriveracp.DiscoverModels(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"acp"},
 					Env:     request.Env,

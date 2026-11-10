@@ -2,9 +2,27 @@ package modelcatalog
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
+
+// catalogThinkingLevels 保留 CLI 明确给出的 thinking 档位，不从 reasoning 布尔值猜测。
+func catalogThinkingLevels(node map[string]any) []string {
+	values, ok := node["thinking"].([]any)
+	if !ok {
+		return nil
+	}
+	var levels []string
+	for _, value := range values {
+		level, ok := value.(string)
+		level = strings.TrimSpace(level)
+		if ok && level != "" && !slices.Contains(levels, level) {
+			levels = append(levels, level)
+		}
+	}
+	return levels
+}
 
 // Catalogs use these explicit token counts; no model-name or pricing lookup is
 // used to fill gaps. Table suffixes K/M are the CLI's decimal token units.
