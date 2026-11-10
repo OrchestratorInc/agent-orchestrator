@@ -14,11 +14,11 @@ describe("update transfer telemetry bridge", () => {
 		const stop = startUpdateTelemetry();
 		const callback = onTelemetry.mock.calls[0][0] as (outcome: UpdateOutcome) => void;
 		callback({
-			event: "ao.renderer.update_downloaded", phase: "download", trigger: "manual",
+			event: "ao.updates.downloaded", phase: "download", trigger: "manual",
 			to_version: "2.0.0", differential_eligible: true, transfer_mode: "differential",
 			fallback: true, transferred_bytes: 100, target_bytes: 500,
 		});
-		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.update_downloaded", {
+		expect(captureRendererEvent).toHaveBeenCalledWith("ao.updates.downloaded", {
 			phase: "download", trigger: "manual", to_version: "2.0.0", error_category: undefined,
 			differential_eligible: true, transfer_mode: "differential", fallback: true,
 			transferred_bytes: 100, target_bytes: 500,

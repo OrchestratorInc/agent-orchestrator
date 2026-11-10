@@ -141,3 +141,35 @@ describe("cloud control-plane URL pinning", () => {
 		}
 	});
 });
+
+// Host tokens open a shell on the account's machines; only the main process reads them.
+describe("the account's machine directory", () => {
+	const listing = JSON.stringify({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example", token: "a".repeat(64) }], fixedAddresses: true });
+	const hosts = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/me/hosts", method: "GET" };
+	const fetchListing = () => vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(listing, { status: 200 }));
+
+	it("strips host tokens from renderer requests, including an encoded path", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchListing() as unknown as typeof fetch });
+		for (const path of [hosts.path, "/api/cloud/v1/me/ho%73ts"]) {
+			const response = await proxy.request({ ...hosts, path });
+			expect(JSON.parse(response.body)).toEqual({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example" }], fixedAddresses: true });
+		}
+	});
+
+	it("keeps host tokens for the main process and passes its signal to the request", async () => {
+		const fetchImpl = fetchListing();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const { signal } = new AbortController();
+		expect((await proxy.request(hosts, { hostTokens: true, signal })).body).toBe(listing);
+		expect(fetchImpl.mock.calls[0][1]?.signal).toBe(signal);
+	});
+
+	it("refuses the directory on the binary and stream channels", async () => {
+		const fetchImpl = fetchListing();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		await expect(proxy.requestBinary(hosts)).rejects.toThrow(/cloudCp:request/);
+		const sender = { id: 1, isDestroyed: () => false, send: vi.fn(), once: vi.fn() };
+		await expect(proxy.openStream(sender, hosts)).rejects.toThrow(/cloudCp:request/);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+});

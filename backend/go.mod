@@ -14,6 +14,7 @@ require (
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.19.1
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/rivo/uniseg v0.4.7
@@ -25,9 +26,11 @@ require (
 	github.com/unixshells/vt-go v0.2.0
 	github.com/unreallabsai/unreal-agent v0.1.1
 	github.com/yuin/goldmark v1.8.2
+	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.51.0
 	rsc.io/qr v0.2.0

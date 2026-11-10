@@ -36,8 +36,9 @@ type Animation = { height: number; collapsing: boolean };
 
 /**
  * The user's bubble body, folded when it is taller than about ten lines. The fold
- * is measured from the rendered content, so pasted text, code and attachments
- * all count by the room they take. Short messages render exactly as before.
+ * is measured from the rendered content, so pasted text and code count by the room
+ * they take. Attachments stay outside it: a normal screenshot is taller than the
+ * fold, so inside it would always be cut off. Short messages render exactly as before.
  */
 export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, children }: {
 	/** Stays the same across the echo-to-stored handoff; the message's visible text. */

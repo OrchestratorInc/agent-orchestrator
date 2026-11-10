@@ -502,7 +502,6 @@ export function GeneralSettingsSection({
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <NewSidebarDesignRow />}
-				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -627,18 +626,6 @@ function NewSidebarDesignRow() {
 	return (
 		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
 			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
-		</SettingsRow>
-	);
-}
-
-/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
-function SimplifiedTopbarRow() {
-	const { t } = useTranslation();
-	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
-	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
-	return (
-		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
-			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
 		</SettingsRow>
 	);
 }
