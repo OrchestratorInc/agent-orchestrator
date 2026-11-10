@@ -119,6 +119,15 @@ describe("native runtime resources", () => {
 		]));
 	});
 
+	it("ships the Liquid Glass icon catalog only on macOS and names it in Info.plist", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("linux")).not.toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("win32")).not.toContain("assets/Assets.car");
+		expect(config.packagerConfig?.extendInfo).toMatchObject({ CFBundleIconName: "AppIcon" });
+		// The .icns stays as CFBundleIconFile for macOS before 26.
+		expect(config.packagerConfig?.icon).toBe("assets/icon");
+	});
+
 	it("bundles the wake coordinator only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
 		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");

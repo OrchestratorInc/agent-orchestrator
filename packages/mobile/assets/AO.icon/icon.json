@@ -1,56 +1,79 @@
 {
-  "fill": {
-    "solid": "srgb:0.09320,0.09249,0.09174,1.00000"
+  "color-space-for-untagged-svg-colors" : "display-p3",
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.10000,0.10500,0.11500,1.00000",
+      "srgb:0.00000,0.00000,0.00000,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.85
+      }
+    }
   },
-  "groups": [
+  "groups" : [
     {
-      "layers": [
+      "layers" : [
         {
-          "image-name": "ruto.png",
-          "name": "Ruto"
+          "glass" : true,
+          "image-name" : "ruto.svg",
+          "name" : "Ruto",
+          "position" : {
+            "scale" : 0.86,
+            "translation-in-points" : [
+              -6,
+              16
+            ]
+          }
         }
       ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0.0
+      "name" : "Ruto",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
       },
-      "specular": false,
-      "translucency": {
-        "enabled": false,
-        "value": 0.5
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
       }
     },
     {
-      "layers": [
+      "layers" : [
         {
-          "image-name": "face.png",
-          "name": "Tile face",
-          "hidden-specializations": [
-            {
-              "appearance": "tinted",
-              "value": true
-            }
-          ]
+          "glass" : true,
+          "image-name" : "baton.svg",
+          "name" : "Baton",
+          "position" : {
+            "scale" : 0.86,
+            "translation-in-points" : [
+              -6,
+              16
+            ]
+          }
         }
       ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0.0
+      "name" : "Baton",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
       },
-      "specular": false,
-      "translucency": {
-        "enabled": false,
-        "value": 0.5
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
       }
     }
   ],
-  "supported-platforms": {
-    "circles": [
+  "supported-platforms" : {
+    "circles" : [
       "watchOS"
     ],
-    "squares": [
-      "iOS",
-      "macOS"
-    ]
+    "squares" : "shared"
   }
 }

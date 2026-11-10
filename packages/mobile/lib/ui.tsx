@@ -131,13 +131,14 @@ export const Dot = memo(function Dot({
 	);
 });
 
-// `mascot.png` is the desktop mascot (frontend/assets/ao-mascot.png) cropped to
-// its artwork, with the eye sockets filled so they stay dark on light themes.
+// `mascot.png` is the Liquid Glass Ruto from assets/brand, cropped to its
+// artwork by scripts/generate-brand-assets.swift, with the eyes painted dark so
+// they stay dark on light themes.
 // Its aspect ratio, as height / width.
 export const MASCOT_ASPECT = 200 / 256;
 // Where the wand tip sits in the artwork, as fractions of its width and height.
-const WAND_TIP_X = 0.972;
-const WAND_TIP_Y = 0.032;
+const WAND_TIP_X = 0.945;
+const WAND_TIP_Y = 0.016;
 const LAMP_DOT = 7;
 const LAMP_HALO = 16;
 
