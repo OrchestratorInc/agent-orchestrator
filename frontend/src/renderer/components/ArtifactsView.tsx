@@ -32,7 +32,7 @@ import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
-import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -567,7 +567,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						</span>
 					</Pressable>
 					{selection ? null : <div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
-						{row.bundle ? null : <ArtifactActionsMenu
+						{row.bundle ? null : <DeferredArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
@@ -594,7 +594,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			onPreview={open}
 			selection={selection}
 			actions={selection || row.bundle ? null : (
-				<ArtifactActionsMenu
+				<DeferredArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly

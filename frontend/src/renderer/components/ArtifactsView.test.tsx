@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
@@ -610,6 +610,45 @@ describe("ArtifactsView", () => {
 		await userEvent.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
 		const dialog = screen.getByRole("dialog", { name: "caching-options.md" });
 		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
+	});
+
+	it.each(["{Enter}", "[Space]"])("opens a card's menu with %s before the pointer has visited the card, and Escape returns focus", async (key) => {
+		const user = userEvent.setup();
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The card draws stand-in buttons until focus or the pointer reaches it; focus moves to the menu's own.
+		act(() => project.getByRole("button", { name: "More actions: pricing.md" }).focus());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+		await user.keyboard(key);
+		expect(await screen.findByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Delete artifact" })).not.toBeInTheDocument());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+	});
+
+	it("starts a pin tooltip from the one pointer move that reached the card", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The pointer comes to rest on Pin: that move lands on the stand-in, before the tooltip trigger exists.
+		fireEvent.pointerMove(project.getByRole("button", { name: "Pin artifact: pricing.md" }), { pointerType: "mouse" });
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pin artifact");
+	});
+
+	it("pins from a first tap on a card the pointer has not moved over", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		const pin = project.getByRole("button", { name: "Pin artifact: pricing.md" });
+		// A browser sends the click only to the button pressed, and only while it is still in the page.
+		fireEvent.pointerDown(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		act(() => pin.focus());
+		await act(async () => {});
+		fireEvent.pointerUp(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		expect(pin).toBeInTheDocument();
+		fireEvent.click(pin);
+		expect(within(screen.getByRole("region", { name: "Pinned" })).getByText("pricing.md")).toBeInTheDocument();
+		// A pressed tooltip trigger stays quiet when focus lands on it, as it does without the stand-in.
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
