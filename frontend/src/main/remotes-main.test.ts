@@ -35,6 +35,10 @@ function registerRemotes(
 	registerRemotesIpc(ipcMain, {
 		localIdentity: async () => "h_this_mac",
 		cloudRequest: async () => ({ status: 200, body: '{"hosts":[]}' }),
+		// A host without device tokens, unless a test pairs.
+		pair: async () => ({ kind: "unsupported" }),
+		authErrorCode: async () => undefined,
+		deviceName: async () => "Test Mac",
 		...deps,
 		getAccountId: deps.getAccountId ?? (async () => TEST_ACCOUNT),
 	});
@@ -620,5 +624,124 @@ describe("registerRemotesIpc", () => {
 		} finally {
 			setPasswordCipher(() => null);
 		}
+	});
+
+	describe("device tokens", () => {
+		const token = "aod_" + "c".repeat(64);
+		const proxy = () => vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
+		const saved = async (file: string) => (JSON.parse(await readFile(file, "utf8")) as { remotes: Array<Record<string, unknown>> }).remotes;
+		type Pair = NonNullable<RemotesIpcDeps["pair"]>;
+
+		it.each([
+			["a one-time code", "pairing-code" as const, undefined],
+			["the pairing password", "password" as const, "typed-secret"],
+		])("adds a host with %s and saves this device's own token", async (_name, credential, fallbackPassword) => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential }));
+			const probe = vi.fn(async () => "online" as const);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe, pair });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "typed-secret" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ url: "https://new.example", hostId: "h_new" }), "typed-secret", { name: "Test Mac", platform: process.platform });
+			// The host is probed with the token, and a spent code is not kept.
+			expect(probe).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toEqual({
+				hostId: "h_new", label: "New", url: "https://new.example", password: token, accountUserId: TEST_ACCOUNT, ...(fallbackPassword ? { fallbackPassword } : {}),
+			});
+		});
+
+		it("adds a host without device tokens with the typed password, and saves nothing for a refused one", async () => {
+			const file = await tempFile();
+			const outcomes: Array<Awaited<ReturnType<Pair>>> = [{ kind: "unsupported" }, { kind: "unauthorized" }];
+			const probe = vi.fn(async () => "online" as const);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe, pair: async () => outcomes.shift()! });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "typed-secret" })).resolves.toBe("online");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: "typed-secret" });
+			probe.mockClear();
+			await expect(ipc.invoke("remotes:add", { label: "Other", url: "https://other.example", password: "wrong" })).resolves.toBe("unauthorized");
+			expect(probe).not.toHaveBeenCalled();
+			expect(await saved(file)).toHaveLength(2);
+		});
+
+		it("swaps a saved pairing password for this device's own token on connect, keeping the password", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "password" }));
+			const start = proxy();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).resolves.toMatchObject({ hostId: "h_workbox" });
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.anything(), "old", expect.anything());
+			expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: token }));
+			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }]);
+			// A device token is not swapped again.
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledOnce();
+			expect(start).toHaveBeenCalledOnce();
+		});
+
+		it("asks a host without device tokens once, and never swaps under a live connection", async () => {
+			const file = await tempFile();
+			const outcomes: Array<Awaited<ReturnType<Pair>>> = [{ kind: "offline" }, { kind: "unsupported" }];
+			const pair = vi.fn<Pair>(async () => outcomes.shift() ?? { kind: "paired", token, credential: "password" });
+			const start = proxy();
+			const registry = new RemoteRegistry(start);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			// The swap failed in transit; the host connects with its password.
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(1);
+			// Connected: the new credential would restart the proxy, so no swap.
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(1);
+			// After a disconnect it is asked again, answers that it has no device
+			// tokens, and is then left alone.
+			await registry.disconnect("http://192.0.2.1:1");
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			await registry.disconnect("http://192.0.2.1:1");
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(2);
+			expect(await saved(file)).toMatchObject([{ password: "old" }]);
+		});
+
+		it.each([
+			["a host that went back to a release without device tokens", undefined, "old"],
+			["a host that removed this device", "DEVICE_REVOKED", token],
+		])("handles a refused token from %s", async (_name, code, expectedPassword) => {
+			const file = await tempFile();
+			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }] }));
+			const start = proxy();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox",
+				// The host refuses the token and still takes the pairing password.
+				probe: async (entry) => entry.password === "old" ? "online" : "unauthorized",
+				authErrorCode: async () => code,
+			});
+			const connected = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			if (code === "DEVICE_REVOKED") {
+				// Removed on purpose: the kept password must not bring the device back.
+				await expect(connected).rejects.toThrow(/is unauthorized$/);
+				expect(start).not.toHaveBeenCalled();
+				expect(await saved(file)).toMatchObject([{ password: token, fallbackPassword: "old" }]);
+			} else {
+				await expect(connected).resolves.toMatchObject({ hostId: "h_workbox" });
+				expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "old" }));
+				expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: expectedPassword, accountUserId: TEST_ACCOUNT }]);
+			}
+		});
+
+		it("swaps a newly typed code when a saved host is edited", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code1234" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostId: "h_workbox" }), "Code1234", expect.anything());
+			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, accountUserId: TEST_ACCOUNT }]);
+			// A rename alone pairs nothing.
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { label: "renamed" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledOnce();
+		});
 	});
 });
