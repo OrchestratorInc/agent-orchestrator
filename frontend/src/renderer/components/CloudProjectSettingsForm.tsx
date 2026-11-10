@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -272,7 +272,8 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 	// Show the agent a reviewer actually runs with when none is chosen.
 	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent, true) : "");
 	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
-	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
+	const label = role === "orchestrator" ? t("settings.project.defaultOrchestrator") : role === "worker" ? t("settings.project.defaultWorker") : `${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`;
+	return <SettingsOptionMenu aria-label={label}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
 		// The worker and orchestrator need an agent, as on local projects; a
 		// reviewer can follow the worker agent's default.

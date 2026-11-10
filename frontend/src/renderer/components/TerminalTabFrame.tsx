@@ -15,6 +15,8 @@ type TerminalTabFrameProps = {
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 	/** Replaces the label while the tab is renamed. */
 	editingContent?: ReactNode;
+	/** The text being edited; it sizes the field so the tab does not jump. */
+	editingValue?: string;
 	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
 	trailing?: ReactNode;
 };
@@ -22,6 +24,11 @@ type TerminalTabFrameProps = {
 /** The control in a tab's icon slot, shared so close buttons and menus match. */
 export const terminalTabActionClassName =
 	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
+
+// Laid over the label's own box, growing outward by its padding so the text
+// stays exactly where the label drew it. The ring takes no layout space.
+export const terminalTabRenameInputClassName =
+	"absolute -left-1 -top-0.5 h-[calc(100%+4px)] w-[calc(100%+8px)] rounded-xs bg-background px-1 text-control leading-none text-foreground outline-none ring-1 ring-accent";
 
 // One chrome for every tab in the session pane strip: the session itself,
 // reviewer, shells and files. Members only supply an icon, a label and the
@@ -36,6 +43,7 @@ export function TerminalTabFrame({
 	buttonRef,
 	buttonProps,
 	editingContent,
+	editingValue,
 	trailing,
 }: TerminalTabFrameProps) {
 	return (
@@ -56,9 +64,13 @@ export function TerminalTabFrame({
 			}}
 		>
 			{editingContent ? (
-				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">
+				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-control leading-none">
 					<span className="grid size-icon-base shrink-0 place-items-center">{icon}</span>
-					{editingContent}
+					<span className="relative flex min-w-0 flex-1">
+						<span aria-hidden="true" className="invisible min-w-0 truncate whitespace-pre">{editingValue || "\u200b"}</span>
+						{editingContent}
+					</span>
+					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</span>
 			) : (
 				<Pressable

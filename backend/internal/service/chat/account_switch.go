@@ -13,6 +13,23 @@ import (
 // the conversation continues on.
 const AccountSwitchedEvent = "account.switched"
 
+type activeTransitionReader interface {
+	GetActiveSessionInterfaceTransition(context.Context, domain.SessionID) (domain.SessionInterfaceTransition, bool, error)
+}
+
+func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.SessionID) bool {
+	reader, ok := s.store.(activeTransitionReader)
+	if !ok {
+		return false
+	}
+	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
+	if err != nil {
+		s.log.Warn("chat: read account move", "session", id, "error", err)
+		return false
+	}
+	return active && move.AccountMoveAwaitsTarget()
+}
+
 // MarkAccountSwitch records that the turn the session's account move stopped
 // ended for the move, rather than failing. It is the exact turn the handoff's
 // interrupt stopped: later rows (a swept queued message, a Codex subagent's own

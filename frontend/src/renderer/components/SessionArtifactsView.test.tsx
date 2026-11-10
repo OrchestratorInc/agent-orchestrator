@@ -147,6 +147,21 @@ describe("SessionArtifactsView for a cloud session", () => {
 		sendSessionMessageMock.mockReset().mockResolvedValue({});
 	});
 
+	it("lists the session's artifacts two to a row without repeating the session name", () => {
+		const current = cloudSession();
+		current.title = "Quarterly planning";
+		current.artifactFiles = [
+			{ kind: "markdown", name: "plan.md", path: "plan.md", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 20, updatedAt: "2026-09-22T00:00:00Z" },
+		];
+		renderView(<SessionArtifactsView session={current} />);
+
+		const gallery = screen.getAllByRole("listitem")[0]!.closest("ul")!;
+		expect(gallery).toHaveClass("grid-cols-2");
+		expect(within(gallery).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(gallery).queryByText("Quarterly planning")).not.toBeInTheDocument();
+	});
+
 	it("previews metadata-only HTML in the session gallery with at most four live pages", async () => {
 		const current = cloudSession();
 		current.artifactFiles = Array.from({ length: 6 }, (_, index) => ({
@@ -484,18 +499,35 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: "View source" })).not.toBeInTheDocument();
 	});
 
+	it("offers feedback on a local HTML artifact shown as its page", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Add feedback" }));
+
+		expect(screen.getByRole("textbox")).toBeInTheDocument();
+		expect(document.querySelector("iframe")).not.toBeNull();
+	});
+
+	it("opens requested feedback over a local HTML artifact's page, not its hidden source", async () => {
+		renderView(<SessionArtifactsView request={{ feedback: true, key: 4, path: "report.html" }} session={session()} />);
+
+		expect(await screen.findByRole("textbox")).toBeInTheDocument();
+		expect(screen.getByTestId("artifact-view")).toHaveAttribute("data-feedback-key", "");
+	});
+
 	it("opens an HTML artifact in the session Browser from its menu", async () => {
 		const openInBrowser = vi.fn();
 		renderView(<AppBrowserLinkContext.Provider value={openInBrowser}><SessionArtifactsView session={session()} /></AppBrowserLinkContext.Provider>);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Open in Orchestrator Browser" })).not.toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
-		expect(screen.queryByRole("button", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Open in Orchestrator Browser" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Open in AO Browser" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Open in Orchestrator Browser" }));
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("http://artifact.localhost/report.html");
 	});
 

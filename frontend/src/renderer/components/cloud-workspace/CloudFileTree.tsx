@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewSearchQueryOptions, cloudWorkspaceReviewTreeQueryOptions } from "../../hooks/useCloudWorkspaceReview";

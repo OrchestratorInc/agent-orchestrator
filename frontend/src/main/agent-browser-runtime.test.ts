@@ -154,7 +154,7 @@ describe("agent-browser runtime lifecycle", () => {
 		try {
 			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
 				code: "AGENT_BROWSER_COMMAND_FAILED",
-				message: "Browser automation did not target AO tab t3",
+				message: "Browser automation did not target Orchestrator tab t3",
 			});
 			expect(processRunner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(["tab", "t2", "--json"]))).toBe(true);
 		} finally {

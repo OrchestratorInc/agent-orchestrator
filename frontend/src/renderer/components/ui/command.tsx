@@ -4,7 +4,7 @@ import * as React from "react";
 import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Command as CommandPrimitive } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Search } from "lucide-react";
+import { Search } from "@/components/app-icons";
 
 import { cn } from "@/lib/utils";
 import { ShortcutCaps } from "./kbd";

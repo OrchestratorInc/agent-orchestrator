@@ -314,6 +314,7 @@ export function shouldHandleAppShortcutInBrowserContext(
   chord: ShortcutChord,
   isMac: boolean,
 ): boolean {
+  if (id === "find-in-chat") return false;
   if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
   // Dictation types into the chat composer, never a page.
@@ -1718,7 +1719,7 @@ export function createBrowserViewHost(
         if (tabCommand) return;
         throw browserError(
           "BROWSER_TARGET_MISMATCH",
-          `Browser automation could not target AO tab ${tabId}`,
+          `Browser automation could not target Orchestrator tab ${tabId}`,
         );
       }
       await entry.ready;
@@ -1768,7 +1769,7 @@ export function createBrowserViewHost(
           // stable AO error and the next command may make a fresh bounded attempt.
           throw browserError(
             "BROWSER_TARGET_MISMATCH",
-            `Browser automation could not target AO tab ${tabId}`,
+            `Browser automation could not target Orchestrator tab ${tabId}`,
           );
         }
       }
@@ -4376,7 +4377,7 @@ export function createBrowserViewHost(
                       : targetTabId;
                   throw browserError(
                     "BROWSER_TARGET_MISMATCH",
-                    `Browser automation could not target AO tab ${requestedTabId}`,
+                    `Browser automation could not target Orchestrator tab ${requestedTabId}`,
                   );
                 }
                 throw error;
@@ -4429,7 +4430,7 @@ export function createBrowserViewHost(
             if (!targetEntry) {
               throw browserError(
                 "BROWSER_TARGET_UNAVAILABLE",
-                `Browser target AO tab ${result.target.tabId} is unavailable`,
+                `Browser target Orchestrator tab ${result.target.tabId} is unavailable`,
               );
             }
             const navState =
@@ -4899,7 +4900,7 @@ export function createBrowserViewHost(
                   }
                   const png = image.toPNG();
                   if (png.length > MAX_SCREENSHOT_BYTES) {
-                    throw browserError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded AO's size limit");
+                    throw browserError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded Orchestrator's size limit");
                   }
                   const { width, height } = image.getSize();
                   return {

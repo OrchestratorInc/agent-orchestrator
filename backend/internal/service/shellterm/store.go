@@ -11,11 +11,15 @@ import (
 // is needed to re-attach after daemon/desktop restarts. Transient trusted
 // terminals expire when their originating app launch ends.
 type ShellTerminalRecord struct {
-	HandleID     string
-	ProjectID    domain.ProjectID
-	SessionID    domain.SessionID
-	WorkingDir   string
-	Title        string
+	HandleID   string
+	ProjectID  domain.ProjectID
+	SessionID  domain.SessionID
+	WorkingDir string
+	Title      string
+	// TitleExplicit marks Title as chosen, so a program's title cannot outrank it.
+	TitleExplicit bool
+	// AppTitle is the title the shell's program last set.
+	AppTitle     string
 	AppRunID     string
 	CreatedAt    time.Time
 	Transient    bool // Trusted auth terminal, owned by its app launch.

@@ -29,8 +29,8 @@ import {
 	RefreshCw,
 	ChevronRight,
 	CornerDownRight,
-	type LucideIcon,
-} from "lucide-react";
+	type AppIcon,
+} from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
@@ -372,7 +372,7 @@ function FileFeedbackBody({ comments }: { comments: readonly FileFeedback[] }) {
 	);
 }
 
-const GIT_ACTIONS: Record<GitAction, { icon: LucideIcon; label: MessageKey }> = {
+const GIT_ACTIONS: Record<GitAction, { icon: AppIcon; label: MessageKey }> = {
 	createPR: { icon: GitPullRequest, label: "inspector.git.createPR" },
 	createDraftPR: { icon: GitPullRequestDraft, label: "inspector.git.createDraftPR" },
 	commit: { icon: GitCommitHorizontal, label: "inspector.git.commit" },
@@ -424,7 +424,7 @@ function BrowserFeedbackBody({ annotations }: { annotations: ParsedBrowserAnnota
 	);
 }
 
-const NOTICES: Record<AutomationNotice, { icon: LucideIcon; label: MessageKey }> = {
+const NOTICES: Record<AutomationNotice, { icon: AppIcon; label: MessageKey }> = {
 	orchestratorReplaced: { icon: RefreshCw, label: "chat.automation.orchestratorReplaced" },
 	contextCarried: { icon: ArrowLeftRight, label: "chat.automation.contextCarried" },
 	reviewTask: { icon: ClipboardCheck, label: "chat.automation.reviewTask" },

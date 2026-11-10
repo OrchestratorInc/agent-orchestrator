@@ -187,6 +187,31 @@ export function getSessionRowMarker(session: {
 	}
 }
 
+/**
+ * A sidebar row spins while its agent works, from the moment it is set up.
+ * Working wins over any PR state: the agent may already be on its next PR, and
+ * the hover card has the PR detail.
+ */
+export function isSessionRowWorking(session: {
+	activity?: SessionActivity | null;
+	displayStatus?: string;
+	provisionState?: string;
+}): boolean {
+	if (session.displayStatus === "Terminated") return false;
+	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
+}
+
+/**
+ * The icon that leads a sidebar row: the working spinner while the agent works,
+ * then what the user has to act on (input, CI, review), then the PR state.
+ * Null leaves the quiet dot.
+ */
+export function getSessionRowIndicator(
+	session: Parameters<typeof getSessionRowMarker>[0] & Parameters<typeof isSessionRowWorking>[0],
+): "working" | SessionRowMarker | null {
+	return isSessionRowWorking(session) ? "working" : getSessionRowMarker(session);
+}
+
 // The agent has stopped and is waiting on the user (a question or a decision).
 export function sessionNeedsInput(session: {
 	activity?: SessionActivity | null;

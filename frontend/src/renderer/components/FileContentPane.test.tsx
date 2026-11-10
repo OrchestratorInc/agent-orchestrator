@@ -447,7 +447,7 @@ describe("FileContentPane", () => {
 			</AppBrowserLinkContext.Provider>,
 		);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Open in AO Browser" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 

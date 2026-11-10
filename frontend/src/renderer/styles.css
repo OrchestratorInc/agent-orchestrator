@@ -4,6 +4,8 @@
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 @import "./components/artifact-document.css";
+@import "./components/ui/button.css";
+@import "./components/ui/switch.css";
 @source "../../../packages/product-ui/src";
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
@@ -271,6 +273,7 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--color-muted-foreground: var(--muted-foreground);
 	--color-passive: var(--color-text-passive);
 	--color-logo-accent: var(--color-brand-logo);
+	--color-logo-accent-bright: var(--color-brand-logo-bright);
 	--color-logo-accent-foreground: var(--color-brand-logo-foreground);
 	--color-markdown-code: var(--color-text-markdown-code);
 	--color-markdown-link: var(--color-text-markdown-link);
@@ -623,17 +626,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-shell--floating-topbar .panel-topbar-controls {
-	top: 1px;
+	top: 1.5px;
 }
 
-.center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control {
-	font-size: var(--font-size-md);
-}
-
-/* The last tab's trailing gap (and separator) already spaces New terminal from
- * it like any other tab; the action region starts one gap after it; and the
- * reserve for the panel's trailing controls drops the surface's 1px edge
- * padding. */
+/* The last tab's trailing gap already spaces New terminal from it; the action
+ * region starts one gap after it; and the reserve for the panel's trailing
+ * controls drops the surface's 1px edge padding. */
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
 	padding-inline-start: 0;
 }
@@ -663,8 +661,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-width: 0;
 	border-radius: 0;
 	/* The frame's faint top line reads as part of the gap below the controls,
-	 * so the bar's contents sit 1px low to look evenly spaced. */
-	padding: 1px 1px 1px;
+	 * so the bar's contents sit low to look evenly spaced. 1.5px also lands them
+	 * on the traffic lights' centerline (y = 25). */
+	padding: 1.5px 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
@@ -728,13 +727,8 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* Floating session tabs. Resting tabs sit flat on the window chrome with
- * short separators between them. Hover is a rounded pill around the label;
- * the selected tab is the same pill, filled more strongly and outlined with
- * the panel frame's line, so it reads as current at a glance (translucent
- * windows included, where fills are faint). Every tab, the last included,
- * ends in the same gap with its separator centered in it, so tabs and New
- * terminal are evenly spaced and the separators never move or vanish. */
+/* Floating session tabs use the secondary control surface when selected and
+ * an instant ghost hover fill when inactive. Tabs have no press effect. */
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
 	--floating-tab-gap: var(--space-1);
 	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
@@ -758,8 +752,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	z-index: -1;
 	inset: 0;
 	border: 1px solid transparent;
-	border-radius: var(--radius-topbar-control);
+	border-radius: var(--radius-md);
 	pointer-events: none;
+	transition: none;
 }
 
 /* The separator, centered in the trailing gap. */
@@ -775,37 +770,78 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	pointer-events: none;
 }
 
-/* With nothing after the strip (orchestrators have no New terminal), the last
- * tab ends at its pill. It is the reorder group's last tab, or the session tab
- * when that group is empty. */
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame] {
-	margin-inline-end: 0;
+/* Leave both sides of the selected pill clear, including the fixed session
+ * tab before the first tab in the reorder group. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
+	content: none;
 }
 
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) > [data-terminal-tab-frame]::after {
+/* Separators only sit between tabs: the last tab drops its separator and
+ * ends one gap before New terminal, the same space a tab leaves before a
+ * separator. It is the reorder group's last tab, or the session tab when that
+ * group is empty; its frame sits inside the tab's context-menu trigger. */
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: var(--floating-tab-gap);
+}
+
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
 	content: none;
+}
+
+/* With nothing after the strip (orchestrators have no New terminal), the last
+ * tab ends at its pill. */
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: 0;
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible)::before {
+	inset: 0;
 	background-color: var(--color-interactive-hover);
 }
 
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
-	border-color: color-mix(in oklch, var(--color-foreground) 5%, transparent);
-	background-color: color-mix(in oklch, var(--color-foreground) 9%, transparent);
+.session-inspector__tab-button[aria-selected="true"],
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
+	color: var(--secondary-foreground);
 }
 
-/* Light: the selected tab matches the center panel instead of a gray wash
- * over the chrome. --solid-bg-primary exists only in a translucent window. */
+@supports (color: contrast-color(red)) {
+	.session-inspector__tab-button[aria-selected="true"],
+	.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active] {
+		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
+	}
+}
+
+.session-inspector__tab-button[aria-selected="true"],
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	inset: 0;
+	border-color: color-mix(in oklab, var(--secondary), #000 5%);
+	background-color: var(--secondary);
+	box-shadow: var(--shadow-control-inset);
+}
+
+.session-inspector__tab-button[aria-selected="true"]:hover,
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: color-mix(in oklab, var(--secondary), #000 7%);
+}
+
+/* Light: the selected tab's fill leans toward the panel's surface, keeps the
+ * control edge, and does not darken on hover. */
 html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
-	border-color: color-mix(in oklch, var(--color-foreground) 12%, transparent);
-	background-color: var(--solid-bg-primary, var(--color-bg-primary));
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button:focus-visible)::before {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
 }
 
 /* Muted gray icons wash out on the light chrome; bar icons use the full
  * foreground there. Disabled controls keep their own reduced opacity. */
-html[data-theme="light"] .center-panel-shell--floating-topbar :is(.topbar-control, .session-inspector__tab-button) {
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]),
+html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled) {
 	color: var(--color-foreground);
 }
 
@@ -1104,11 +1140,8 @@ button.settings-row-bar {
 	padding-inline: var(--space-2);
 	padding-block: var(--space-1);
 	font-size: var(--font-size-base);
-	color: var(--color-text-settings-muted);
-	outline: none;
-	box-shadow: none;
-	transition-property: color, background-color;
-	transition-duration: var(--duration-fast);
+	transition-property: background-color, border-color, box-shadow;
+	transition-duration: 200ms;
 }
 
 .review-run-controls-container {
@@ -1357,23 +1390,9 @@ button.settings-row-bar {
 
 .composer-toolbar .composer-toolbar-option {
 	height: var(--size-composer-toolbar-height);
-	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
-	   --card (an opaque color) instead of --color-bg-settings-row. */
-	border-radius: var(--radius-md) !important;
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground)) !important;
 }
 
-.composer-toolbar .composer-toolbar-option:hover:not(:disabled),
-.composer-toolbar .composer-toolbar-option[data-state="open"] {
-	background-color: color-mix(in oklch, var(--card) 88%, var(--foreground)) !important;
-}
-
-.composer-toolbar .composer-toolbar-option:focus-visible {
-	box-shadow: none;
-}
-
-/* Inline value control inside the task composer's bottom toolbar. Each chip is
-   its own dropdown trigger with the quiet filled chrome settings uses. */
+/* Task selector sizing; shared menu triggers own their colors and states. */
 @utility composer-chip {
 	display: inline-flex;
 	width: auto;
@@ -1382,39 +1401,8 @@ button.settings-row-bar {
 	height: var(--size-settings-action-height);
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border: 1px solid transparent;
-	border-radius: var(--radius-md);
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground));
 	padding-inline: var(--space-2);
 	font-size: var(--font-size-base);
-	color: var(--color-foreground);
-	transition-property: background-color, border-color, box-shadow, color;
-	transition-duration: var(--duration-fast);
-
-	&:hover:not(:disabled) {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-	}
-
-	&:focus-visible {
-		border-color: transparent;
-		box-shadow: none;
-		outline: none;
-	}
-
-	&[data-state="open"] {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-		border-color: transparent;
-	}
-
-	/* The agent chip's SelectTrigger chevron has no rotation of its own — give
-	   it the same open-state flip as the settings dropdowns. */
-	& svg {
-		transition: transform var(--duration-normal) ease-out;
-	}
-
-	&[data-state="open"] svg {
-		transform: rotate(180deg);
-	}
 }
 
 /* Model menus can contain hundreds of entries. Keep scrolling available without
@@ -1483,53 +1471,6 @@ button.settings-row-bar {
 	font-size: var(--font-size-base);
 	line-height: 1.25rem;
 	color: var(--color-text-settings-muted);
-}
-
-/* Footer actions for raw buttons in packages/product-ui (desktop uses Button
-   variant="footer" / "footer-primary"). */
-@utility settings-footer-button {
-	display: inline-flex;
-	height: var(--size-settings-action-height);
-	flex-shrink: 0;
-	align-items: center;
-	justify-content: center;
-	gap: calc(var(--spacing) * 2);
-	white-space: nowrap;
-	border-radius: var(--radius-settings-action);
-	border: 1px solid var(--color-border-settings-input);
-	background-color: var(--color-bg-settings-input);
-	padding-inline: var(--space-3);
-	font-size: var(--font-size-md);
-	line-height: 1.25rem;
-	color: var(--color-text-settings-row);
-	outline: none;
-	transition-property: color, background-color, border-color, opacity, box-shadow;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		opacity: 0.9;
-	}
-
-	&:focus-visible {
-		box-shadow: none;
-	}
-}
-
-@utility settings-footer-button-primary {
-	border-color: transparent;
-	background-color: var(--color-settings-accent);
-	padding-inline: var(--size-settings-footer-button-padding-x);
-	color: var(--color-settings-footer-button-primary-fg);
-	transition-property: opacity;
-	transition-duration: var(--duration-normal);
-
-	&:hover:not(:disabled) {
-		opacity: 0.9;
-	}
-
-	&:disabled {
-		cursor: not-allowed;
-	}
 }
 
 /* Segmented control — ReportProblem destination picker, ConnectMobile LAN/Tailscale. */
@@ -2267,6 +2208,11 @@ textarea,
 
 .edge-fade[data-fade-end] {
 	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
+}
+
+/* Where a scroller sits as it mounts is not a change: no fade-in on open. */
+.edge-fade[data-fade-instant] {
+	transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3091,6 +3037,11 @@ html.sidebar-reordering * {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* A question already waiting when its chat opens is drawn in place (ChatComposer's useDockEntrance). */
+[data-dock-quiet] .elicitation-dock {
+	animation: none;
+}
+
 /* The parent reserves one compact footprint; the expanded dock floats above it. */
 .cursor-chat-composer-queue {
 	--queue-dock-header-height: 2rem;
@@ -3297,6 +3248,28 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Editing a sent message keeps its bubble. A hidden copy of the draft shares the
+   textarea's grid cell and sizes it, so the box fits its text the way the bubble
+   did and grows only as the text does. A long message folds as its bubble does
+   (see .chat-human-fold[data-scroll-folded]). */
+.chat-human-edit-field {
+	display: grid;
+}
+
+.chat-human-edit-field::after {
+	/* The zero-width space gives a trailing newline its line without widening the box. */
+	content: attr(data-value) "\200b";
+	visibility: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	text-wrap: pretty;
+}
+
+.chat-human-edit-field::after,
+.chat-human-edit-field > textarea {
+	grid-area: 1 / 1;
+}
+
 /* Opacity only, so the fade stays on the compositor. */
 .chat-welcome-leaving {
 	animation: chat-welcome-out 150ms ease-out both;
@@ -3353,6 +3326,15 @@ html.sidebar-reordering * {
 	transition:
 		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
 		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The message editor keeps the fold's height and scrolls inside it, so the
+   person can reach and type in every line. No fade: once scrolled to the end it
+   would hide the line being typed. */
+.chat-human-fold[data-folded][data-scroll-folded]:not([data-animating]) {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	mask-image: none;
 }
 
 /* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
@@ -3651,33 +3633,26 @@ html.sidebar-reordering * {
 		var(--session-inspector-motion-easing, ease-out);
 }
 
-.topbar-control > [data-nav-row-highlight],
-.topbar-control-group > [data-nav-row-highlight] {
-	z-index: -1;
-	border-radius: inherit;
-}
-
-.workspace-topbar-actions .topbar-control {
+.workspace-topbar-actions .group\/button {
 	-webkit-app-region: no-drag;
 	height: var(--size-topbar-control);
 	min-width: var(--size-topbar-control);
-	flex: 0 0 auto;
-	justify-content: center;
-	border-radius: var(--radius-topbar-control);
 	font-size: var(--font-size-sm-md);
-	transition:
-		transform var(--duration-fast) ease-out,
-		background-color var(--duration-fast) ease,
-		border-color var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		filter var(--duration-fast) ease,
-		gap var(--duration-normal) ease,
-		padding-inline var(--duration-normal) ease;
+	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
 }
 
-/* Override the unlayered form-control font reset for primary topbar actions. */
-.topbar-control--primary {
-	font-weight: var(--font-weight-semibold);
+.workspace-topbar-actions .group\/button:disabled {
+	pointer-events: auto;
+	cursor: not-allowed;
+	opacity: var(--opacity-control-disabled);
+}
+
+.workspace-topbar-actions .group\/button:disabled::before {
+	display: none;
+}
+
+.center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button {
+	font-size: var(--font-size-md);
 }
 
 /* Ends the session's own actions where the inspector rail begins; shown only
@@ -3722,23 +3697,18 @@ html.sidebar-reordering * {
 
 /* The rail's (transparent) 1px left border sits between the divider and the
  * inspector tabs, so their start padding gives that pixel back. */
-.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar:not(.session-inspector__topbar--browser) {
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar {
 	padding-left: calc(var(--gap-topbar-control) - 1px);
+}
+
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar > .session-inspector__tablist {
+	padding-left: 0;
 }
 
 .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
 	width: 1px;
 	margin-inline: var(--space-1);
 	opacity: 1;
-}
-
-.workspace-topbar-actions .topbar-control--labeled {
-	padding-inline: var(--space-2_5);
-}
-
-.topbar-control--disabled-affordance:disabled {
-	cursor: not-allowed;
-	opacity: var(--opacity-control-disabled);
 }
 
 .workspace-topbar-actions [data-compact-label] {
@@ -3758,7 +3728,7 @@ html.sidebar-reordering * {
 
 /* Session switches restore the destination's topbar in its first frame; these
  * transitions are only for changes inside a session (useSessionSwitchSnap). */
-:root[data-session-switching] .workspace-topbar-actions .topbar-control,
+:root[data-session-switching] .workspace-topbar-actions .group\/button,
 :root[data-session-switching] .workspace-topbar-actions [data-compact-label] {
 	transition: none !important;
 }
@@ -3770,7 +3740,7 @@ html.sidebar-reordering * {
 		transform: translateX(-2px);
 	}
 
-	.workspace-topbar-actions [data-priority="secondary"].topbar-control {
+	.workspace-topbar-actions [data-priority="secondary"].group\/button {
 		gap: 0;
 		padding-inline: 0;
 	}
@@ -3783,7 +3753,7 @@ html.sidebar-reordering * {
 		transform: translateX(-2px);
 	}
 
-	.workspace-topbar-actions [data-priority].topbar-control {
+	.workspace-topbar-actions [data-priority].group\/button {
 		gap: 0;
 		padding-inline: 0;
 	}
@@ -3798,7 +3768,7 @@ html.sidebar-reordering * {
 	[data-compact-label],
 .session-split[data-terminal-live-resize="true"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	transition-duration: var(--session-inspector-motion-duration);
 	transition-timing-function: var(
 		--session-inspector-motion-easing,
@@ -3817,7 +3787,7 @@ html.sidebar-reordering * {
 
 .session-split[data-terminal-live-resize="true"][data-topbar-secondary-label-mode="expanded"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	gap: var(--space-1_5);
 	padding-inline: var(--space-2_5);
 }
@@ -3833,17 +3803,17 @@ html.sidebar-reordering * {
 
 .session-split[data-terminal-live-resize="true"][data-topbar-secondary-label-mode="compact"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	gap: 0;
 	padding-inline: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.workspace-topbar-actions .topbar-control,
+	.workspace-topbar-actions .group\/button,
 	.workspace-topbar-actions [data-compact-label],
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
-		[data-priority="secondary"].topbar-control,
+		[data-priority="secondary"].group\/button,
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
 		[data-priority="secondary"]

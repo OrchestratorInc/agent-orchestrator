@@ -24,6 +24,13 @@ describe("packaged renderer CSP", () => {
 		expect(connectSrc).toContain("wss://staging-api.aoagents.dev");
 		expect(connectSrc).toContain("wss://api.aoagents.dev");
 	});
+
+	it("lets chat image copy and save fetch data: images", () => {
+		const connectSrc = contentSecurityPolicy("build")
+			.split("; ")
+			.find((directive) => directive.startsWith("connect-src"));
+		expect(connectSrc?.split(" ")).toContain("data:");
+	});
 });
 
 describe("VITE_AO_TEAMS at build time", () => {
