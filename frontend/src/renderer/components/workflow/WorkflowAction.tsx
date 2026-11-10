@@ -7,16 +7,17 @@ import { useWorkflowUi } from "../../stores/workflow-ui-store";
 import { Button } from "../ui/button";
 
 /** 未得到成功回执前保留原请求；页面版本变化不能把超时重试变成第二次操作。 */
-export function WorkflowAction({ verb, path, payload, children, disabled, withKey = true, keyField = "idempotencyKey", onSuccess }: {
+export function WorkflowAction({ verb, path, payload, children, disabled, withKey = true, keyField = "idempotencyKey", requestKey, onSuccess }: {
 	verb: OperatorVerbRequest["verb"]; path: string; payload: object; children: ReactNode;
-	disabled?: boolean; withKey?: boolean; keyField?: "idempotencyKey" | "clientMessageId"; onSuccess?: (body: unknown) => void;
+	disabled?: boolean; withKey?: boolean; keyField?: "idempotencyKey" | "clientMessageId"; requestKey?: string; onSuccess?: (body: unknown) => void;
 }) {
 	const action = useWorkflowAction();
 	const { t } = useTranslation();
 	const scope = useWorkflowScope();
 	const connection = useSyncExternalStore(subscribeEventsConnection, getEventsConnectionState);
 	const mode = "mode" in payload ? String(payload.mode) : "verdict" in payload ? String(payload.verdict) : "approve" in payload ? String(payload.approve) : "";
-	const key = `${scope[1]}:${verb}:${path}:${mode}`;
+	// 同一路径管理多个策略时，原请求只能在对应策略上重放。
+	const key = `${scope[1]}:${verb}:${path}:${requestKey ?? mode}`;
 	const latestKey = useRef(key);
 	latestKey.current = key;
 	const prior = useWorkflowUi(state => state.requests[key]);

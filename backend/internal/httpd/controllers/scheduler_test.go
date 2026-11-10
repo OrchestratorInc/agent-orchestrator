@@ -24,8 +24,10 @@ func TestM3SchedulerControlApprovalAndCAS(t *testing.T) {
 			p = row
 		}
 	}
-	policy := controllers.PutSchedulerPolicyRequest{OperatorChangeRequest: controllers.OperatorChangeRequest{ExpectedRevision: p.Revision, IdempotencyKey: "policy-1", Reason: "TEST_REVIEW"}, MaxConcurrent: 4,
-		CPURecoverPercent: p.CPURecoverPercent, CPUSoftPercent: p.CPUSoftPercent, CPUHardPercent: p.CPUHardPercent, RAMSoftPercent: p.RAMSoftPercent, RAMHardPercent: p.RAMHardPercent, RAMFloorBytes: p.RAMFloorBytes}
+	// 使用设置页提交的原因码，避免测试占位值掩盖前后端审计契约不一致。
+	policy := controllers.PutSchedulerPolicyRequest{OperatorChangeRequest: controllers.OperatorChangeRequest{ExpectedRevision: p.Revision, IdempotencyKey: "policy-1", Reason: "SCHEDULER_POLICY_UPDATE"}, MaxConcurrent: 4,
+		ResourceLimitsDisabled: true,
+		CPURecoverPercent:      p.CPURecoverPercent, CPUSoftPercent: p.CPUSoftPercent, CPUHardPercent: p.CPUHardPercent, RAMSoftPercent: p.RAMSoftPercent, RAMHardPercent: p.RAMHardPercent, RAMFloorBytes: p.RAMFloorBytes}
 	encoded, err := json.Marshal(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +42,7 @@ func TestM3SchedulerControlApprovalAndCAS(t *testing.T) {
 	status, raw = e.submitAsApproval(t, http.MethodPut, path, body, approval.Approval.ApprovalID)
 	var changed controllers.SchedulerPolicyEnvelope
 	mustJSON(t, raw, &changed)
-	if status != http.StatusOK || !changed.Applied || changed.Policy.MaxConcurrent != 4 || changed.Policy.Revision != p.Revision+1 {
+	if status != http.StatusOK || !changed.Applied || changed.Policy.MaxConcurrent != 4 || !changed.Policy.ResourceLimitsDisabled || changed.Policy.Revision != p.Revision+1 {
 		t.Fatalf("policy write: %d %s", status, raw)
 	}
 	status, raw = e.submitAsApproval(t, http.MethodPut, path, body, approval.Approval.ApprovalID)

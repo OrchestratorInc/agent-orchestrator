@@ -55,6 +55,9 @@ func (s *Service) RefreshResources(ctx context.Context) error {
 	if s.deps.Resources == nil {
 		s.sample = domain.ResourceSample{ReasonCode: "RESOURCE_UNAVAILABLE"}
 		s.capacity = s.window.evaluate(s.sample, now, policy)
+		if policy.ResourceLimitsDisabled {
+			return nil
+		}
 		return domain.ErrSchedulerCapacity
 	}
 	sample, err := s.deps.Resources.Sample(ctx)
@@ -65,11 +68,17 @@ func (s *Service) RefreshResources(ctx context.Context) error {
 	}
 	s.sample = sample
 	s.capacity = s.window.evaluate(s.sample, now, policy)
+	if policy.ResourceLimitsDisabled {
+		return nil
+	}
 	return err
 }
 
 // evaluate 从原始 ticks 判定资源；同一时间戳绝不重复累加恢复样本。
 func (w *resourceWindow) evaluate(r domain.ResourceSample, now time.Time, p domain.SchedulerPolicy) Capacity {
+	if p.ResourceLimitsDisabled {
+		return Capacity{Limit: min(p.MaxConcurrent, domain.SchedulerHardCap), MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_LIMITS_DISABLED"}
+	}
 	if !w.initialized {
 		w.initialized = true
 		w.limit = p.MaxConcurrent

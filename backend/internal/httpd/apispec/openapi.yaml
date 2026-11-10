@@ -25013,11 +25013,16 @@ components:
           maxLength: 80
           minLength: 1
           type: string
+        resourceLimitsDisabled:
+          description: Disable CPU and memory admission limits in the global policy;
+            concurrency and authorization still apply.
+          type: boolean
       required:
       - expectedRevision
       - idempotencyKey
       - reason
       - maxConcurrent
+      - resourceLimitsDisabled
       - cpuRecoverPercent
       - cpuSoftPercent
       - cpuHardPercent
@@ -25930,6 +25935,8 @@ components:
         ramSoftPercent:
           format: int64
           type: integer
+        resourceLimitsDisabled:
+          type: boolean
         revision:
           format: int64
           type: integer
@@ -25945,6 +25952,7 @@ components:
       - scope
       - scopeId
       - maxConcurrent
+      - resourceLimitsDisabled
       - cpuRecoverPercent
       - cpuSoftPercent
       - cpuHardPercent

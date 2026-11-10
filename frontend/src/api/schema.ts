@@ -8159,6 +8159,8 @@ export interface components {
             /** Format: int64 */
             ramSoftPercent: number;
             reason: string;
+            /** @description Disable CPU and memory admission limits in the global policy; concurrency and authorization still apply. */
+            resourceLimitsDisabled: boolean;
         };
         QualityActionRequest: {
             /** Format: int64 */
@@ -8534,6 +8536,7 @@ export interface components {
             ramHardPercent: number;
             /** Format: int64 */
             ramSoftPercent: number;
+            resourceLimitsDisabled: boolean;
             /** Format: int64 */
             revision: number;
             /** @enum {string} */

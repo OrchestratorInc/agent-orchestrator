@@ -95,6 +95,7 @@ func (c *SchedulerController) putPolicy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := domain.DefaultSchedulerPolicy(domain.AgentHarness(req.Harness))
+	p.ResourceLimitsDisabled = req.ResourceLimitsDisabled
 	p.MaxConcurrent, p.CPURecoverPercent, p.CPUSoftPercent, p.CPUHardPercent = req.MaxConcurrent, req.CPURecoverPercent, req.CPUSoftPercent, req.CPUHardPercent
 	p.RAMSoftPercent, p.RAMHardPercent, p.RAMFloorBytes, p.Revision = req.RAMSoftPercent, req.RAMHardPercent, req.RAMFloorBytes, req.ExpectedRevision
 	policy, applied, err := c.Svc.PutPolicy(r.Context(), p, req.ExpectedRevision, policyChange(r, req.IdempotencyKey, req.Reason, caller), caller)
@@ -292,7 +293,7 @@ func schedulerError(err error) error {
 }
 
 func schedulerPolicyResponse(p domain.SchedulerPolicy) SchedulerPolicyResponse {
-	return SchedulerPolicyResponse{ID: p.ID, Scope: p.Scope, ScopeID: p.ScopeID, MaxConcurrent: p.MaxConcurrent, CPURecoverPercent: p.CPURecoverPercent, CPUSoftPercent: p.CPUSoftPercent, CPUHardPercent: p.CPUHardPercent, RAMSoftPercent: p.RAMSoftPercent, RAMHardPercent: p.RAMHardPercent, RAMFloorBytes: p.RAMFloorBytes, Revision: p.Revision}
+	return SchedulerPolicyResponse{ID: p.ID, Scope: p.Scope, ScopeID: p.ScopeID, MaxConcurrent: p.MaxConcurrent, ResourceLimitsDisabled: p.ResourceLimitsDisabled, CPURecoverPercent: p.CPURecoverPercent, CPUSoftPercent: p.CPUSoftPercent, CPUHardPercent: p.CPUHardPercent, RAMSoftPercent: p.RAMSoftPercent, RAMHardPercent: p.RAMHardPercent, RAMFloorBytes: p.RAMFloorBytes, Revision: p.Revision}
 }
 func workflowSchedulerResponse(s domain.SchedulerWorkflowState) WorkflowSchedulerResponse {
 	return WorkflowSchedulerResponse{WorkflowID: string(s.WorkflowID), Paused: s.Paused, Revision: s.Revision, CandidateOffset: s.CandidateOffset, Deficit: s.Deficit, Weight: s.Weight}

@@ -194,3 +194,71 @@ func m3Capacity(t *testing.T, s *sqlite.Store, h domain.AgentHarness, n int64, n
 		t.Fatal(err)
 	}
 }
+
+// TestSessionAdmissionReadsModeSpecificEvidence is the regression for the spawn
+// failure "spawn: create: capability evidence is insufficient to authorize this
+// feature": every TUI launch was refused because no probe reports a terminal
+// surface. A Chat launch still needs a handshake; a TUI launch needs the local
+// installation facts, which are exactly what a local probe observes.
+func TestSessionAdmissionReadsModeSpecificEvidence(t *testing.T) {
+	ctx := context.Background()
+	now := workflowStoreTime()
+	s := newTestStore(t)
+	f := sqlitetest.NewAdmissionFixture(t, s, func() time.Time { return now })
+	tests := []struct {
+		name     string
+		mode     domain.SessionMode
+		mutate   func(*domain.AdmissionEvidence)
+		want     string
+		admitted bool
+	}{
+		{name: "chat with a handshake", mode: domain.SessionModeChat, mutate: func(*domain.AdmissionEvidence) {}, admitted: true},
+		{name: "tui with a local probe", mode: domain.SessionModeTUI, mutate: func(e *domain.AdmissionEvidence) {
+			e.Capability.Source = domain.CapabilitySourceLocalProbe
+			e.Capability.Surfaces = domain.CapabilitySurfaceUnknown
+		}, admitted: true},
+		{name: "chat without a handshake", mode: domain.SessionModeChat, mutate: func(e *domain.AdmissionEvidence) {
+			e.Capability.Source = domain.CapabilitySourceLocalProbe
+		}, want: domain.LaunchRefusalStaticEvidence},
+		{name: "tui with static reading only", mode: domain.SessionModeTUI, mutate: func(e *domain.AdmissionEvidence) {
+			e.Capability.Source = domain.CapabilitySourceStatic
+		}, want: domain.LaunchRefusalStaticEvidence},
+		{name: "tui with an unverified credential", mode: domain.SessionModeTUI, mutate: func(e *domain.AdmissionEvidence) {
+			e.Capability.Source = domain.CapabilitySourceLocalProbe
+			e.Capability.AuthState = domain.AgentAuthenticationConfigured
+		}, want: domain.LaunchRefusalAuthUnverified},
+		{name: "chat with an unobserved surface", mode: domain.SessionModeChat, mutate: func(e *domain.AdmissionEvidence) {
+			e.Capability.Surfaces = domain.CapabilitySurfaceUnknown
+		}, want: domain.LaunchRefusalSurfaceNotObserved},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := f.PrepareWorkflowAdmission(ctx, domain.WorkflowTask{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Capability.Surfaces = domain.CapabilitySurfaceChat
+			tc.mutate(&e)
+			in := domain.SessionAdmissionInput{
+				Harness: domain.HarnessCodex, Mode: tc.mode,
+				ClientRequestID: "mode-" + fmt.Sprint(i), ClientRequestHash: strings.Repeat("a", 64),
+				Evidence: e,
+			}
+			_, created, err := s.ReserveSessionAdmission(ctx, in)
+			if tc.admitted {
+				if err != nil || !created {
+					t.Fatalf("admission refused %s: %v", tc.mode, err)
+				}
+				return
+			}
+			var refusal *domain.CapabilityRefusal
+			if !errors.As(err, &refusal) || refusal.Code != tc.want {
+				t.Fatalf("err = %v, want refusal %q", err, tc.want)
+			}
+			// The sentinel must stay reachable so existing callers keep matching it.
+			if !errors.Is(err, domain.ErrCapabilityEvidenceInsufficient) {
+				t.Fatalf("refusal %q lost the sentinel", refusal.Code)
+			}
+		})
+	}
+}

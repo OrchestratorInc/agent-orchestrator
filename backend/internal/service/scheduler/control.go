@@ -31,6 +31,21 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return out, err
 	}
+	configured := make(map[string]bool, len(out.Policies))
+	global := domain.DefaultSchedulerPolicy("")
+	for _, p := range out.Policies {
+		configured[p.ID] = true
+		if p.Scope == "global" {
+			global = p
+		}
+	}
+	// 返回实际生效的默认值，使未配置过的代理也能在同一入口修改并发。
+	for _, h := range domain.AllHarnesses {
+		p := domain.DefaultSchedulerPolicy(h)
+		if !configured[p.ID] {
+			out.Policies = append(out.Policies, p)
+		}
+	}
 	occupancy, err := s.deps.Store.ListSchedulerOccupancy(ctx)
 	if err != nil {
 		return out, err
@@ -43,7 +58,9 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	out.Resources, out.Capacity = s.sample, s.capacity
 	s.resourceMu.Unlock()
 	now := s.deps.Clock().UTC()
-	if out.Resources.ObservedAt.IsZero() || out.Resources.ObservedAt.After(now) || now.Sub(out.Resources.ObservedAt) > 3*SampleInterval {
+	if global.ResourceLimitsDisabled {
+		out.Capacity = Capacity{Limit: global.MaxConcurrent, MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_LIMITS_DISABLED"}
+	} else if out.Resources.ObservedAt.IsZero() || out.Resources.ObservedAt.After(now) || now.Sub(out.Resources.ObservedAt) > 3*SampleInterval {
 		out.Capacity = Capacity{ReasonCode: "RESOURCE_UNKNOWN"}
 	}
 	if !out.Leader.Recovered || !out.Leader.LeaseUntil.After(now) {
@@ -79,7 +96,17 @@ func (s *Service) PutPolicy(ctx context.Context, p domain.SchedulerPolicy, expec
 		return domain.SchedulerPolicy{}, false, principal.ErrNotAuthorized
 	}
 	change.ActorRef, change.Now = caller.OperatorTokenFingerprint, s.deps.Clock().UTC()
-	return s.deps.Store.PutSchedulerPolicy(ctx, p, expected, change)
+	if p.Scope == "global" {
+		s.resourceMu.Lock()
+		defer s.resourceMu.Unlock()
+	}
+	p, applied, err := s.deps.Store.PutSchedulerPolicy(ctx, p, expected, change)
+	if err == nil && applied && p.Scope == "global" {
+		// 用户改变策略后立即重算容量，旧策略留下的降额不能继续锁住新策略。
+		s.window = resourceWindow{}
+		s.capacity = s.window.evaluate(s.sample, s.deps.Clock().UTC(), p)
+	}
+	return p, applied, err
 }
 
 // SetWorkflowPaused 只控制新增调度，不终止既有进程，也不绕过恢复或硬预算。

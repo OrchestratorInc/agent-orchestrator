@@ -50,8 +50,11 @@ func (s *Store) ReserveAndClaim(ctx context.Context, in domain.ClaimAdmissionInp
 		if t.State != domain.WorkflowTaskStateReady || t.Revision != in.ExpectedTaskRevision || w.State != domain.WorkflowStateActive {
 			return domain.ErrWorkflowTaskNotClaimable
 		}
-		if t.Profile != in.Evidence.Capability.Profile || t.AgentHarness != "" && t.AgentHarness != in.Evidence.Capability.Harness {
-			return domain.ErrCapabilityEvidenceInsufficient
+		if t.Profile != in.Evidence.Capability.Profile {
+			return &domain.CapabilityRefusal{Code: domain.LaunchRefusalProfileMismatch}
+		}
+		if t.AgentHarness != "" && t.AgentHarness != in.Evidence.Capability.Harness {
+			return &domain.CapabilityRefusal{Code: domain.LaunchRefusalHarnessMismatch}
 		}
 		if err := checkPredecessorQuality(ctx, q, in.Attempt.WorkflowID, in.Attempt.TaskID, t.Kind, in.Evidence.Now); err != nil {
 			return err
@@ -74,7 +77,9 @@ func (s *Store) ReserveAndClaim(ctx context.Context, in domain.ClaimAdmissionInp
 				return domain.ErrWorkflowTaskNotClaimable
 			}
 		}
-		admission = domain.SchedulerAdmission{ID: "admission-" + uuid.NewString(), AttemptID: in.Attempt.ID, WorkflowID: in.Attempt.WorkflowID, TaskID: in.Attempt.TaskID, Harness: in.Evidence.Capability.Harness, RequestFingerprint: in.RequestFingerprint, Fence: in.Evidence.Fence, State: domain.AdmissionReserved, Revision: 1, CreatedAt: in.Evidence.Now.UTC(), UpdatedAt: in.Evidence.Now.UTC()}
+		// 工作流 Dispatch 始终以 Chat 模式启动（daemon/scheduler_wiring.go），
+		// 因此这里的准入必须是 Chat：留下空模式会让表面门禁永远无法生效。
+		admission = domain.SchedulerAdmission{ID: "admission-" + uuid.NewString(), AttemptID: in.Attempt.ID, WorkflowID: in.Attempt.WorkflowID, TaskID: in.Attempt.TaskID, Harness: in.Evidence.Capability.Harness, Mode: domain.SessionModeChat, RequestFingerprint: in.RequestFingerprint, Fence: in.Evidence.Fence, State: domain.AdmissionReserved, Revision: 1, CreatedAt: in.Evidence.Now.UTC(), UpdatedAt: in.Evidence.Now.UTC()}
 		reservations, err := checkAdmission(ctx, q, admission, in.Evidence)
 		if err != nil {
 			return err
@@ -161,7 +166,7 @@ func (s *Store) ReserveSessionAdmission(ctx context.Context, in domain.SessionAd
 			}
 		}
 		if in.Harness != in.Evidence.Capability.Harness {
-			return domain.ErrCapabilityEvidenceInsufficient
+			return &domain.CapabilityRefusal{Code: domain.LaunchRefusalHarnessMismatch}
 		}
 		result = domain.SchedulerAdmission{ID: "admission-" + uuid.NewString(), ProjectID: in.ProjectID, Harness: in.Harness, Mode: in.Mode, ClientRequestID: in.ClientRequestID, RequestFingerprint: in.ClientRequestHash, Fence: in.Evidence.Fence, State: domain.AdmissionReserved, Revision: 1, CreatedAt: in.Evidence.Now.UTC(), UpdatedAt: in.Evidence.Now.UTC()}
 		reservations, err := checkAdmission(ctx, q, result, in.Evidence)

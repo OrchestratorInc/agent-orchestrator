@@ -65,6 +65,16 @@ export function useWorkflowScheduler(id: string) {
 	} });
 }
 
+/** 开放只读的调度快照按 daemon 隔离，并复用工作流事件和保存后的缓存失效。 */
+export function useSchedulerStatus() {
+	const scope = useWorkflowScope();
+	return useQuery({ queryKey: [...scope, "scheduler-status"], enabled: !!scope[1], queryFn: async ({ signal }) => {
+		const { data, error } = await apiClient.GET("/api/v1/scheduler/status", { signal });
+		if (error) throw workflowError(error);
+		return data!;
+	} });
+}
+
 export function useWorkflowCollaboration(id: string) {
 	const scope = useWorkflowScope();
 	return useQuery({ queryKey: [...scope, id, "collaboration"], retry: false, enabled: !!scope[1] && !!id && !!window.ao, queryFn: async () => {

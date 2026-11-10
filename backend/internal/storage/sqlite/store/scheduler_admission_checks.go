@@ -21,14 +21,10 @@ func checkAdmission(ctx context.Context, q *gen.Queries, a domain.SchedulerAdmis
 		}
 	}
 	c := e.Capability
-	if err := c.Validate(); err != nil {
-		return nil, domain.ErrCapabilityEvidenceInsufficient
-	}
-	if c.Harness != a.Harness || c.Readiness != domain.CapabilityReady || !c.Source.AllowsSessionGating() || c.Expired(e.Now) || c.ObservedAt.After(e.Now) || c.SessionScoped() || c.AuthState != domain.AgentAuthenticationAuthorized && c.AuthState != domain.AgentAuthenticationNotApplicable {
-		return nil, domain.ErrCapabilityEvidenceInsufficient
-	}
-	if a.Mode == domain.SessionModeChat && c.Surfaces != domain.CapabilitySurfaceChat && c.Surfaces != domain.CapabilitySurfaceBoth || a.Mode == domain.SessionModeTUI && c.Surfaces != domain.CapabilitySurfaceTUI && c.Surfaces != domain.CapabilitySurfaceBoth {
-		return nil, domain.ErrCapabilityEvidenceInsufficient
+	// Profile identity is verified against the task's own profile by the caller that
+	// knows it (workflow claim); this re-derivation covers the mode and evidence.
+	if err := domain.AuthorizeLaunch(c, a.Harness, a.Mode, e.Now); err != nil {
+		return nil, err
 	}
 	global := domain.DefaultSchedulerPolicy("")
 	adapter := domain.DefaultSchedulerPolicy(a.Harness)
@@ -49,7 +45,7 @@ func checkAdmission(ctx context.Context, q *gen.Queries, a domain.SchedulerAdmis
 			return nil, domain.ErrSchedulerPolicy
 		}
 	}
-	if !validResourceSample(e.Resources, e.Now, global) || e.EffectiveGlobalCap < 1 || e.EffectiveGlobalCap > global.MaxConcurrent || e.EffectiveGlobalCap > domain.SchedulerHardCap {
+	if !global.ResourceLimitsDisabled && !validResourceSample(e.Resources, e.Now, global) || e.EffectiveGlobalCap < 1 || e.EffectiveGlobalCap > global.MaxConcurrent || e.EffectiveGlobalCap > domain.SchedulerHardCap {
 		return nil, domain.ErrSchedulerCapacity
 	}
 	occupied, err := q.ListSchedulerOccupancy(ctx, a.SessionID)

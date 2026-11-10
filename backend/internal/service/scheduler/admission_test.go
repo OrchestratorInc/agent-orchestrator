@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -207,6 +208,11 @@ func TestSlowCapabilityCannotReuseOldAdmissionTime(t *testing.T) {
 				f.clock.Advance(elapsed)
 				c := domain.NewHarnessCapabilitySnapshot(req.Harness, domain.CapabilitySourceConfirmedRuntime, observed, time.Minute)
 				c.AuthState, c.Readiness = domain.AgentAuthenticationAuthorized, domain.CapabilityReady
+				// A workflow Claim is a Chat launch, so the probe reports the Chat
+				// surface exactly as the production ChatDriverProbe does after a
+				// handshake; without it the launch rule refuses before the
+				// capacity/fence assertion this test is about.
+				c.Surfaces = domain.CapabilitySurfaceChat
 				return c, nil
 			})
 			_, err := f.scheduler.PrepareWorkflowAdmission(context.Background(), f.tasks(w)[0])
@@ -218,5 +224,38 @@ func TestSlowCapabilityCannotReuseOldAdmissionTime(t *testing.T) {
 				t.Fatalf("elapsed %s: %v, want %v", elapsed, err, want)
 			}
 		})
+	}
+}
+
+// TestSessionAdmissionTUIUsesInstallFacts is the end-to-end regression for
+// "spawn: create: capability evidence is insufficient to authorize this
+// feature": a TUI spawn used to require a chat handshake surface that no probe
+// reports, so every terminal session was refused before it started.
+func TestSessionAdmissionTUIUsesInstallFacts(t *testing.T) {
+	f := newFixture(t)
+	// The production probe's terminal answer: install facts only, surfaces unknown.
+	f.resolver.RegisterProbeFunc(domain.HarnessClaudeCode, func(_ context.Context, req ports.CapabilityProbeRequest) (domain.HarnessCapabilitySnapshot, error) {
+		c := domain.NewHarnessCapabilitySnapshot(req.Harness, domain.CapabilitySourceLocalProbe, f.clock.Now(), time.Minute)
+		c.AuthState, c.Readiness = domain.AgentAuthenticationAuthorized, domain.CapabilityReady
+		return c, nil
+	})
+	e, err := f.scheduler.PrepareSessionAdmission(context.Background(), ports.SpawnConfig{
+		Harness: domain.HarnessClaudeCode, Kind: domain.KindWorker, RequestedMode: domain.SessionModeTUI,
+	})
+	if err != nil {
+		t.Fatalf("a terminal launch must be authorized by install facts: %v", err)
+	}
+	in := domain.SessionAdmissionInput{
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		ClientRequestID: "tui-session", ClientRequestHash: strings.Repeat("a", 64), Evidence: e,
+	}
+	if _, created, err := f.store.ReserveSessionAdmission(context.Background(), in); err != nil || !created {
+		t.Fatalf("terminal admission refused: created=%v err=%v", created, err)
+	}
+	// The same evidence must not license a chat launch.
+	if _, err := f.scheduler.PrepareSessionAdmission(context.Background(), ports.SpawnConfig{
+		Harness: domain.HarnessClaudeCode, Kind: domain.KindWorker, RequestedMode: domain.SessionModeChat,
+	}); err == nil {
+		t.Fatal("install facts alone must not authorize a chat launch")
 	}
 }

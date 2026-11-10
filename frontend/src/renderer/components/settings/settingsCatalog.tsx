@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Gauge, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -18,6 +18,7 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+import { SchedulerSettingsSection } from "./SchedulerSettingsSection";
 
 /** The memory window's own blocks, loaded only when the page is opened: it
  * samples the machine every two seconds while it is on screen. */
@@ -68,6 +69,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Settings2,
 		label: (t) => t("settings.general"),
 		render: (_t, titleHidden) => <GeneralSettingsSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "scheduler",
+		icon: Gauge,
+		label: (t) => t("settings.scheduler.title"),
+		render: (_t, titleHidden) => <SchedulerSettingsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "harness",

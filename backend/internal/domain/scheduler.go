@@ -45,17 +45,19 @@ type SchedulerLeader struct {
 
 // SchedulerPolicy 是 Operator 批准的资源边界；动态容量只能进一步收紧。
 type SchedulerPolicy struct {
-	ID                string
-	Scope             string
-	ScopeID           string
-	MaxConcurrent     int64
-	CPURecoverPercent int64
-	CPUSoftPercent    int64
-	CPUHardPercent    int64
-	RAMSoftPercent    int64
-	RAMHardPercent    int64
-	RAMFloorBytes     int64
-	Revision          int64
+	ID            string
+	Scope         string
+	ScopeID       string
+	MaxConcurrent int64
+	// ResourceLimitsDisabled 只关闭全局 CPU/RAM 门禁；零值保留旧策略的资源保护。
+	ResourceLimitsDisabled bool
+	CPURecoverPercent      int64
+	CPUSoftPercent         int64
+	CPUHardPercent         int64
+	RAMSoftPercent         int64
+	RAMHardPercent         int64
+	RAMFloorBytes          int64
+	Revision               int64
 }
 
 // DefaultSchedulerPolicy 返回全局或单 Harness 的保守初始策略。
@@ -82,7 +84,7 @@ func (p SchedulerPolicy) Validate() error {
 	if p.Scope == "global" && p.ScopeID == "" && p.ID == "global" {
 		return nil
 	}
-	if p.Scope == "adapter" && p.ScopeID != "" && p.ID == "adapter:"+p.ScopeID && (AgentHarness(p.ScopeID).IsKnown() || AgentHarness(p.ScopeID) == HarnessFake) {
+	if p.Scope == "adapter" && !p.ResourceLimitsDisabled && p.ScopeID != "" && p.ID == "adapter:"+p.ScopeID && (AgentHarness(p.ScopeID).IsKnown() || AgentHarness(p.ScopeID) == HarnessFake) {
 		return nil
 	}
 	return ErrSchedulerPolicy

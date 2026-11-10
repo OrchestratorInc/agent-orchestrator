@@ -164,7 +164,7 @@ func (s *Service) PrepareWorkflowAdmission(ctx context.Context, task domain.Work
 	if err := s.eligibility(ctx, task, h); err != nil {
 		return domain.AdmissionEvidence{}, err
 	}
-	e, budgets, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: h, Profile: task.Profile, Model: task.Model, Effort: task.Effort})
+	e, budgets, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: h, Profile: task.Profile, Model: task.Model, Effort: task.Effort, Mode: domain.SessionModeChat}, domain.SessionModeChat)
 	if err != nil {
 		return e, err
 	}
@@ -187,16 +187,19 @@ func (s *Service) PrepareWorkflowAdmission(ctx context.Context, task domain.Work
 
 // PrepareSessionAdmission 为所有普通启动提供与 Workflow 相同的领导权、资源与能力证据。
 func (s *Service) PrepareSessionAdmission(ctx context.Context, cfg ports.SpawnConfig) (domain.AdmissionEvidence, error) {
-	if (!cfg.Harness.IsKnown() && cfg.Harness != domain.HarnessFake) ||
-		(cfg.RequestedMode != domain.SessionModeChat && cfg.RequestedMode != domain.SessionModeTUI) {
-		return domain.AdmissionEvidence{}, domain.ErrCapabilityEvidenceInsufficient
+	if !cfg.Harness.IsKnown() && cfg.Harness != domain.HarnessFake {
+		return domain.AdmissionEvidence{}, &domain.CapabilityRefusal{Code: domain.LaunchRefusalHarnessMismatch}
 	}
-	e, _, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: cfg.Harness, Profile: cfg.AgentConfig.Profile, Model: cfg.AgentConfig.Model, Effort: cfg.AgentConfig.Effort})
+	if !cfg.RequestedMode.Valid() {
+		return domain.AdmissionEvidence{}, &domain.CapabilityRefusal{Code: domain.LaunchRefusalInvalidEvidence}
+	}
+	e, _, err := s.prepareLaunchAdmission(ctx, ports.CapabilityProbeRequest{Harness: cfg.Harness, Profile: cfg.AgentConfig.Profile, Model: cfg.AgentConfig.Model, Effort: cfg.AgentConfig.Effort, Mode: cfg.RequestedMode}, cfg.RequestedMode)
 	return e, err
 }
 
 // prepareLaunchAdmission 不执行副作用；探测后重新校验当前任期和样本时间，慢探测不能放宽准入。
-func (s *Service) prepareLaunchAdmission(ctx context.Context, request ports.CapabilityProbeRequest) (domain.AdmissionEvidence, []domain.BudgetPolicy, error) {
+// 模式决定读哪份证据，判定本身只有 domain.AuthorizeLaunch 一处实现。
+func (s *Service) prepareLaunchAdmission(ctx context.Context, request ports.CapabilityProbeRequest, mode domain.SessionMode) (domain.AdmissionEvidence, []domain.BudgetPolicy, error) {
 	h := request.Harness
 	l, err := s.currentLeader(ctx)
 	if err != nil {
@@ -212,17 +215,15 @@ func (s *Service) prepareLaunchAdmission(ctx context.Context, request ports.Capa
 		return e, nil, err
 	}
 	if s.deps.Capabilities == nil {
-		return e, nil, domain.ErrCapabilityEvidenceInsufficient
+		return e, nil, &domain.CapabilityRefusal{Code: domain.LaunchRefusalNotReady}
 	}
 	c, err := s.deps.Capabilities.Resolve(ctx, request)
 	if err != nil {
 		return e, nil, errors.Join(domain.ErrCapabilityEvidenceInsufficient, err)
 	}
 	e.Now = s.deps.Clock().UTC()
-	if c.Validate() != nil || c.Harness != h || c.Profile != request.Profile || !c.Source.AllowsSessionGating() || c.SessionScoped() ||
-		c.Readiness != domain.CapabilityReady || c.Expired(e.Now) || c.ObservedAt.After(e.Now) ||
-		(c.AuthState != domain.AgentAuthenticationAuthorized && c.AuthState != domain.AgentAuthenticationNotApplicable) {
-		return e, nil, domain.ErrCapabilityEvidenceInsufficient
+	if err := domain.AuthorizeLaunchForProfile(c, h, request.Profile, mode, e.Now); err != nil {
+		return e, nil, err
 	}
 	e.Capability = c
 	if _, err := s.currentLeader(ctx); err != nil {
