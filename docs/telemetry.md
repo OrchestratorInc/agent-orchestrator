@@ -440,8 +440,13 @@ New (`historical: false`) PR outcomes add:
   carry `failed_step` and `cause` as tags.
 - `mode` is `chat` or `terminal` (absent when the start failed before a mode
   was chosen), `async` is whether the start went on in the background after
-  the request was answered, and `model` is the resolved model ID (absent when
-  the harness default was used without naming one). Like every daemon event
+  the request was answered, and `model` is the resolved model ID only when
+  the agent's saved model catalog lists it or it is a Claude family alias
+  (`fable`, `opus`, `sonnet`, `haiku`); any other ID (a gateway alias, a
+  private fine-tune, a typed or local model name) is sent as `custom`, so no
+  user-typed model name leaves the daemon. `model` is absent when the harness
+  default was used without naming one, or the harness has no model catalog to
+  check against. Like every daemon event
   they also carry `$os`, `platform` and `arch`, whichever client launched the
   daemon.
 - `surface` is `desktop`, `mobile`, or `cli`, as above.

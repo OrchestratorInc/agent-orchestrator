@@ -200,7 +200,7 @@ func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawn
 	// (context.DeadlineExceeded) still reports as failed.
 	report := func(answered int64) {
 		if !ready {
-			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, mode: rec.Mode, model: rec.Metadata.Model, facts: attempt.facts}, cause, answered, elapsed)
+			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, mode: rec.Mode, facts: attempt.facts}, cause, answered, elapsed)
 			return
 		}
 		s.emitSpawned(rec, answered, elapsed, firstForInstall, firstKnown, attempt.facts)

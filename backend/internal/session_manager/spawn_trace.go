@@ -73,7 +73,9 @@ func BeginSpawnStep(ctx context.Context, step string) func(error) {
 	}
 }
 
-func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, model string, async bool) {
+// NoteSpawnLaunch records the launch's mode and whether it went on in the
+// background. An empty mode is ignored and async is sticky-true.
+func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, async bool) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil {
 		return
@@ -83,10 +85,28 @@ func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, model string,
 	if mode != "" {
 		trace.mode = mode
 	}
-	if model != "" {
-		trace.model = model
-	}
 	trace.async = trace.async || async
+}
+
+// customSpawnModel stands in for a model ID the saved catalog does not list.
+// Typed IDs (gateway aliases, private fine-tunes, Hermes IDs, local paths) are
+// free text that can name org-internal things, so they never leave the daemon.
+const customSpawnModel = "custom"
+
+// NoteSpawnModel records the model a spawn resolved, as telemetry may report
+// it: the ID itself only when the saved catalog lists it or it is a Claude
+// family alias, otherwise customSpawnModel.
+func NoteSpawnModel(ctx context.Context, model string, listed bool) {
+	trace := spawnTraceFrom(ctx)
+	if trace == nil || model == "" {
+		return
+	}
+	if !listed {
+		model = customSpawnModel
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	trace.model = model
 }
 
 // SpawnTraceFacts is a snapshot of a trace.

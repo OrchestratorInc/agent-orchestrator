@@ -81,7 +81,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
 	// The outcome event reads this start's steps from the request's trace.
 	bg = carrySpawnTrace(ctx, bg)
-	NoteSpawnLaunch(ctx, domain.SessionModeChat, "", true)
+	NoteSpawnLaunch(ctx, domain.SessionModeChat, true)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run

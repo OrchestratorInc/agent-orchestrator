@@ -21,9 +21,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -6651,7 +6651,10 @@ func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
 		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
 		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
 		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
-		{"after a successful read", func() error { noteWorkspaceGitReadOK(root); return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error {
+			noteWorkspaceGitReadOK(root)
+			return read("fatal: your current branch appears to be broken")
+		}, false},
 	}
 	for _, step := range steps {
 		err := step.run()

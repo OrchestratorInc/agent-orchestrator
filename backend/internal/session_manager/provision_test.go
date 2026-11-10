@@ -1119,3 +1119,33 @@ func TestRuntimeEnvOmitsAgentBrowserConfigOnDesktopHosts(t *testing.T) {
 		t.Fatalf("%s = %q on a desktop host", EnvAgentBrowserToken, value)
 	}
 }
+
+// Telemetry reports a model only as the saved catalog knows it: a typed ID
+// (gateway alias, private fine-tune, local path) leaves the daemon as "custom".
+func TestResolveAgentConfigRecordsOnlyCatalogModelsForTelemetry(t *testing.T) {
+	listed := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-sonnet-5-5", Efforts: []string{"high"}}}}
+	for _, tc := range []struct {
+		name    string
+		catalog tuningCatalog
+		model   string
+		want    string
+	}{
+		{"listed model", tuningCatalog{catalog: listed}, "claude-sonnet-5-5", "claude-sonnet-5-5"},
+		{"family alias", tuningCatalog{catalog: listed}, "opus", "opus"},
+		{"typed model", tuningCatalog{catalog: listed}, "acme-internal/finetune-7", "custom"},
+		{"unreadable catalog", tuningCatalog{err: errors.New("offline")}, "claude-sonnet-5-5", "custom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Manager{backgroundContext: context.Background(), modelCatalog: tc.catalog}
+			ctx, trace := WithSpawnTrace(context.Background())
+			if _, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{
+				Harness: domain.HarnessClaudeCode, AgentConfig: ports.AgentConfig{Model: tc.model},
+			}, domain.ProjectConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			if got := trace.Facts().Model; got != tc.want {
+				t.Fatalf("telemetry model = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

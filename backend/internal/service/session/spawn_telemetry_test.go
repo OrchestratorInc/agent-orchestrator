@@ -59,7 +59,8 @@ func TestSpawnFailedCarriesStepsCauseAndLaunchFacts(t *testing.T) {
 	fc := &fakeCommander{
 		spawnErr: fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrWorkspaceCreate, gitErr),
 		spawnHook: func(ctx context.Context) {
-			sessionmanager.NoteSpawnLaunch(ctx, domain.SessionModeChat, "claude-opus-5-5", false)
+			sessionmanager.NoteSpawnLaunch(ctx, domain.SessionModeChat, false)
+			sessionmanager.NoteSpawnModel(ctx, "claude-opus-5-5", true)
 			sessionmanager.BeginSpawnStep(ctx, sessionmanager.SpawnStepModelCheck)(nil)
 			sessionmanager.BeginSpawnStep(ctx, sessionmanager.SpawnStepWorktree)(gitErr)
 		},

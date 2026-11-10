@@ -10,9 +10,11 @@ import (
 
 // addSpawnLaunchProps adds what a spawn outcome event says about the launch:
 // the steps that ran (model_check_ms ... agent_start_ms), mode (chat or
-// terminal), async and the resolved model ID. mode and model fall back to the
-// caller's when the trace has none (the start failed before choosing).
-func addSpawnLaunchProps(payload map[string]any, trace sessionmanager.SpawnTraceFacts, mode domain.SessionMode, model string) {
+// terminal), async and the model. mode falls back to the caller's when the
+// trace has none (the start failed before choosing). model comes only from
+// the trace's catalog check (sessionmanager.NoteSpawnModel): a listed ID, or
+// "custom" for a typed one, never the raw saved or requested ID.
+func addSpawnLaunchProps(payload map[string]any, trace sessionmanager.SpawnTraceFacts, mode domain.SessionMode) {
 	for key, ms := range trace.StepMs {
 		payload[key] = ms
 	}
@@ -27,10 +29,7 @@ func addSpawnLaunchProps(payload map[string]any, trace sessionmanager.SpawnTrace
 	}
 	payload["async"] = trace.Async
 	if trace.Model != "" {
-		model = trace.Model
-	}
-	if model != "" {
-		payload["model"] = model
+		payload["model"] = trace.Model
 	}
 }
 

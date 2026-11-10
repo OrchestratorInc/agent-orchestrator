@@ -1169,7 +1169,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
-	NoteSpawnLaunch(ctx, mode, cfg.AgentConfig.Model, cfg.Async && mode == domain.SessionModeChat)
+	NoteSpawnLaunch(ctx, mode, cfg.Async && mode == domain.SessionModeChat)
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1769,6 +1769,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
+		NoteSpawnModel(ctx, modelID, false)
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
 		}
@@ -1789,6 +1790,8 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
+	NoteSpawnModel(ctx, modelID, selected != nil ||
+		containsString(claudeFamilyAliases, strings.ToLower(strings.TrimSuffix(modelID, "[1m]"))))
 	if selected != nil && selected.RequiresVersion != "" {
 		// Launching would only fail on the first turn with the provider's
 		// claude_code_version_too_old rejection; say so before spawning. A model

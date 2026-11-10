@@ -656,7 +656,7 @@ func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDuratio
 	if facts.githubActor != "" {
 		payload["github_actor"] = facts.githubActor
 	}
-	addSpawnLaunchProps(payload, facts.trace.Facts(), rec.Mode, rec.Metadata.Model)
+	addSpawnLaunchProps(payload, facts.trace.Facts(), rec.Mode)
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
@@ -721,7 +721,6 @@ type spawnFailure struct {
 	// mode is the requested mode, used when the start failed before the
 	// manager chose one.
 	mode  domain.SessionMode
-	model string
 	facts spawnFacts
 }
 
@@ -757,7 +756,7 @@ func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDu
 		payload["surface"] = string(f.facts.surface)
 	}
 	trace := f.facts.trace.Facts()
-	addSpawnLaunchProps(payload, trace, f.mode, f.model)
+	addSpawnLaunchProps(payload, trace, f.mode)
 	payload["failed_step"], payload["cause"] = sessionmanager.ClassifySpawnFailure(err, trace)
 	// A start cancelled on purpose (the client left, the session was killed
 	// mid-start, the daemon shut down) is not a launch failure: it reports
