@@ -3,7 +3,6 @@
 package conductorimport
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -113,43 +111,32 @@ func Read(ctx context.Context, root string, current domain.ProjectConfig) (Plan,
 }
 
 func load(repo *os.Root, plan *Plan) (map[string]any, error) {
-	shared, err := readFile(repo, settingsFile)
-	if err != nil {
-		return nil, err
-	}
-	local, err := readFile(repo, localSettingsFile)
-	if err != nil {
-		return nil, err
-	}
-	if shared != nil || local != nil {
-		settings := map[string]any{}
-		for _, file := range []struct {
-			name string
-			body []byte
-		}{{settingsFile, shared}, {localSettingsFile, local}} {
-			if file.body == nil {
-				continue
-			}
-			var layer map[string]any
-			if err := toml.Unmarshal(file.body, &layer); err != nil {
-				return nil, fmt.Errorf("%s: %w", file.name, err)
-			}
-			overlay(settings, layer)
-			if plan.Source == "" {
-				plan.Source = file.name
-			}
+	settings := map[string]any{}
+	for _, name := range []string{settingsFile, legacyFile, localSettingsFile} {
+		if name == legacyFile && plan.Source != "" {
+			continue
 		}
-		return settings, nil
+		body, err := readFile(repo, name)
+		if err != nil {
+			return nil, err
+		}
+		if body == nil {
+			continue
+		}
+		var layer map[string]any
+		if name == legacyFile {
+			err = json.Unmarshal(body, &layer)
+		} else {
+			err = toml.Unmarshal(body, &layer)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		overlay(settings, layer)
+		if plan.Source == "" {
+			plan.Source = name
+		}
 	}
-	legacy, err := readFile(repo, legacyFile)
-	if err != nil || legacy == nil {
-		return nil, err
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(legacy, &settings); err != nil {
-		return nil, fmt.Errorf("%s: %w", legacyFile, err)
-	}
-	plan.Source = legacyFile
 	return settings, nil
 }
 
@@ -430,34 +417,57 @@ func includePatterns(repo *os.Root, settings map[string]any) (string, []string) 
 }
 
 func copyStep(patterns ...string) string {
-	excludes := make([]string, len(patterns))
-	for i, pattern := range patterns {
-		excludes[i] = shellQuote("--exclude=" + pattern)
+	specs := pathspecs(patterns)
+	for i, spec := range specs {
+		specs[i] = shellQuote(spec)
 	}
-	return `git -C "$AO_SOURCE_TREE_PATH" ls-files -z --others --ignored ` + strings.Join(excludes, " ") +
-		` | git -C "$AO_SOURCE_TREE_PATH" check-ignore -z --stdin` +
+	return `git -C "$AO_SOURCE_TREE_PATH" ls-files -z --others --ignored --exclude-standard -- ` + strings.Join(specs, " ") +
 		` | xargs -0 sh -c 'for f; do [ -e "$f" ] || [ -L "$f" ] || { mkdir -p "$(dirname "$f")" && cp -pR "$AO_SOURCE_TREE_PATH/$f" "$f"; } || exit 1; done' sh`
 }
 
-func ignoredMatches(ctx context.Context, root string, patterns []string) ([]string, error) {
-	if len(patterns) == 0 {
-		return nil, nil
-	}
-	args := []string{"-C", root, "ls-files", "-z", "--others", "--ignored"}
+func pathspecs(patterns []string) []string {
+	var specs []string
+	include := false
 	for _, pattern := range patterns {
-		args = append(args, "--exclude="+pattern)
+		magic := ":(glob)"
+		switch {
+		case strings.HasPrefix(pattern, "!"):
+			magic, pattern = ":(exclude,glob)", pattern[1:]
+		case strings.HasPrefix(pattern, `\!`), strings.HasPrefix(pattern, `\#`):
+			pattern, include = pattern[1:], true
+		default:
+			include = true
+		}
+		dir := strings.HasSuffix(pattern, "/")
+		pattern = strings.TrimSuffix(pattern, "/")
+		if strings.Trim(pattern, "/") == "" {
+			continue
+		}
+		if strings.Contains(pattern, "/") {
+			pattern = strings.TrimPrefix(pattern, "/")
+		} else {
+			pattern = "**/" + pattern
+		}
+		if !dir {
+			specs = append(specs, magic+pattern)
+		}
+		if !strings.HasSuffix(pattern, "/**") {
+			specs = append(specs, magic+pattern+"/**")
+		}
 	}
-	matched, err := aoprocess.CommandContext(ctx, "git", args...).Output()
-	if err != nil || len(matched) == 0 {
-		return nil, err
+	if !include {
+		return nil
 	}
-	check := aoprocess.CommandContext(ctx, "git", "-C", root, "check-ignore", "-z", "--stdin")
-	check.Stdin = bytes.NewReader(matched)
-	ignored, err := check.Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	return specs
+}
+
+func ignoredMatches(ctx context.Context, root string, patterns []string) ([]string, error) {
+	specs := pathspecs(patterns)
+	if len(specs) == 0 {
 		return nil, nil
 	}
+	args := append([]string{"-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--"}, specs...)
+	ignored, err := aoprocess.CommandContext(ctx, "git", args...).Output()
 	if err != nil {
 		return nil, err
 	}

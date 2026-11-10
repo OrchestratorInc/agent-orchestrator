@@ -41,7 +41,7 @@ Choose **Settings → Account → Export data** and keep the archive.
 
 ### Write down your Cloud settings
 
-Copy your Cloud setup script, environment variables, secrets, run actions, and routines somewhere safe. You set them up again in Orchestrator.
+Copy your Cloud Computer install script, Cloud environment variables, run actions, and routines somewhere safe. Conductor hides secret values after you save them, so get each secret from where you keep it. You set them up again in Orchestrator.
 
 </Step>
 </Steps>
@@ -71,11 +71,11 @@ Open **Project settings → Scripts**. If the repository has `.conductor/setting
 | `prompts.general` | agent rules |
 | `.worktreeinclude`, `file_include_globs`, or the default `.env*` | a **Setup** step that copies those files into each new worktree |
 
-`settings.local.toml` overrides `settings.toml`, as in Conductor, and `conductor.json` is read only when neither exists. The import adds to the project and never replaces anything: it skips a step the project already has, a variable name you already set, and a Cue name already in use. Running it again changes nothing.
+`settings.local.toml` overrides `settings.toml`, as in Conductor. Conductor ignores `conductor.json` when `settings.toml` exists, and so does the import. The import adds to the project and never replaces anything: it skips a step the project already has, a variable name you already set, and a Cue name already in use. Running it again changes nothing.
 
 The review lists every key it leaves out, such as `git.*`, `run_mode`, other `prompts.*`, hidden actions, and Cloud-only actions and variables.
 
-The copy step runs before your setup script, as in Conductor, so a setup script that reads `.env` still finds it. Each worktree gets its own copy.
+The copy step runs before your setup script, so a setup script that reads `.env` still finds it. It finds the matching files each time it creates a worktree, so a file you add later is copied too. Each worktree gets its own copy.
 
 </Step>
 <Step>
@@ -152,6 +152,6 @@ Sharing needs everyone signed in to Orchestrator.
 <details>
 <summary>Verification scope</summary>
 
-Checked against the Orchestrator source and Conductor's public documentation on 9 November 2026. The settings import was tested with sample repositories. The chat import was tested with a sample Conductor database built from a real Claude Code session, and Claude Code continued the imported chats. Neither was tested with a live Conductor install, and Conductor Cloud could not be tested.
+Checked against the Orchestrator source and Conductor's public documentation on 10 November 2026. The settings import was tested with sample repositories. The chat import was tested with a sample Conductor database built from a real Claude Code session, and Claude Code continued the imported chats. Neither was tested with a live Conductor install, and Conductor Cloud could not be tested.
 
 </details>

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -41,6 +42,7 @@ func TestReadMergesSettingsLayers(t *testing.T) {
 		".env.draft":          "B=2",
 		".env.example":        "A=",
 		"config/a.local.json": "{}",
+		"conductor.json":      `{"scripts":{"setup":"npm ci"},"runScriptMode":"concurrent"}`,
 		".conductor/settings.toml": `"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 enterprise_data_privacy = true
 file_include_globs = ".env*\nconfig/*.local.json\n"
@@ -140,15 +142,16 @@ API_URL = "http://127.0.0.1"
 
 func TestReadLegacyConductorJSON(t *testing.T) {
 	root := repo(t, map[string]string{
-		".gitignore":     ".env.local\n",
-		".env.local":     "A=1",
-		"conductor.json": `{"scripts":{"setup":"npm ci","run":"npm run dev","archive":"rm -rf tmp"},"runScriptMode":"concurrent"}`,
+		".gitignore":                     ".env.local\n",
+		".env.local":                     "A=1",
+		"conductor.json":                 `{"scripts":{"setup":"npm ci","run":"npm run dev","archive":"rm -rf tmp"},"runScriptMode":"concurrent"}`,
+		".conductor/settings.local.toml": "[scripts]\narchive = \"make clean\"\n",
 	}, ".gitignore", "conductor.json")
 	plan, err := Read(context.Background(), root, domain.ProjectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Source != "conductor.json" || !reflect.DeepEqual(plan.Config.PostCreate, []string{copyStep(".env*"), "npm ci"}) || !reflect.DeepEqual(plan.Config.PreRemove, []string{"rm -rf tmp"}) {
+	if plan.Source != "conductor.json" || !reflect.DeepEqual(plan.Config.PostCreate, []string{copyStep(".env*"), "npm ci"}) || !reflect.DeepEqual(plan.Config.PreRemove, []string{"make clean"}) {
 		t.Fatalf("plan = %+v", plan)
 	}
 	if !reflect.DeepEqual(plan.Cues, []CueDraft{{Key: "scripts.run", Name: "Run", Command: "npm run dev"}}) || plan.Config.Symlinks != nil {
@@ -186,16 +189,18 @@ func TestEnvGivesEachWorkspaceAStablePortBlock(t *testing.T) {
 
 func TestCopyStepCopiesIgnoredFilesIntoTheWorkspace(t *testing.T) {
 	root := repo(t, map[string]string{
-		".gitignore":               ".env\n*.local.json\n",
-		".env":                     "A=1",
-		".worktreeinclude":         ".env\n*.local.json\n",
-		"config/it's a.local.json": "{}",
-		"config/linked.local.json": "{}",
-		".conductor/settings.toml": "[scripts]\nsetup = \"true\"\n",
+		".gitignore":                   ".env\n*.local.json\n.local-secrets/\n",
+		".env":                         "A=1",
+		".worktreeinclude":             ".env\n*.local.json\n.local-secrets/**\n!.local-secrets/**/*.example\n",
+		"config/it's a.local.json":     "{}",
+		"config/linked.local.json":     "{}",
+		".local-secrets/a/key":         "k",
+		".local-secrets/a/key.example": "k=",
+		".conductor/settings.toml":     "[scripts]\nsetup = \"true\"\n",
 	}, ".gitignore", ".conductor/settings.toml")
 	ctx := context.Background()
 	plan, err := Read(ctx, root, domain.ProjectConfig{Symlinks: []string{"config/linked.local.json"}})
-	if err != nil || len(plan.Config.PostCreate) != 2 {
+	if err != nil || len(plan.Config.PostCreate) != 2 || strings.Contains(plan.Added[0].Detail, ".example") {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "config", "new.local.json"), []byte("{}"), 0o600); err != nil {
@@ -220,11 +225,14 @@ func TestCopyStepCopiesIgnoredFilesIntoTheWorkspace(t *testing.T) {
 			t.Fatalf("copy step: %v: %s", err, out)
 		}
 	}
-	for _, name := range []string{".env", "config/it's a.local.json", "config/new.local.json"} {
+	for _, name := range []string{".env", "config/it's a.local.json", "config/new.local.json", ".local-secrets/a/key"} {
 		info, err := os.Lstat(filepath.Join(workspace, name))
 		if err != nil || !info.Mode().IsRegular() {
 			t.Fatalf("%s in workspace: %v, %v", name, info, err)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".local-secrets/a/key.example")); !os.IsNotExist(err) {
+		t.Fatalf("negated file copied: %v", err)
 	}
 	if info, err := os.Lstat(linked); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("linked file replaced: %v, %v", info, err)
