@@ -23,8 +23,15 @@ import {
 
 const isMac = isMacPlatform();
 const MOD_KEY = isMac ? "⌘" : "Ctrl";
-/** Cards mounted at a time; scrolling or arrowing near the end mounts the next page. */
+/** Cards mounted when the modal opens or the search changes. */
 const PAGE_SIZE = 24;
+/**
+ * The rest mount a few at a time while the page is idle, up to this many, so
+ * scrolling never waits on a mount. Past it, scrolling or arrowing near the end
+ * mounts the next page.
+ */
+const IDLE_BATCH = 6;
+const IDLE_LIMIT = 120;
 
 /** Everything a search can match, lowercased once per session. */
 function searchText(session: WorkspaceSession): string {
@@ -149,6 +156,17 @@ export function SessionArchiveModal({
 		startTransition(() => setLimit((current) => current + PAGE_SIZE));
 	};
 
+	useEffect(() => {
+		if (!open || !cardsReady || limit >= Math.min(results.length, IDLE_LIMIT)) return;
+		const grow = () => setLimit((current) => current + IDLE_BATCH);
+		if (typeof requestIdleCallback !== "function") {
+			const timer = setTimeout(grow, 50);
+			return () => clearTimeout(timer);
+		}
+		const handle = requestIdleCallback(grow, { timeout: 500 });
+		return () => cancelIdleCallback(handle);
+	}, [cardsReady, limit, open, results.length]);
+
 	const openSession = (session: WorkspaceSession) => {
 		onOpenChange(false);
 		onOpenSession(session);
@@ -226,8 +244,9 @@ export function SessionArchiveModal({
 				onOpenChange={onOpenChange}
 				title={t("shell.archivedSessions")}
 				description={t("archiveModal.searchPlaceholder")}
-				// Wider than the palette so cards sit at least three to a row.
-				className="w-[min(1200px,calc(100vw-4rem))]!"
+				// Wider and taller than the palette so cards sit at least three to a
+				// row. `!` because tailwind-merge does not know the palette's sizes.
+				className="top-[6vh]! w-[min(1200px,calc(100vw-4rem))]!"
 				commandProps={{
 					shouldFilter: false,
 					onValueChange: (value) => {
@@ -256,7 +275,8 @@ export function SessionArchiveModal({
 					}}
 					data-keyboard={keyboardSelecting || undefined}
 					// The arrow-key selection looks like the board card's own hover.
-					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
+					// Hover and selection switch instantly, without the card's fade.
+					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
 					{cardsReady ? (
 						<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
