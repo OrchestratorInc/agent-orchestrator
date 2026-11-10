@@ -45,27 +45,66 @@ describe("cloud folder upload", () => {
 		push.mockRestore();
 	});
 
-	it("tells what uploading a folder sends: the checked-out branch's commits, a detached commit, or its files", async () => {
+	it("tells what uploading a folder sends as the main process decides it: the checked-out branch's commits, a detached commit, or its files", async () => {
 		const scan = vi.spyOn(aoBridge.app, "scanImportFolder");
 		const branch = vi.spyOn(aoBridge.app, "getRepositoryBranch");
+		const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload");
 		const repo = (overrides: Record<string, unknown>) => ({ path: "/w/a", repos: [{ name: "a", path: "/w/a", relativePath: ".", branch: "auto", remote: "git@github.com:acme/a.git", hasRemote: true, isRepo: true, hasCommit: true, ...overrides }] });
 
-		scan.mockResolvedValue(repo({})); branch.mockResolvedValue("feature-x");
+		scan.mockResolvedValue(repo({}));
+		preview.mockResolvedValue({ status: "ok", source: "head", branch: "feature-x", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", committed: { branch: "feature-x" } });
-		branch.mockResolvedValue(undefined);
+		preview.mockResolvedValue({ status: "ok", source: "head", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", committed: { branch: undefined } });
-		scan.mockResolvedValue(repo({ hasCommit: false })); branch.mockResolvedValue("main");
-		expect((await describeLocalFolder("/w/a")).committed).toBeUndefined();
+		// The scan sees a repository with a commit, but the main process imports
+		// the folder's files (say git could not read the repository's HEAD as
+		// the folder's own): the main process decides.
+		preview.mockResolvedValue({ status: "ok", source: "import", leftOut: [".env"] });
+		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", leftOut: [".env"] });
 		// A linked worktree's .git is a file, which the scan reads as a plain folder.
-		scan.mockResolvedValue(repo({ isRepo: false, hasCommit: false, needsGitInit: true, remote: "" })); branch.mockResolvedValue("wt");
+		scan.mockResolvedValue(repo({ isRepo: false, hasCommit: false, needsGitInit: true, remote: "" }));
+		preview.mockResolvedValue({ status: "ok", source: "head", branch: "wt", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "", committed: { branch: "wt" } });
-		// A plain folder, and a scan or branch read that fails.
-		branch.mockResolvedValue(undefined);
+		// A scan that fails still says what goes; a preview that fails says nothing.
+		scan.mockRejectedValue(new Error("unreadable"));
+		preview.mockResolvedValue({ status: "ok", source: "import", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "" });
-		scan.mockRejectedValue(new Error("unreadable")); branch.mockRejectedValue(new Error("no git"));
+		preview.mockRejectedValue(new Error("no bridge"));
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "" });
+		// The branch comes from the main process, never read separately.
+		expect(branch).not.toHaveBeenCalled();
 		scan.mockRestore();
 		branch.mockRestore();
+		preview.mockRestore();
+	});
+
+	it("refuses a repository git cannot read instead of calling it a folder of files", async () => {
+		const scan = vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/w/a", repos: [] });
+		const message = "git could not read a as a repository, so Orchestrator cannot tell whether to upload its commits or its files: fatal: detected dubious ownership in repository at '/w/a'";
+		const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload").mockResolvedValue({ status: "error", code: "import_failed", message });
+
+		const info = await describeLocalFolder("/w/a");
+
+		expect(info.committed).toBeUndefined();
+		expect(info.refusal).toBeInstanceOf(FolderPushError);
+		expect(folderPushErrorText(appI18n.t.bind(appI18n), info.refusal!, "/w/a")).toEqual({ message: "Orchestrator could not prepare a for upload.", detail: message });
+		scan.mockRestore();
+		preview.mockRestore();
+	});
+
+	it("reads the folder's origin and the main process's preview at once", async () => {
+		let finishScan: (value: { path: string; repos: never[] }) => void = () => undefined;
+		const scan = vi.spyOn(aoBridge.app, "scanImportFolder").mockImplementation(() => new Promise((resolve) => { finishScan = resolve; }));
+		const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload").mockResolvedValue({ status: "ok", source: "import", leftOut: [] });
+
+		const described = describeLocalFolder("/w/a");
+		await Promise.resolve();
+
+		expect(preview).toHaveBeenCalledWith({ folder: "/w/a" });
+		finishScan({ path: "/w/a", repos: [] });
+		expect(await described).toEqual({ remote: "" });
+		scan.mockRestore();
+		preview.mockRestore();
 	});
 
 	it("translates an upload refusal by its code, keeping the main process's message where it adds to it", () => {

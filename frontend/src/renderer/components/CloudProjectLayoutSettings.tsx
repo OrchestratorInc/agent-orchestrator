@@ -388,27 +388,34 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	const busy = phase !== "idle";
 	useReportBusy(busy, onBusyChange);
 	const owner = repositoryOwner(gitHubFullName(project.repositoryUrl) ?? "");
-	// The folder picked last; an earlier pick whose checks end after it is dropped.
-	const latestPick = useRef(0);
+	// While a folder is picked, then checked (folder, once picked): the checks
+	// are every check the upload makes, which can take a while on a long
+	// history, so Add waits for them rather than starting another.
+	const [choosing, setChoosing] = useState<{ folder?: string } | null>(null);
 	const choose = async () => {
 		setError(null);
-		const folder = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
-		if (!folder || !mounted.current) return;
-		const pick = ++latestPick.current;
-		const { remote, committed, leftOut, refusal } = await describeLocalFolder(folder);
-		if (!mounted.current || pick !== latestPick.current) return;
-		const existing = grantedRepositoryForRemote(remote, repos.data ?? []);
-		if (existing) {
-			onAddExisting(canonicalGitHubUrl(existing.fullName));
-			return;
+		setChoosing({});
+		try {
+			const folder = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
+			if (!folder || !mounted.current) return;
+			setChoosing({ folder });
+			const { remote, committed, leftOut, refusal } = await describeLocalFolder(folder);
+			if (!mounted.current) return;
+			const existing = grantedRepositoryForRemote(remote, repos.data ?? []);
+			if (existing) {
+				onAddExisting(canonicalGitHubUrl(existing.fullName));
+				return;
+			}
+			// A folder that cannot be uploaded at all is refused before a repository is made.
+			if (refusal) {
+				setError(folderPushErrorText(t, refusal, folder));
+				return;
+			}
+			setCreated(null);
+			setPending({ folder, name: gitHubRepositoryNameFromFolder(folderLabel(folder)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) });
+		} finally {
+			if (mounted.current) setChoosing(null);
 		}
-		// A folder that cannot be uploaded at all is refused before a repository is made.
-		if (refusal) {
-			setError(folderPushErrorText(t, refusal, folder));
-			return;
-		}
-		setCreated(null);
-		setPending({ folder, name: gitHubRepositoryNameFromFolder(folderLabel(folder)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) });
 	};
 	const madeForPending = pending !== null && created?.folder === pending.folder ? created.repository : undefined;
 	const nameInvalid = pending !== null && !madeForPending && !isValidGitHubRepositoryName(pending.name.trim());
@@ -501,10 +508,14 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 					: t("cloudWorkspace.newPrivateRepository", { defaultValue: "Uploaded to a new private repository" })}
 			</p>
 			{pending.leftOut?.length ? <p className="text-pretty text-xs text-settings-muted [overflow-wrap:anywhere]">{leftOutNotice(t, pending.leftOut)}</p> : null}
-		</div> : <Button type="button" variant="secondary" size="sm" disabled={disabled || atLimit} onClick={() => void choose()}>
+		</div> : <Button type="button" variant="secondary" size="sm" disabled={disabled || atLimit || choosing !== null} onClick={() => void choose()}>
 			<FolderPlus aria-hidden="true" className="size-icon-sm" />
 			{t("cloudWorkspace.addFolder", { defaultValue: "Add a local folder" })}
 		</Button>}
+		{choosing?.folder ? <p role="status" className="flex items-center gap-2 text-xs text-settings-muted">
+			<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
+			{t("cloudWorkspace.checkingFolder", { defaultValue: "Checking {{folder}}", folder: folderLabel(choosing.folder) })}
+		</p> : null}
 		{atLimit && !pending ? <p className="text-xs text-settings-muted">{t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: MAX_PROJECT_ADDITIONAL_REPOS })}</p> : null}
 		{nameInvalid ? <p role="alert" className="text-xs text-error">{t("cloudWorkspace.invalidRepositoryName", { defaultValue: "{{name}} is not a valid repository name: use letters, digits, \".\", \"-\" and \"_\", up to 100 characters.", name: pending?.name ?? "" })}</p> : null}
 		{problem ? <p role="alert" className="text-xs text-error">{problem}</p> : null}

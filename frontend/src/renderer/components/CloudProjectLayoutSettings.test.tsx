@@ -367,7 +367,8 @@ it("says a repository folder uploads its commits and holds the dialog open while
 	mocks.createRepository.mockReset().mockResolvedValue({ repository: repository("9", "notes"), created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" });
 	vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
 	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [{ name: "notes", path: "/Users/me/notes", relativePath: ".", branch: "auto", remote: "", hasRemote: false, isRepo: true, hasCommit: true }] });
-	vi.spyOn(aoBridge.app, "getRepositoryBranch").mockResolvedValue("draft");
+	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload").mockResolvedValue({ status: "ok", source: "head", branch: "draft", leftOut: [] });
+	onTestFinished(() => preview.mockRestore());
 	let finishPush: (value: Awaited<ReturnType<typeof aoBridge.cloud.pushFolderToRepository>>) => void = () => undefined;
 	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockImplementation(() => new Promise((resolve) => { finishPush = resolve; }));
 	const onSaveState = vi.fn();
@@ -476,27 +477,44 @@ it("saves an uploaded folder after a save in flight, on top of what it saved", a
 	await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
 });
 
-it("offers the folder picked last when an earlier folder's check ends after it", async () => {
+it("says a picked folder is being checked, and takes no other folder until it is", async () => {
 	workspacePatches();
 	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
-	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValueOnce("/Users/me/slow").mockResolvedValueOnce("/Users/me/fast");
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/slow");
 	const scan = vi.spyOn(aoBridge.app, "scanImportFolder").mockImplementation(async ({ path }) => ({ path, repos: [] }));
 	let finishSlow: () => void = () => undefined;
 	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload")
-		.mockImplementationOnce(() => new Promise((resolve) => { finishSlow = () => resolve({ status: "ok", source: "import", leftOut: [] }); }))
-		.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [] });
+		.mockImplementationOnce(() => new Promise((resolve) => { finishSlow = () => resolve({ status: "ok", source: "import", leftOut: [] }); }));
 	onTestFinished(() => [choose, scan, preview].forEach((spy) => spy.mockRestore()));
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
-	await waitFor(() => expect(preview).toHaveBeenCalledOnce());
-	await userEvent.click(screen.getByRole("button", { name: "Add a local folder" }));
-	expect(await screen.findByLabelText("Repository name for /Users/me/fast")).toBeInTheDocument();
+	expect(await screen.findByRole("status")).toHaveTextContent("Checking slow");
+	// A second click would start a second full check of a folder.
+	expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled();
+	expect(choose).toHaveBeenCalledOnce();
 
 	finishSlow();
-	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(screen.getByLabelText("Repository name for /Users/me/fast")).toBeInTheDocument();
-	expect(screen.queryByLabelText("Repository name for /Users/me/slow")).not.toBeInTheDocument();
+	expect(await screen.findByLabelText("Repository name for /Users/me/slow")).toBeInTheDocument();
+	expect(screen.queryByText("Checking slow")).not.toBeInTheDocument();
+});
+
+it("takes no other folder while the folder dialog is open, and none after it is cancelled", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	let pick: (folder: string | null) => void = () => undefined;
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockImplementationOnce(() => new Promise((resolve) => { pick = resolve; }));
+	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload").mockClear();
+	onTestFinished(() => [choose, preview].forEach((spy) => spy.mockRestore()));
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled());
+	expect(screen.queryByRole("status")).toBeNull();
+
+	act(() => pick(null));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Add a local folder" })).toBeEnabled());
+	expect(preview).not.toHaveBeenCalled();
 });
 
 it("says a folder's repository is on GitHub and still empty when its upload fails", async () => {

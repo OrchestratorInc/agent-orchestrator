@@ -42,56 +42,47 @@ export function folderLabel(path: string): string {
 }
 
 /**
- * What uploading a folder will send, as far as the app can tell before it
- * runs: the folder's origin, and, when the folder is the top of a git
- * repository with a commit, that its checked-out commit (and history) is
- * uploaded rather than its files. branch is the checked-out branch, absent
- * when HEAD is detached. The main process makes the same choice when it
- * pushes (main/cloud-folder-push.ts).
+ * What uploading a folder will send, as the main process decides it before
+ * anything is made (main/cloud-folder-push.ts previewFolderUpload, the same
+ * checks the upload makes): the folder's origin, and, when the main process
+ * will upload the folder's checked-out commit (and history) rather than its
+ * files, committed, with the checked-out branch (absent when HEAD is
+ * detached).
  */
 export type LocalFolderInfo = {
 	remote: string;
 	committed?: { branch?: string };
-	/** The secret-looking files the upload leaves out (main/cloud-folder-push.ts isSecretLookingPath). */
+	/** The files with credentials the upload leaves out (main/cloud-folder-push.ts secretPathKind). */
 	leftOut?: string[];
 	/** Why the folder cannot be uploaded at all, as the main process found before uploading. */
 	refusal?: FolderPushError;
 };
 
 export async function describeLocalFolder(path: string): Promise<LocalFolderInfo> {
-	let remote = "";
-	let top: { isRepo: boolean; hasCommit: boolean; needsGitInit?: boolean } | undefined;
-	try {
-		const scanned = (await aoBridge.app.scanImportFolder({ path, mode: "project" })).repos[0];
-		remote = scanned?.remote ?? "";
-		if (scanned?.relativePath === ".") top = scanned;
-	} catch {
-		// Unreadable as a repository: it is uploaded as a folder.
+	// Independent reads, run together: the origin (to match a granted
+	// repository) and what the main process would upload.
+	// A read that fails tells nothing: no origin to match, or no preview (the
+	// upload makes the same checks and refuses then).
+	const settle = async <T,>(read: () => Promise<T>): Promise<T | undefined> => {
+		try {
+			return await read();
+		} catch {
+			return undefined;
+		}
+	};
+	const [scanned, preview] = await Promise.all([
+		settle(async () => (await aoBridge.app.scanImportFolder({ path, mode: "project" })).repos[0]),
+		settle<PushFolderPreview>(() => aoBridge.cloud.previewFolderUpload({ folder: path })),
+	]);
+	const remote = scanned?.remote ?? "";
+	if (preview?.status === "error") {
+		return preview.code === "invalid_request" ? { remote } : { remote, refusal: new FolderPushError(preview.code, preview.message, preview.files) };
 	}
-	let branch: string | undefined;
-	try {
-		// The checked-out branch, only for the top of a repository; undefined
-		// when detached, for a folder inside a repository, or outside any.
-		branch = (await aoBridge.app.getRepositoryBranch(path)) || undefined;
-	} catch {
-		branch = undefined;
-	}
-	// What the upload would leave out, or why it cannot go, from the main
-	// process, which makes the same checks when it pushes.
-	let preview: PushFolderPreview | undefined;
-	try {
-		preview = await aoBridge.cloud.previewFolderUpload({ folder: path });
-	} catch {
-		preview = undefined;
-	}
-	const checked: Pick<LocalFolderInfo, "leftOut" | "refusal"> = preview?.status === "error"
-		? (preview.code === "invalid_request" ? {} : { refusal: new FolderPushError(preview.code, preview.message, preview.files) })
-		: preview?.leftOut.length ? { leftOut: preview.leftOut } : {};
-	if (top?.isRepo && top.hasCommit) return { remote, committed: { branch }, ...checked };
-	// A linked worktree (or a submodule checkout) has a .git file, which the
-	// scan reads as a plain folder; git still reports its branch at its top.
-	if (top?.needsGitInit && branch) return { remote, committed: { branch }, ...checked };
-	return { remote, ...checked };
+	return {
+		remote,
+		...(preview?.source === "head" ? { committed: { branch: preview.branch } } : {}),
+		...(preview?.leftOut.length ? { leftOut: preview.leftOut } : {}),
+	};
 }
 
 /**
@@ -112,7 +103,7 @@ function secretFilesText(t: TFunction, folder: string, files: readonly string[])
 		: t("cloudWorkspace.pushError.secretFiles", { defaultValue: "The history of {{folder}} holds files that look like secrets ({{files}}), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.", folder, files: shown });
 }
 
-/** The notice for files an upload leaves out because they look like secrets. */
+/** The notice for files an upload leaves out because they hold credentials. */
 export function leftOutNotice(t: TFunction, files: readonly string[]): string {
 	const shown = shownFileNames(files);
 	return files.length > NAMED_FILES

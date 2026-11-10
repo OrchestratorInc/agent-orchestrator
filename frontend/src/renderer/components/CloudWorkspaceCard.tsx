@@ -151,6 +151,10 @@ export function CloudWorkspaceCard({
 	const [members, setMembers] = useState<WorkspaceMember[]>([]);
 	// Folders picked whose checks (describeLocalFolder) are still running.
 	const [checking, setChecking] = useState<string[]>([]);
+	// Folder dialogs still open. The dialog does not block this window, so
+	// Create could be pressed meanwhile, and a folder picked once the create
+	// had begun would never be uploaded or added.
+	const [pickingFolders, setPickingFolders] = useState(0);
 	const [progress, setProgress] = useState<Record<string, MemberProgress>>({});
 	const [pickingRepository, setPickingRepository] = useState(false);
 	const [chosenOwner, setChosenOwner] = useState("");
@@ -192,8 +196,8 @@ export function CloudWorkspaceCard({
 	// more than one needs one; a role the app does not know leaves it to the server.
 	const memberRoleBlocks = org?.role !== undefined && !canManageBilling(org) && members.length > 1;
 	const atLimit = members.length >= MAX_WORKSPACE_REPOSITORIES;
-	// A folder still being checked would be left out of a workspace created now.
-	const createBlocked = nameInvalid || members.length === 0 || checking.length > 0 || problem !== undefined || badName !== undefined || mixedOwners || ownerMissing || memberRoleBlocks || coderSetup.workspaceNamePrefixInvalid;
+	// A folder still being picked or checked would be left out of a workspace created now.
+	const createBlocked = nameInvalid || members.length === 0 || pickingFolders > 0 || checking.length > 0 || problem !== undefined || badName !== undefined || mixedOwners || ownerMissing || memberRoleBlocks || coderSetup.workspaceNamePrefixInvalid;
 
 	// Every change applies to the list as it is when it lands: a folder's
 	// checks can end after other members joined, left, or were renamed.
@@ -213,7 +217,15 @@ export function CloudWorkspaceCard({
 	};
 	const addFolder = async () => {
 		setAddError(null);
-		const path = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
+		setPickingFolders((open) => open + 1);
+		let path: string | null;
+		try {
+			path = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
+		} finally {
+			// In the same render as the folder's check starts below, so Create
+			// never comes back on between them.
+			setPickingFolders((open) => open - 1);
+		}
 		if (!path) return;
 		if (members.some((member) => member.kind === "folder" && member.path === path) || checking.includes(path)) {
 			setAddError({ message: t("cloudWorkspace.folderAlreadyAdded", { defaultValue: "{{folder}} is already in this workspace.", folder: folderLabel(path) }) });

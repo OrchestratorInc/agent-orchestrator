@@ -180,14 +180,14 @@ describe("CloudWorkspaceCard", () => {
 		renderCard();
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
 		// The scan reports origin's default branch ("auto" without one); the
-		// push sends what is checked out.
+		// main process pushes, and names, what is checked out.
 		mocks.scanImportFolder.mockResolvedValue(scanned("/Users/me/notes", { branch: "main" }));
-		mocks.getRepositoryBranch.mockResolvedValue("draft");
+		mocks.previewFolderUpload.mockResolvedValue({ status: "ok", source: "head", branch: "draft", leftOut: [] });
 
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 
 		expect(await screen.findByText("Uploads the commits of draft, not uncommitted changes")).toBeInTheDocument();
-		expect(mocks.getRepositoryBranch).toHaveBeenCalledWith("/Users/me/notes");
+		expect(mocks.previewFolderUpload).toHaveBeenCalledWith({ folder: "/Users/me/notes" });
 	});
 
 	it("says a detached repository folder uploads its checked-out commit", async () => {
@@ -195,6 +195,7 @@ describe("CloudWorkspaceCard", () => {
 		renderCard();
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
 		mocks.scanImportFolder.mockResolvedValue(scanned("/Users/me/notes", {}));
+		mocks.previewFolderUpload.mockResolvedValue({ status: "ok", source: "head", leftOut: [] });
 
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 
@@ -202,21 +203,63 @@ describe("CloudWorkspaceCard", () => {
 		expect(screen.queryByText(/commits of auto/)).not.toBeInTheDocument();
 	});
 
-	it("treats a linked worktree as a repository and a repository without commits as files", async () => {
+	it("says what the main process uploads, whatever the scan made of the folder", async () => {
 		const user = userEvent.setup();
 		renderCard();
+		// A linked worktree, whose .git file the scan reads as a plain folder.
 		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/notes-wt");
 		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/notes-wt", { isRepo: false, hasCommit: false, needsGitInit: true, branch: "" }));
-		mocks.getRepositoryBranch.mockResolvedValueOnce("wt-branch");
+		mocks.previewFolderUpload.mockResolvedValueOnce({ status: "ok", source: "head", branch: "wt-branch", leftOut: [] });
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 		expect(await screen.findByText("Uploads the commits of wt-branch, not uncommitted changes")).toBeInTheDocument();
 
+		// A repository with a commit the main process imports as files.
 		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/draft");
-		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/draft", { hasCommit: false }));
-		// git names the unborn branch, but there is no commit to push.
-		mocks.getRepositoryBranch.mockResolvedValueOnce("main");
+		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/draft", {}));
+		mocks.previewFolderUpload.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [] });
 		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
 		expect(await screen.findByText("Uploaded to a new private repository")).toBeInTheDocument();
+		expect(mocks.getRepositoryBranch).not.toHaveBeenCalled();
+	});
+
+	it("keeps Create off while the folder dialog is open, and uploads the folder picked in it", async () => {
+		const user = userEvent.setup();
+		const onCreated = renderCard();
+		let pick: (folder: string | null) => void = () => undefined;
+		mocks.chooseDirectory.mockImplementationOnce(() => new Promise((resolve) => { pick = resolve; }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Platform");
+		await addRepository(user, "acme/api");
+		expect(await screen.findByRole("button", { name: "Create" })).toBeEnabled();
+		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
+		await waitFor(() => expect(mocks.chooseDirectory).toHaveBeenCalledOnce());
+		// The dialog does not block the window, so Create is still on the screen.
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+
+		pick("/Users/me/notes");
+		expect(await screen.findByLabelText("Repository name for notes")).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ws-1"));
+		expect(mocks.pushFolderToRepository).toHaveBeenCalledWith(expect.objectContaining({ folder: "/Users/me/notes" }));
+		expect(mocks.createGitHubProject.mock.calls[0]?.[1].config.repos).toEqual([{ url: "https://github.com/acme/notes" }]);
+	});
+
+	it("turns Create back on when the folder dialog is cancelled", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		let pick: (folder: string | null) => void = () => undefined;
+		mocks.chooseDirectory.mockImplementationOnce(() => new Promise((resolve) => { pick = resolve; }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Platform");
+		await addRepository(user, "acme/api");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeDisabled());
+
+		pick(null);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+		expect(mocks.previewFolderUpload).not.toHaveBeenCalled();
 	});
 
 	it("creates a workspace from repositories and a local folder", async () => {
