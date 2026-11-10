@@ -677,8 +677,8 @@ function privacyGuidePreloadPath(): string {
 	return path.join(__dirname, "privacy-guide-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
-// Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
+// Runtime window/taskbar icon for Linux and Windows, and the unpackaged macOS
+// dock icon. Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
 // the orange "DEV" variant so they are recognisable and never impersonate the
 // installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
@@ -698,8 +698,11 @@ function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 	]);
 }
 
+// Unpackaged runs only: the Dock shows the DEV icon. A packaged app keeps its
+// bundle icon, which macOS 26+ renders as Liquid Glass from Assets.car and
+// adapts to light, dark, tinted and clear; a runtime PNG would flatten it.
 function applyRuntimeAppIcon(): void {
-	if (process.platform !== "darwin") return;
+	if (process.platform !== "darwin" || app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
