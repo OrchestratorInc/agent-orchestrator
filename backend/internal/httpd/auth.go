@@ -319,7 +319,10 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !state.retiredPasswordMatches(tok) {
+			// Only a presented password is a guess. A request with none (a
+			// browser opening the tunnel URL, its favicon) reveals nothing, and
+			// counting it locks out every device behind the visitor's IP.
+			if tok != "" && !state.retiredPasswordMatches(tok) {
 				lock.fail(src)
 			}
 			envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "BAD_PASSWORD",

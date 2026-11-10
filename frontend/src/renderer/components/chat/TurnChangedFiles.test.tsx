@@ -260,9 +260,10 @@ describe("TurnChangedFiles", () => {
 });
 
 describe("ActivityRow command output", () => {
-	it("bounds a multi-megabyte log preview while preserving its latest output", () => {
+	it("bounds a multi-megabyte log preview while preserving its latest output", async () => {
 		const output = "BEGIN_OVERSIZE\n" + "Oversized output integrity check.\n".repeat(160_000) + "END_OVERSIZE";
 		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		const shown = container.querySelector("pre")!.textContent!;
 		expect(shown.split("\n").length).toBeLessThanOrEqual(400);
 		expect(shown.length).toBeLessThanOrEqual(64 * 1024);
@@ -272,21 +273,23 @@ describe("ActivityRow command output", () => {
 		expect(screen.queryByText(/printed more than Orchestrator stores/i)).not.toBeInTheDocument();
 	});
 
-	it("bounds single-line output without splitting a surrogate pair", () => {
+	it("bounds single-line output without splitting a surrogate pair", async () => {
 		const output = "head" + "😀" + "x".repeat(64 * 1024 - 1);
 		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		expect(container.querySelector("pre")?.textContent).toBe("x".repeat(64 * 1024 - 1));
 	});
 
-	it("updates the bounded preview as a running command prints more", () => {
+	it("updates the bounded preview as a running command prints more", async () => {
 		const output = "start\n".repeat(1_000);
 		const { container, rerender } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		await userEvent.click(screen.getByRole("button"));
 		rerender(<TooltipProvider><ActivityRow activity={commandActivity({ output: output + "latest failure" }, "running")} /></TooltipProvider>);
 		expect(container.querySelector("pre")?.textContent).toMatch(/latest failure$/);
 		expect(container.querySelector("pre")!.textContent!.split("\n").length).toBeLessThanOrEqual(400);
 	});
 
-	it("opens itself while a command is still printing", () => {
+	it("stays one line while a command is still printing, until the reader opens it", async () => {
 		const { container } = render(
 			<ActivityRow
 				activity={commandActivity(
@@ -295,14 +298,17 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
-		// No click: live output that needs a click is not live. Read off the <pre>
-		// rather than via getByText, which normalizes the runs of whitespace that
-		// real command output is full of.
-		const pre = container.querySelector("pre");
-		expect(pre?.textContent).toBe("ok  pkg/a\n");
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+		expect(container.querySelector("pre")).toBeNull();
+
+		await userEvent.click(screen.getByRole("button"));
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+		// Read off the <pre> rather than via getByText, which normalizes the runs of
+		// whitespace that real command output is full of.
+		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
-	it("does not add provider provenance below streamed output", () => {
+	it("does not add provider provenance below streamed output", async () => {
 		render(
 			<ActivityRow
 				activity={commandActivity(
@@ -311,6 +317,7 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
+		await userEvent.click(screen.getByRole("button"));
 		expect(screen.getByText("tick-2")).toBeInTheDocument();
 		expect(screen.queryByText(/Streamed live as the command runs/i)).not.toBeInTheDocument();
 	});
@@ -367,8 +374,8 @@ describe("ActivityRow command output", () => {
 	});
 });
 
-// A run collapses consecutive tool calls to one line. Without the same auto-open
-// rule, a command streaming output inside a run is live to nobody.
+// A run collapses consecutive tool calls to one line, and a command printing
+// inside it does not open it: the reader decides.
 describe("ActivityRun with a streaming command", () => {
 	function plan(id: string): ConversationActivity {
 		return {
@@ -383,7 +390,7 @@ describe("ActivityRun with a streaming command", () => {
 		};
 	}
 
-	it("opens itself so live output inside it is visible", () => {
+	it("stays folded while a command inside it prints", () => {
 		render(
 			<ActivityRun
 				activities={[
@@ -395,10 +402,10 @@ describe("ActivityRun with a streaming command", () => {
 				]}
 			/>,
 		);
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
-	it("opens the matching subgroup when a grouped command is streaming", () => {
+	it("keeps the subgroup of a streaming command folded when the reader opens the run", async () => {
 		const completedCommand = commandActivity({ command: "pwd" }, "completed");
 		completedCommand.id = "act-2";
 		completedCommand.sequence = 2;
@@ -416,7 +423,9 @@ describe("ActivityRun with a streaming command", () => {
 			/>,
 		);
 
-		expect(screen.getByText("compiling…")).toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button")[0]!);
+		expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByText("compiling…")).not.toBeInTheDocument();
 	});
 
 	it("stays collapsed when nothing inside it is printing", () => {

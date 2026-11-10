@@ -181,10 +181,12 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
+import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -466,6 +468,8 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
+	/** resumeError says another app still holds this chat. */
+	resumeOpenElsewhere?: boolean;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -488,6 +492,7 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
+	importBlock?: AgentBlock;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -783,6 +788,7 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
+	resumeOpenElsewhere,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -794,6 +800,7 @@ function ChatWorkspaceContent({
 	composerNotice,
 	composerLockedPlaceholder,
 	savedCopy = false,
+	importBlock,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -1962,11 +1969,12 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy ? null : (
+					{savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
 							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+							needsResume={session?.needsResume}
 							transitioning={controllerTransitioning || agentResuming}
 							automaticWakePending={suppressStopped}
 							reconnecting={startupReconnecting}
@@ -1974,6 +1982,8 @@ function ChatWorkspaceContent({
 							onResume={newWorkDisabled ? undefined : onResumeAgent}
 							resuming={resumingAgent}
 							resumeError={resumeError}
+							resumeOpenElsewhere={resumeOpenElsewhere}
+							harness={snapshot.harness}
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
@@ -2095,7 +2105,11 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									<ChatComposer
+									{importBlock && session ? (
+										<ImportedAgentBlocked agent={session.provider} block={importBlock} />
+									) : session?.mode === "tui" && session.needsResume ? (
+										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
+									) : <ChatComposer
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
@@ -2209,7 +2223,7 @@ function ChatWorkspaceContent({
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
-									/>
+									/>}
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
@@ -2584,6 +2598,8 @@ function ChatHeader({
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }
 
+const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
+
 /**
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
@@ -2591,6 +2607,7 @@ function ChatHeader({
 function ControllerBanner({
 	controller,
 	provisionState,
+	needsResume,
 	transitioning,
 	automaticWakePending,
 	reconnecting,
@@ -2598,6 +2615,8 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
+	resumeOpenElsewhere,
+	harness,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -2607,6 +2626,7 @@ function ControllerBanner({
 	/** The chat already shows the opening brief as working; connecting needs no banner. */
 	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
+	needsResume?: boolean;
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
@@ -2616,11 +2636,30 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
+	resumeOpenElsewhere?: boolean;
+	harness?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
 	const { t } = useTranslation();
+	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
+	// An archived session is restored, never resumed, so it is not "open elsewhere".
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
+	const resumeRef = useRef(onResume);
+	resumeRef.current = onResume;
+	// The other app releases the chat without telling AO (Codex can hold a closed
+	// one for many minutes), so keep checking instead of waiting for Retry; but
+	// not while a handoff, restart or startup owns the agent.
+	const recheck = openElsewhere && Boolean(onResume) && !resuming && !transitioning && !reconnecting &&
+		provisionState !== "provisioning" && provisionState !== "failed";
+	useEffect(() => {
+		if (!recheck) return;
+		const timer = window.setTimeout(() => {
+			void Promise.resolve().then(() => resumeRef.current?.()).catch(() => {});
+		}, OPEN_ELSEWHERE_RECHECK_MS);
+		return () => window.clearTimeout(timer);
+	}, [recheck]);
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
@@ -2654,8 +2693,12 @@ function ControllerBanner({
 					? "Waking agent…"
 					: restarting
 						? "Reconnecting to the agent…"
-						: "The agent controller stopped",
-			tone: terminated || waking || restarting ? "text-muted-foreground" : "text-destructive",
+						: openElsewhere
+							? t("chat.controller.openElsewhere")
+							: needsResume
+								? t("chat.controller.couldNotConnect")
+								: "The agent controller stopped",
+			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2691,9 +2734,17 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{terminated ? t("chat.archived.body") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{terminated
+								? t("chat.archived.body")
+								: openElsewhere
+									? [
+										t("chat.controller.openElsewhereBody"),
+										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+									].filter(Boolean).join(" ")
+									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
-						{resumeError || shellError ? (
+						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
@@ -2707,11 +2758,11 @@ function ControllerBanner({
 									onClick={resumeClick}
 									disabled={resuming}
 								>
-									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : "Resume agent"}
+									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
 								</Button>
 							) : null}
 							{/* Once the worktree is gone a shell would open in the project root. */}
-							{onOpenShell && !terminated ? (
+							{onOpenShell && !needsResume && !terminated ? (
 								<Button
 									type="button"
 									size="sm"
@@ -5206,9 +5257,6 @@ const TurnGroup = memo(function TurnGroup({
 	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
-	// Only the run the agent is working in stays open while the turn runs; earlier
-	// runs fold to their summary, so a long turn does not keep every call mounted.
-	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
 	const renderRun = (run: TimelineRun) => {
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
@@ -5222,7 +5270,6 @@ const TurnGroup = memo(function TurnGroup({
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
 				activities={activities}
-				live={run.key === liveRunKey}
 			/>
 		);
 	};
@@ -6125,12 +6172,14 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.kind === "single" && isNoticeItem(run.items[0]);
+	return run.items.some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
+	// A run holding a failed call stays out of the fold, so the failure shows under it.
+	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }

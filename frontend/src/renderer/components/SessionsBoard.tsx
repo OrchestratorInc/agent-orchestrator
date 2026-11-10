@@ -38,6 +38,7 @@ import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, worksp
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
+import { ProjectImportOffer } from "./ProjectImportOffer";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -115,7 +116,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
-	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
+	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter((session) => !session.needsResume || isArchivedSession(session));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
 		? demoBoardSessions(demoWorkspaceId)
@@ -340,7 +341,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
-					<ProjectBoardEmpty actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />} />
+					<ProjectBoardEmpty
+						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
+						offer={projectId && !hostId ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
+					/>
 				) : (
 					<SessionsBoardGridView
 						columns={columns}

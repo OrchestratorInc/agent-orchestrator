@@ -119,7 +119,6 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 				}, sessions.map((session) => session.id)).catch(() => undefined);
 			}, 120);
 		},
-		chunks: (session: HeldSession) => chunks.get(session.id) ?? 1,
 		stop() {
 			if (streaming) clearInterval(streaming);
 		},
@@ -133,6 +132,16 @@ async function throttle(page: Page, rate: number) {
 
 function conversationLog(page: Page) {
 	return page.getByRole("log", { name: "Conversation" });
+}
+
+/**
+ * The highest reply chunk the conversation shows, or -1 before any. The last
+ * chunk runs into the turn's elapsed time in the log's text ("chunk-128h 7m"),
+ * so only chunks followed by a space count.
+ */
+async function latestShownChunk(page: Page) {
+	const text = await conversationLog(page).textContent() ?? "";
+	return Math.max(-1, ...Array.from(text.matchAll(/chunk-(\d+) /g), (match) => Number(match[1])));
 }
 
 async function expectShowing(page: Page, session: HeldSession) {
@@ -232,9 +241,11 @@ test("renderer: streaming replies keep updating through rapid session switches @
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
 			previous = session;
-			// The shown session keeps streaming after the switch.
-			const seen = harness.chunks(session);
-			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });
+			// The shown session keeps streaming after the switch. Its reply grows
+			// faster than a throttled dev build repaints it, so wait for the
+			// shown reply to advance rather than to catch up with the stream.
+			const shownChunk = await latestShownChunk(page);
+			await expect.poll(() => latestShownChunk(page), { timeout: 10_000 }).toBeGreaterThan(shownChunk);
 		}
 	} finally {
 		harness.stop();

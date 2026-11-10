@@ -49,6 +49,7 @@ type APIDeps struct {
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
 	Import             controllers.ImportService
+	SessionImport      controllers.SessionImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
@@ -147,6 +148,7 @@ type API struct {
 	reports       *controllers.ReportsController
 	push          *controllers.PushController
 	imports       *controllers.ImportController
+	sessionImport *controllers.SessionImportController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
@@ -212,6 +214,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
 		push:          &controllers.PushController{Registry: deps.Push},
 		imports:       &controllers.ImportController{Svc: deps.Import},
+		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
@@ -240,7 +243,9 @@ func setupRoute(req *http.Request) bool {
 		return false
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
+		// The first open of an imported chat runs Setup in its new workspace.
+		"/api/v1/sessions/{sessionId}/resume-agent":
 		return true
 	}
 	return false
@@ -299,13 +304,17 @@ func (a *API) Register(root chi.Router) {
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
 						budget := timeout
-						if attachmentUploadRoute(req) {
+						// Resuming an agent reads its whole native history, which takes
+						// over a minute for a large imported Codex thread.
+						if attachmentUploadRoute(req) ||
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) {
+					// An import scan reads every local history.
+					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -335,6 +344,7 @@ func (a *API) Register(root chi.Router) {
 			a.reports.Register(r)
 			a.push.Register(r)
 			a.imports.Register(r)
+			a.sessionImport.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
@@ -359,6 +369,11 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+}
+
+// sessionImportRoute covers the scan and the import: both read every chosen history.
+func sessionImportRoute(req *http.Request) bool {
+	return chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/session-import"
 }
 
 func attachmentUploadRoute(req *http.Request) bool {

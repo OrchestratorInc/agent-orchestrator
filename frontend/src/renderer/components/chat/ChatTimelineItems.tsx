@@ -136,7 +136,7 @@ import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
-import { StagedAttachmentItems } from "./StagedAttachmentItems";
+import { AttachmentStrip, StagedAttachmentItems } from "./StagedAttachmentItems";
 import { UsageLimitMarker, UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -1012,9 +1012,12 @@ export function HumanMessage({
 				revision: excerpt.sourceRevision,
 			}))}
 			onSelect={onSelectAnnotation}
-			className="mb-2"
+			tile
 		/>
 	) : null;
+	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
+	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
@@ -1048,7 +1051,7 @@ export function HumanMessage({
 					className={humanBubbleClass()}
 					actionsClassName={editActionRowClass}
 					leading={annotationSummary}
-					cloudAttachments={<CloudMessageAttachments attachments={message.cloudAttachments} className="mb-2" />}
+					cloudAttachments={message.cloudAttachments?.length ? <CloudMessageAttachments attachments={message.cloudAttachments} className="contents" /> : undefined}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}
@@ -1064,36 +1067,44 @@ export function HumanMessage({
 					}}
 				/>
 			) : (
-				<div
-					/* Themes draw sent and queued differently; light theme needs to tell them
-					   apart in CSS because it paints an enclosure only around a sent one. */
-					data-queued={queued ? "" : undefined}
-					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
-				>
-					<CollapsibleHumanBody stateKey={visibleMessageText}>
-						{annotationSummary}
-						{/* Attachments sit above the text they came with. */}
-						<StagedAttachmentItems
-							paths={attachments}
-							sessionId={sessionId}
-							apiBaseUrl={apiBaseUrl}
-							ariaLabel="Attached files"
-							className={cn((body || Boolean(message.cloudAttachments?.length)) && "mb-2")}
-						/>
-						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn(body && "mb-2")} />
-						{body ? (
-							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-								<ProseWithInlineImages
-									text={body}
-									attachments={attachments}
-									sessionId={sessionId}
-									apiBaseUrl={apiBaseUrl}
-									renderText={(text) => <SessionLinkedText text={text} />}
-								/>
-							</p>
-						) : null}
-					</CollapsibleHumanBody>
-				</div>
+				<>
+					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
+					{hasAttachments ? (
+						<AttachmentStrip className={cn(animateIn && "chat-human-message-enter")}>
+							{annotationSummary}
+							<StagedAttachmentItems
+								paths={attachments}
+								sessionId={sessionId}
+								apiBaseUrl={apiBaseUrl}
+								ariaLabel="Attached files"
+								className="contents"
+							/>
+							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
+						</AttachmentStrip>
+					) : null}
+					{showBubble ? (
+						<div
+							/* Themes draw sent and queued differently; light theme needs to tell them
+							   apart in CSS because it paints an enclosure only around a sent one. */
+							data-queued={queued ? "" : undefined}
+							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
+						>
+							<CollapsibleHumanBody stateKey={visibleMessageText}>
+								{body ? (
+									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+										<ProseWithInlineImages
+											text={body}
+											attachments={attachments}
+											sessionId={sessionId}
+											apiBaseUrl={apiBaseUrl}
+											renderText={(text) => <SessionLinkedText text={text} />}
+										/>
+									</p>
+								) : null}
+							</CollapsibleHumanBody>
+						</div>
+					) : null}
+				</>
 			)}
 			{editing ? null : (
 				<div className={actionRowClass}>
@@ -1354,13 +1365,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 }) {
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
-	// Per step: null until the reader decides, so a step that starts printing opens
-	// itself, as its own row did. The next step starts from its own default.
+	// Per step: the row stays one line, even while the step prints, until the reader
+	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
 	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
-	const stepStreaming = step?.status === "running" && Boolean(step.detail?.output);
-	const stepOpen = expandable && (stepChoice?.id === step?.id ? stepChoice!.open : stepStreaming);
+	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
 	// A finished step stays on the row for a moment before it moves up. It says what
 	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
@@ -1670,21 +1680,19 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
 function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
-	// null means "nobody has decided", which is what lets a running command open
-	// itself and then close again once it settles. Once the user clicks, their
-	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
-	// a finished row open. That goes for a choice made on the live row too, which
-	// the row starts from when the step moves up from there.
+	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
+	// someone is reading is worse than leaving a finished row open. That goes for a
+	// choice made on the live row too, which the row starts from when the step moves
+	// up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [override, setOverride] = useState<boolean | null>(() => stepChoices?.get(activity.id) ?? null);
-	const toggle = (open: boolean) => {
-		setOverride(open);
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const toggle = (next: boolean) => {
+		setOpen(next);
 		// Kept current, so a later remount starts from the reader's latest choice.
-		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, open);
+		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, next);
 	};
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
-	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const hasBody = genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
@@ -1703,11 +1711,6 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const noticeLabel = retry?.label.startsWith("Reconnecting…") ? retry.label : undefined;
 	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
-
-	// Live output is only live if it is on screen, so a command that is still
-	// running and already printing opens itself.
-	const streamingOutput = activity.status === "running" && Boolean(detail?.output);
-	const open = override ?? streamingOutput;
 
 	return (
 		<div
@@ -3331,33 +3334,42 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
-					{body ? (
-						<p>
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
+				<>
+					{/* As on a sent message: attachments above the text, outside its bubble. */}
+					{attachments.length > 0 || remainingContent.length > 0 ? (
+						<AttachmentStrip>
+							<StagedAttachmentItems
+								paths={attachments}
 								sessionId={sessionId}
 								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => text}
+								ariaLabel="Steered attachments"
+								className="contents"
 							/>
-						</p>
+							<ConversationContentItems
+								content={remainingContent}
+								ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
+								imageLabel="Image"
+								imageAlt={(position) => `Steered attachment ${position}`}
+								className="contents"
+							/>
+						</AttachmentStrip>
 					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Steered attachments"
-						className={cn(body && "mt-2")}
-					/>
-					<ConversationContentItems
-						content={remainingContent}
-						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
-						imageLabel="Image"
-						imageAlt={(position) => `Steered attachment ${position}`}
-						className={cn((body || attachments.length > 0) && "mt-2")}
-					/>
-				</div>
+					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
+						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+							{body ? (
+								<p>
+									<ProseWithInlineImages
+										text={body}
+										attachments={attachments}
+										sessionId={sessionId}
+										apiBaseUrl={apiBaseUrl}
+										renderText={(text) => text}
+									/>
+								</p>
+							) : null}
+						</div>
+					) : null}
+				</>
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />

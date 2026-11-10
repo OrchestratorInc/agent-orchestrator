@@ -15,10 +15,11 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
+import type { AgentBlock } from "../../lib/session-import";
 import { labelForHost } from "../../lib/host-clients";
 import { cn, truncateMiddle } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -26,6 +27,30 @@ import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import { CloseButton } from "../ui/close-button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
+
+export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const signedOut = block === "signed_out";
+	const Icon = signedOut ? KeyRound : Download;
+	return (
+		<div role="status" className="flex items-center gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-sm text-foreground">
+				{t(signedOut ? "sessionImport.blockedSignedOut" : "sessionImport.blockedMissing", { agent: agentLabel(agent) })}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="primary"
+				className="shrink-0"
+				onClick={() => openGlobalSettings("harness", { focusAgentId: agent, startLogin: signedOut, preserveProject: true })}
+			>
+				{t(signedOut ? "sessionImport.signIn" : "sessionImport.install")}
+			</Button>
+		</div>
+	);
+}
 
 /**
  * The provider refused this session's login; dismissal affects presentation only.
