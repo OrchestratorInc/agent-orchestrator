@@ -4,7 +4,7 @@ import PdfRendererView from "react-native-pdf-renderer";
 import { artifactStreamSource } from "./api";
 import { downloadArtifact } from "./artifactDownload";
 import { artifactCacheEntry, type SessionArtifact } from "./artifacts";
-import type { ServerConfig } from "./config";
+import { machineIdentity, type ServerConfig } from "./config";
 import { userFacingError } from "./connectionError";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -23,7 +23,9 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const glassInset = useGlassBarInset();
-	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	// Session ids are only unique on one machine: the same path on two paired machines is two files.
+	const machine = machineIdentity(config);
+	const key = `${machine}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const [state, setState] = useState<PdfState>();
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
@@ -33,12 +35,12 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 			setState({ key, error: "Its path isn't one the phone can request." });
 			return;
 		}
-		downloadArtifact(source, artifactCacheEntry(sessionId, artifact.path, artifact.updatedAt)).then(
+		downloadArtifact(source, artifactCacheEntry(machine, sessionId, artifact.path, artifact.updatedAt)).then(
 			(uri) => { if (live) setState({ key, uri }); },
 			(cause) => { if (live) setState({ key, error: userFacingError(cause, "The PDF didn't download.") }); },
 		);
 		return () => { live = false; };
-	}, [artifact.path, artifact.updatedAt, attempt, config, key, sessionId]);
+	}, [artifact.path, artifact.updatedAt, attempt, config, key, machine, sessionId]);
 	const retry = <Button title="Try again" icon="refresh-cw" onPress={() => { setState(undefined); setAttempt((n) => n + 1); }} />;
 	if (state?.key === key && state.error) return <View style={styles.center}><EmptyState icon="file" title="Couldn't load this PDF" message={state.error} action={retry} /></View>;
 	if (state?.key !== key || !state.uri) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;

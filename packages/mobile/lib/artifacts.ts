@@ -281,7 +281,8 @@ export const MAX_ARTIFACT_CACHE_BYTES = 200 * 1024 * 1024;
 
 /**
  * Where a downloaded artifact is kept in the cache: `prefix` names the file
- * (session and path), `name` that version of it. An unchanged file opens from
+ * (paired machine, session and path; session ids are only unique on one
+ * machine), `name` that version of it. An unchanged file opens from
  * the cache; a rewritten one downloads under a new name, and the old copy goes
  * (artifactCacheEvictions).
  */
@@ -296,9 +297,10 @@ function hashText(text: string): string {
 	return (hash >>> 0).toString(36);
 }
 
-export function artifactCacheEntry(sessionId: string, path: string, version: string): ArtifactCacheEntry {
+/** `machine` is the paired machine's stable identity (machineIdentity). */
+export function artifactCacheEntry(machine: string, sessionId: string, path: string, version: string): ArtifactCacheEntry {
 	// The separator keeps "hash + length" unambiguous: no two files share a prefix by concatenation.
-	const prefix = `${hashText(`${sessionId}\n${path}`)}_${path.length.toString(36)}`;
+	const prefix = `${hashText(`${machine}\n${sessionId}\n${path}`)}_${path.length.toString(36)}`;
 	const ext = /\.([a-z0-9]{1,6})$/i.exec(path)?.[1]?.toLowerCase() ?? "bin";
 	return { prefix, name: `${prefix}-${hashText(version)}.${ext}` };
 }
