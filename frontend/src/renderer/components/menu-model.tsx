@@ -41,6 +41,8 @@ export type MenuEntry =
 			destructive?: boolean;
 			title?: string;
 			ariaLabel?: string;
+			/** Fixed action category only; never include names, IDs or paths. */
+			telemetryAction?: string;
 			onSelect?: () => void;
 	  }
 	| {
@@ -56,6 +58,8 @@ export type MenuEntry =
 	| { kind: "custom"; id: string; label: string; render: () => ReactNode };
 
 type ItemProps = {
+	asChild?: boolean;
+	"data-ph-capture-attribute-ao_action"?: string;
 	className?: string;
 	disabled?: boolean;
 	title?: string;
@@ -152,23 +156,30 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 								</kit.SubContent>
 							</kit.Sub>
 						);
-					case "item":
+					case "item": {
+						const content = (
+							<>
+							{entry.icon}
+							{entry.label}
+							{entry.shortcut ? <kit.Shortcut aria-hidden="true">{entry.shortcut}</kit.Shortcut> : null}
+							{!entry.shortcut && entry.shortcutId ? <AppShortcutHint id={entry.shortcutId} /> : null}
+							{entry.count !== undefined ? <kit.Shortcut aria-hidden="true">{entry.count}</kit.Shortcut> : null}
+							</>
+						);
 						return (
 							<kit.Item
 								key={entry.id}
+								{...(entry.telemetryAction ? { asChild: true, "data-ph-capture-attribute-ao_action": entry.telemetryAction } : {})}
 								aria-label={entry.ariaLabel}
 								className={cn(entry.destructive && destructiveClass)}
 								disabled={entry.disabled || !entry.onSelect}
 								onSelect={entry.onSelect ? () => entry.onSelect?.() : undefined}
 								title={entry.title}
 							>
-								{entry.icon}
-								{entry.label}
-								{entry.shortcut ? <kit.Shortcut aria-hidden="true">{entry.shortcut}</kit.Shortcut> : null}
-								{!entry.shortcut && entry.shortcutId ? <AppShortcutHint id={entry.shortcutId} /> : null}
-								{entry.count !== undefined ? <kit.Shortcut aria-hidden="true">{entry.count}</kit.Shortcut> : null}
+								{entry.telemetryAction ? <button className="w-full" type="button">{content}</button> : content}
 							</kit.Item>
 						);
+					}
 				}
 			})}
 		</>

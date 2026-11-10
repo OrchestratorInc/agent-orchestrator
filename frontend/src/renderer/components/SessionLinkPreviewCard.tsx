@@ -219,6 +219,7 @@ export function SessionLinkPreviewCard({
 				sideOffset={6}
 				className={cn(SESSION_CARD_CLASS, openable && "cursor-pointer transition-colors hover:bg-accent")}
 				onClick={openable ? onOpen : undefined}
+				data-ph-capture-attribute-ao_card_action={openable ? session.kind === "orchestrator" ? "open_orchestrator" : "open_worker_session" : undefined}
 			>
 				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
 			</HoverCardContent>

@@ -13,6 +13,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { shouldCaptureDomEvent } from "posthog-js/lib/src/autocapture-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import {
@@ -992,7 +993,10 @@ describe("Sidebar", () => {
 		const before = useUiStore.getState().newTaskRequest?.nonce ?? 0;
 
 		await user.click(screen.getByLabelText("Project actions for Project One"));
-		await user.click(await screen.findByRole("menuitem", { name: /New task/ }));
+		const newTask = await screen.findByRole("menuitem", { name: /New task/ });
+		expect(shouldCaptureDomEvent(newTask, new MouseEvent("click"))).toBe(true);
+		expect(newTask).toHaveAttribute("data-ph-capture-attribute-ao_action", "new_task");
+		await user.click(newTask);
 
 		const request = useUiStore.getState().newTaskRequest;
 		expect(request?.projectId).toBe("proj-1");
