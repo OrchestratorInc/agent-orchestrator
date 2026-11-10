@@ -6,6 +6,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
@@ -36,18 +40,28 @@ func (s *Store) usageAllowed() bool {
 	return s.usageTelemetryAllowed != nil && s.usageTelemetryAllowed()
 }
 
+// SetWriteLockObserver reports every write lock held for a second or more,
+// after it is released, with the holder's call stack.
+func (s *Store) SetWriteLockObserver(observe func(caller string, held time.Duration)) {
+	s.writeMu.onSlow.Store(&observe)
+}
+
 type contextMutex struct {
-	token chan struct{}
+	token    chan struct{}
+	acquired time.Time
+	slowHold time.Duration
+	onSlow   atomic.Pointer[func(caller string, held time.Duration)]
 }
 
 func newContextMutex() *contextMutex {
-	mutex := &contextMutex{token: make(chan struct{}, 1)}
+	mutex := &contextMutex{token: make(chan struct{}, 1), slowHold: time.Second}
 	mutex.token <- struct{}{}
 	return mutex
 }
 
 func (m *contextMutex) Lock() {
 	<-m.token
+	m.acquired = time.Now()
 }
 
 func (m *contextMutex) LockContext(ctx context.Context) error {
@@ -62,12 +76,37 @@ func (m *contextMutex) LockContext(ctx context.Context) error {
 			m.token <- struct{}{}
 			return err
 		}
+		m.acquired = time.Now()
 		return nil
 	}
 }
 
 func (m *contextMutex) Unlock() {
+	held := time.Since(m.acquired)
 	m.token <- struct{}{}
+	if held < m.slowHold {
+		return
+	}
+	if onSlow := m.onSlow.Load(); onSlow != nil {
+		(*onSlow)(m.holder(), held)
+	}
+}
+
+func (m *contextMutex) holder() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+	var stack []string
+	for len(stack) < 4 {
+		frame, more := frames.Next()
+		fn := frame.Function
+		if fn != "" && !strings.Contains(fn, "contextMutex") && !strings.HasPrefix(fn, "runtime.") {
+			stack = append(stack, fmt.Sprintf("%s:%d", fn[strings.LastIndex(fn, "/")+1:], frame.Line))
+		}
+		if !more {
+			break
+		}
+	}
+	return strings.Join(stack, " | ")
 }
 
 type conversationProjectionTxKey struct{}
