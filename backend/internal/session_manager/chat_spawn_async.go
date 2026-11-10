@@ -207,7 +207,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		}
 	} else {
 		// A reused workspace skips Setup but still credits Orchestrator.
-		m.applyCommitAttribution(ctx, in.project, ws.Path)
+		m.applyCommitAttribution(ctx, in.project, ws.Path, attributionFromSettings)
 	}
 	if err := ctx.Err(); err != nil {
 		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)

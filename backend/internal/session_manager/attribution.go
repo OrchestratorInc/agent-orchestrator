@@ -2,7 +2,6 @@ package sessionmanager
 
 import (
 	"context"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,67 +34,123 @@ func (m *Manager) commitTrailerWanted(ctx context.Context, project domain.Projec
 }
 
 // prFooterWanted reports whether agents in this project end PR bodies with the
-// Orchestrator footer. Projects without a remote have no PRs to sign.
+// Orchestrator footer. Projects without a remote have no PRs to sign; in a
+// workspace project the remotes may live only on its child repositories.
 func (m *Manager) prFooterWanted(ctx context.Context, project domain.ProjectRecord) bool {
-	return strings.TrimSpace(project.RepoOriginURL) != "" &&
-		!project.Config.Attribution.DisablePRFooter && m.commitAttributionEnabled(ctx)
+	if project.Config.Attribution.DisablePRFooter || !m.commitAttributionEnabled(ctx) {
+		return false
+	}
+	if strings.TrimSpace(project.RepoOriginURL) != "" {
+		return true
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return false
+	}
+	repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		m.logger.Warn("attribution: list workspace repos", "project", project.ID, "error", err)
+		return false
+	}
+	for _, repo := range repos {
+		if strings.TrimSpace(repo.RepoOriginURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
-// applyCommitAttribution routes a session workspace's git hooks through the
-// Orchestrator dispatcher and sets the trailer it adds. It runs only while the
-// beta is on and the project keeps the trailer; with either off it changes
-// nothing, so turning the beta off leaves new sessions exactly as before.
+// attributionChoice says which choice applyCommitAttribution applies.
+type attributionChoice int
+
+const (
+	// attributionFromSettings is for a session starting now, in a new or a
+	// reused worktree: today's beta and project switches decide, and the
+	// choice is recorded on each worktree's branch.
+	attributionFromSettings attributionChoice = iota
+	// attributionRecorded is for an existing session whose reclaimed worktree
+	// was recreated: it keeps the choice it started with.
+	attributionRecorded
+)
+
+// applyCommitAttribution routes a session's git hooks through the Orchestrator
+// dispatcher and sets the trailer it adds, or undoes that in a reused worktree
+// an earlier session configured. With attribution never turned on (no hooks
+// dir) it runs no git at all.
 //
-// A workspace project's root is not a repository; each child repository
-// worktree below it is configured instead. Failures are logged, never fatal:
-// a missing trailer must not stop a session from starting.
-func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, workspacePath string) {
-	if workspacePath == "" || !m.commitTrailerWanted(ctx, project) {
+// A workspace project's root is a worktree of the root repository, and each
+// child repository has its own worktree below it; every one is configured.
+// Failures are logged, never fatal: a missing trailer must not stop a session
+// from starting.
+func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, workspacePath string, choice attributionChoice) {
+	if workspacePath == "" {
 		return
 	}
 	hooksDir := attribution.HooksDir(m.dataDir)
-	if err := attribution.InstallHooks(hooksDir); err != nil {
-		m.logger.Warn("attribution: install git hooks", "error", err)
-		return
+	coAuthor := ""
+	if choice == attributionFromSettings && m.commitTrailerWanted(ctx, project) {
+		coAuthor = attribution.Bot.CoAuthor()
 	}
-	for _, worktree := range sessionGitWorktrees(workspacePath) {
-		if err := attribution.ConfigureWorktree(ctx, worktree, hooksDir, attribution.Bot.CoAuthor()); err != nil {
-			m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
+	if coAuthor == "" {
+		if _, err := os.Stat(hooksDir); err != nil {
+			return
+		}
+	}
+	installed := false
+	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
+		want := coAuthor
+		if choice == attributionRecorded {
+			want = attribution.RecordedChoice(ctx, worktree)
+		}
+		if want == "" {
+			if attribution.ConfiguredFor(ctx, worktree, hooksDir) {
+				if err := attribution.RemoveFromWorktree(ctx, worktree); err != nil {
+					m.logger.Warn("attribution: remove from worktree", "path", worktree, "error", err)
+				}
+			}
+		} else {
+			if !installed {
+				if err := attribution.InstallHooks(hooksDir); err != nil {
+					m.logger.Warn("attribution: install git hooks", "error", err)
+					return
+				}
+				installed = true
+			}
+			if err := attribution.ConfigureWorktree(ctx, worktree, hooksDir, want); err != nil {
+				m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
+				continue
+			}
+		}
+		if choice == attributionFromSettings {
+			if err := attribution.RecordChoice(ctx, worktree, want); err != nil {
+				m.logger.Warn("attribution: record choice", "path", worktree, "error", err)
+			}
 		}
 	}
 }
 
-// sessionGitWorktrees lists the linked git worktrees a session workspace holds:
-// the workspace itself for a repository project, or the child repositories of
-// a workspace project. Linked worktrees have a .git file, not a directory, so a
-// person's own checkout nested in the tree is never touched. The walk stays
-// shallow and skips dependency and hidden directories.
-func sessionGitWorktrees(root string) []string {
-	if isLinkedWorktree(root) {
-		return []string{root}
-	}
-	const maxDepth = 4
+// sessionGitWorktrees lists the linked git worktrees of a session workspace:
+// the workspace itself, plus each child repository's worktree for a workspace
+// project. Only linked worktrees (a .git file, not a directory) are listed, so
+// a person's own checkout is never touched.
+func (m *Manager) sessionGitWorktrees(ctx context.Context, project domain.ProjectRecord, root string) []string {
 	var out []string
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// An unreadable directory holds no worktree we can configure.
-			return filepath.SkipDir
+	if isLinkedWorktree(root) {
+		out = append(out, root)
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return out
+	}
+	repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		m.logger.Warn("attribution: list workspace repos", "project", project.ID, "error", err)
+		return out
+	}
+	for _, repo := range repos {
+		child := filepath.Join(root, filepath.FromSlash(repo.RelativePath))
+		if child != root && isLinkedWorktree(child) {
+			out = append(out, child)
 		}
-		if !d.IsDir() || path == root {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		name := d.Name()
-		if relErr != nil || strings.Count(rel, string(filepath.Separator)) >= maxDepth ||
-			strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" {
-			return filepath.SkipDir
-		}
-		if isLinkedWorktree(path) {
-			out = append(out, path)
-			return filepath.SkipDir
-		}
-		return nil
-	})
+	}
 	return out
 }
 
