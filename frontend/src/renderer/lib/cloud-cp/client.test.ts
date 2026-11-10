@@ -104,6 +104,32 @@ describe("cloud control-plane Coder template parameters", () => {
 	});
 });
 
+describe("cloud control-plane harness versions", () => {
+	const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+
+	it("lists the organization's harness versions, refreshing the newest releases on request", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => ok({ editable: true, agents: [] }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.listOrgHarnessVersions("org/a")).resolves.toEqual({ editable: true, agents: [] });
+		await client.listOrgHarnessVersions("org/a", { refresh: true });
+		expect(fetchImpl.mock.calls[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/harness-versions");
+		expect(fetchImpl.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/harness-versions?refresh=true");
+	});
+
+	it("updates a harness to the version the caller saw, and resets it to the AO-tested one", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => ok({ agentId: "codex" }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.installOrgHarnessVersion("org-1", "codex", "0.167.0");
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/harness-versions/codex/install");
+		expect(init).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(init.body))).toEqual({ method: "ao-cloud", operation: "update", expectedVersion: "0.167.0" });
+		await client.resetOrgHarnessVersion("org-1", "codex");
+		expect(fetchImpl.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/harness-versions/codex");
+		expect(fetchImpl.mock.calls[1][1]).toMatchObject({ method: "DELETE" });
+	});
+});
+
 describe("cloud control-plane new-task model catalogs", () => {
 	it("loads the agent's catalog from the encoded organization route", async () => {
 		const catalog = { models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }], source: "release", cliVersion: "2.1.287" };
