@@ -1040,7 +1040,7 @@ describe("startAutoUpdates", () => {
     );
 
     try {
-      const { module, updaterEvents, statusMessages } = await importAutoUpdater({
+      const { module, autoUpdater, updaterEvents, statusMessages } = await importAutoUpdater({
         enabled: false,
         channel: "nightly",
         nightlyAck: true,
@@ -1055,6 +1055,25 @@ describe("startAutoUpdates", () => {
         state: "available",
         releaseNotes: "- Stopped the re-stage loop\n- Rebuilt the Updates page",
       });
+
+      // No nightly was staged. A stable lookup with no verified notes must not
+      // reuse the direct prerelease provider's cached notes.
+      autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        updaterEvents.get("update-available")?.({ version: "1.0.1" });
+        return { isUpdateAvailable: true, updateInfo: { version: "1.0.1" } };
+      });
+      await module.checkForUpdatesNow(stateDir, { settings: {
+        enabled: false, channel: "latest", nightlyAck: false, feature: null,
+      } });
+      expect(module.getUpdateStatus()).toMatchObject({ state: "available", version: "1.0.1" });
+      expect(module.getUpdateStatus()).not.toHaveProperty("releaseNotes");
+
+      // Background stable checks must also forget the old nightly offer.
+      autoUpdater.checkForUpdates.mockResolvedValueOnce({
+        isUpdateAvailable: false, updateInfo: { version: "1.0.0" },
+      });
+      await module.startAutoUpdates(stateDir);
+      expect(module.getUpdateStatus()).toMatchObject({ state: "not-available" });
     } finally {
       if (originalResourcesPath) {
         Object.defineProperty(process, "resourcesPath", originalResourcesPath);

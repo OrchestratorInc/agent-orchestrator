@@ -175,6 +175,10 @@ async function reconcileAndPersist(
 export function configureFeed(
   settings: Pick<UpdateSettings, "channel" | "feature">,
 ): void {
+  if (settings.channel === "latest" && !settings.feature) {
+    directFeedReleaseNotes = undefined;
+    directFeedDiscoveredAvailable = undefined;
+  }
   const coordinates = readAppUpdateYml();
   if (coordinates) {
     autoUpdater.setFeedURL(settings.channel === "latest" && !settings.feature
