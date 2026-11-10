@@ -508,3 +508,18 @@ func TestHookIgnoresPersonalTrailerConfig(t *testing.T) {
 		t.Fatalf("message:\n%s", msg)
 	}
 }
+
+func TestHookIgnoresPersonalTrailerCommands(t *testing.T) {
+	r := newRepo(t, testCoAuthor, nil)
+	for _, scope := range []string{"--worktree", "--local"} {
+		r.git(r.worktree, "config", scope, "trailer.coauthor.key", "Co-authored-by")
+		r.git(r.worktree, "config", scope, "trailer.coauthor.cmd", "echo 'Agent <agent@example.com>'")
+		r.git(r.worktree, "config", scope, "trailer.co-authored-by.command", "echo 'Other <other@example.com>'")
+	}
+	r.commit("-m", "feat: example")
+	msg := r.message("HEAD")
+	want := "feat: example\n\nCo-authored-by: " + testCoAuthor
+	if msg != want {
+		t.Fatalf("message:\n%s\nwant:\n%s", msg, want)
+	}
+}
