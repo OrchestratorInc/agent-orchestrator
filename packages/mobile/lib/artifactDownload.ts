@@ -33,6 +33,21 @@ export function downloadArtifact(source: { uri: string; headers: Record<string, 
 	return task;
 }
 
+/**
+ * Deletes the cached copy of an entry, so the next open downloads it again:
+ * for a copy the viewer could not read (a cut or corrupt file would otherwise
+ * be served from the cache on every Try again). A download in progress stays.
+ */
+export function discardArtifact(entry: ArtifactCacheEntry): void {
+	if (pending.has(entry.name)) return;
+	try {
+		const file = new File(new Directory(Paths.cache, "artifacts"), entry.name);
+		if (file.exists) file.delete();
+	} catch {
+		// Nothing cached, or it cannot be removed now: the next download replaces it.
+	}
+}
+
 /** Applies artifactCacheEvictions to the cache directory. Never fails the download it follows. */
 function pruneCache(directory: Directory, keep: ArtifactCacheEntry): void {
 	try {

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import PdfRendererView from "react-native-pdf-renderer";
 import { artifactStreamSource } from "./api";
-import { downloadArtifact } from "./artifactDownload";
+import { discardArtifact, downloadArtifact } from "./artifactDownload";
 import { artifactCacheEntry, type SessionArtifact } from "./artifacts";
 import { machineIdentity, type ServerConfig } from "./config";
 import { userFacingError } from "./connectionError";
@@ -26,6 +26,7 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 	// Session ids are only unique on one machine: the same path on two paired machines is two files.
 	const machine = machineIdentity(config);
 	const key = `${machine}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	const entry = useMemo(() => artifactCacheEntry(machine, sessionId, artifact.path, artifact.updatedAt), [artifact.path, artifact.updatedAt, machine, sessionId]);
 	const [state, setState] = useState<PdfState>();
 	const [attempt, setAttempt] = useState(0);
 	useEffect(() => {
@@ -35,12 +36,12 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 			setState({ key, error: "Its path isn't one the phone can request." });
 			return;
 		}
-		downloadArtifact(source, artifactCacheEntry(machine, sessionId, artifact.path, artifact.updatedAt)).then(
+		downloadArtifact(source, entry).then(
 			(uri) => { if (live) setState({ key, uri }); },
 			(cause) => { if (live) setState({ key, error: userFacingError(cause, "The PDF didn't download.") }); },
 		);
 		return () => { live = false; };
-	}, [artifact.path, artifact.updatedAt, attempt, config, key, machine, sessionId]);
+	}, [artifact.path, artifact.updatedAt, attempt, config, entry, key, sessionId]);
 	const retry = <Button title="Try again" icon="refresh-cw" onPress={() => { setState(undefined); setAttempt((n) => n + 1); }} />;
 	if (state?.key === key && state.error) return <View style={styles.center}><EmptyState icon="file" title="Couldn't load this PDF" message={state.error} action={retry} /></View>;
 	if (state?.key !== key || !state.uri) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
@@ -50,7 +51,11 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 				source={state.uri}
 				distanceBetweenPages={8}
 				maxZoom={5}
-				onError={() => setState({ key, error: "The phone couldn't read this file as a PDF." })}
+				onError={() => {
+					// Try again downloads a fresh copy rather than reopening the one that failed.
+					discardArtifact(entry);
+					setState({ key, error: "The phone couldn't read this file as a PDF." });
+				}}
 				style={styles.pdf}
 			/>
 		</View>
