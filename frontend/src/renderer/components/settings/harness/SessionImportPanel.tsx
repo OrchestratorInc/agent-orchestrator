@@ -7,18 +7,14 @@ import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
 import { formatTimeCompact } from "../../../lib/format-time";
 import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
-import { folderName, importableProject, importChats, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
+import { importableProject, importChats, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
 import { useUiStore } from "../../../stores/ui-store";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { SettingsSearch } from "../SettingsSearch";
 
-const folderFilter = "folder:";
-
-/** One agent's chats on this computer, from the daemon's validated preview. A
- * chat from a Git folder that is not a project yet adds that folder as a
- * project on import. */
+/** One agent's chats on this computer, from the daemon's validated preview. */
 export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const { t } = useTranslation();
 	const [project, setProject] = useState("all");
@@ -26,7 +22,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const [selected, setSelected] = useState(new Set<string>());
 	const [results, setResults] = useState<ImportResult[]>([]);
 	const [importing, setImporting] = useState(false);
-	// The scan an import runs after adding folders must not reset its results.
 	const importingRef = useRef(false);
 	// Choices made on the last list (a selection or an import) survive the next scan.
 	const keepChoicesRef = useRef(false);
@@ -57,35 +52,21 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		setResults([]);
 	}, [preview.data]);
 	const candidates = useMemo(
-		() => (preview.data?.candidates ?? []).filter((c) => c.harness === harness),
+		() => (preview.data?.candidates ?? []).filter((c) => c.harness === harness && !c.folder),
 		[preview.data, harness],
-	);
-	const folders = useMemo(
-		() => [...new Set(candidates.flatMap((c) => (c.folder ? [c.folder] : [])))].sort(),
-		[candidates],
 	);
 	const names = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
 	const projectName = (c: Candidate) =>
-		c.projectId
-			? (names.get(c.projectId) ?? c.projectId)
-			: c.folder
-				? t("sessionImport.newProject", { name: folderName(c.folder) })
-				: t("remote.standalone");
+		c.projectId ? (names.get(c.projectId) ?? c.projectId) : t("remote.standalone");
 	const needle = query.trim().toLocaleLowerCase();
 	const visible = candidates.filter(
 		(c) =>
-			(project === "all" ||
-				(project === "standalone"
-					? !c.projectId && !c.folder
-					: project.startsWith(folderFilter)
-						? c.folder === project.slice(folderFilter.length)
-						: c.projectId === project)) &&
-			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
+			(project === "all" || (project === "standalone" ? !c.projectId : c.projectId === project)) &&
+			(!needle || [c.title, projectName(c)].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
 	const importedIds = new Set(results.filter((r) => r.status !== "failed").map((r) => r.id));
 	const eligible = visible.filter((c) => !c.sessionId && !importedIds.has(c.id));
 	const selectedVisible = eligible.filter((c) => selected.has(c.id));
-	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
 	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
 	const openSession = (c: Candidate, sessionId: string) => {
 		closeSettings();
@@ -115,8 +96,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		setError(undefined);
 		const ids = selectedVisible.map((c) => c.id);
 		try {
-			if (newFolders.length) setProject("all");
-			const imported = await importChats(queryClient, "settings", ids, newFolders);
+			const imported = await importChats(queryClient, "settings", ids);
 			setResults(imported);
 			setSelected(new Set(imported.filter((r) => r.status === "failed").map((r) => r.id)));
 			if (imported.some((r) => r.status === "created")) closeSessionImportOffer();
@@ -162,11 +142,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 								{projects.map((p) => (
 									<SelectItem key={p.id} value={p.id}>
 										{p.name}
-									</SelectItem>
-								))}
-								{folders.map((path) => (
-									<SelectItem key={path} value={folderFilter + path}>
-										{t("sessionImport.newProject", { name: folderName(path) })}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -230,14 +205,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			)}
 			{preview.isPending ? null : (
 				<div className="flex shrink-0 flex-col gap-3">
-					{newFolders.length ? (
-						<p className="text-xs text-muted-foreground">
-							{t("sessionImport.addsProjects", {
-								count: newFolders.length,
-								names: newFolders.map(folderName).join(", "),
-							})}
-						</p>
-					) : null}
 					{results.length ? (
 						<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 							<p role="status" className="text-sm">
@@ -329,7 +296,7 @@ function ImportRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
 				<span className="block truncate text-xs text-muted-foreground">
-					<span title={c.folder}>{projectName}</span> · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					{projectName} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
 					<time dateTime={c.lastActivity} title={new Date(c.lastActivity).toLocaleString(i18n.resolvedLanguage)}>
 						{formatTimeCompact(c.lastActivity, { longUnits: true })}
 					</time>
