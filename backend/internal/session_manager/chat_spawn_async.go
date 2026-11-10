@@ -496,12 +496,17 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 }
 
 // retryFailedChatSpawn reuses the published session and durable turn queue.
-// Queueing the opening brief again would send the user's task twice.
+// Queueing the opening brief again would send the user's task twice. A
+// Terminal start has no queue: its retry starts a fresh agent with the saved
+// opening prompt, the same contract as resuming an exited agent from its
+// prompt, and only after any agent the failed attempt left is stopped.
 func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRecord, releaseHarness func()) (RestoreResult, bool, error) {
-	if (rec.Kind != domain.KindWorker && rec.Kind != domain.KindOrchestrator) || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat || m.chat == nil {
+	mode := domain.NormalizeSessionMode(rec.Mode)
+	terminal := mode == domain.SessionModeTUI
+	if (rec.Kind != domain.KindWorker && rec.Kind != domain.KindOrchestrator) || (!terminal && (mode != domain.SessionModeChat || m.chat == nil)) {
 		return RestoreResult{}, false, fmt.Errorf("retry start %s: %w", rec.ID, ports.ErrChatUnsupported)
 	}
-	if m.chat.HasLiveChatController(rec.ID) {
+	if !terminal && m.chat.HasLiveChatController(rec.ID) {
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionProvisioning, ""); err != nil {
 			return RestoreResult{}, false, err
 		}
@@ -526,7 +531,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		ready, err := m.getRecord(ctx, rec.ID)
 		return RestoreResult{Session: ready, Mode: RestoreModeNative}, false, err
 	}
-	if rec.Metadata.ProviderConversationID != "" {
+	if !terminal && rec.Metadata.ProviderConversationID != "" {
 		var err error
 		rec, err = m.setProvisionState(ctx, rec.ID, domain.SessionProvisionProvisioning, "")
 		if err != nil {
@@ -559,11 +564,23 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		}
 		return resumed, false, nil
 	}
+	if terminal {
+		if err := m.validateRuntimePrerequisites(); err != nil {
+			return RestoreResult{}, false, fmt.Errorf("retry start %s: %w", rec.ID, err)
+		}
+		// The failed attempt's agent may still run: its runtime refused to stop,
+		// or the daemon restarted after launching it. Replace it, never add one.
+		if rec.Metadata.RuntimeHandleID != "" {
+			if err := m.runtime.Destroy(ctx, runtimeHandle(rec.Metadata)); err != nil {
+				return RestoreResult{}, false, fmt.Errorf("retry start %s: stop the previous agent: %w", rec.ID, err)
+			}
+		}
+	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, !terminal)
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
@@ -577,10 +594,10 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	config := restoredAgentConfig(rec, project.Config)
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
-		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
+		Harness: rec.Harness, RequestedMode: mode,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}
-	if rec.Harness == domain.HarnessCodex {
+	if rec.Harness == domain.HarnessCodex && !terminal {
 		// ChatUI can change the saved model independently of effort, and provider
 		// capabilities can change between attempts. Validate the actual pair
 		// without merging today's project defaults back into the saved choices.
@@ -600,11 +617,15 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if branch == "" {
 		branch = DefaultSpawnBranch(rec.ID, rec.Kind, sessionPrefix(project), projectKind, m.dataDir)
 	}
-	retried, _, _, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
+	in := asyncChatSpawn{
 		cfg: cfg, project: project, projectKind: projectKind,
 		record: rec, branch: branch, systemPrompt: systemPrompt, systemPromptFile: systemPromptFile,
 		retry: true, releaseHarness: releaseHarness,
-	})
+	}
+	if terminal {
+		in.prompt, in.agentConfig = rec.Metadata.Prompt, config
+	}
+	retried, _, _, err := m.beginAsyncChatSpawn(ctx, in)
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
@@ -687,6 +708,12 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 	for _, rec := range recs {
 		if rec.IsTerminated || rec.IsTaskPreparation || !rec.ProvisionState.IsProvisioning() {
 			continue
+		}
+		// A Terminal start interrupted after its agent launched left that agent
+		// running where no one can see it; whether it got its prompt is unknown.
+		// Stop it rather than let it work unseen. Retry starts a fresh one.
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && rec.Metadata.RuntimeHandleID != "" {
+			m.destroyFailedTerminalRuntime(ctx, rec.ID, workspaceInfo(rec), runtimeHandle(rec.Metadata))
 		}
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionFailed,
 			"Orchestrator restarted before this session finished starting"); err != nil {
