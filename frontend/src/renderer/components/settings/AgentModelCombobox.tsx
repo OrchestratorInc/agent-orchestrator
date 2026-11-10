@@ -82,6 +82,7 @@ export function AgentModelCombobox({
 	recentScope,
 	compact = false,
 	showEffortInTrigger = true,
+	preserveDefaultSelection = false,
 	agentId,
 	tuning,
 	disabled = false,
@@ -123,6 +124,8 @@ export function AgentModelCombobox({
 	compact?: boolean;
 	/** Keep the effort level inside the menu only, off the trigger label. */
 	showEffortInTrigger?: boolean;
+	/** Save explicit catalog default picks instead of treating them as inheritance. */
+	preserveDefaultSelection?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -247,7 +250,7 @@ export function AgentModelCombobox({
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(!preserveDefaultSelection && modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const family = families?.find((entry) => entry.id === item.id);
@@ -580,7 +583,7 @@ export function AgentModelCombobox({
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {
-											tuning.onEffortChange(effort === defaultEffort ? "" : effort);
+											tuning.onEffortChange(!preserveDefaultSelection && effort === defaultEffort ? "" : effort);
 											setEffortMenuOpen(false);
 											setAwaitingEffort(false);
 											setMenuOpen(false);

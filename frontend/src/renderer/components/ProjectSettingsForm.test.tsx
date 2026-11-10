@@ -474,6 +474,35 @@ describe("ProjectSettingsForm", () => {
 		expect(repoLink).toHaveAttribute("href", "https://github.com/acme/project-one");
 	});
 
+	it.each([false, true])("keeps untouched defaults unset and saves explicit default picks (picked: %s)", async (picked) => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex" }, orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("GPT Test"));
+		if (picked) {
+			await userEvent.click(picker);
+			await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+			await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		}
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalled());
+		const config = putMock.mock.calls.at(-1)![1].body.config.worker.agentConfig;
+		expect(config?.model).toBe(picked ? "gpt-test" : undefined);
+		expect(config?.effort).toBe(picked ? "low" : undefined);
+	});
+
 	it("saves Codex effort from the combined default model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;

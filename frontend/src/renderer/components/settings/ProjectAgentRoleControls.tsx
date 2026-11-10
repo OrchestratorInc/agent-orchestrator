@@ -199,6 +199,7 @@ export function AgentModelField({
 				<div className="min-w-0">
 					<AgentModelCombobox
 						aria-label={label}
+						preserveDefaultSelection
 						value={model}
 						models={models}
 						emptyLabel={unsetLabel}
