@@ -35,11 +35,14 @@ export function freshMachineSimActive(): boolean {
 	return IS_DEV && readFlag(STORAGE_KEY, session) && readFlag(developerModeStorageKey, local);
 }
 
-/** Switches the simulation on or off; switching it on starts from nothing installed. */
-export function setFreshMachineSim(on: boolean) {
+/** Switches the simulation on or off; switching it on starts from nothing
+ * installed (or only git, with `gitInstalled`, which keeps the app's
+ * missing-git screen out of the way). */
+export function setFreshMachineSim(on: boolean, { gitInstalled = false }: { gitInstalled?: boolean } = {}) {
 	if (!IS_DEV) return;
 	installed.clear();
 	installStartedAt.clear();
+	if (on && gitInstalled) installed.add("git");
 	try {
 		if (on) session()?.setItem(STORAGE_KEY, "true");
 		else session()?.removeItem(STORAGE_KEY);
