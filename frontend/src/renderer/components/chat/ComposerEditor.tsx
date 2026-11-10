@@ -837,7 +837,7 @@ const EditorBridge = forwardRef<
 		const removeEnter = editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
 			if (!plainKey(event)) return false;
 			const caret = $caretLine();
-			const action = caret && listEnter(caret.line, caret.column);
+			const action = caret && listEnter(caret.line, caret.column, caret.previous);
 			if (!caret || !action) return false;
 			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
 			$addUpdateTag(HISTORY_PUSH_TAG);

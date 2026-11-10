@@ -38,14 +38,23 @@ export type LinePrefixEdit = { remove: number; insert: string };
 export type ListEnter =
 	/** Insert this at the caret: a newline and the next item's marker. */
 	| { kind: "continue"; text: string }
-	/** The item was empty: drop its marker and end the list. */
+	/** An empty item under another item: drop its marker and end the list. */
 	| { kind: "exit"; edit: LinePrefixEdit };
 
-/** What the newline key does at `column` of `line`; undefined leaves it a plain newline. */
-export function listEnter(line: string, column: number): ListEnter | undefined {
+/**
+ * What the newline key does at `column` of `line`, below the draft's `previous`
+ * lines; undefined leaves it a plain newline. An empty item only ends a list
+ * that is already going: a `1. ` just typed on its own line is kept.
+ */
+export function listEnter(line: string, column: number, previous: string[]): ListEnter | undefined {
 	const item = parseListItem(line);
 	if (!item || column < item.prefix.length) return undefined;
-	if (line.length === item.prefix.length) return { kind: "exit", edit: { remove: line.length, insert: "" } };
+	if (line.length === item.prefix.length) {
+		const above = previous.at(-1);
+		return above !== undefined && parseListItem(above)
+			? { kind: "exit", edit: { remove: line.length, insert: "" } }
+			: undefined;
+	}
 	return { kind: "continue", text: `\n${itemPrefix(item, item.indent, item.number === undefined ? undefined : item.number + 1)}` };
 }
 
