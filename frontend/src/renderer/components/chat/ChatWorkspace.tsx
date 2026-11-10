@@ -149,9 +149,11 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
+	deliveredUpdatesOnly,
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
+	isWorkerReportActivity,
 	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
@@ -2390,8 +2392,10 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
 		// Approvals, user input, errors, reasoning, and stamped system events stay
-		// boundaries. Confirmed AO actions have no event stamp, so they batch.
-		const runnable = isOrdinaryActivity(item);
+		// boundaries. Confirmed AO actions have no event stamp, so they batch —
+		// except a report the daemon threaded at ingestion: each is its own quiet
+		// row, the way a delivered batch draws, not one "N actions" summary.
+		const runnable = isOrdinaryActivity(item) && !isWorkerReportActivity(item);
 		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);
@@ -5251,6 +5255,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
+	const workerUpdateIndexOfGroup = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -5404,11 +5409,18 @@ const TurnGroup = memo(function TurnGroup({
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
-		const updates = workerUpdatesOf(item);
+		const updateIndex = workerUpdateIndexOfGroup;
+		const updates = deliveredUpdatesOnly(workerUpdatesOf(item), updateIndex);
 		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		if (workerUpdatesOf(item).length > 0) {
+			// A delivered batch whose every report the thread already drew live at
+			// ingestion has nothing left to show — the rows are already above, at
+			// their true report times, and the batch itself is daemon context.
+			return null;
+		}
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		const piggybacked = piggybackedUpdates(item);
+		const piggybacked = deliveredUpdatesOnly(piggybackedUpdates(item), updateIndex);
 		if (piggybacked.length === 0) return renderRun(run);
 		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};

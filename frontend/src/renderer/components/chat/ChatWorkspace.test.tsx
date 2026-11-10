@@ -4342,6 +4342,54 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 	});
 });
 
+describe("live worker report rows", () => {
+	const reportAt = "2026-11-04T10:52:00Z";
+	// The ao_action row the daemon writes at `ao report` ingestion time.
+	const threadRow: ConversationItem = {
+		kind: "activity", id: "ao-action:worker.report:rpt_1", sequence: 1, revision: 0,
+		activityKind: "ao_action", status: "completed", summary: "Worker report", createdAt: reportAt,
+		detail: {
+			action: "worker.report", operationId: "rpt_1", targetSessionId: "proj-9",
+			projectId: "proj", displayName: "Builder", href: "ao://sessions/proj/proj-9", state: "done",
+			text: "Finished", outputs: [{ kind: "artifact", reference: "report.html" }],
+		},
+	};
+	// The batch the daemon still renders into the agent's next turn, and whose
+	// conversation row used to be the only way reports reached the thread.
+	const batch = (id: string, sequence: number): ConversationMessage => ({
+		kind: "message", id, sequence, revision: 0, role: "user", origin: "automation", streaming: false,
+		text: "Reports since your previous turn:\n\n[done] [Builder](ao://sessions/proj/proj-9)\nFinished\nartifact: report.html",
+		createdAt: "2026-11-04T11:04:00Z",
+	});
+	const orchestratorChat = { ...chatSession, id: "orch-live", kind: "orchestrator" as const };
+
+	it("draws an ingested report live at report time and never repeats its delivered copy", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, sessionId: orchestratorChat.id, latestSequence: 2, items: [threadRow, batch("m-batch", 2)] }}
+				session={orchestratorChat}
+				sessionRole="orchestrator"
+			/>,
+		);
+		expect(screen.getAllByTestId("worker-update")).toHaveLength(1);
+		expect(screen.getByText("Finished")).toBeInTheDocument();
+		// The delivered batch adds no second row and leaves no raw batch blob.
+		expect(screen.queryByText(/Reports since your previous turn/)).not.toBeInTheDocument();
+	});
+
+	it("keeps a delivered batch as rows when no ingestion-time row exists", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, sessionId: "orch-old", latestSequence: 1, items: [batch("m-only", 1)] }}
+				session={orchestratorChat}
+				sessionRole="orchestrator"
+			/>,
+		);
+		expect(screen.getAllByTestId("worker-update")).toHaveLength(1);
+		expect(screen.getByText("Finished")).toBeInTheDocument();
+	});
+});
+
 describe("ChatWorkspace message actions", () => {
 	it("hides first-message editing until the conversation controller is ready", () => {
 		render(
