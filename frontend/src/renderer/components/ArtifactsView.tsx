@@ -1,5 +1,7 @@
 import { artifactFileIcon } from "./artifact-file-icon";
-import { ChevronDown, Clock, Cloud, File, Filter, Folder, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
+import { ChevronDown, Clock, File, Filter, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
+import { useProjectAvatars } from "../hooks/useProjectAvatars";
+import { ProjectIcon } from "./ProjectIcon";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
@@ -58,6 +60,19 @@ const ARTIFACT_GRID_CLASS = "grid grid-cols-1 gap-4 @lg:grid-cols-2 @2xl:grid-co
 const MAX_LIVE_PREVIEWS = 4;
 /** How many selected names the bulk delete confirmation lists before "+N more". */
 const MAX_CONFIRM_NAMES = 5;
+const NO_WORKSPACES: WorkspaceSummary[] = [];
+
+/**
+ * A project's icon as the sidebar draws it: its repository owner's avatar or
+ * colour-coded letter tile, or a folder with avatars off.
+ */
+function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<WorkspaceSummary, "id" | "name" | "path">; avatarUrl?: string }) {
+	return (
+		<span aria-hidden="true" className="inline-flex size-icon-md shrink-0 items-center justify-center">
+			<ProjectIcon avatarUrl={avatarUrl} expanded={false} name={workspace.name} seed={workspace.path || workspace.id} />
+		</span>
+	);
+}
 
 /**
  * Every artifact agents have written, grouped by project: on this machine, and
@@ -70,6 +85,7 @@ export function ArtifactsView() {
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
+	const projectAvatars = useProjectAvatars(workspaces ?? NO_WORKSPACES);
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState("");
 	const [location, setLocation] = useState<ArtifactLocation | undefined>();
@@ -388,12 +404,12 @@ export function ArtifactsView() {
 								</div>
 							) : (
 								<div>
-									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
+									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={<Pin aria-hidden="true" className="size-icon-md shrink-0" />} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
 											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
 									</ArtifactSection> : null}
-									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
+									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={<Clock aria-hidden="true" className="size-icon-md shrink-0" />} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
 											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
@@ -405,7 +421,9 @@ export function ArtifactsView() {
 												key={group.id}
 												sectionId={`project:${group.id}`}
 												name={projectName}
-												icon={group.isScratchpad ? File : group.cloud ? Cloud : Folder}
+												icon={group.isScratchpad
+													? <File aria-hidden="true" className="size-icon-md shrink-0" />
+													: <ArtifactProjectIcon avatarUrl={projectAvatars.get(group.id)} workspace={workspaces?.find((workspace) => workspace.id === group.id) ?? { id: group.id, name: group.name, path: "" }} />}
 												view={view}
 												collapsible={showProjectSections}
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
@@ -448,10 +466,10 @@ export function ArtifactsView() {
 	);
 }
 
-function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, view, collapsible = true }: {
+function ArtifactSection({ sectionId, name, icon, updatedAt, children, view, collapsible = true }: {
 	sectionId: string;
 	name: string;
-	icon: typeof Folder;
+	icon: ReactNode;
 	updatedAt?: string;
 	children: ReactNode;
 	view: ArtifactViewMode;
@@ -463,7 +481,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const gridId = useId();
 	const headerContent = <>
 		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
-			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
+			{icon}
 			<span className="truncate">{name}</span>
 		</span>
 		{updatedAt ? (
@@ -648,6 +666,7 @@ function CreateArtifactMenu({
 	localDisabledReason?: string;
 }) {
 	const { t } = useTranslation();
+	const projectAvatars = useProjectAvatars(workspaces);
 	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
 		(workspace) =>
@@ -719,11 +738,7 @@ function CreateArtifactMenu({
 						disabled={localBlocked && project.kind !== CLOUD_PROJECT_KIND}
 						onSelect={() => void create(project.id, project.kind === CLOUD_PROJECT_KIND ? project.cloudOrgId : undefined)}
 					>
-						{project.kind === CLOUD_PROJECT_KIND ? (
-							<Cloud aria-hidden="true" className="size-icon-sm" />
-						) : (
-							<Folder aria-hidden="true" className="size-icon-sm" />
-						)}
+						<ArtifactProjectIcon avatarUrl={projectAvatars.get(project.id)} workspace={project} />
 						<span className="truncate">{project.name}</span>
 					</DropdownMenuItem>
 				))}

@@ -174,6 +174,14 @@ function renderView() {
 	return { ...view, refresh };
 }
 
+
+/** The open menu's items by accessible name; a project's letter tile is decoration, not part of it. */
+function expectMenuItems(names: string[]) {
+	const items = screen.getAllByRole("menuitem");
+	expect(items).toHaveLength(names.length);
+	items.forEach((item, index) => expect(item).toHaveAccessibleName(names[index]));
+}
+
 describe("ArtifactsView", () => {
 	afterEach(() => vi.unstubAllGlobals());
 	beforeEach(() => {
@@ -952,7 +960,7 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "New artifact" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Scratchpad", "agent-orchestrator"]);
+		expectMenuItems(["Scratchpad", "agent-orchestrator"]);
 		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
 
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-7" } }));
@@ -978,7 +986,21 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Scratchpad", "agent-orchestrator", "px0"]);
+		expectMenuItems(["Scratchpad", "agent-orchestrator", "px0"]);
+	});
+
+	it("gives each project the sidebar's icon, in its section and in the New artifact menu", async () => {
+		const user = userEvent.setup();
+		renderView();
+		// The letter tile is decoration beside the project's name, as in the sidebar.
+		const section = screen.getByRole("region", { name: "agent-orchestrator" });
+		const sectionTile = within(section).getByRole("heading", { name: "agent-orchestrator" }).querySelector('[aria-hidden="true"]');
+		expect(sectionTile?.textContent).toBe("A");
+		await user.click(screen.getByRole("button", { name: "New artifact" }));
+		const item = screen.getByRole("menuitem", { name: "agent-orchestrator" });
+		expect(item.querySelector('[aria-hidden="true"]')?.textContent).toBe("A");
+		// Scratchpad keeps its file icon: it is not a project.
+		expect(screen.getByRole("menuitem", { name: "Scratchpad" }).textContent).toBe("Scratchpad");
 	});
 
 	it("starts a Scratchpad artifact session without a project id and opens it", async () => {
