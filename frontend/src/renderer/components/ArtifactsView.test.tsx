@@ -604,15 +604,27 @@ describe("ArtifactsView", () => {
 		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
 	});
 
-	it("opens a card's menu from the keyboard before the pointer has visited the card", async () => {
+	it.each(["{Enter}", "[Space]"])("opens a card's menu with %s before the pointer has visited the card, and Escape returns focus", async (key) => {
 		const user = userEvent.setup();
 		renderView();
 		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
 		// The card draws stand-in buttons until focus or the pointer reaches it; focus moves to the menu's own.
 		act(() => project.getByRole("button", { name: "More actions: pricing.md" }).focus());
 		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
-		await user.keyboard("{Enter}");
+		await user.keyboard(key);
 		expect(await screen.findByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Delete artifact" })).not.toBeInTheDocument());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+	});
+
+	it("starts a pin tooltip from the one pointer move that reached the card", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The pointer comes to rest on Pin: that move lands on the stand-in, before the tooltip trigger exists.
+		fireEvent.pointerMove(project.getByRole("button", { name: "Pin artifact: pricing.md" }), { pointerType: "mouse" });
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pin artifact");
 	});
 
 	it("pins from a first tap on a card the pointer has not moved over", async () => {
@@ -627,6 +639,8 @@ describe("ArtifactsView", () => {
 		expect(pin).toBeInTheDocument();
 		fireEvent.click(pin);
 		expect(within(screen.getByRole("region", { name: "Pinned" })).getByText("pricing.md")).toBeInTheDocument();
+		// A pressed tooltip trigger stays quiet when focus lands on it, as it does without the stand-in.
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {

@@ -455,7 +455,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	// Each stand-in's place among its card's buttons, where its replacement goes.
 	const places = useRef(new Map<HTMLButtonElement, number>());
 	// What reached the stand-ins before the menu replaced them, to repeat on it.
-	const replay = useRef<{ focus?: number; presses: Array<[place: number, press: Press]> }>({ presses: [] });
+	const replay = useRef<{ hover?: [place: number, move: PointerEvent]; focus?: number; presses: Array<[place: number, press: Press]> }>({ presses: [] });
 	// The queries the menu starts, so it offers the same items when it first opens.
 	useShareAvailable();
 	useCloudMeUserId(Boolean(session.cloud));
@@ -472,9 +472,10 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		// them. Both act on click, which the browser sends only to the button
 		// pressed while it is still in the page, so the swap waits for the press.
 		let held: HTMLButtonElement | null = null;
-		let heldUp = false;
+		let heldDown: PointerEvent | null = null;
+		let heldUp: PointerEvent | null = null;
 		let wanted = false;
-		const activate = () => {
+		const activate = (event?: Event) => {
 			if (activated) return;
 			if (held) {
 				wanted = true;
@@ -485,6 +486,18 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 			for (const button of stand) places.current.set(button, buttons.indexOf(button));
 			const focused = document.activeElement instanceof HTMLButtonElement ? places.current.get(document.activeElement) : undefined;
 			if (focused !== undefined) replay.current.focus = focused;
+			// A tooltip's hover delay starts on a move over its trigger; the move that
+			// activated this went to a stand-in, so the replacement gets it, unless
+			// the pointer leaves before then.
+			const hovered = event?.type === "pointermove" && event.target instanceof Node
+				? stand.find((button) => button.contains(event.target as Node))
+				: undefined;
+			if (hovered) {
+				replay.current.hover = [places.current.get(hovered) ?? -1, event as PointerEvent];
+				hovered.addEventListener("pointerleave", () => {
+					replay.current.hover = undefined;
+				}, { once: true });
+			}
 			card.removeEventListener("pointermove", activate);
 			card.removeEventListener("focusin", activate);
 			setActive(true);
@@ -492,6 +505,8 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		const release = () => {
 			if (!held) return;
 			held = null;
+			heldDown = null;
+			heldUp = null;
 			window.removeEventListener("pointerup", onPointerUp, true);
 			window.removeEventListener("pointercancel", release, true);
 			window.removeEventListener("pointerdown", afterPress, true);
@@ -501,7 +516,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		};
 		// Released over the button, a click follows; released elsewhere, none will.
 		const onPointerUp = (event: PointerEvent) => {
-			if (held && event.target instanceof Node && held.contains(event.target)) heldUp = true;
+			if (held && event.target instanceof Node && held.contains(event.target)) heldUp = event;
 			else release();
 		};
 		// Once the press is over, the next pointer event means no click came.
@@ -515,7 +530,8 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 				return;
 			}
 			held = button;
-			heldUp = false;
+			heldDown = event;
+			heldUp = null;
 			window.addEventListener("pointerup", onPointerUp, true);
 			window.addEventListener("pointercancel", release, true);
 			window.addEventListener("pointerdown", afterPress, true);
@@ -525,12 +541,16 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		const pass = (event: Event) => {
 			const button = event.currentTarget as HTMLButtonElement;
 			const press: Press = event.type === "click" ? "click" : event as PointerEvent;
-			if (held === button && press === "click") release();
+			// The held press is repeated whole, so its replacement sees what it would have.
+			const gesture = held === button && press === "click" ? [heldDown, heldUp] : [];
+			if (gesture.length) release();
 			activate();
 			const place = places.current.get(button) ?? -1;
 			// Still in the page, the menu has yet to replace it: repeat the press once it has.
-			if (button.isConnected) replay.current.presses.push([place, press]);
-			else passOn(card, place, press);
+			if (button.isConnected) {
+				for (const step of gesture) if (step) replay.current.presses.push([place, step]);
+				replay.current.presses.push([place, press]);
+			} else passOn(card, place, press);
 		};
 		card.addEventListener("pointermove", activate);
 		card.addEventListener("focusin", activate);
@@ -555,14 +575,23 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	useLayoutEffect(() => {
 		const card = cardRef.current;
 		if (!active || !card) return;
-		const { focus, presses } = replay.current;
+		const { hover, focus, presses } = replay.current;
 		replay.current = { presses: [] };
-		if (focus !== undefined) {
+		if (hover) passOn(card, ...hover);
+		// In the order a browser gives them: a press's pointerdown, then focus, then the rest.
+		let refocus = focus !== undefined;
+		const restoreFocus = () => {
+			if (!refocus) return;
+			refocus = false;
 			const focused = document.activeElement;
-			const button = card.querySelectorAll("button")[focus];
+			const button = card.querySelectorAll("button")[focus as number];
 			if (button && (!focused || focused === document.body || !focused.isConnected)) button.focus();
+		};
+		for (const [place, press] of presses) {
+			if (press === "click" || press.type !== "pointerdown") restoreFocus();
+			passOn(card, place, press);
 		}
-		for (const [place, press] of presses) passOn(card, place, press);
+		restoreFocus();
 	}, [active]);
 
 	if (active) return <ArtifactActionsMenu {...props} />;
@@ -628,7 +657,7 @@ function passOn(card: HTMLElement, place: number, event: Press) {
 		return;
 	}
 	const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
-	button.dispatchEvent(new Pointer("pointerdown", {
+	button.dispatchEvent(new Pointer(event.type, {
 		bubbles: true,
 		cancelable: true,
 		button: event.button,
