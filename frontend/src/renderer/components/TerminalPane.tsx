@@ -1357,7 +1357,11 @@ function AttachedTerminal({
 	const banner = isCloudConnectError
 		? undefined
 		: bannerText(state, t, hasAttached, Boolean(attachSession?.cloud), error);
-	const showEmptyState = !handleId;
+	// A session's start that failed before its terminal was offered has nothing
+	// to attach to; it gets the ended strip with its reason, not a boot spinner.
+	const sessionStartFailed =
+		terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && session?.provisionState === "failed";
+	const showEmptyState = !handleId && !sessionStartFailed;
 	// Cover xterm while the attachment buffers the initial replay, so the pane
 	// appears already drawn at the tail instead of visibly scrolling down to it.
 	// Deliberately NOT the empty state above: that renders a centered "Starting
@@ -1412,7 +1416,7 @@ function AttachedTerminal({
 	// never reports "exited" there, so without this the strip — and the resume
 	// action on it — stays hidden in exactly the state that needs it (#3875).
 	const showEndedStatePreview =
-		state === "exited" || canRestoreSession || (terminalTarget?.kind === "worker" && sessionAgentExited(session));
+		state === "exited" || canRestoreSession || sessionStartFailed || (terminalTarget?.kind === "worker" && sessionAgentExited(session));
 	const isCloudConnecting =
 		Boolean(attachSession?.cloud) &&
 		!isCloudConnectError &&
