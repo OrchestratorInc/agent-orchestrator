@@ -4985,8 +4985,6 @@ html.sidebar-reordering * {
    composition overrides for the browser never reach the files overlay. */
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	/* Maximized files use the window's full width: no inset strip beside the frame. */
-	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5004,8 +5002,6 @@ html.sidebar-reordering * {
    Chromium over IPC every frame and make the controls visibly trail the page. */
 .browser-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	/* Maximized browser uses the window's full width, like maximized files. */
-	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5027,8 +5023,8 @@ html.sidebar-reordering * {
 .browser-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5047,8 +5043,8 @@ html.sidebar-reordering * {
 .files-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
