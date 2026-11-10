@@ -70,7 +70,13 @@ type fakeStore struct {
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
 	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
-	sharedLog *[]string
+	sharedLog    *[]string
+	loginDemands []string
+}
+
+func (s *fakeStore) RequireSessionLogin(_ context.Context, id domain.SessionID, reason string, _ time.Time) error {
+	s.loginDemands = append(s.loginDemands, string(id)+": "+reason)
+	return nil
 }
 
 func newFakeStore() *fakeStore {
