@@ -5,7 +5,7 @@
  * does, in a box the snapshot's size, and nothing else of the app.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -28,6 +28,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { networkMode: 
 let activity = Date.now();
 let quietMs = QUIET_MS;
 let started = false;
+let mounted: { root: Root; observer: MutationObserver } | undefined;
 
 function bump() {
 	activity = Date.now();
@@ -45,7 +46,17 @@ function state(): State {
 	return "ready";
 }
 
+/** Unmounts the preview, so the window sits idle until the next artifact. */
+function reset(): void {
+	started = false;
+	mounted?.observer.disconnect();
+	mounted?.root.unmount();
+	mounted = undefined;
+	queryClient.clear();
+}
+
 async function start(job: ArtifactSnapshotJob): Promise<void> {
+	reset();
 	applyDocumentTheme(job.theme);
 	applyDocumentThemeStyle(isThemeStyle(job.styleTheme) ? job.styleTheme : DEFAULT_THEME_STYLE);
 	await refreshDaemonStatus();
@@ -65,13 +76,13 @@ async function start(job: ArtifactSnapshotJob): Promise<void> {
 	quietMs = /\.pdf$/i.test(job.path) ? QUIET_PDF_MS : QUIET_MS;
 	const root = document.getElementById("root") as HTMLElement;
 	// Anything that changes the preview, or finishes loading into it, restarts the quiet period.
-	new MutationObserver(bump).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-	root.addEventListener("load", bump, true);
-	root.addEventListener("loadeddata", bump, true);
-	root.addEventListener("error", bump, true);
+	const observer = new MutationObserver(bump);
+	observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
 	bump();
 	started = true;
-	createRoot(root).render(
+	const reactRoot = createRoot(root);
+	mounted = { root: reactRoot, observer };
+	reactRoot.render(
 		<I18nextProvider i18n={appI18n}>
 			<QueryClientProvider client={queryClient}>
 				<div className="relative overflow-hidden bg-[var(--solid-muted,var(--muted))]" style={{ width: ARTIFACT_SNAPSHOT_WIDTH, height: ARTIFACT_SNAPSHOT_HEIGHT }}>
@@ -98,4 +109,6 @@ async function encode(png: string, quality: number): Promise<string> {
 }
 
 void preloadMarkdownFonts();
-(window as unknown as { __aoSnapshot: unknown }).__aoSnapshot = { start, state, encode };
+// Loads and errors do not bubble, but they do capture; listen once for every artifact.
+for (const type of ["load", "loadeddata", "error"]) document.getElementById("root")?.addEventListener(type, bump, true);
+(window as unknown as { __aoSnapshot: unknown }).__aoSnapshot = { start, state, encode, reset };

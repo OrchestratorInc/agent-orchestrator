@@ -21,6 +21,8 @@ export const SNAPSHOT_RETRY_MS = 60_000;
 /** More than this waiting in the queue and the oldest request is dropped, so a long scroll cannot pile up work. */
 export const SNAPSHOT_MAX_QUEUED = 64;
 const PRUNE_EVERY_WRITES = 25;
+/** A pause after each render, so a long queue leaves the app room to draw and scroll. */
+export const SNAPSHOT_GAP_MS = 150;
 
 export type SnapshotRenderer = (job: ArtifactSnapshotJob) => Promise<Buffer>;
 
@@ -36,11 +38,13 @@ export function createArtifactSnapshotStore(options: {
 	directory: string;
 	render: SnapshotRenderer;
 	concurrency?: number;
+	gapMs?: number;
 	now?: () => number;
 }) {
 	const { directory, render } = options;
-	const concurrency = options.concurrency ?? 2;
+	const concurrency = options.concurrency ?? 1;
 	const now = options.now ?? Date.now;
+	const gapMs = options.gapMs ?? SNAPSHOT_GAP_MS;
 	const fileFor = (key: string) => path.join(directory, `${key}.webp`);
 	const inFlight = new Map<string, Promise<Buffer | null>>();
 	const failedAt = new Map<string, number>();
@@ -106,7 +110,8 @@ export function createArtifactSnapshotStore(options: {
 	}
 
 	function pump(): void {
-		while (running < concurrency && waiting.length > 0) waiting.shift()?.start();
+		// The newest request first: the cards being looked at are the ones that asked last.
+		while (running < concurrency && waiting.length > 0) waiting.pop()?.start();
 	}
 
 	function enqueue(key: string, job: ArtifactSnapshotJob): Promise<Buffer | null> {
@@ -127,6 +132,7 @@ export function createArtifactSnapshotStore(options: {
 							failedAt.set(key, now());
 							finish(null);
 						} finally {
+							if (gapMs > 0) await new Promise((resolve) => setTimeout(resolve, gapMs));
 							running -= 1;
 							pump();
 						}

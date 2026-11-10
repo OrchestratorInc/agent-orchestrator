@@ -18,10 +18,18 @@ function remember(key: string, url: string) {
 	}
 }
 
+// One observer for every card on the page, not one each.
+const themeListeners = new Set<() => void>();
+let themeObserver: MutationObserver | undefined;
+
 function subscribeToTheme(onChange: () => void) {
-	const observer = new MutationObserver(onChange);
-	observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme"] });
-	return () => observer.disconnect();
+	themeListeners.add(onChange);
+	themeObserver ??= new MutationObserver(() => themeListeners.forEach((listener) => listener()));
+	if (themeListeners.size === 1) themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme"] });
+	return () => {
+		themeListeners.delete(onChange);
+		if (themeListeners.size === 0) themeObserver?.disconnect();
+	};
 }
 
 const themeSnapshot = () => `${document.documentElement.dataset.theme === "light" ? "light" : "dark"}|${document.documentElement.dataset.styleTheme ?? ""}`;

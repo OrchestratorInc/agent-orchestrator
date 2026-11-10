@@ -55,32 +55,68 @@ async function paintedFrame(window: BrowserWindow): Promise<NativeImage> {
 	throw new Error("the snapshot window never painted the whole preview");
 }
 
+/** The window stays warm between artifacts, so a screen of cards does not start a renderer process for each. */
+const WINDOW_IDLE_MS = 30_000;
+/** The window only paints when asked to (invalidate), so it never spends frames on its own. */
+const IDLE_FRAME_RATE = 4;
+
 export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRenderer {
-	return async (job: ArtifactSnapshotJob) => {
-		const window = new deps.BrowserWindow({
-			show: false,
-			width: ARTIFACT_SNAPSHOT_WIDTH,
-			height: ARTIFACT_SNAPSHOT_HEIGHT,
-			useContentSize: true,
-			webPreferences: {
-				offscreen: true,
-				sandbox: true,
-				contextIsolation: true,
-				nodeIntegration: false,
-				backgroundThrottling: false,
-				preload: deps.preload,
-			},
-		});
-		const contents = window.webContents;
-		const read = <T>(code: string) => contents.executeJavaScript(code) as Promise<T>;
-		const deadline = Date.now() + SNAPSHOT_DEADLINE_MS;
-		try {
+	let current: Promise<BrowserWindow> | undefined;
+	let idle: ReturnType<typeof setTimeout> | undefined;
+
+	function open(): Promise<BrowserWindow> {
+		current ??= (async () => {
+			const window = new deps.BrowserWindow({
+				show: false,
+				width: ARTIFACT_SNAPSHOT_WIDTH,
+				height: ARTIFACT_SNAPSHOT_HEIGHT,
+				useContentSize: true,
+				webPreferences: {
+					offscreen: true,
+					sandbox: true,
+					contextIsolation: true,
+					nodeIntegration: false,
+					backgroundThrottling: false,
+					preload: deps.preload,
+				},
+			});
+			const contents = window.webContents;
 			// The page is the app's own; nothing in it may leave for another address or open a window.
 			contents.setWindowOpenHandler(() => ({ action: "deny" }));
 			contents.on("will-navigate", (event) => event.preventDefault());
 			contents.session.setPermissionRequestHandler((_contents, _permission, decide) => decide(false));
 			contents.setAudioMuted(true);
-			await contents.loadURL(deps.pageUrl());
+			contents.setFrameRate(IDLE_FRAME_RATE);
+			window.once("closed", () => {
+				current = undefined;
+			});
+			try {
+				await contents.loadURL(deps.pageUrl());
+			} catch (error) {
+				window.destroy();
+				throw error;
+			}
+			return window;
+		})();
+		return current;
+	}
+
+	function close(): void {
+		const window = current;
+		current = undefined;
+		void window?.then((opened) => {
+			if (!opened.isDestroyed()) opened.destroy();
+		}, () => undefined);
+	}
+
+	return async (job: ArtifactSnapshotJob) => {
+		clearTimeout(idle);
+		const window = await open();
+		const contents = window.webContents;
+		const read = <T>(code: string) => contents.executeJavaScript(code) as Promise<T>;
+		const deadline = Date.now() + SNAPSHOT_DEADLINE_MS;
+		try {
+			contents.startPainting();
 			await read(`window.__aoSnapshot.start(${JSON.stringify(job)})`);
 			let state: PageState = "loading";
 			while (state === "loading" && Date.now() < deadline) {
@@ -96,8 +132,17 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 			const bytes = Buffer.from(encoded, "base64");
 			if (bytes.length === 0) throw new Error("the preview could not be encoded");
 			return bytes;
+		} catch (error) {
+			// A page that failed or hung may be stuck; the next artifact gets a fresh one.
+			close();
+			throw error;
 		} finally {
-			if (!window.isDestroyed()) window.destroy();
+			if (!window.isDestroyed()) {
+				void read("window.__aoSnapshot.reset()").catch(() => undefined);
+				contents.stopPainting();
+			}
+			clearTimeout(idle);
+			idle = setTimeout(close, WINDOW_IDLE_MS);
 		}
 	};
 }
