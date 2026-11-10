@@ -1165,6 +1165,42 @@ const artifact = (
 });
 
 describe("SessionInspector Artifacts section", () => {
+  beforeEach(() => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  it("previews the most recent artifacts and lists the rest by name behind Show more", () => {
+    const onOpenArtifact = vi.fn();
+    // file-0 is the newest; listed oldest first to check the sort.
+    const files = Array.from({ length: 7 }, (_, index) =>
+      artifact({ path: `file-${index}.md`, name: `file-${index}.md`, kind: "markdown", updatedAt: `2026-06-${20 - index}T00:00:00Z` }),
+    ).reverse();
+    renderWithQuery(
+      <SessionInspector onOpenArtifact={onOpenArtifact} session={session([], { outputType: "artifact", artifactFiles: files })} />,
+    );
+
+    // jsdom has no layout, so the row keeps its default of three previews.
+    for (const name of ["file-0.md", "file-1.md", "file-2.md"]) {
+      expect(screen.getByTitle(name).closest("li")).toBeNull();
+    }
+    for (const name of ["file-3.md", "file-4.md", "file-5.md"]) {
+      expect(screen.getByTitle(name).closest("li")).not.toBeNull();
+    }
+    expect(screen.queryByTitle("file-6.md")).not.toBeInTheDocument();
+
+    const list = screen.getByTitle("file-3.md").closest("ul") as HTMLElement;
+    fireEvent.click(within(list).getByRole("button", { name: "Show more" }));
+    expect(screen.getByTitle("file-6.md").closest("li")).not.toBeNull();
+    expect(within(list).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByTitle("file-0.md"));
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "file-0.md" });
+  });
+
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {
     renderWithQuery(
       <SessionInspector
