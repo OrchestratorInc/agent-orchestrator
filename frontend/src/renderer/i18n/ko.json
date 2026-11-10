@@ -4171,6 +4171,7 @@
 	"automations.templates.setup": "선택한 프로젝트의 GitHub 읽기 권한이 필요합니다.",
 	"automations.templates.title": "템플릿으로 시작하기",
 	"automations.templates.description": "시작점을 선택하고 원하는 대로 수정한 후 에이전트에게 맡기세요.",
+	"automations.section.runIn": "실행 위치",
 	"automations.templates.use": "템플릿 사용",
 	"automations.templates.label": "템플릿",
 	"automations.filter.status": "상태",

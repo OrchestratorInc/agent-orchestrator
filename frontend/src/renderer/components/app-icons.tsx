@@ -156,6 +156,7 @@ import {
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
+	Sparkles as LucideSparkles,
 	CaseSensitive as LucideCaseSensitive,
 	CheckCheck as LucideCheckCheck,
 	ChevronsDownUp as LucideChevronsDownUp,
@@ -480,6 +481,7 @@ export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
+export const Sparkles = fromLucide(LucideSparkles, "sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");
 export const WrapText = fromLucide(LucideWrapText, "wrap-text");
 export const Wrench = fromMyna(MynaWrench, "wrench");

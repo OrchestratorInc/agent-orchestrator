@@ -4354,6 +4354,7 @@
 	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта.",
 	"automations.templates.title": "Начните с шаблона",
 	"automations.templates.description": "Выберите шаблон, настройте его под себя и поручите остальное агенту.",
+	"automations.section.runIn": "Где запускать",
 	"automations.templates.use": "Использовать шаблон",
 	"automations.templates.label": "Шаблоны",
 	"automations.filter.status": "Статус",

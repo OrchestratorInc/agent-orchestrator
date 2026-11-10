@@ -4266,6 +4266,7 @@
 	"automations.templates.setup": "Requer acesso de leitura ao GitHub para o projeto selecionado.",
 	"automations.templates.title": "Comece com um modelo",
 	"automations.templates.description": "Escolha um ponto de partida, personalize e deixe seu agente cuidar do resto.",
+	"automations.section.runIn": "Executar em",
 	"automations.templates.use": "Usar modelo",
 	"automations.templates.label": "Modelos",
 	"automations.filter.status": "Status",

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, WandSparkles, TriangleAlert } from "@/components/app-icons";
+import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Sparkles, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -48,6 +48,7 @@ import {
 	clampMonthDayDraft,
 	describeSchedule,
 	formatTimeDraft,
+	nextScheduledRun,
 	nowLocalHHMM,
 	parseHourMinute,
 	parseTimeValue,
@@ -464,7 +465,7 @@ function AutomationFormDialog({
 	onOpenChange,
 	onSubmit,
 }: AutomationFormDialogProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
@@ -548,6 +549,9 @@ function AutomationFormDialog({
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, initialTemplateId]);
 
+	const nextRun = schedule.legacyRaw || (automation && automation.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone)
+		? null
+		: nextScheduledRun(schedule);
 	const projectOptions = workspaces.map((item) => ({ value: item.id, label: item.name }));
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
@@ -702,10 +706,13 @@ function AutomationFormDialog({
 						</div>
 						{validationErrors.prompt ? <p id={`${AUTOMATION_FIELD_IDS.prompt}-error`} className={onboardingFieldErrorClass}>{validationErrors.prompt}</p> : null}
 					</div>
-					<div className="flex min-h-0 flex-col gap-4 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
-						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
+					<div className="flex min-h-0 flex-col gap-6 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
+						<section className="flex flex-col gap-2" aria-labelledby="automation-run-in">
+						<h3 id="automation-run-in" className="text-caption text-passive">{t("automations.section.runIn")}</h3>
+						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId} hideLabel>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
+								icon={Folder}
 								label={t("automations.field.project")}
 								placeholder={t("automations.projectPlaceholder")}
 								required
@@ -721,7 +728,7 @@ function AutomationFormDialog({
 							<RequiredAgentField
 								id="automation-agent"
 								label={t("automations.agent")}
-								labelClassName={onboardingFormLabelClass}
+								labelClassName="sr-only"
 								placeholder={t("automations.agentPlaceholder")}
 								value={selectedHarness}
 								agents={harnesses}
@@ -732,7 +739,7 @@ function AutomationFormDialog({
 								}}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex min-h-control-md min-w-0 flex-col justify-center gap-2 rounded-md bg-input/50 px-1 [&_.composer-chip]:w-full [&_.composer-chip]:justify-between" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
@@ -749,8 +756,10 @@ function AutomationFormDialog({
 									/>
 								</div>
 							) : null}
-						<div className="grid grid-cols-2 gap-3">
-							<Field label={t("automations.field.schedule")}>
+						</section>
+						<section className="flex flex-col gap-2" aria-labelledby="automation-schedule">
+							<h3 id="automation-schedule" className="text-caption text-passive">{t("automations.field.schedule")}</h3>
+							<Field label={t("automations.field.schedule")} hideLabel>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
 									value={schedule.preset}
@@ -769,7 +778,7 @@ function AutomationFormDialog({
 								/>
 							</Field>
 							{schedule.preset === "weekly" ? (
-								<Field label={t("automations.field.weekday")}>
+								<Field label={t("automations.field.weekday")} hideLabel>
 									<AutomationSelect
 										label={t("automations.field.weekday")}
 										value={schedule.weekday}
@@ -782,7 +791,9 @@ function AutomationFormDialog({
 								</Field>
 							) : null}
 							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
-								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time}>
+								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time} hideLabel>
+									<div className="relative">
+									<Clock aria-hidden="true" className="pointer-events-none absolute start-3 top-1/2 size-icon-sm -translate-y-1/2 text-muted-foreground" />
 									<Input
 										id={AUTOMATION_FIELD_IDS.time}
 										type="text"
@@ -794,16 +805,16 @@ function AutomationFormDialog({
 										value={schedule.time}
 										aria-invalid={Boolean(validationErrors.time) || undefined}
 										aria-describedby={validationErrors.time ? `${AUTOMATION_FIELD_IDS.time}-error` : undefined}
-										className="tabular-nums"
+										className="ps-9 tabular-nums"
 										onChange={(event) => {
 											const next = formatTimeDraft(event.target.value);
 											patchSchedule({ time: next });
 											if (parseTimeValue(next)) clearValidationError("time");
 										}}
 									/>
+									</div>
 								</Field>
 							) : null}
-						</div>
 						{schedule.preset === "custom" ? (
 							<div className="grid grid-cols-2 gap-3">
 								<div className="col-span-2"><Field label={t("automations.field.frequency")}>
@@ -895,9 +906,16 @@ function AutomationFormDialog({
 								</Field>
 							</div>
 						) : null}
-						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						<p className={onboardingFieldHintClass}>{timezone}</p>
+						</section>
 						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
+						{nextRun ? (
+							<div className="mt-auto flex flex-col gap-1 rounded-lg border border-border px-4 py-3">
+								<span className="text-xs text-muted-foreground">{t("automations.nextRun")}</span>
+								<span className="text-sm text-foreground tabular-nums">{displayTime(nextRun.toISOString(), i18n.resolvedLanguage)}</span>
+							</div>
+						) : null}
 					</div>
 					</div>
 
@@ -923,7 +941,7 @@ function TemplateMenu({ disabled, onSelect }: { disabled: boolean; onSelect: (id
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button type="button" size="sm" variant="quiet" disabled={disabled}>
-					<WandSparkles aria-hidden="true" className="size-icon-sm" />
+					<Sparkles aria-hidden="true" className="size-icon-sm" />
 					{t("automations.templates.use")}
 				</Button>
 			</DropdownMenuTrigger>
@@ -951,8 +969,10 @@ function AutomationSelect({
 	disabled,
 	invalid,
 	describedBy,
+	icon: Icon,
 }: {
 	id?: string;
+	icon?: typeof Folder;
 	label: string;
 	value: string;
 	onValueChange: (value: string) => void;
@@ -966,7 +986,10 @@ function AutomationSelect({
 	return (
 		<Select value={value} onValueChange={onValueChange} required={required} disabled={disabled}>
 			<SelectTrigger id={id} size="sm" className="w-full text-control" aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy}>
-				<SelectValue placeholder={placeholder} />
+				<span className="flex min-w-0 items-center gap-2">
+					{Icon ? <Icon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" /> : null}
+					<SelectValue placeholder={placeholder} />
+				</span>
 			</SelectTrigger>
 			<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
 				{options.map((option) => (
@@ -979,10 +1002,11 @@ function AutomationSelect({
 	);
 }
 
-function Field({ label, id, error, children }: { label: string; id?: string; error?: string; children: React.ReactNode }) {
+function Field({ label, id, error, hideLabel, children }: { label: string; id?: string; error?: string; hideLabel?: boolean; children: React.ReactNode }) {
+	const labelClass = hideLabel ? "sr-only" : onboardingFormLabelClass;
 	return (
 		<div className="flex flex-col gap-2">
-			{id ? <label htmlFor={id} className={onboardingFormLabelClass}>{label}</label> : <span className={onboardingFormLabelClass}>{label}</span>}
+			{id ? <label htmlFor={id} className={labelClass}>{label}</label> : <span className={labelClass}>{label}</span>}
 			{children}
 			{error ? <p id={`${id}-error`} className={onboardingFieldErrorClass}>{error}</p> : null}
 		</div>

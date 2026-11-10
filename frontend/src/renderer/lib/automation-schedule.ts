@@ -329,3 +329,21 @@ export function describeSchedule(rruleText: string): ScheduleSummary {
 	}
 	return { kind: "other", frequency, time };
 }
+
+/** The next local wall-clock time a form schedule fires, or null when it cannot be read. */
+export function nextScheduledRun(fields: ScheduleFields, from: Date = new Date()): Date | null {
+	const summary = describeSchedule(buildRRuleFromSchedule(fields));
+	if (!summary.time || summary.kind === "other") return null;
+	for (let offset = 0; offset <= 366; offset += 1) {
+		const day = new Date(from.getFullYear(), from.getMonth(), from.getDate() + offset, summary.time.hour, summary.time.minute);
+		if (day <= from) continue;
+		const code = WEEKDAY_CODES[(day.getDay() + 6) % 7];
+		const matches =
+			summary.kind === "daily" ||
+			(summary.kind === "weekdays" && day.getDay() !== 0 && day.getDay() !== 6) ||
+			(summary.kind === "weekly" && summary.days.includes(code)) ||
+			(summary.kind === "monthly" && day.getDate() === summary.day);
+		if (matches) return day;
+	}
+	return null;
+}
