@@ -68,6 +68,22 @@ export function defaultAuthorizedAgentForRole(authorizedAgents: AgentInfo[]): st
 		)[0]?.id ?? "";
 }
 
+/**
+ * The agent to name in the deprecated project role fields when adding a project
+ * on a remote host. Older AO daemons cannot start an orchestrator for a project
+ * that names no agent; current daemons strip these fields on write. Picks the
+ * first authorized agent in DEFAULT_AGENT_PRIORITY, else the first installed
+ * one, else none.
+ */
+export function legacyRemoteProjectAgent(agents: { authorized?: { id: string }[]; installed?: { id: string }[] } | undefined): string {
+	const rank = (id: string) => DEFAULT_AGENT_PRIORITY_RANK.get(id) ?? Number.MAX_SAFE_INTEGER;
+	for (const list of [agents?.authorized, agents?.installed]) {
+		const ranked = (list ?? []).map((agent) => agent.id).filter((id) => DEFAULT_AGENT_PRIORITY_RANK.has(id)).sort((a, b) => rank(a) - rank(b));
+		if (ranked[0]) return ranked[0];
+	}
+	return "";
+}
+
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
 	if (agent.installation.state === "not_installed") {
 		return { status: "Needs install", statusTone: "muted" };

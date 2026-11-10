@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent } from "./agent-select-options";
+import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent, legacyRemoteProjectAgent } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -188,5 +188,22 @@ describe("defaultAuthorizedAgentForRole", () => {
 	it("orders unranked agents by label and returns an empty string for no agents", () => {
 		expect(defaultAuthorizedAgentForRole([agent("zed"), agent("goose")])).toBe("goose");
 		expect(defaultAuthorizedAgentForRole([])).toBe("");
+	});
+});
+
+describe("legacyRemoteProjectAgent", () => {
+	const ids = (...values: string[]) => values.map((id) => ({ id }));
+
+	it("names the first authorized agent in the default priority", () => {
+		expect(legacyRemoteProjectAgent({ authorized: ids("cursor", "codex"), installed: ids("claude-code", "cursor", "codex") })).toBe("codex");
+	});
+
+	it("falls back to the first installed agent when none is authorized", () => {
+		expect(legacyRemoteProjectAgent({ authorized: [], installed: ids("opencode", "cursor") })).toBe("cursor");
+	});
+
+	it("names nothing when the host has no usable agent or the list failed to load", () => {
+		expect(legacyRemoteProjectAgent({ authorized: ids("goose"), installed: ids("goose") })).toBe("");
+		expect(legacyRemoteProjectAgent(undefined)).toBe("");
 	});
 });
