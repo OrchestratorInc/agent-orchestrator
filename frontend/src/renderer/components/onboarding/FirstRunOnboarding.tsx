@@ -7,6 +7,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useId,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -16,7 +17,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Trans, useTranslation } from "react-i18next";
-import type { components } from "../../../api/schema";
 import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
@@ -36,7 +36,6 @@ import {
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
 import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { useOnboardingStep } from "../../lib/onboarding-telemetry";
@@ -54,6 +53,7 @@ import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
 import { startGuidedTour } from "./GuidedTour";
+import { InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -76,16 +76,9 @@ const LEGACY_STEPS: Record<string, Step> = {
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 // Always listed so a machine with no agents still has something to install.
 const SUGGESTED_AGENTS = ["claude-code", "codex"];
-// Agents the daemon can install in one click (POST /api/v1/system/install/{target}).
-const AGENT_INSTALL_TARGET: Partial<Record<string, SystemInstallTarget>> = {
-	"claude-code": "claude",
-	codex: "codex",
-	opencode: "opencode",
-	"opencode-v2": "opencode-v2",
-	copilot: "copilot",
-};
+// Where to get the GitHub CLI when it can't be installed from here.
+const GITHUB_CLI_URL = "https://cli.github.com/";
 const READINESS_POLL_MS = 3_000;
-const INSTALL_POLL_MS = 1_000;
 // --duration-normal and --ease-out, for motion's JS-driven transitions.
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
@@ -113,8 +106,6 @@ const SORT_ORDER = [3, 2, 0, 1] as const;
 const PR_SORTS = 3;
 const SORT_BEAT_MS = 2200;
 
-type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
-type InstallJob = components["schemas"]["InstallJob"];
 
 function readStoredStep(): Step {
 	try {
@@ -465,6 +456,20 @@ function Waiting({ children }: { children: ReactNode }) {
 	);
 }
 
+/** A group of rows on a step: a short title and what the group is for. */
+function RowGroup({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+	const id = useId();
+	return (
+		<section aria-labelledby={id} className="flex flex-col gap-2">
+			<div className="flex flex-col gap-0.5 px-1">
+				<h3 id={id} className="text-sm font-medium text-foreground">{title}</h3>
+				<p className="text-xs text-muted-foreground">{hint}</p>
+			</div>
+			{children}
+		</section>
+	);
+}
+
 /** Muted trailing state for a row that needs nothing ("Installed", "Signed in"). */
 function RowState({ children }: { children: ReactNode }) {
 	return <span className="text-xs text-muted-foreground">{children}</span>;
@@ -481,15 +486,19 @@ function RowSpinner() {
  * halftone wallpaper never shows through the rows. */
 const ROW_LIST = "overflow-hidden rounded-xl border border-border bg-(--schematic-solid)";
 
-function CheckRow({ icon, label, detail, trailing }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode }) {
+function CheckRow({ icon, label, detail, trailing, below }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode }) {
 	return (
-		<li className="flex items-center gap-3 px-4 py-3 [&+&]:border-t [&+&]:border-border">
-			{icon ? <span className="flex shrink-0" aria-hidden="true">{icon}</span> : null}
-			<span className="min-w-0 flex-1">
-				<span className="block truncate text-sm text-foreground">{label}</span>
-				{detail ? <span className="block truncate text-xs text-muted-foreground">{detail}</span> : null}
-			</span>
-			<span className="flex h-control-md shrink-0 items-center">{trailing}</span>
+		<li className="px-4 py-3 [&+&]:border-t [&+&]:border-border">
+			<div className="flex items-center gap-3">
+				{icon ? <span className="flex shrink-0" aria-hidden="true">{icon}</span> : null}
+				<span className="min-w-0 flex-1">
+					<span className="block truncate text-sm text-foreground">{label}</span>
+					{detail ? <span className="block truncate text-xs text-muted-foreground">{detail}</span> : null}
+				</span>
+				<span className="flex h-control-md shrink-0 items-center">{trailing}</span>
+			</div>
+			{/* Progress, or why an install didn't finish, under the label. */}
+			{below ? <div className={cn("mt-2.5 flex flex-col gap-2", icon && "ps-7")}>{below}</div> : null}
 		</li>
 	);
 }
@@ -807,44 +816,6 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 
 // ── 2. Your tools: GitHub CLI and coding agents ─────────────────────────────
 
-/** Starts and polls a one-click system install (gh or an agent CLI). */
-function useSystemInstall(onSucceeded: (target: SystemInstallTarget) => void) {
-	const [jobs, setJobs] = useState<Partial<Record<SystemInstallTarget, InstallJob>>>({});
-	const [errors, setErrors] = useState<Partial<Record<SystemInstallTarget, string>>>({});
-	const timers = useRef(new Map<SystemInstallTarget, number>());
-	const onSucceededRef = useRef(onSucceeded);
-	onSucceededRef.current = onSucceeded;
-	useEffect(() => () => {
-		for (const timer of timers.current.values()) window.clearInterval(timer);
-	}, []);
-	const active = (job?: InstallJob) => Boolean(job && ["running", "waiting_for_idle", "installing", "verifying"].includes(job.status));
-	const start = useCallback(async (target: SystemInstallTarget) => {
-		setErrors((current) => ({ ...current, [target]: undefined }));
-		const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target } } });
-		if (error || !data) {
-			setErrors((current) => ({ ...current, [target]: apiErrorMessage(error, "Could not start the install.") }));
-			return;
-		}
-		setJobs((current) => ({ ...current, [target]: data }));
-		if (data.status === "succeeded") onSucceededRef.current(target);
-		if (!active(data)) return;
-		const timer = window.setInterval(() => {
-			void (async () => {
-				const next = await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target } } });
-				if (next.error || !next.data) return;
-				setJobs((current) => ({ ...current, [target]: next.data }));
-				if (active(next.data)) return;
-				window.clearInterval(timer);
-				timers.current.delete(target);
-				if (next.data.status === "succeeded") onSucceededRef.current(target);
-				else setErrors((current) => ({ ...current, [target]: next.data.error || "The install did not finish." }));
-			})();
-		}, INSTALL_POLL_MS);
-		timers.current.set(target, timer);
-	}, []);
-	return { start, isRunning: (target: SystemInstallTarget) => active(jobs[target]), error: (target: SystemInstallTarget) => errors[target] };
-}
-
 type AgentRowState = "ready" | "signin" | "missing" | "checking";
 
 function agentRowState(agent: AgentReadinessSnapshot): AgentRowState {
@@ -898,18 +869,17 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			await readiness.refetch();
 		}
 	}, [queryClient, readiness]);
-	const install = useSystemInstall((target) => {
-		if (target === "gh") {
-			void queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey });
-			void ghAuth.refetch();
-		} else void refresh();
+	const ghInstall = useGhInstall(() => {
+		void queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey });
+		void ghAuth.refetch();
 	});
+	const agentInstalls = useAgentInstalls((agentId) => void refresh([agentId]));
 
 	const gh = gate.requirements.find((requirement) => requirement.id === "gh");
 	const ghInstalled = gh?.satisfied === true;
 	const ghSignedIn = ghAuth.data?.satisfied === true;
 	const ghChecking = gate.checking || ghAuth.isPending;
-	const ghInstalling = install.isRunning("gh");
+	const ghView = ghInstall.view;
 
 	const { agents, anyReady } = useToolAgents();
 	const signingInAgent = workflow?.agentId;
@@ -975,44 +945,68 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			{ghChecking || readiness.isPending ? (
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
 			) : (
-				<div className="flex flex-col gap-2">
-					<ul className={ROW_LIST}>
-						<CheckRow
-							icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
-							label={t("firstRun.githubTitle")}
-							detail={install.error("gh") ?? (ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined)}
-							trailing={ghInstalling ? <RowSpinner />
-								: !ghInstalled ? (
-									<Button size="sm" variant="secondary" onClick={() => void install.start("gh")}>{t("firstRun.install")}</Button>
-								)
-								: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
-								: null}
-						/>
-						{agents.map(({ agent, state }) => {
-							const target = AGENT_INSTALL_TARGET[agent.id];
-							const installing = target ? install.isRunning(target) : false;
-							const busy = installing || (signingInAgent === agent.id && !signingInReady);
-							return (
-								<CheckRow
-									key={agent.id}
-									icon={<AgentAvatar provider={agent.id} className="size-icon-base" decorative />}
-									label={agent.label}
-									detail={target ? install.error(target) : undefined}
-									trailing={busy ? <RowSpinner />
-										: state === "ready" ? <RowState>{t("settings.harness.installed")}</RowState>
-										: state === "missing" && target ? (
-											<Button size="sm" variant="secondary" onClick={() => void install.start(target)}>{t("firstRun.install")}</Button>
-										) : state === "missing" ? <RowState>{t("firstRun.agentMissing")}</RowState>
-										: state === "signin" ? (
-											<Button size="sm" variant="secondary" disabled={startAuth.isPending} onClick={() => void signIn(agent.id)}>{t("firstRun.signIn")}</Button>
-										) : null}
-								/>
-							);
-						})}
-					</ul>
-					{/* The existing login flow: an embedded `gh auth login` terminal. */}
-					{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
-					{anyReady ? null : <p className="text-xs text-muted-foreground">{t("firstRun.agentsBodyNone")}</p>}
+				<div className="flex flex-col gap-5">
+					{/* GitHub is optional: agents still work locally without it. */}
+					<RowGroup title={t("firstRun.toolsGithubHeading")} hint={t("firstRun.toolsGithubHint")}>
+						<ul className={ROW_LIST}>
+							<CheckRow
+								icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
+								label={t("firstRun.githubTitle")}
+								detail={ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined}
+								trailing={ghView.busy ? <RowSpinner />
+									: !ghInstalled ? (
+										<Button size="sm" variant="secondary" onClick={() => void ghInstall.start()}>
+											{ghView.ended ? t("startup.installTryAgain") : t("firstRun.install")}
+										</Button>
+									)
+									: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
+									: null}
+								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
+									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
+									: undefined}
+							/>
+						</ul>
+						{/* The existing login flow: an embedded `gh auth login` terminal. */}
+						{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
+					</RowGroup>
+					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
+						<ul className={ROW_LIST}>
+							{agents.map(({ agent, state }) => {
+								const view = agentInstalls.view(agent.id);
+								const plan = agentInstalls.planFor(agent.id);
+								const canInstall = agentInstalls.canInstall(agent.id);
+								const signingIn = signingInAgent === agent.id && !signingInReady;
+								const missing = state === "missing";
+								// Its plan says it can't be installed from here: say how instead. With no
+								// plan (not loaded, or none for it) Install is tried, and says why if it fails.
+								const manual = missing && plan !== undefined && !canInstall;
+								return (
+									<CheckRow
+										key={agent.id}
+										icon={<AgentAvatar provider={agent.id} className="size-icon-base" decorative />}
+										label={agent.label}
+										detail={manual && !view.ended ? plan?.reason : undefined}
+										trailing={view.busy || signingIn ? <RowSpinner />
+											: state === "ready" ? <RowState>{t("settings.harness.installed")}</RowState>
+											: state === "signin" ? (
+												<Button size="sm" variant="secondary" disabled={startAuth.isPending} onClick={() => void signIn(agent.id)}>{t("firstRun.signIn")}</Button>
+											)
+											: missing && !manual ? (
+												<Button size="sm" variant="secondary" disabled={!agentInstalls.plansReady} onClick={() => void agentInstalls.start(agent.id)}>
+													{view.ended ? t("startup.installTryAgain") : t("firstRun.install")}
+												</Button>
+											)
+											: manual && plan?.documentationUrl ? <InstallDocsLink url={plan.documentationUrl} label={t("firstRun.installHowTo")} />
+											: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
+											: null}
+										below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
+											: view.ended && missing ? <InstallProblem view={view} docsUrl={plan?.documentationUrl} />
+											: undefined}
+									/>
+								);
+							})}
+						</ul>
+					</RowGroup>
 					<Button variant="ghost" size="sm" className="self-end text-muted-foreground" onClick={() => void checkAgain()} disabled={checking}>
 						<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
 						{t("firstRun.checkAgain")}
