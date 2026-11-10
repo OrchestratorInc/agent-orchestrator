@@ -47,7 +47,11 @@ var errorBudget = struct {
 
 const (
 	maxErrorsPerFingerprintMinute = 5
-	maxErrorsPerFingerprintDay    = 200
+	// The daemon is one per install, so this is the per-install daily cap: one
+	// noisy failure used to spend the project's whole Sentry quota (AO-DAEMON-9).
+	// ponytail: in memory, so a daemon restart refills it; persist under the
+	// data dir if restart loops turn out to matter.
+	maxErrorsPerFingerprintDay = 10
 	maxErrorFingerprintsPerDay    = 1024
 )
 
@@ -55,6 +59,9 @@ type errorBudgetGroup struct {
 	minute      int64
 	minuteCount int
 	dayCount    int
+	// dropped counts events refused since the last one sent; the next one
+	// sent carries it as dropped_since_last.
+	dropped int
 }
 
 var captureGate = struct {
@@ -409,6 +416,15 @@ func safeSentryTag(key, value string) bool {
 	case "install_id":
 		id := installID.Load()
 		return id != nil && value != "" && value == *id
+	case "dropped_since_last":
+		n, err := strconv.Atoi(value)
+		return err == nil && n > 0
+	case "failed_step":
+		_, ok := spawnFailedSteps[value]
+		return ok
+	case "cause":
+		_, ok := spawnFailureCauses[value]
+		return ok
 	}
 	if ok, handled := safeBackgroundTag(key, value); handled {
 		return ok
@@ -455,10 +471,25 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 		return
 	}
 	defer leaveCapture()
-	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+	ok, dropped := admitErrorFingerprint(fingerprint, operation, time.Now().UTC())
+	if !ok {
 		return
 	}
-	capture(sentry.LevelError, tags, fingerprint, route, site, false)
+	capture(sentry.LevelError, withDropped(tags, dropped), fingerprint, route, site, false)
+}
+
+// withDropped returns tags carrying how many events of this fingerprint the
+// budget refused since the last one sent. tags is never modified.
+func withDropped(tags map[string]string, dropped int) map[string]string {
+	if dropped <= 0 {
+		return tags
+	}
+	out := make(map[string]string, len(tags)+1)
+	for k, v := range tags {
+		out[k] = v
+	}
+	out["dropped_since_last"] = strconv.Itoa(dropped)
+	return out
 }
 
 // allowErrorFingerprintFor applies the per-fingerprint budget. Once a day has
@@ -466,6 +497,13 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 // overflow bucket for its operation rather than one bucket for the whole
 // daemon, so a noisy day cannot hide a new failure in a different operation.
 func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool {
+	ok, _ := admitErrorFingerprint(fingerprint, operation, now)
+	return ok
+}
+
+// admitErrorFingerprint is allowErrorFingerprintFor that also reports, for an
+// admitted event, how many were refused since the last admitted one.
+func admitErrorFingerprint(fingerprint, operation string, now time.Time) (bool, int) {
 	overflow := "unknown"
 	if _, ok := operationLabels[operation]; ok {
 		overflow = "overflow:" + operation
@@ -477,8 +515,16 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 	defer errorBudget.Unlock()
 	day := now.YearDay() + now.Year()*366
 	if errorBudget.day != day {
+		// A new day refills every budget but keeps the refused counts, so the
+		// first event sent tomorrow still reports what today dropped.
+		groups := make(map[string]errorBudgetGroup)
+		for key, group := range errorBudget.groups {
+			if group.dropped > 0 {
+				groups[key] = errorBudgetGroup{dropped: group.dropped}
+			}
+		}
 		errorBudget.day = day
-		errorBudget.groups = make(map[string]errorBudgetGroup)
+		errorBudget.groups = groups
 	}
 	group, known := errorBudget.groups[fingerprint]
 	if !known && len(errorBudget.groups) >= maxErrorFingerprintsPerDay {
@@ -491,12 +537,16 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 		group.minuteCount = 0
 	}
 	if group.minuteCount >= maxErrorsPerFingerprintMinute || group.dayCount >= maxErrorsPerFingerprintDay {
-		return false
+		group.dropped++
+		errorBudget.groups[fingerprint] = group
+		return false, 0
 	}
 	group.minuteCount++
 	group.dayCount++
+	dropped := group.dropped
+	group.dropped = 0
 	errorBudget.groups[fingerprint] = group
-	return true
+	return true, dropped
 }
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.

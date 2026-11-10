@@ -124,12 +124,13 @@ func captureAsync(ctx context.Context, tags map[string]string, fingerprint strin
 		leaveCapture()
 		return
 	}
-	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+	ok, dropped := admitErrorFingerprint(fingerprint, operation, time.Now().UTC())
+	if !ok {
 		<-backgroundSends
 		leaveCapture()
 		return
 	}
-	tags = maps.Clone(tags)
+	tags = maps.Clone(withDropped(tags, dropped))
 	go func() {
 		defer leaveCapture()
 		defer func() { <-backgroundSends }()
