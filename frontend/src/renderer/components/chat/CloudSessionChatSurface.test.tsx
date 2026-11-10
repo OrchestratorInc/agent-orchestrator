@@ -12,7 +12,8 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
+import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudMessageBody, cloudSessionArtifactPath, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -1836,6 +1837,53 @@ describe("CloudSessionChatSurface", () => {
 		await expect(cloudWorkspaceFilePath("/home/coder/project/docs/NOTES.md", search)).resolves.toBe("docs/NOTES.md");
 		expect(search).toHaveBeenLastCalledWith("NOTES.md");
 		await expect(cloudWorkspaceFilePath("/etc/hosts", search)).resolves.toBeUndefined();
+	});
+
+	it("names a file in the session's artifact directory by its place there", () => {
+		expect(cloudSessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/notes/Migration Guide.md", "session-1")).toBe("notes/Migration Guide.md");
+		expect(cloudSessionArtifactPath("/home/coder/.ao/worker/artifacts/session-1/plan.md", "session-1")).toBe("plan.md");
+		expect(cloudSessionArtifactPath("/workspace/.ao/worker/artifacts/session-2/plan.md", "session-1")).toBeUndefined();
+		expect(cloudSessionArtifactPath("/workspace/repository/artifacts/plan.md", "session-1")).toBeUndefined();
+		expect(cloudSessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/../../repository/.env", "session-1")).toBeUndefined();
+		expect(cloudSessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/", "session-1")).toBeUndefined();
+	});
+
+	it("opens a file the agent just wrote to its artifact directory in Artifacts, before the session lists it", async () => {
+		// The file view reads through the checkout and refuses the artifact
+		// directory (HTTP 422), so the click never goes there, listed or not.
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: CLOUD_CHAT_NEWEST });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+		const onOpenFile = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const listed = { kind: "markdown" as const, name: "plan.md", path: "plan.md", size: 1, updatedAt: session.updatedAt };
+		const surface = (cloud: { orgId: string; shared?: boolean }) =>
+			<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud, artifactFiles: [listed] }} onOpenFile={onOpenFile} /></QueryClientProvider>;
+		const view = render(surface({ orgId: "org-1" }));
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		const openFile = (path: string) => act(() => cloudMocks.chatProps.mock.lastCall?.[0].onOpenFile(path));
+
+		openFile("/workspace/.ao/worker/artifacts/session-1/Migration Guide.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "Migration Guide.md", source: "artifact" });
+		// Not listed yet: the session list is read again now, not at its next poll.
+		expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: cloudSessionsQueryKey });
+		expect(onOpenFile).not.toHaveBeenCalled();
+
+		// A listed one opens without a read.
+		openFile("/workspace/.ao/worker/artifacts/session-1/plan.md");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "plan.md", source: "artifact" });
+		expect(invalidate).toHaveBeenCalledTimes(1);
+
+		// A session shared with this person is listed with the shared projects.
+		view.rerender(surface({ orgId: "org-1", shared: true }));
+		openFile("/workspace/.ao/worker/artifacts/session-1/fresh.md");
+		expect(invalidate).toHaveBeenLastCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
+
+		// A checkout file still opens in the workspace.
+		openFile("/workspace/repository/src/app.ts");
+		await waitFor(() => expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("src/app.ts"));
 	});
 
 	it("merges streamed and polled events in order without dropping either side's", () => {
