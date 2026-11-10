@@ -42,26 +42,31 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 	const colors = useMemo(() => ({ scheme: scheme === "light" ? "light" as const : "dark" as const, background: t.bgColumn }), [scheme, t.bgColumn]);
 	const drawable = !streaming && isRenderableDiagram(code);
 	const key = diagramCacheKey(code, colors.scheme);
-	const [runtime, setRuntime] = useState<string>();
 	const [failed, setFailed] = useState(false);
 	const [height, setHeight] = useState<number>();
 	const [showCode, setShowCode] = useState(false);
-	// A frame whose web process died mounts afresh, from the cached SVG once there is one.
+	// A frame whose web process died mounts afresh, from the cached SVG.
 	const page = useDiagramRemount();
-	// Read once per source, theme and mount: storing this mount's own SVG must not reload its frame.
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	const cached = useMemo(() => drawable ? cachedDiagram(key) : undefined, [drawable, key, page.mount]);
+	// The page in the frame. A first draw loads the engine page; once it posts
+	// its SVG, the frame switches (still hidden) to that SVG alone, so the
+	// 3.5 MB engine is not kept for as long as the row stays mounted. The
+	// engine is never held apart from the page built from it.
+	const [doc, setDoc] = useState<{ key: string; html: string; engine: boolean }>();
 	useEffect(() => {
-		if (!drawable || cached || runtime) return;
+		if (!drawable) return;
+		const svg = cachedDiagram(key);
+		if (svg) {
+			setDoc({ key, html: mermaidSvgPageHtml({ svg, colors, inline: true }), engine: false });
+			return;
+		}
 		let live = true;
-		loadMermaidRuntime().then((source) => { if (live) setRuntime(source); }, () => { if (live) setFailed(true); });
+		loadMermaidRuntime().then(
+			(runtime) => { if (live) setDoc({ key, html: mermaidPageHtml({ runtime, code, colors, inline: true }), engine: true }); },
+			() => { if (live) setFailed(true); },
+		);
 		return () => { live = false; };
-	}, [cached, drawable, runtime]);
-	const html = useMemo(() => {
-		if (!drawable) return undefined;
-		if (cached) return mermaidSvgPageHtml({ svg: cached, colors, inline: true });
-		return runtime ? mermaidPageHtml({ runtime, code, colors, inline: true }) : undefined;
-	}, [cached, code, colors, drawable, runtime]);
+	}, [code, colors, drawable, key, page.mount]);
+	const current = doc?.key === key ? doc : undefined;
 	// A new source or theme lays out again.
 	useEffect(() => {
 		setFailed(false);
@@ -80,7 +85,14 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 		const message = parseDiagramMessage(event.nativeEvent.data);
 		if (message?.type === "failed") setFailed(true);
 		else if (message?.type === "rendered") {
-			if (message.svg) storeDiagram(key, message.svg);
+			if (current?.engine) {
+				// Drawn: keep the SVG, and let the engine page go before the frame shows.
+				if (message.svg) {
+					storeDiagram(key, message.svg);
+					setDoc({ key, html: mermaidSvgPageHtml({ svg: message.svg, colors, inline: true }), engine: false });
+				}
+				return;
+			}
 			if (message.height) setHeight(message.height);
 		}
 	};
@@ -110,10 +122,10 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 				<View style={styles.card}>
 					<View style={styles.header}><Text style={styles.label}>mermaid</Text></View>
 					<View style={{ height: height ?? PLACEHOLDER_HEIGHT }}>
-						{html ? (
+						{current ? (
 							<WebView
 								key={page.mount}
-								source={{ html }}
+								source={{ html: current.html }}
 								originWhitelist={["*"]}
 								onShouldStartLoadWithRequest={stayInDiagramPage}
 								onMessage={onMessage}
