@@ -6,8 +6,6 @@ import type { SessionArtifact } from "../types/workspace";
 export type TurnArtifact = {
 	artifact: Deliverable<SessionArtifact>;
 	status: DiffStatus;
-	/** The path the turn diff reported, which opens the file like a Files row does. */
-	diffPath: string;
 };
 
 /**
@@ -66,7 +64,7 @@ export function splitTurnArtifacts(
 		// Several files of one bundle make one card.
 		if (seen.has(artifact.path)) continue;
 		seen.add(artifact.path);
-		touched.push({ artifact, status: file.status, diffPath: resolve(file.path) });
+		touched.push({ artifact, status: file.status });
 	}
 	return { artifacts: touched, files };
 }

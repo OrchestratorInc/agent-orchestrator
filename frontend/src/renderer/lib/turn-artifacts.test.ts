@@ -76,7 +76,7 @@ describe("splitTurnArtifacts", () => {
 			[artifact("report.md")],
 			(path) => `${ROOT}/${path}`,
 		);
-		expect(split.artifacts[0]?.diffPath).toBe(`${ROOT}/report.md`);
+		expect(split.artifacts[0]?.artifact.path).toBe("report.md");
 		expect(split.files).toEqual([]);
 	});
 

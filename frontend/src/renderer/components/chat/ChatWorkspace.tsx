@@ -566,6 +566,8 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
@@ -835,6 +837,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
@@ -2111,6 +2114,7 @@ function ChatWorkspaceContent({
 									onRollback={rollbackTarget}
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
+									onOpenArtifact={onOpenArtifact}
 									retryControl={retryControl}
 									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
@@ -2938,6 +2942,7 @@ export function Timeline({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	retryControl,
 	composerRecoveryTurnId,
 	onEditHumanMessage,
@@ -2980,6 +2985,8 @@ export function Timeline({
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	retryControl?: ChatRetryControl;
 	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
@@ -3441,6 +3448,7 @@ export function Timeline({
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
 	const openFile = useStableCallback(onOpenFile);
+	const openArtifact = useStableCallback(onOpenArtifact);
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const apiBaseUrl = remoteHost ? assetBaseUrl ?? null : assetBaseUrl ?? localBaseUrl;
@@ -4960,6 +4968,7 @@ export function Timeline({
 									onRollback={rollback}
 									onOpenFiles={onOpenFiles ? openFiles : undefined}
 									onOpenFile={onOpenFile ? openFile : undefined}
+									onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
@@ -5250,6 +5259,7 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onEditHumanMessage,
 	messageEdit,
 	onStartMessageEdit,
@@ -5287,6 +5297,8 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -5627,6 +5639,7 @@ const TurnGroup = memo(function TurnGroup({
 					items={group.items}
 					onReview={onOpenFiles}
 					onOpenFile={onOpenFile}
+					onOpenArtifact={onOpenArtifact}
 				/>
 			) : null}
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}

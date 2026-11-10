@@ -617,25 +617,27 @@ describe("TurnResults", () => {
 		],
 	};
 
-	function renderResults(onOpenFile = vi.fn()) {
+	function renderResults(onOpenArtifact = vi.fn(), onOpenFile = vi.fn()) {
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
-					<TurnResults diff={resultsDiff} onOpenFile={onOpenFile} />
+					<TurnResults diff={resultsDiff} onOpenArtifact={onOpenArtifact} onOpenFile={onOpenFile} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
 		);
-		return onOpenFile;
+		return { onOpenArtifact, onOpenFile };
 	}
 
 	it("shows a created artifact as a card instead of a changed file", async () => {
-		const onOpenFile = renderResults();
+		const { onOpenArtifact, onOpenFile } = renderResults();
 		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
 		expect(screen.getByText("Created")).toBeInTheDocument();
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
 		expect(screen.getByText("a.ts")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
-		expect(onOpenFile).toHaveBeenCalledWith(`${root}/guide.md`);
+		// By artifact path, never through the workspace-file opener.
+		expect(onOpenArtifact).toHaveBeenCalledWith({ path: "guide.md" });
+		expect(onOpenFile).not.toHaveBeenCalled();
 	});
 
 	it("drops the changed-files card when the turn only made artifacts", () => {

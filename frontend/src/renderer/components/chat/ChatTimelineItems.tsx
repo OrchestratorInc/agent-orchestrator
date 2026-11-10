@@ -3833,11 +3833,14 @@ export function TurnResults({
 	items,
 	onReview,
 	onOpenFile,
+	onOpenArtifact,
 }: {
 	diff: TurnDiff;
 	items?: ConversationItem[];
 	onReview?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens an artifact in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 }) {
 	const source = useChatArtifactFiles();
 	const pathHints = useMemo(() => turnPathHints(items), [items]);
@@ -3849,7 +3852,7 @@ export function TurnResults({
 	return (
 		<>
 			{split.artifacts.length > 0 && source ? (
-				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenFile={onOpenFile} />
+				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenArtifact={onOpenArtifact} />
 			) : null}
 			<TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} />
 		</>
@@ -3861,13 +3864,17 @@ export function TurnArtifacts({
 	artifacts,
 	sessionId,
 	cloud,
-	onOpenFile,
+	onOpenArtifact,
 }: {
 	artifacts: TurnArtifact[];
 	sessionId: string;
 	cloud?: ArtifactRow["cloud"];
-	/** Opens the path in the inspector, which shows an artifact in its Artifacts tab. */
-	onOpenFile?: (path: string, line?: number) => void;
+	/**
+	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
+	 * cloud chat resolves that against workspace files, which never holds the
+	 * artifact, so a card would open the wrong file or none.
+	 */
+	onOpenArtifact?: (target: { path: string }) => void;
 }) {
 	return (
 		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
@@ -3875,7 +3882,7 @@ export function TurnArtifacts({
 				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
 			</span>
 			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
-				{artifacts.map(({ artifact, status, diffPath }) => {
+				{artifacts.map(({ artifact, status }) => {
 					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
 					const verb = fileChangeVerb(status);
 					const body = (
@@ -3892,11 +3899,11 @@ export function TurnArtifacts({
 					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
 					return (
 						<li key={artifact.path} className="min-w-0">
-							{onOpenFile ? (
+							{onOpenArtifact ? (
 								<Pressable
 									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
 									className={tileClass}
-									onClick={() => onOpenFile(diffPath)}
+									onClick={() => onOpenArtifact({ path: artifact.path })}
 									title={artifact.path}
 								>
 									{body}
