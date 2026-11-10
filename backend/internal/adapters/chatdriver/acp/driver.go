@@ -805,7 +805,9 @@ func (d *Driver) connect(
 	select {
 	case <-time.After(startupRetryDelay):
 	case <-ctx.Done():
-		return nil, acpsdk.InitializeResponse{}, nil, err
+		// The caller classifies by its context: a retry wait cut short by the
+		// spawn's deadline is a timeout, not the agent's exit.
+		return nil, acpsdk.InitializeResponse{}, nil, errors.Join(ctx.Err(), err)
 	}
 	return reopen("initialize_retry")
 }

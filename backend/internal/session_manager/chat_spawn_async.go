@@ -386,6 +386,8 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 
 // failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
+	// ctx is the start's own budget: a stage it killed is a timeout.
+	cause = RelabelSpawnTimeout(cause, ctx)
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()

@@ -38,6 +38,7 @@ type timeoutProbeSessionService struct {
 	spawnSetup    time.Duration
 	spawnRuns     time.Duration
 	spawnLive     chan bool
+	spawnBudget   chan time.Duration
 	resumeBudget  chan time.Duration
 	resumeSetup   time.Duration
 }
@@ -45,6 +46,13 @@ type timeoutProbeSessionService struct {
 // Spawn extends the request's budget by spawnSetup (none when negative), runs
 // past the ordinary budget, and reports whether its context was still live.
 func (s *timeoutProbeSessionService) Spawn(ctx context.Context, _ ports.SpawnConfig) (domain.Session, int, int, error) {
+	if s.spawnBudget != nil {
+		// A spawn with no Setup steps still extends: the base budget is then its whole budget.
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 0)
+		defer cancel()
+		s.spawnBudget <- remainingRequestBudget(ctx)
+		return domain.Session{}, 0, 0, errors.New("probe only")
+	}
 	if s.spawnSetup >= 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = ports.ExtendSpawnRequestBudget(ctx, s.spawnSetup)
@@ -275,6 +283,9 @@ func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
 // request keeps the ordinary budget until the spawn extends it.
 func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	const configuredTimeout = 200 * time.Millisecond
+	previous := setupRequestBudget
+	setupRequestBudget = configuredTimeout
+	t.Cleanup(func() { setupRequestBudget = previous })
 	for _, tc := range []struct {
 		name  string
 		setup time.Duration
@@ -299,6 +310,40 @@ func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 				t.Fatalf("the route never reached Spawn: status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+// A cold spawn fetches, creates a worktree and starts the agent inside one
+// request: setup routes start from a 120s budget, every other route keeps the
+// configured REST timeout.
+func TestSetupRoutesStartFromTheSpawnBudget(t *testing.T) {
+	svc := &timeoutProbeSessionService{spawnBudget: make(chan time.Duration, 1), sendBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: config.DefaultRequestTimeout}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
+	for _, path := range []string{"/api/v1/sessions"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"projectId":"p1","kind":"worker","harness":"claude-code"}`))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.spawnBudget:
+			if budget <= 110*time.Second || budget > 120*time.Second {
+				t.Fatalf("%s budget = %s, want about 120s", path, budget)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s never reached Spawn: status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/send", bytes.NewBufferString(`{"message":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	select {
+	case budget := <-svc.sendBudget:
+		if budget > config.DefaultRequestTimeout {
+			t.Fatalf("send budget = %s, want at most the REST timeout %s", budget, config.DefaultRequestTimeout)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("send never reached the service: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

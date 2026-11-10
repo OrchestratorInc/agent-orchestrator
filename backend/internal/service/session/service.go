@@ -496,6 +496,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
 	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
+	err = sessionmanager.RelabelSpawnTimeout(err, ctx)
 	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
 		if acc.deferred {
@@ -2087,6 +2088,12 @@ func mapSessionError(err error) error {
 func toSpawnAPIError(err error) error {
 	if err == nil {
 		return nil
+	}
+	// A stage killed by the spawn's expired budget is a timeout, whatever the
+	// stage returned (sessionmanager.RelabelSpawnTimeout).
+	var timedOut *sessionmanager.SpawnTimeoutError
+	if errors.As(err, &timedOut) {
+		return apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out before the agent could start", nil)
 	}
 	var already *apierr.Error
 	if errors.As(err, &already) {
