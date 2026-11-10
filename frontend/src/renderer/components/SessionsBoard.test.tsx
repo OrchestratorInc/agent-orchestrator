@@ -149,10 +149,12 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	);
 }
 
-/** Opens the board's archive modal. */
+/** Opens the board's archive modal; its cards mount the frame after it opens. */
 async function expandArchive() {
 	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
-	return screen.findByRole("dialog", { name: "Archived sessions" });
+	const dialog = await screen.findByRole("dialog", { name: "Archived sessions" });
+	await within(dialog).findAllByTestId("session-archive-card");
+	return dialog;
 }
 
 beforeEach(() => {

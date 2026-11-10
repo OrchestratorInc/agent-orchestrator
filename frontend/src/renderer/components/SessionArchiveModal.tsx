@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type SyntheticEvent, type UIEvent } from "react";
+import { memo, startTransition, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type SyntheticEvent, type UIEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
@@ -8,7 +8,6 @@ import { agentLabel } from "../lib/agent-options";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
-import { cn } from "../lib/utils";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
@@ -72,11 +71,14 @@ export function SessionArchiveModal({
 	const restoreSessionById = useRestoreSession();
 	const [query, setQuery] = useState("");
 	const deferredQuery = useDeferredValue(query);
-	const [selected, setSelected] = useState("");
 	// The pointer's hover is the card's own CSS, as on the board. Selection is
 	// only drawn while the arrow keys move it, and clears once the pointer moves.
+	// cmdk keeps the selection itself: tracking it here re-rendered every card
+	// each time the pointer crossed into another one.
 	const [keyboardSelecting, setKeyboardSelecting] = useState(false);
 	const [limit, setLimit] = useState(PAGE_SIZE);
+	// Cards mount the frame after the modal opens, so they never hold up its entrance.
+	const [cardsReady, setCardsReady] = useState(false);
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
 	const [restoreUnavailableSession, setRestoreUnavailableSession] = useState<WorkspaceSession | undefined>();
@@ -91,11 +93,17 @@ export function SessionArchiveModal({
 		setWasOpen(open);
 		if (open) {
 			setQuery("");
-			setSelected("");
 			setLimit(PAGE_SIZE);
 			setKeyboardSelecting(false);
+			setCardsReady(false);
 		}
 	}
+
+	useEffect(() => {
+		if (!open) return;
+		const frame = requestAnimationFrame(() => startTransition(() => setCardsReady(true)));
+		return () => cancelAnimationFrame(frame);
+	}, [open]);
 
 	useEffect(() => {
 		setRestoringSessionId(undefined);
@@ -119,16 +127,27 @@ export function SessionArchiveModal({
 		if (tokens.length === 0) return sessions;
 		return index.filter((entry) => tokens.every((token) => entry.text.includes(token))).map((entry) => entry.session);
 	}, [deferredQuery, index, sessions]);
-	const shown = results.length > limit ? results.slice(0, limit) : results;
-	// cmdk highlights the first row until the reader moves, and again after a
-	// filter drops the selected one.
-	const selectedSession = shown.find((session) => session.id === selected) ?? shown[0];
+	const shown = useMemo(
+		() => (!cardsReady ? [] : results.length > limit ? results.slice(0, limit) : results),
+		[cardsReady, limit, results],
+	);
+	const shownRef = useRef(shown);
+	shownRef.current = shown;
 	const restoreAvailable = connected && restoringSessionId === undefined;
 	const canDelete = (session: WorkspaceSession) =>
 		// The control plane owns a cloud session's record; this daemon cannot delete it.
 		!session.cloud && restoringSessionId !== session.id;
 
-	const showMore = () => setLimit((current) => (current < results.length ? current + PAGE_SIZE : current));
+	// One page per render: a burst of scroll events must not mount several.
+	const growingRef = useRef(false);
+	useEffect(() => {
+		growingRef.current = false;
+	}, [limit, results]);
+	const showMore = () => {
+		if (growingRef.current || limit >= results.length) return;
+		growingRef.current = true;
+		startTransition(() => setLimit((current) => current + PAGE_SIZE));
+	};
 
 	const openSession = (session: WorkspaceSession) => {
 		onOpenChange(false);
@@ -164,11 +183,26 @@ export function SessionArchiveModal({
 		}
 	};
 
+	// Cells get one stable set of callbacks that always reach the latest state,
+	// so a card re-renders only when its own data changes.
+	const actionsRef = useRef({ openSession, restore, requestDelete: setDeleteTarget });
+	actionsRef.current = { openSession, restore, requestDelete: setDeleteTarget };
+	const actions = useMemo<CardActions>(() => ({
+		open: (session) => actionsRef.current.openSession(session),
+		restore: (session) => void actionsRef.current.restore(session),
+		requestDelete: (session) => actionsRef.current.requestDelete(session),
+	}), []);
+
 	const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		if (["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) setKeyboardSelecting(true);
-		if (event.nativeEvent.isComposing || !selectedSession) return;
+		if (event.nativeEvent.isComposing) return;
 		const mod = isMac ? event.metaKey : event.ctrlKey;
-		if (!mod) return;
+		if (!mod || (event.key !== "Enter" && event.key !== "Backspace")) return;
+		// cmdk owns the selection; ask the list which card it has.
+		const selectedId = event.currentTarget.closest("[cmdk-root]")
+			?.querySelector("[cmdk-item][aria-selected='true']")?.getAttribute("data-value");
+		const selectedSession = shown.find((session) => session.id === selectedId) ?? shown[0];
+		if (!selectedSession) return;
 		if (event.key === "Enter") {
 			event.preventDefault();
 			event.stopPropagation();
@@ -196,12 +230,11 @@ export function SessionArchiveModal({
 				className="w-[min(1200px,calc(100vw-4rem))]!"
 				commandProps={{
 					shouldFilter: false,
-					value: selected,
 					onValueChange: (value) => {
-						setSelected(value);
 						// Arrowing onto the last mounted rows mounts the next page.
-						const position = shown.findIndex((session) => session.id === value);
-						if (position >= shown.length - 3) showMore();
+						const current = shownRef.current;
+						const position = current.findIndex((session) => session.id === value);
+						if (position >= current.length - 3) showMore();
 					},
 					label: t("shell.archivedSessions"),
 				}}
@@ -212,8 +245,6 @@ export function SessionArchiveModal({
 					onValueChange={(next) => {
 						setQuery(next);
 						setLimit(PAGE_SIZE);
-						// A new query selects its own first row.
-						setSelected("");
 					}}
 					onKeyDown={onInputKeyDown}
 					placeholder={t("archiveModal.searchPlaceholder")}
@@ -223,56 +254,34 @@ export function SessionArchiveModal({
 					onPointerMove={() => {
 						if (keyboardSelecting) setKeyboardSelecting(false);
 					}}
-					className="max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
+					data-keyboard={keyboardSelecting || undefined}
+					// The arrow-key selection looks like the board card's own hover.
+					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
-					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
-						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
-					</CommandEmpty>
+					{cardsReady ? (
+						<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
+							{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
+						</CommandEmpty>
+					) : null}
 					{shown.map((session) => (
-						<CommandPrimitive.Item
+						<ArchiveCardCell
 							key={session.id}
-							value={session.id}
-							onSelect={() => openSession(session)}
-							data-testid="session-archive-card"
-							// The arrow-key selection looks like the board card's own hover.
-							// Every row is as tall as the tallest card: each card fills its
-							// cell, with its time line pinned to the bottom.
-							className={cn(
-								"rounded-lg outline-none [&>div>div]:h-full [&_[data-testid=board-session-card]]:flex [&_[data-testid=board-session-card]]:h-full [&_[data-testid=board-session-card]]:flex-col [&_[data-testid=board-session-card]>div.grid]:mt-auto",
-								keyboardSelecting && "data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover",
-							)}
-						>
-							{/* The card opens itself on click, so clicks stop here; keys from
-							    its controls and from its menus and dialogs (portals bubble
-							    through React) must not reach the list either. */}
-							<div className="h-full" onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
-								<ArchivedSessionCardAdapter
-									hidePullRequestProgress
-									hideTerminatedStatus
-									isRestoreDisabled={!restoreAvailable}
-									isRestoring={restoringSessionId === session.id}
-									onDelete={canDelete(session) ? () => setDeleteTarget(session) : undefined}
-									onOpen={() => openSession(session)}
-									restoreAction={(event) => {
-										event.stopPropagation();
-										void restore(session);
-									}}
-									restoreError={restoreErrors[session.id]}
-									session={session}
-								/>
-							</div>
-						</CommandPrimitive.Item>
+							actions={actions}
+							deletable={canDelete(session)}
+							restoreDisabled={!restoreAvailable}
+							restoreError={restoreErrors[session.id]}
+							restoring={restoringSessionId === session.id}
+							session={session}
+						/>
 					))}
 				</CommandList>
 				<CommandFooter aria-hidden="true">
 					<FooterHint keys={["↑", "↓"]} label={t("command.navigate")} />
-					{selectedSession ? <FooterHint keys={["Enter"]} label={t("command.open")} /> : null}
-					{selectedSession && restoreAvailable ? (
+					{shown.length > 0 ? <FooterHint keys={["Enter"]} label={t("command.open")} /> : null}
+					{shown.length > 0 && restoreAvailable ? (
 						<FooterHint keys={[MOD_KEY, "Enter"]} label={t("archiveModal.restore")} />
 					) : null}
-					{selectedSession && canDelete(selectedSession) ? (
-						<FooterHint keys={[MOD_KEY, "⌫"]} label={t("archiveModal.delete")} />
-					) : null}
+					{shown.length > 0 ? <FooterHint keys={[MOD_KEY, "⌫"]} label={t("archiveModal.delete")} /> : null}
 					<FooterHint keys={["Esc"]} label={t("command.close")} />
 				</CommandFooter>
 			</CommandDialog>
@@ -303,6 +312,63 @@ export function SessionArchiveModal({
 		</>
 	);
 }
+
+type CardActions = {
+	open: (session: WorkspaceSession) => void;
+	restore: (session: WorkspaceSession) => void;
+	requestDelete: (session: WorkspaceSession) => void;
+};
+
+/**
+ * One card in the grid. Memoized on its own data, so the pointer moving,
+ * typing, workspace polls and other cards' restores leave it alone.
+ */
+const ArchiveCardCell = memo(function ArchiveCardCell({
+	actions,
+	deletable,
+	restoreDisabled,
+	restoreError,
+	restoring,
+	session,
+}: {
+	actions: CardActions;
+	deletable: boolean;
+	restoreDisabled: boolean;
+	restoreError?: string;
+	restoring: boolean;
+	session: WorkspaceSession;
+}) {
+	return (
+		<CommandPrimitive.Item
+			value={session.id}
+			onSelect={() => actions.open(session)}
+			data-testid="session-archive-card"
+			// Every row is as tall as the tallest card: each card fills its cell,
+			// with its time line pinned to the bottom.
+			className="rounded-lg outline-none [&>div>div]:h-full [&_[data-testid=board-session-card]]:flex [&_[data-testid=board-session-card]]:h-full [&_[data-testid=board-session-card]]:flex-col [&_[data-testid=board-session-card]>div.grid]:mt-auto"
+		>
+			{/* The card opens itself on click, so clicks stop here; keys from its
+			    controls and from its menus and dialogs (portals bubble through
+			    React) must not reach the list either. */}
+			<div className="h-full" onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
+				<ArchivedSessionCardAdapter
+					hidePullRequestProgress
+					hideTerminatedStatus
+					isRestoreDisabled={restoreDisabled}
+					isRestoring={restoring}
+					onDelete={deletable ? () => actions.requestDelete(session) : undefined}
+					onOpen={() => actions.open(session)}
+					restoreAction={(event) => {
+						event.stopPropagation();
+						actions.restore(session);
+					}}
+					restoreError={restoreError}
+					session={session}
+				/>
+			</div>
+		</CommandPrimitive.Item>
+	);
+});
 
 function FooterHint({ keys, label }: { keys: readonly string[]; label: string }) {
 	return (
