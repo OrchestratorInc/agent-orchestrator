@@ -8,7 +8,10 @@ type TerminalTabFrameProps = {
 	/** Optional: without one the label starts at the tab's edge. */
 	icon?: ReactNode;
 	label: string;
-	/** Shown on hover or focus: the tab's ⋮ menu, or a running interface switch's status on the session's tab. It takes the icon's slot, or the tab's right edge when there is no icon. */
+	/**
+	 * Shown after the title on hover or focus: the tab's ⋮ menu, on every tab,
+	 * or a running interface switch's status on the session's tab.
+	 */
 	action?: ReactNode;
 	/** Closes the tab; a middle-click runs it, as the menu's Close tab does. */
 	onClose?: () => void;
@@ -24,7 +27,7 @@ type TerminalTabFrameProps = {
 	trailing?: ReactNode;
 };
 
-/** The control in a tab's icon slot, shared so every tab's ⋮ button matches. */
+/** The control in a tab's trailing slot, shared so every tab's ⋮ button matches. */
 export const terminalTabActionClassName =
 	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
 
@@ -35,7 +38,7 @@ export const terminalTabRenameInputClassName =
 
 // One chrome for every tab in the session pane strip: the session itself,
 // reviewer, shells and files. Members only supply an icon, a label and the
-// control that replaces the icon on hover, so they cannot drift apart.
+// control shown after the label on hover, so they cannot drift apart.
 export function TerminalTabFrame({
 	active,
 	wide = false,
@@ -75,7 +78,7 @@ export function TerminalTabFrame({
 			} : undefined}
 		>
 			{editingContent ? (
-				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-control leading-none">
+				<span className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2 pr-1.5 text-control leading-none">
 					{icon ? <span className="grid size-icon-base shrink-0 place-items-center">{icon}</span> : null}
 					<span className="relative flex min-w-0 flex-1">
 						<span aria-hidden="true" className="invisible min-w-0 truncate whitespace-pre">{editingValue || "\u200b"}</span>
@@ -86,46 +89,31 @@ export function TerminalTabFrame({
 			) : (
 				<Pressable
 					ref={buttonRef}
-					className={cn(
-						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!",
-						// Without an icon the action takes the tab's right edge; keep the label clear of it.
-						!icon && action && "pr-7",
-					)}
+					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 pl-2 pr-1.5 text-control leading-none in-data-dragging:cursor-grabbing!"
 					{...buttonProps}
 				>
-					{/* The open-menu rule reaches the icon through child combinators. The
-					    group-has-[[data-state=open]] form (`:has([attr]) *`) made Chromium
-					    restyle the whole document on every DOM change in the app. */}
-					{icon ? (
-						<span
-							className={cn(
-								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
-							)}
-						>
-							{icon}
-						</span>
-					) : null}
+					{icon ? <span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{icon}</span> : null}
 					<span className="truncate">{label}</span>
 					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
-			{action ? (
-				<span
-					className={cn(
-						"absolute top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
-						icon ? "left-2" : "right-2",
-						// Clickable only while revealed: a tap or a click on a faded slot
-						// selects the tab (the icon lets it through) instead of closing it.
-						actionPinned
-							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
-					)}
-					data-terminal-tab-action
-				>
-					{action}
-				</span>
-			) : null}
+			{/* The trailing slot, the same on every tab and always reserved, so a
+			    control appearing on hover never moves the title. */}
+			<span
+				className={cn(
+					"mr-2 grid size-icon-base shrink-0 place-items-center",
+					// Clickable only while revealed: a tap or a click on a faded slot
+					// selects the tab (the frame forwards it) instead of opening the menu.
+					!action
+						? "pointer-events-none"
+						: !actionPinned
+						? "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100"
+						: undefined,
+				)}
+				data-terminal-tab-action
+			>
+				{action}
+			</span>
 			{active ? (
 				<span
 					aria-hidden="true"

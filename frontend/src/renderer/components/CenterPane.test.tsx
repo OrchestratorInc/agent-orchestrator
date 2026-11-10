@@ -460,7 +460,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
 		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch", "max-w-shell-tab-max");
-		expect(reviewerTab).toHaveClass("h-full", "px-2", "cursor-pointer");
+		expect(reviewerTab).toHaveClass("h-full", "pl-2", "cursor-pointer");
 
 		fireEvent.click(reviewerTab);
 		expect(onSelectReviewerTerminal).toHaveBeenCalledWith({ handleId: "review-sess-1", harness: "codex" });
@@ -534,7 +534,8 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "left-2", "top-1/2");
+		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("mr-2", "shrink-0");
+		expect(screen.getByTestId("session-tab-action").parentElement?.previousElementSibling).toBe(screen.getByRole("tab", { name: /^do the thing/ }));
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1");
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");

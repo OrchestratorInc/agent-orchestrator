@@ -723,7 +723,7 @@ type SessionPaneTabProps = {
 	providerIcon?: boolean;
 	icon?: ReactNode;
 	title?: string;
-	/** The control in the tab's icon slot: its ⋮ menu, or a running interface switch's status. */
+	/** The control in the tab's trailing slot: its ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
 	/** Keep the action showing at rest, while an interface switch is in flight. */
 	tabActionPinned?: boolean;

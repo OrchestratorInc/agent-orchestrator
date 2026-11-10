@@ -116,24 +116,21 @@ describe("ShellTerminalTab rename", () => {
 	it("makes the full connected tile the semantic selection button", () => {
 		const { onSelect } = renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		expect(tab).toHaveClass("h-full", "min-w-0", "px-2", "cursor-pointer");
+		expect(tab).toHaveClass("h-full", "min-w-0", "pl-2", "cursor-pointer");
 		fireEvent.click(tab);
 		expect(onSelect).toHaveBeenCalledOnce();
 	});
 
-	it("reveals the tab's ⋮ menu in the terminal glyph's slot on hover", () => {
+	it("reveals the tab's ⋮ menu after the title on hover, leaving the glyph alone", () => {
 		renderTab({ appearance: "connected", isActive: true });
 
 		const menuButton = screen.getByRole("button", { name: "Tab actions" });
-		expect(menuButton.parentElement).toHaveClass(
-			"absolute",
-			"left-2",
-			"opacity-0",
-			"group-hover:opacity-100",
-		);
+		expect(menuButton.parentElement).toHaveClass("mr-2", "shrink-0", "opacity-0", "group-hover:opacity-100");
+		expect(menuButton.parentElement).not.toHaveClass("absolute");
+		expect(screen.getByRole("tab", { name: "ao" }).nextElementSibling).toBe(menuButton.parentElement);
 		expect(menuButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
 		expect(menuButton).not.toHaveClass("w-control-sm");
-		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).toHaveClass("group-hover:opacity-0");
+		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).not.toHaveClass("group-hover:opacity-0");
 		expect(screen.getByRole("tab", { name: "ao" })).toHaveAttribute("aria-selected", "true");
 	});
 

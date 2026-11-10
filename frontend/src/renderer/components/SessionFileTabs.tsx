@@ -62,9 +62,9 @@ export function SessionFileTab({
 	path: string;
 }) {
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The tab's ⋮ menu takes the file icon's slot on hover, as on every tab. A
-	// dirty file keeps an always-visible dot in that slot, which swaps to ⋮ on
-	// hover. Outside the session strip (no tab menu) the slot holds nothing.
+	// The tab's ⋮ menu shows after the name on hover, as on every tab. A dirty
+	// file keeps an always-visible dot in that slot, which swaps to ⋮ on hover.
+	// Outside the session strip (no tab menu) the slot holds nothing.
 	const menuAction = (
 		<TabMenuButton>
 			{dirty ? (

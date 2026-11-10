@@ -376,15 +376,16 @@
 	--size-content-max: 320px;
 	/* Lets flex children shrink for truncation without hardcoding zero-width utilities in components. */
 	--size-flex-min: 0px;
-	/* Keeps terminal tabs usable after title truncation while leaving room for several tabs. */
-	--size-shell-tab-min: 64px;
+	/* Keeps every session strip tab wide enough to read a short title beside its icon and ⋮ slot. */
+	--size-shell-tab-min: 120px;
 	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
 	--size-session-pane-tab-max: 112px;
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
-	--size-shell-tab-max: 140px;
+	/* Includes the 20px trailing ⋮ slot every tab reserves. */
+	--size-shell-tab-max: 160px;
 	/* Agent names and their status glyph need more room in Developer Mode. */
-	--size-agent-shell-tab-max: 192px;
+	--size-agent-shell-tab-max: 212px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
