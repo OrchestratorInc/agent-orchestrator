@@ -145,6 +145,26 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
+	it("offers Open usage only in Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
+		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	});
+
+	it("offers Open archive for the current project only when it has archived sessions", () => {
+		expect(byId(buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" })).has("current-open-archive")).toBe(false);
+
+		const withArchive = workspaces();
+		withArchive[0]!.sessions.push(
+			session({ id: "w-ended", status: "terminated" }),
+			session({ id: "w-merged-ended", status: "merged", isTerminated: true }),
+			session({ id: "orch-ended", kind: "orchestrator", status: "terminated" }),
+		);
+		const archive = byId(buildCommands({ workspaces: withArchive, currentProjectId: "proj-1" })).get("current-open-archive");
+		expect(archive?.group).toBe("current");
+		expect(archive?.subtitle).toBe("2 archived sessions");
+		expect(archive?.action).toEqual({ kind: "open-archive", projectId: "proj-1" });
+	});
+
 	it("disables New task with a reason when the route project is absent from workspaces", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "missing", currentSessionId: undefined });
 		const newTask = byId(items).get("current-new-task");

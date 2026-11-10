@@ -259,6 +259,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
@@ -3418,6 +3419,13 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
+setPasswordCipher(() => protectedStorageAvailable() ? {
+	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
+	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
+} : null);
+void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((error: unknown) => {
+	console.warn("[remotes] could not encrypt saved host passwords", error);
+});
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
@@ -3425,6 +3433,14 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	cloudRequest: async (method, path, { body, signal } = {}) => {
+		const baseUrl = await cloudControlPlaneUrl();
+		if (!baseUrl) throw new ExpectedIpcError("No Orchestrator Cloud control plane is configured.");
+		return cloudCpProxy.request({
+			baseUrl, path, method,
+			...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+		}, { hostTokens: true, signal });
+	},
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
 		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
 		: null),
@@ -4007,7 +4023,7 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
+const cloudCpProxy = installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 

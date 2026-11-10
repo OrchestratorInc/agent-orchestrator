@@ -70,7 +70,13 @@ type fakeStore struct {
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
 	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
-	sharedLog *[]string
+	sharedLog    *[]string
+	loginDemands []string
+}
+
+func (s *fakeStore) RequireSessionLogin(_ context.Context, id domain.SessionID, reason string, _ time.Time) error {
+	s.loginDemands = append(s.loginDemands, string(id)+": "+reason)
+	return nil
 }
 
 func newFakeStore() *fakeStore {
@@ -486,6 +492,12 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.FirstSignalAt = time.Now()
 	rec.Metadata = preserveCheckpointOnFakeMarkSpawned(rec.Metadata, metadata)
+	if metadata.RuntimeHandleID == "" {
+		rec.Metadata.RuntimeHandleID = l.store.sessions[id].Metadata.RuntimeHandleID
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && metadata.ControllerGeneration != "" {
+		rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = "", ""
+	}
 	l.store.sessions[id] = rec
 	return nil
 }
@@ -6711,7 +6723,10 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: cfg}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
-		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x",
+			NativeTranscriptPath: "/ao/data/pi/sessions/agent-x.jsonl",
+		},
 	}
 	agent := &recordingAgent{}
 	dataDir := t.TempDir()
@@ -6726,6 +6741,9 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	}
 	if !strings.Contains(agent.lastRestore.SystemPrompt, "Use workers for implementation.") {
 		t.Fatalf("restore system prompt missing project rules:\n%s", agent.lastRestore.SystemPrompt)
+	}
+	if got := agent.lastRestore.Session.Metadata[ports.MetadataKeyNativeTranscriptPath]; got != "/ao/data/pi/sessions/agent-x.jsonl" {
+		t.Fatalf("restore transcript path = %q", got)
 	}
 	wantPath := filepath.Join(dataDir, "prompts", "mer-1", "system.md")
 	if agent.lastRestore.SystemPromptFile != wantPath {
@@ -12242,4 +12260,22 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
+}
+
+func (f *fakeStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return f.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
+func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != workspace.WorkspacePath {
+		return false, nil
+	}
+	copied := *next
+	rec.Metadata.ImportSource = &copied
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = workspace.Branch, workspace.WorkspacePath, workspace.WorkspaceRepoPath
+	rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef = workspace.DiffBaseSHA, workspace.DiffBaseRef
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
 }

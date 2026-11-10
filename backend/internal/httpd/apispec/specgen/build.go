@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 
 	jsonschema "github.com/swaggest/jsonschema-go"
 	openapi "github.com/swaggest/openapi-go"
@@ -558,6 +559,20 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersClearNotificationsResponse":       "ClearNotificationsResponse",
 	"ControllersUsageHookMetadata":                "UsageHookMetadata",
 	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
+	"ControllersUsageLimitHistoryRequest":         "UsageLimitHistoryRequest",
+	"ControllersUsagePriceOverride":               "UsagePriceOverride",
+	"ControllersUsagePricesRequest":               "UsagePricesRequest",
+	"ControllersUsagePricesResponse":              "UsagePricesResponse",
+	"ControllersUsageLimitHistoryResponse":        "UsageLimitHistoryResponse",
+	"ControllersUsageLimitWindowsQuery":           "UsageLimitWindowsQuery",
+	"ControllersUsageLimitWindowsResponse":        "UsageLimitWindowsResponse",
+	"DomainUsageLimitLogin":                       "UsageLimitLogin",
+	"DomainUsageLimitSpan":                        "UsageLimitSpan",
+	"DomainUsageLimitPoint":                       "UsageLimitPoint",
+	"ControllersUsageReportQuery":                 "UsageReportQuery",
+	"ControllersUsageReportResponse":              "UsageReportResponse",
+	"ControllersUsageReportRowResponse":           "UsageReportRowResponse",
+	"ControllersUsageReportSessionResponse":       "UsageReportSessionResponse",
 	"ControllersEstimatedCostResponse":            "EstimatedCostResponse",
 	"ControllersCompactSessionUsageResponse":      "CompactSessionUsageResponse",
 	"ControllersListSessionMemoryResponse":        "ListSessionMemoryResponse",
@@ -569,10 +584,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionActivityResponse":          "SessionActivityResponse",
 	"ControllersSessionStepResponse":              "SessionStepResponse",
 	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
-	"ControllersUsageTotalsResponse":              "UsageTotalsResponse",
-	"ControllersUsageModelResponse":               "UsageModelResponse",
-	"ControllersUsageHarnessResponse":             "UsageHarnessResponse",
-	"ControllersSessionUsageResponse":             "SessionUsageResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
@@ -609,8 +620,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSubmitReviewItem":      "SubmitReviewItem",
 	"ControllersSubmitReviewInput":     "SubmitReviewInput",
 	// domain review entities
-	"DomainReviewRun":     "ReviewRun",
-	"ReviewPRReviewState": "PRReviewState",
+	"DomainReviewRun":                  "ReviewRun",
+	"ReviewPRReviewState":              "PRReviewState",
+	"SessionimportCandidate":           "SessionImportCandidate",
+	"SessionimportPreview":             "SessionImportPreview",
+	"SessionimportResult":              "SessionImportResult",
+	"ControllersSessionImportRequest":  "SessionImportRequest",
+	"ControllersSessionImportResponse": "SessionImportResponse",
 	// httpd/controllers: import wire envelopes
 	"ControllersImportStatusResponse": "ImportStatusResponse",
 	"ControllersImportRunResponse":    "ImportRunResponse",
@@ -1113,6 +1129,59 @@ type sessionConversationSnapshotQuery struct {
 func usageOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodGet, path: "/api/v1/usage/report", id: "getUsageReport", tag: "usage",
+			summary:    "Read token and estimated cost usage over a window, by day or hour, for the usage page",
+			pathParams: []any{controllers.UsageReportQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageReportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/usage/limit-history", id: "setUsageLimitHistory", tag: "usage",
+			summary: "Turn keeping limit readings, and reading limits in the background, on or off",
+			reqBody: controllers.UsageLimitHistoryRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitHistoryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/prices", id: "getUsagePrices", tag: "usage",
+			summary: "Read the user's model prices and the catalog models a model can price as",
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsagePricesResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/usage/prices", id: "setUsagePrices", tag: "usage",
+			summary: "Replace the user's model prices and reprice the usage they change",
+			reqBody: controllers.UsagePricesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsagePricesResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/limit-windows", id: "getUsageLimitWindows", tag: "usage",
+			summary:    "Read each login's five-hour and weekly windows from the limit readings AO took",
+			pathParams: []any{controllers.UsageLimitWindowsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitWindowsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/usage/sessions", id: "listCompactSessionUsage", tag: "usage",
 			summary:    "List compact token and estimated cost usage for session cards",
 			pathParams: []any{controllers.ListUsageSessionsQuery{}},
@@ -1137,17 +1206,6 @@ func usageOperations() []operation {
 			summary: "Read the machine's memory-pressure verdict without sampling any process",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MemoryPressureResponse{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/usage/sessions/{sessionId}", id: "getSessionUsage", tag: "usage",
-			summary:    "Get detailed token and estimated cost usage for one session",
-			pathParams: []any{controllers.SessionIDParam{}},
-			resps: []respUnit{
-				{http.StatusOK, controllers.SessionUsageResponse{}},
-				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -2482,6 +2540,9 @@ func mobileDeviceOperations() []operation {
 // the routes ImportController.Register mounts (enforced by the parity test).
 func importOperations() []operation {
 	return []operation{
+		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local agent histories from Git folders and Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+		{method: http.MethodPost, path: "/api/v1/session-import", id: "importSelectedSessions", tag: "import", summary: "Import selected histories as idle AO sessions without starting providers", reqBody: controllers.SessionImportRequest{}, resps: []respUnit{{http.StatusOK, controllers.SessionImportResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
+
 		{
 			method: http.MethodGet, path: "/api/v1/import", id: "getImportStatus", tag: "import",
 			summary: "Check whether a legacy AO install is available to import",

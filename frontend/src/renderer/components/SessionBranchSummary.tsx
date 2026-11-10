@@ -74,8 +74,9 @@ export function SessionBranchSummary({
 	const updatePending = useSessionGitActionStore((state) => state.update);
 	const clearPending = useSessionGitActionStore((state) => state.clear);
 	// Cloud sessions have no local workspace facts; orchestrators coordinate
-	// workers rather than shipping a branch of their own.
-	const showGit = !session.cloud && session.kind !== "orchestrator";
+	// workers rather than shipping a branch of their own. An imported chat has
+	// no branch until it is opened.
+	const showGit = !session.cloud && session.kind !== "orchestrator" && !session.needsResume;
 	// No worktree yet means a guaranteed 404; read it once the start publishes one.
 	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit && sessionWorkspaceReady(session) });
 

@@ -1,5 +1,6 @@
 import { OrchestratorIcon, type AppIcon } from "../components/icons";
 import {
+	Archive,
 	ArrowRight,
 	Bug,
 	Copy,
@@ -8,6 +9,7 @@ import {
 	Folder,
 	FolderPlus,
 	FileText,
+	Gauge,
 	GitPullRequest,
 	House,
 	Keyboard,
@@ -24,10 +26,12 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-new-task": Plus,
 	"current-open-orchestrator": OrchestratorIcon,
 	"current-project-settings": Settings,
+	"current-open-archive": Archive,
 	"current-copy-branch": Copy,
 	"current-search-files": FileSearch,
 	"global-home": House,
 	"global-new-project": FolderPlus,
+	"global-usage": Gauge,
 	"global-settings": Settings,
 	"global-theme": Sun,
 	"global-report-problem": Bug,

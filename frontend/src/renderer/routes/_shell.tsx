@@ -27,6 +27,7 @@ import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
+import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
@@ -85,6 +86,8 @@ import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
+import { watchRemoteUnpins } from "../lib/remote-session-unpins";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
@@ -333,8 +336,13 @@ function ShellLayout() {
 	// What each host showed last stays only for the hosts still saved, and shows
 	// while they connect or are offline.
 	useEffect(() => {
-		if (remoteHostsListed) void syncRemoteCache(queryClient, remoteHostIds);
+		if (!remoteHostsListed) return;
+		void syncRemoteCache(queryClient, remoteHostIds);
+		// Pins removed here for a host that is no longer saved have no row left to hide.
+		useRemoteUnpinStore.getState().keepHosts(remoteHostIds);
 	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	// Pins removed here while a host was unreachable reach it once its list loads.
+	useEffect(() => watchRemoteUnpins(queryClient), [queryClient]);
 	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
@@ -1168,6 +1176,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					body: { enabled: developerMode },
 				});
 				if (error) throw error;
+				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
+					body: { enabled: developerMode },
+				});
+				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
@@ -1494,6 +1506,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<NewTaskNavigator />
 				<GlobalToast />
 				<RestartToUpdateDialog />
+				<SessionImportDialog />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
