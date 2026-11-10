@@ -300,7 +300,9 @@ function useSessionInterfaceTransitionStatusQuery(
 			return data as SessionInterfaceTransitionStatus;
 		},
 		refetchInterval: interfaceTransitionRefetchInterval,
-		retry: 1,
+		// The poll schedule owns retries; a per-fetch retry would double every
+		// attempt the failure budget counts.
+		retry: false,
 	});
 }
 
