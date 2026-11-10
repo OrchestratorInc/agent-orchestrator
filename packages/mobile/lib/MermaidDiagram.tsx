@@ -9,7 +9,7 @@ import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 
 /** Loads in the page's own document; anything else is a link, which opens in the browser. */
-function stayInPage(request: ShouldStartLoadRequest): boolean {
+export function stayInDiagramPage(request: ShouldStartLoadRequest): boolean {
 	if (/^(about|data):/i.test(request.url)) return true;
 	if (/^https?:/i.test(request.url)) void Linking.openURL(request.url).catch(() => {});
 	return false;
@@ -80,7 +80,7 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
 					key={page.mount}
 					source={{ html }}
 					originWhitelist={["*"]}
-					onShouldStartLoadWithRequest={stayInPage}
+					onShouldStartLoadWithRequest={stayInDiagramPage}
 					onMessage={onMessage}
 					onError={() => setFailed(true)}
 					onContentProcessDidTerminate={() => page.gone(() => setFailed(true))}

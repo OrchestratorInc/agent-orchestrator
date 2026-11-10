@@ -124,7 +124,7 @@ function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, 
 		return (
 			<View style={styles.surface}>
 				<View style={[styles.markdown, { width: width / MARKDOWN_SCALE }]}>
-					<ChatMarkdown text={value} resolveImage={resolveImage} />
+					<ChatMarkdown text={value} resolveImage={resolveImage} diagrams={false} />
 				</View>
 			</View>
 		);
