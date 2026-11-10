@@ -3,7 +3,7 @@ import { useId, type ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { cn } from "../lib/utils";
-import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import { ArtifactSnapshotThumbnail } from "./ArtifactSnapshotThumbnail";
 import { Checkbox } from "./ui/checkbox";
 import { Pressable } from "./ui/pressable";
 
@@ -40,7 +40,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	return (
 		<li className={cn("group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10", selection?.selected && "ring-2 ring-primary")}>
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
-				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
+				<ArtifactSnapshotThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
 			</span>
 			<Pressable
 				className={cn("block w-full overflow-hidden rounded-md hover:bg-accent", selection?.disabledReason && "cursor-not-allowed hover:bg-transparent")}

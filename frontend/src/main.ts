@@ -210,6 +210,8 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { createArtifactSnapshotStore, registerArtifactSnapshotIpc } from "./main/artifact-snapshots";
+import { createArtifactSnapshotRenderer } from "./main/artifact-snapshot-window";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
@@ -3584,6 +3586,17 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 	appName: app.getName(),
+});
+registerArtifactSnapshotIpc({
+	ipcMain,
+	store: createArtifactSnapshotStore({
+		directory: path.join(desktopDataDir, "artifact-previews"),
+		render: createArtifactSnapshotRenderer({
+			BrowserWindow,
+			preload: preloadPath(),
+			pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
+		}),
+	}),
 });
 registerCloudArtifactIpc({
 	ipcMain,

@@ -229,6 +229,15 @@ export default defineConfig({
 			),
 		},
 	},
+	// The app, plus the hidden page main renders cached artifact previews in.
+	build: {
+		rollupOptions: {
+			input: {
+				index: fileURLToPath(new URL("./index.html", import.meta.url)),
+				"artifact-snapshot": fileURLToPath(new URL("./artifact-snapshot.html", import.meta.url)),
+			},
+		},
+	},
 	// Dev proxy for VITE_NO_ELECTRON=1 browser preview — forwards /api and /mux
 	// to the daemon so the renderer can be tested against a running daemon from
 	// a plain browser without an Electron shell.

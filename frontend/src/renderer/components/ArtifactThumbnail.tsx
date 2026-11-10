@@ -147,13 +147,17 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (cloud && !cloudPreviewable) || pageAvailable === false || (page && !contentUrl) || (textPreview && !contentUrl)
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
+	// What a snapshot of this card may wait for: the preview drawn, or nothing worth drawing.
+	const previewState = accessPending || imagePending || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined)
+		? "loading"
+		: unavailable ? "unavailable" : "content";
 	const placeholder = (
 		<span className="absolute inset-0 grid place-items-center text-passive" title={t("artifactLink.noPreview")}>
 			<Icon className="size-7" />
 		</span>
 	);
 	return (
-		<span inert ref={container} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
+		<span inert ref={container} data-preview-state={previewState} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
 			{accessPending || imagePending || unavailable ? placeholder : !visible ? null : image ? (
 				<img src={image} alt="" loading="eager" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
 			) : video ? (

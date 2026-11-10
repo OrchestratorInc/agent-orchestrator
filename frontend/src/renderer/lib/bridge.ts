@@ -152,6 +152,10 @@ export const aoBridge: AoBridge =
 			},
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			get: async () => null,
+			request: async () => null,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",

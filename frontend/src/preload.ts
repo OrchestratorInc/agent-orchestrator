@@ -457,6 +457,11 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	artifactSnapshot: {
+		get: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:get", job) as Promise<Uint8Array | null>,
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<Uint8Array | null>,
+	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {
 		remember: (baseUrl: string, linkId: string, url: string) =>
