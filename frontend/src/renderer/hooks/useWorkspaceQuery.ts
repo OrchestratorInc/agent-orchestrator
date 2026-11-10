@@ -4,7 +4,8 @@ import { useUiStore } from "../stores/ui-store";
 import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useTranslation } from "react-i18next";
 import { useStableArray } from "./useStable";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -22,7 +23,7 @@ import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
-import { applyOptimisticSessionKills } from "./optimistic-session-kills";
+import { applyOptimisticSessionKills, optimisticSessionKillsVersion, subscribeOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
 import {
 	type PRState,
@@ -891,16 +892,27 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
 	// Every render of the shell would otherwise hand out new lists, which
 	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
-	// them only when a host's data, a pending unpin or Developer Mode changed:
-	// session titles show the terminal title only in Developer Mode.
+	// them only when something the mapping reads changed: a host's data, a
+	// pending unpin, Developer Mode (terminal titles), the language (the
+	// Scratchpad name) or an in-flight kill (a remote row hides at once).
 	const developerMode = useUiStore((state) => state.developerMode);
-	const dataInputs = useStableArray([hostIds, unpins, developerMode, ...projects.map((query) => query.data), ...sessions.map((query) => query.data)]);
+	const language = useTranslation().i18n.language;
+	const killVersion = useSyncExternalStore(subscribeOptimisticSessionKills, optimisticSessionKillsVersion);
+	const dataInputs = useStableArray([
+		hostIds,
+		unpins,
+		developerMode,
+		language,
+		killVersion,
+		...projects.map((query) => query.data),
+		...sessions.map((query) => query.data),
+	]);
 	const data = useMemo(
 		() => hostIds.flatMap((hostId, index) => projects[index]?.data
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
-		// dataInputs holds every value read here, including Developer Mode,
-		// which the session mapping reads from the store.
+		// dataInputs holds every value read here, including the ones the mapping
+		// reads outside React (Developer Mode, the language, in-flight kills).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[dataInputs],
 	);
