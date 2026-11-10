@@ -87,6 +87,15 @@ func findMessageText(message domain.ConversationMessage) string {
 			source = source[:match[0]]
 		}
 	}
+	// Inline image paths are removed per block by FindUserBlocks, which knows
+	// which ones the bubble draws as image chips and which it shows as code.
+	return source
+}
+
+// stripInlineImages removes staged image paths the bubble draws as image chips.
+// A path that overlaps a [start, end) range in literal is shown as written (in
+// a code span or a link label), so it stays.
+func stripInlineImages(source string, literal [][2]int) string {
 	var visible strings.Builder
 	from := 0
 	for _, match := range findInlineImage.FindAllStringIndex(source, -1) {
@@ -99,8 +108,21 @@ func findMessageText(message domain.ConversationMessage) string {
 				continue
 			}
 		}
+		shown := false
+		for _, span := range literal {
+			if match[0] < span[1] && span[0] < match[1] {
+				shown = true
+				break
+			}
+		}
+		if shown {
+			continue
+		}
 		visible.WriteString(source[from:match[0]])
 		from = match[1]
+	}
+	if from == 0 {
+		return source
 	}
 	visible.WriteString(source[from:])
 	return visible.String()
