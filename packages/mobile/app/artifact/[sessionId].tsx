@@ -12,7 +12,7 @@ import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbn
 import { artifactVisual } from "../../lib/artifactVisual";
 import { headerTitleWidth } from "../../lib/pagerTitle";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { ARTIFACT_PROBE_BYTES, artifactCommentTarget, artifactFormatLabel, artifactLanguage, artifactPageAt, artifactViewerPages, artifactViewKind, canShowArtifactHistory, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, type SessionArtifact } from "../../lib/artifacts";
+import { ARTIFACT_PROBE_BYTES, artifactCommentTarget, artifactFormatLabel, openOnMachineHint, artifactLanguage, artifactPageAt, artifactViewerPages, artifactViewKind, canShowArtifactHistory, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -26,6 +26,7 @@ import { ReviewButton } from "../../lib/files/ReviewButton";
 import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { haptics } from "../../lib/haptics";
+import { findHost } from "../../lib/hosts";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
@@ -440,6 +441,8 @@ function PagerTitle({ title, position, actions }: { title: string; position: str
 }
 
 function ArtifactBody({ config, sessionId, artifact, active, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; active: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+	// Said where the phone gives up on a file (a format it cannot play).
+	const hint = useOpenOnMachineHint();
 	const kind = artifactViewKind(artifact);
 	const url = artifactFileUrl(config, sessionId, artifact.path);
 	if (!url) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
@@ -451,7 +454,7 @@ function ArtifactBody({ config, sessionId, artifact, active, versionOf, onAsk }:
 		case "video":
 		case "audio": {
 			const source = artifactStreamSource(config, sessionId, artifact.path, artifact.updatedAt);
-			return source ? <ArtifactMedia source={source} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} /> : <NoPreview artifact={artifact} />;
+			return source ? <ArtifactMedia source={source} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} /> : <NoPreview artifact={artifact} />;
 		}
 		case "pdf":
 			// Android's WebView has no PDF viewer: the platform's renderer draws it instead.
@@ -475,7 +478,28 @@ function ArtifactBody({ config, sessionId, artifact, active, versionOf, onAsk }:
 
 /** A file the phone has no viewer for, said as the desktop says it, with what the file is. */
 function NoPreview({ artifact }: { artifact: Pick<SessionArtifact, "path" | "size"> }) {
-	return <Unavailable title="Preview not available" message={artifactFormatLabel(artifact)} />;
+	const hint = useOpenOnMachineHint();
+	return <Unavailable title="Preview not available" message={`${artifactFormatLabel(artifact)}\n${hint}`} />;
+}
+
+/**
+ * Where to open a file the phone cannot show: on the machine, from the
+ * desktop app's artifact menu ("Show in Finder"), as its platform names it.
+ */
+function useOpenOnMachineHint(): string {
+	const { currentHostId, hostStates } = useApp();
+	const [host, setHost] = useState<{ id: string; name: string; platform: string }>();
+	useEffect(() => {
+		if (!currentHostId) return;
+		let live = true;
+		findHost(currentHostId).then((found) => {
+			if (live && found) setHost({ id: found.id, name: found.name, platform: found.platform });
+		}, () => {});
+		return () => { live = false; };
+	}, [currentHostId]);
+	const saved = host?.id === currentHostId ? host : undefined;
+	const name = saved?.name || hostStates.find((state) => state.hostId === currentHostId)?.name;
+	return openOnMachineHint(name, saved?.platform);
 }
 
 /**

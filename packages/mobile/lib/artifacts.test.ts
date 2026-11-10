@@ -6,6 +6,7 @@ import {
 	artifactCommentTarget,
 	artifactExtensionLabel,
 	artifactFormatLabel,
+	openOnMachineHint,
 	artifactFilePath,
 	artifactMenuActions,
 	artifactPageAt,
@@ -147,6 +148,23 @@ describe("artifactFormatLabel", () => {
 
 	it("leaves out a size that is not known", () => {
 		expect(artifactFormatLabel({ path: "clip.webm", size: 0 })).toBe("WEBM file");
+	});
+});
+
+describe("openOnMachineHint", () => {
+	it("names the desktop's Show in action for the machine's platform", () => {
+		expect(openOnMachineHint("Studio Mac", "darwin")).toBe("Open it on Studio Mac with “Show\u00a0in\u00a0Finder” in the desktop app.");
+		expect(openOnMachineHint("Build Box", "win32")).toBe("Open it on Build Box with “Show\u00a0in\u00a0File\u00a0Explorer” in the desktop app.");
+		expect(openOnMachineHint("Server", "linux")).toBe("Open it on Server with “Show\u00a0in\u00a0File\u00a0Manager” in the desktop app.");
+	});
+
+	it("points to the artifact menu when the platform is not known", () => {
+		expect(openOnMachineHint("Studio Mac", "")).toBe("Open it on Studio Mac from the artifact's ⋯ menu in the desktop app.");
+	});
+
+	it("says the machine when its name is not known", () => {
+		expect(openOnMachineHint(undefined, "darwin")).toBe("Open it on the machine with “Show\u00a0in\u00a0Finder” in the desktop app.");
+		expect(openOnMachineHint("  ", undefined)).toBe("Open it on the machine from the artifact's ⋯ menu in the desktop app.");
 	});
 });
 

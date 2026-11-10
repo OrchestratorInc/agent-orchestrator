@@ -18,7 +18,7 @@ import { useGlassBarInset } from "./useHeaderOverlap";
  * page load, so its player's own requests were refused. A page swiped off
  * screen pauses.
  */
-export function ArtifactMedia({ source, kind, active, name, label }: {
+export function ArtifactMedia({ source, kind, active, name, label, hint }: {
 	source: { uri: string; headers: Record<string, string> };
 	kind: "video" | "audio";
 	/** Whether this is the page on screen. */
@@ -26,6 +26,8 @@ export function ArtifactMedia({ source, kind, active, name, label }: {
 	name: string;
 	/** What the file is, for when it cannot play: "WEBM file · 4.1 MB". */
 	label: string;
+	/** Where else it can be opened, said with the format when it cannot play here. */
+	hint?: string;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const glassInset = useGlassBarInset();
@@ -39,7 +41,7 @@ export function ArtifactMedia({ source, kind, active, name, label }: {
 		if (!active) player.pause();
 	}, [active, player]);
 	if (status === "error") {
-		return <View style={styles.center}><EmptyState icon={kind === "video" ? { ios: "video.slash", android: "videocam_off" } : { ios: "speaker.slash", android: "music_off" }} title={kind === "video" ? "This video can't play on the phone" : "This audio can't play on the phone"} message={label} /></View>;
+		return <View style={styles.center}><EmptyState icon={kind === "video" ? { ios: "video.slash", android: "videocam_off" } : { ios: "speaker.slash", android: "music_off" }} title={kind === "video" ? "This video can't play on the phone" : "This audio can't play on the phone"} message={hint ? `${label}\n${hint}` : label} /></View>;
 	}
 	if (kind === "audio") return <AudioPlayer player={player} name={name} ready={status === "readyToPlay"} />;
 	return (

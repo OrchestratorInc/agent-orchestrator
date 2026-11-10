@@ -271,6 +271,33 @@ export function artifactFormatLabel(artifact: Pick<SessionArtifact, "path" | "si
 }
 
 /**
+ * The desktop's name for the system file manager on the machine's platform,
+ * as its artifact menu says it ("Show in Finder"). Undefined when the
+ * platform is not known (a machine connected by address only).
+ */
+export function machineFileManagerName(platform: string | undefined): string | undefined {
+	const normalized = platform?.trim().toLowerCase() ?? "";
+	if (normalized === "darwin" || normalized === "macos") return "Finder";
+	if (normalized === "win32" || normalized === "windows") return "File Explorer";
+	if (normalized === "linux") return "File Manager";
+	return undefined;
+}
+
+/**
+ * Where a file the phone cannot show can be opened: on the machine, from the
+ * desktop app's artifact menu, named as that menu names it.
+ */
+export function openOnMachineHint(machineName: string | undefined, platform: string | undefined): string {
+	const machine = machineName?.trim() || "the machine";
+	const fileManager = machineFileManagerName(platform);
+	// The menu item's name stays on one line: non-breaking spaces.
+	const label = `Show in ${fileManager ?? ""}`.replace(/ /g, "\u00a0");
+	return fileManager
+		? `Open it on ${machine} with “${label}” in the desktop app.`
+		: `Open it on ${machine} from the artifact's ⋯ menu in the desktop app.`;
+}
+
+/**
  * How much of a file too large to load as text the viewer reads to tell text
  * from binary, as the desktop decides from the start of the file.
  */
