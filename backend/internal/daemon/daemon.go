@@ -116,6 +116,17 @@ func sentryEnvironment(version string) string {
 	}
 }
 
+// publishedSentryDSN keeps Sentry off for any version that is not a published
+// stable or nightly build (an edge, PR or unversioned copy). The desktop app
+// already withholds the DSN from self-built copies.
+func publishedSentryDSN(dsn, version string) string {
+	switch sentryEnvironment(version) {
+	case "stable", "nightly":
+		return dsn
+	}
+	return ""
+}
+
 // Session Manager asserts the terminal input gate's optional capabilities at
 // runtime: a signature drift compiles but silently turns the send guard's
 // keystroke fence off (#5711).
@@ -264,7 +275,7 @@ func Run(buildVersion string) error {
 	// restart. The policy gate is checked before every capture. An unavailable
 	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
-		DSN:         cfg.Telemetry.SentryDSN,
+		DSN:         publishedSentryDSN(cfg.Telemetry.SentryDSN, cfg.Telemetry.AppVersion),
 		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),
