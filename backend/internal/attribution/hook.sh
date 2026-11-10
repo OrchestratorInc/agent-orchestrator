@@ -35,6 +35,9 @@ original_hook() {
 # replaying reports whether git is replaying existing commits (a rebase or a
 # cherry-pick). Those commits were written before, often by someone else, so
 # they keep the message they had. A revert is a new commit and is credited.
+# While a rebase is stopped (an edit stop, or an --exec step) every commit is
+# skipped, including a new one the agent writes there: telling it apart from a
+# replayed pick needs rebase-merge/done bookkeeping, not worth it for that case.
 replaying() {
 	for name in rebase-merge rebase-apply CHERRY_PICK_HEAD; do
 		path=$(git rev-parse --git-path "$name" 2>/dev/null) || continue
@@ -53,14 +56,16 @@ has_message() {
 	cs=$(git config --get core.commentString 2>/dev/null) ||
 		cs=$(git config --get core.commentChar 2>/dev/null) || cs='#'
 	[ -n "$cs" ] || cs='#'
-	awk -v cs="$cs" '
+	# The comment string goes through the environment: awk -v would treat its
+	# backslashes as escapes.
+	ORCHESTRATOR_CS=$cs awk '
 		function comment(line,   i) {
 			if (cs != "auto") return index(line, cs) == 1
 			for (i = 1; i <= length(auto); i++)
 				if (substr(line, 1, 1) == substr(auto, i, 1)) return 1
 			return 0
 		}
-		BEGIN { auto = "#;@!$%^&|:"; found = 0 }
+		BEGIN { cs = ENVIRON["ORCHESTRATOR_CS"]; auto = "#;@!$%^&|:"; found = 0 }
 		comment($0) && index($0, "------------------------ >8 ------------------------") { exit }
 		!comment($0) && $0 ~ /[^ \t\r]/ { found = 1; exit }
 		END { exit !found }

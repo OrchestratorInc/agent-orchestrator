@@ -339,6 +339,8 @@ type Store interface {
 	// config into the launch command. ok=false means the project is unknown.
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
+	SetSessionCommitAttribution(ctx context.Context, id domain.SessionID, coAuthor string) error
+	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -1383,7 +1385,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+	if err := m.provisionWorkspace(ctx, project, id, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
@@ -4696,7 +4698,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 	}
 	if recreated {
-		if err := m.provisionWorkspaceWith(ctx, project, ws.Path, attributionRecorded); err != nil {
+		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
@@ -4787,7 +4789,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -4819,7 +4821,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
@@ -4830,10 +4832,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 // worktree was reclaimed. Only such a restore runs Setup, so only it extends
 // a REST restore's budget, from now, by the Setup steps' limits; any other
 // restore keeps the request's ordinary budget.
-func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
-	return m.provisionWorkspaceWith(ctx, project, workspacePath, attributionRecorded)
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionRecorded)
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -6731,16 +6733,16 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // worktree exists: symlink shared files from the project repo, then run any
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
-	return m.provisionWorkspaceWith(ctx, project, workspacePath, attributionFromSettings)
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionFromSettings)
 }
 
 // provisionWorkspaceWith is provisionWorkspace with the attribution choice
 // made explicit: a recreated worktree of an existing session keeps the choice
 // that session started with.
-func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, workspacePath string, choice attributionChoice) error {
+func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) error {
 	// Before post-create commands, so commits they make are credited too.
-	m.applyCommitAttribution(ctx, project, workspacePath, choice)
+	m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}

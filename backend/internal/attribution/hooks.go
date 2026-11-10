@@ -3,7 +3,9 @@ package attribution
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -31,8 +33,8 @@ var HookNames = []string{
 
 // onDemandHookNames run often (reference-transaction on every ref update,
 // post-index-change on every index write) or rarely matter in a session. A
-// dispatcher for one is installed only once a repository being configured
-// has that hook, so worktrees of other repositories don't pay for it.
+// dispatcher for one is installed only in the hooks directory of a repository
+// that has that hook, so worktrees of other repositories don't pay for it.
 // fsmonitor-watchman is left out: Git reads it from core.fsmonitor, not the
 // hooks directory.
 var onDemandHookNames = []string{
@@ -51,8 +53,32 @@ const (
 	ConfigOriginalHooksPath = "orchestrator.originalHooksPath"
 )
 
-// HooksDir is where the hook dispatcher lives under the daemon data dir.
+// HooksDir is the directory under the daemon data dir that holds one hooks
+// directory per repository (see repoHooksDir).
 func HooksDir(dataDir string) string { return filepath.Join(dataDir, "git-hooks") }
+
+// repoHooksDir is the hooks directory every session worktree of one repository
+// points at. Each repository gets its own, so an on-demand hook one repository
+// needs is not run on every ref update or index write in the others.
+func repoHooksDir(base, commonDir string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(commonDir)))
+	return filepath.Join(base, hex.EncodeToString(sum[:8]))
+}
+
+// worktreeGit runs git in worktree and returns its trimmed combined output.
+func worktreeGit(ctx context.Context, worktree string) func(...string) (string, error) {
+	return func(args ...string) (string, error) {
+		cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", worktree}, args...)...)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+}
+
+// within reports whether path is base or below it.
+func within(base, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
 var installMu sync.Mutex
 
@@ -99,14 +125,14 @@ func installHook(dir, name string) error {
 
 // RefreshRepositoryHooks repeats ConfigureWorktree's scan for on-demand hooks
 // in a worktree it configured, for a hook that project setup installed after
-// that.
-func RefreshRepositoryHooks(ctx context.Context, worktree, hooksDir string) error {
-	git := func(args ...string) (string, error) {
-		cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", worktree}, args...)...)
-		out, err := cmd.CombinedOutput()
-		return strings.TrimSpace(string(out)), err
+// that. base is HooksDir.
+func RefreshRepositoryHooks(ctx context.Context, worktree, base string) error {
+	git := worktreeGit(ctx, worktree)
+	current, _ := git("config", "--worktree", "--get", "core.hooksPath")
+	if current == "" || !within(base, current) {
+		return nil
 	}
-	return installRepositoryHooks(worktree, hooksDir, git)
+	return installRepositoryHooks(worktree, current, git)
 }
 
 // installRepositoryHooks adds a dispatcher for each on-demand hook that one of
@@ -146,16 +172,21 @@ func installRepositoryHooks(worktree, hooksDir string, git func(...string) (stri
 	return nil
 }
 
-// ConfigureWorktree points one worktree's hooks at hooksDir and sets the
+// ConfigureWorktree points one worktree's hooks at its repository's hooks
+// directory under base (HooksDir), installs the dispatcher there, and sets the
 // trailer the hook adds. Everything is written with `git config --worktree`, so
 // the person's own checkout and other worktrees are untouched. It needs
 // extensions.worktreeConfig, which session worktrees already enable.
 // RemoveFromWorktree undoes it.
-func ConfigureWorktree(ctx context.Context, worktree, hooksDir, coAuthor string) error {
-	git := func(args ...string) (string, error) {
-		cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", worktree}, args...)...)
-		out, err := cmd.CombinedOutput()
-		return strings.TrimSpace(string(out)), err
+func ConfigureWorktree(ctx context.Context, worktree, base, coAuthor string) error {
+	git := worktreeGit(ctx, worktree)
+	common, err := git("rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || common == "" {
+		return fmt.Errorf("attribution: find repository: %s: %w", common, err)
+	}
+	hooksDir := repoHooksDir(base, common)
+	if err := InstallHooks(hooksDir); err != nil {
+		return err
 	}
 	current, _ := git("config", "--worktree", "--get", "core.hooksPath")
 	if current == "" || filepath.Clean(current) != filepath.Clean(hooksDir) {
@@ -163,7 +194,7 @@ func ConfigureWorktree(ctx context.Context, worktree, hooksDir, coAuthor string)
 		// ours, so it is saved and the dispatcher runs it. Repository, global
 		// and system values are read live by the dispatcher instead, which
 		// also covers a hooksPath that husky sets after the session started.
-		if current != "" {
+		if current != "" && !within(base, current) {
 			if out, err := git("config", "--worktree", ConfigOriginalHooksPath, current); err != nil {
 				return fmt.Errorf("attribution: save original hooksPath: %s: %w", out, err)
 			}
@@ -200,58 +231,11 @@ func RemoveFromWorktree(ctx context.Context, worktree string) error {
 	return nil
 }
 
-// ConfiguredFor reports whether the worktree's hooks point at hooksDir, that
-// is, whether ConfigureWorktree ran there.
-func ConfiguredFor(ctx context.Context, worktree, hooksDir string) bool {
-	out, err := aoprocess.CommandContext(ctx, "git", "-C", worktree, "config", "--worktree", "--get", "core.hooksPath").Output()
-	return err == nil && filepath.Clean(strings.TrimSpace(string(out))) == filepath.Clean(hooksDir)
-}
-
-// configBranchCoAuthor is the per-branch key (branch.<name>.<key>) that keeps a
-// session's choice. It lives with the branch rather than the worktree, so it
-// survives a reclaimed worktree, and git drops it when the branch is deleted.
-const configBranchCoAuthor = "orchestratorCoauthor"
-
-// RecordChoice saves on the worktree's branch the trailer its session started
-// with, or that it started without one (empty coAuthor). A detached HEAD has no
-// branch to keep it on and is skipped.
-func RecordChoice(ctx context.Context, worktree, coAuthor string) error {
-	key, ok := branchKey(ctx, worktree)
-	if !ok {
-		return nil
-	}
-	args := []string{"-C", worktree, "config", "--local", key, coAuthor}
-	if coAuthor == "" {
-		args = []string{"-C", worktree, "config", "--local", "--unset-all", key}
-	}
-	out, err := aoprocess.CommandContext(ctx, "git", args...).CombinedOutput()
-	if err != nil && (coAuthor != "" || !isMissingKey(err)) {
-		return fmt.Errorf("attribution: record choice: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return nil
-}
-
-// RecordedChoice returns the trailer RecordChoice saved for the worktree's
-// branch, or "" when its session started without one.
-func RecordedChoice(ctx context.Context, worktree string) string {
-	key, ok := branchKey(ctx, worktree)
-	if !ok {
-		return ""
-	}
-	out, err := aoprocess.CommandContext(ctx, "git", "-C", worktree, "config", "--local", "--get", key).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func branchKey(ctx context.Context, worktree string) (string, bool) {
-	out, err := aoprocess.CommandContext(ctx, "git", "-C", worktree, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
-	branch := strings.TrimSpace(string(out))
-	if err != nil || branch == "" {
-		return "", false
-	}
-	return "branch." + branch + "." + configBranchCoAuthor, true
+// ConfiguredFor reports whether the worktree's hooks point into base
+// (HooksDir), that is, whether ConfigureWorktree ran there.
+func ConfiguredFor(ctx context.Context, worktree, base string) bool {
+	current, err := worktreeGit(ctx, worktree)("config", "--worktree", "--get", "core.hooksPath")
+	return err == nil && current != "" && within(base, current)
 }
 
 // isMissingKey reports git config's exit status 5: the key was not set.

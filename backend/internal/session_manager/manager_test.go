@@ -53,6 +53,8 @@ type fakeStore struct {
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	commitAttributionMu                sync.Mutex
+	commitAttribution                  map[domain.SessionID]string
 	num                                int
 	deleteErr                          error
 	upsertWTErr                        error
@@ -92,6 +94,20 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
 	return f.workspaceRepo[projectID], nil
+}
+func (f *fakeStore) SetSessionCommitAttribution(_ context.Context, id domain.SessionID, coAuthor string) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.commitAttribution == nil {
+		f.commitAttribution = map[domain.SessionID]string{}
+	}
+	f.commitAttribution[id] = coAuthor
+	return nil
+}
+func (f *fakeStore) SessionCommitAttribution(_ context.Context, id domain.SessionID) (string, error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	return f.commitAttribution[id], nil
 }
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
