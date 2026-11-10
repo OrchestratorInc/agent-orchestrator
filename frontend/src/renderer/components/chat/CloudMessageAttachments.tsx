@@ -60,21 +60,28 @@ function dataUrl(bytes: Uint8Array, contentType: string): string {
 }
 
 function CloudImageAttachment({ source, attachment }: { source: CloudAttachmentSource | undefined; attachment: CloudAttachment }) {
-	// A file this person just sent is still in memory: shown from there, not read back.
+	// A file this person just sent is still in memory: shown from there, not read
+	// back, unless that copy fails to draw.
 	const local = useSentAttachmentPreview(cloudAttachmentReference(attachment));
-	const bytes = useAttachmentBytes(source, attachment, !local);
-	return <ChatImage src={local ?? (bytes.data ? dataUrl(bytes.data, attachment.contentType) : undefined)} alt={attachment.fileName} />;
+	const bytes = useAttachmentBytes(source, attachment, !local.url);
+	return <ChatImage src={local.url ?? (bytes.data ? dataUrl(bytes.data, attachment.contentType) : undefined)} alt={attachment.fileName} onError={local.onError} />;
 }
 
 function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSource | undefined; attachment: CloudAttachment }) {
 	const [open, setOpen] = useState(false);
 	const [failed, setFailed] = useState(false);
-	const local = useSentAttachmentPreview(cloudAttachmentReference(attachment));
+	const local = useSentAttachmentPreview(cloudAttachmentReference(attachment)).url;
 	const bytes = useAttachmentBytes(source, attachment, !local);
 	// The PDF viewer takes ownership of the bytes it is given, so each viewer
 	// gets a copy and the cached bytes stay readable for the next one.
 	const load = async () => {
-		if (local) return new Uint8Array(await (await fetch(local)).arrayBuffer());
+		if (local) {
+			try {
+				return new Uint8Array(await (await fetch(local)).arrayBuffer());
+			} catch {
+				// The local copy is gone or blocked: read the control plane's copy below.
+			}
+		}
 		if (bytes.data) return bytes.data.slice();
 		const result = await bytes.refetch();
 		if (!result.data) throw result.error ?? new Error("The PDF could not be read.");

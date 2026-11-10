@@ -109,11 +109,12 @@ const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^ht
 // CSP for the renderer. The daemon is loopback-only, so network access is
 // pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
 // cloud control-plane websocket origins above. The policy is injected here
-// rather than written into index.html so the serve variant can differ: the
-// same directives apply in dev, relaxed only where the dev server itself
-// needs it. Enforcing CSP in dev keeps dev/packaged parity — a connect-src
-// gap then fails on the developer's screen, not weeks later in a packaged
-// build (that skew is exactly how the cloud-terminal block in #4666 shipped).
+// rather than written into index.html so the serve variant can differ,
+// relaxed only where the dev server itself needs it. Only the build injects
+// it (injectCspMeta below is build-only), so the dev app runs with no CSP at
+// all: a missing source works in dev and fails only in a packaged build, as
+// the cloud-terminal block in #4666 and the blob: attachment tiles did. Check
+// any new resource scheme against this list by hand.
 export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
@@ -126,14 +127,22 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// Repository avatars can come from self-hosted SCM instances whose origins
 		// are only known at runtime. Keep the broad exception limited to images;
 		// scripts, connections, frames, and other resource classes remain scoped.
-		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
+		//
+		// blob: in img-src, media-src and connect-src is for object URLs the
+		// renderer makes from bytes it already holds: a file the user just sent
+		// draws its tile from the composer's copy (sent-attachment-previews.ts),
+		// and copying an image re-encodes it through one. Only the renderer's own
+		// scripts can mint a blob: URL, so it opens no network access.
+		"img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https:",
 		// A cloud session's audio and video artifacts stream from its control plane.
-		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
+		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
 			"'self'",
 			"data:",
+			// A just-sent PDF or text file is read from its object URL (see img-src).
+			"blob:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
 			// Session artifact files are read from the daemon's artifact preview
