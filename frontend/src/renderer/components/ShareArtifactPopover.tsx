@@ -148,20 +148,71 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, child
 }
 
 /**
+ * Whether the file changed since it was published to a link that is still
+ * active: what Republish would put on that link. The local fingerprint is
+ * checked first; the link list is asked for only when it differs. Checked
+ * again whenever `revision` changes.
+ */
+function usePublishedOutdated(file: CloudShareFile | null, revision: string): boolean {
+	const [outdated, setOutdated] = useState(false);
+	const fileKey = file ? JSON.stringify(file) : "";
+	useEffect(() => {
+		if (!file) return setOutdated(false);
+		let cancelled = false;
+		void (async () => {
+			const inspection = await aoBridge.cloudShare.inspect(file);
+			if (!inspection.shareId || !inspection.publishedFingerprint || inspection.publishedFingerprint === inspection.fingerprint) return false;
+			const links = await aoBridge.cloudShare.list(file.baseUrl);
+			return links.shares.some((share) => share.id === inspection.shareId && !share.revokedAt);
+		})()
+			.catch(() => false)
+			.then((result) => {
+				if (!cancelled) setOutdated(result);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [fileKey, revision]); // eslint-disable-line react-hooks/exhaustive-deps
+	return outdated;
+}
+
+/**
  * The Publish button beside an open local artifact's other actions. Clicking it
  * publishes the file as a public link and opens a popover anchored to it with
- * that link to copy or unpublish, or to republish a file that changed since.
- * A file that looks like it holds a credential waits for a second Publish. For
- * a video the button is disabled and says why.
+ * that link to copy or unpublish. Once the file changed since it was
+ * published, the button says Republish, and clicking it puts the newer version
+ * on the same link. A file that looks like it holds a credential waits for a
+ * second click under its warning. For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "" }: {
+	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
+	name: string;
+	className?: string;
+	iconOnly?: boolean;
+	/** The file's last change, e.g. its updatedAt: a new value checks again whether it needs Republish. */
+	revision?: string;
+}) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
+	// Checked again when a publish ends and when the popover closes.
+	const [checks, setChecks] = useState(0);
+	const recheck = useCallback(() => setChecks((count) => count + 1), []);
 	const available = useShareAvailable();
+	const { baseUrl, signedIn } = useShareAccess();
 	const video = VIDEO_FILE.test(file.path);
+	const outdated = usePublishedOutdated(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}`);
+	// What the panel does on opening is fixed when it opens, so a check that
+	// lands while it is open never starts a second publish.
+	const [republishOnOpen, setRepublishOnOpen] = useState(false);
+	const label = t(outdated ? "artifacts.share.republish" : "artifacts.share.publish");
+	const onOpenChange = (next: boolean) => {
+		if (next) setRepublishOnOpen(outdated);
+		else recheck();
+		setOpen(next);
+	};
 	const button = (
 		<Button
-			aria-label={`${t("artifacts.share.publish")}: ${name}`}
+			aria-label={`${label}: ${name}`}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
 			className={className}
 			disabled={video}
@@ -170,14 +221,14 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{iconOnly ? null : t("artifacts.share.publish")}
+			{iconOnly ? null : label}
 		</Button>
 	);
 	const popoverTrigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
 	const trigger = iconOnly ? (
 		<Tooltip>
 			<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
-			<TooltipContent side="bottom">{t("artifacts.share.publish")}</TooltipContent>
+			<TooltipContent side="bottom">{label}</TooltipContent>
 		</Tooltip>
 	) : popoverTrigger;
 	// Not offered where the control plane does not serve share links.
@@ -194,10 +245,10 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false }:
 	}
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
-		<Popover open={open} onOpenChange={setOpen}>
+		<Popover open={open} onOpenChange={onOpenChange}>
 			{trigger}
 			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-4" data-browser-native-overlay="true">
-				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
+				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} onPublished={recheck} republishOnOpen={republishOnOpen} /> : null}
 			</PopoverContent>
 		</Popover>
 	);
@@ -207,10 +258,16 @@ function SharePanel({
 	file,
 	name,
 	onClose,
+	onPublished,
+	republishOnOpen = false,
 }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	onClose: () => void;
+	/** A publish or republish put the file on its link. */
+	onPublished?: () => void;
+	/** Opened from a Republish button: put the newer version on the link at once. */
+	republishOnOpen?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { baseUrl, signedIn } = useShareAccess();
@@ -228,6 +285,7 @@ function SharePanel({
 			case "published": {
 				const published = result.share;
 				setPhase({ kind: "published", share: published });
+				onPublished?.();
 				// The plan count now includes this link; it shows once the list says so.
 				void aoBridge.cloudShare.list(baseUrl)
 					.then((latest) => setPhase((current) => current.kind === "published" && current.share.id === published.id && !current.links ? { ...current, links: latest } : current))
@@ -283,7 +341,11 @@ function SharePanel({
 				// The file changed since it was published here: the link still
 				// serves what it held then.
 				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-				if (current) return setPhase({ kind: "published", share: current, links, outdated: outdated ? { inspection, links } : undefined });
+				if (current) {
+					// The Republish click, like Publish, needs no second one, unless the newer version looks like it holds a credential.
+					if (publishNow && republishOnOpen && outdated && inspection.secretFindings.length === 0) return void publish(inspection, links, current);
+					return setPhase({ kind: "published", share: current, links, outdated: outdated ? { inspection, links } : undefined });
+				}
 				// It was published from here, but its link is unpublished now,
 				// usually from somewhere else. Publishing gives it a new link.
 				const unpublished = Boolean(inspection.shareId);

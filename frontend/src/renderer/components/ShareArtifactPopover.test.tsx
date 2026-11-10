@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton, publishTitle } from "./ShareArtifactPopover";
+import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -34,9 +34,22 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 	return { inspectSpy, listSpy, publishSpy };
 }
 
-async function openPopover(path = file.path, name = "report.html") {
+/** Clicks the header button once it says `label`: Republish only after its check finds the file changed. */
+async function openPopover(path = file.path, name = "report.html", label: "Publish" | "Republish" = "Publish") {
 	render(<TooltipProvider><ShareArtifactButton file={{ ...file, path }} name={name} /></TooltipProvider>);
-	await userEvent.click(await screen.findByRole("button", { name: `Publish: ${name}` }));
+	await userEvent.click(await screen.findByRole("button", { name: `${label}: ${name}` }));
+	return screen.findByRole("dialog");
+}
+
+/** The panel as the artifact menu's Publish item opens it: it shows a published file's link without republishing. */
+async function openMenuPanel() {
+	render(
+		<TooltipProvider>
+			<ShareArtifactMenuPopover file={file} name="report.html" open onOpenChange={() => undefined}>
+				<button type="button">menu</button>
+			</ShareArtifactMenuPopover>
+		</TooltipProvider>,
+	);
 	return screen.findByRole("dialog");
 }
 
@@ -127,7 +140,7 @@ describe("ShareArtifactButton", () => {
 
 	it("says when the file changed since it was published, and the link shows the earlier version", async () => {
 		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] });
-		await openPopover();
+		await openMenuPanel();
 		expect(await screen.findByText("This file changed since you published it. The link still shows the earlier version.")).toBeTruthy();
 		// It stays through an Unpublish that is cancelled.
 		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
@@ -143,9 +156,34 @@ describe("ShareArtifactButton", () => {
 		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
 	});
 
-	it("offers Republish beside Unpublish when the file changed, and it updates the same link", async () => {
+	it("says Republish on the button once the file changed, and one click puts the newer version on the same link", async () => {
+		const { inspectSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
+		publishSpy.mockImplementation(async () => {
+			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
+			return { status: "published", replaced: true, share };
+		});
+		await openPopover(file.path, "report.html", "Republish");
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
+		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID });
+		expect(screen.queryByText(/changed since you published/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
+		// Once republished, the button checks again and is back to Publish.
+		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
+	});
+
+	it("says Publish, not Republish, while the file is unchanged or never published", async () => {
+		const { inspectSpy, listSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" }, { ...links, shares: [share] });
+		render(<TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider>);
+		await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(inspectSpy).toHaveBeenCalled());
+		// Unchanged: the link list is not asked for.
+		expect(listSpy).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "Republish: report.html" })).toBeNull();
+	});
+
+	it("offers Republish beside Unpublish in the panel when the file changed, and it updates the same link", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
-		await openPopover();
+		await openMenuPanel();
 		const republish = await screen.findByRole("button", { name: "Republish" });
 		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
 		// The link stays copyable, and Republish is the row's one primary action, at its right.
@@ -159,10 +197,11 @@ describe("ShareArtifactButton", () => {
 	});
 
 	it("warns about a credential in the newer version before it is republished", async () => {
-		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0", secretFindings: ["AWS access key"] }, { ...links, shares: [share] });
-		await openPopover();
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0", secretFindings: ["AWS access key"] }, { ...links, shares: [share] });
+		await openPopover(file.path, "report.html", "Republish");
 		await screen.findByRole("button", { name: "Republish" });
 		expect(screen.getByRole("alert").textContent).toContain("AWS access key");
+		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
 	it("stays on the link, with the newest version to republish, when the file changes during a republish", async () => {
@@ -170,8 +209,7 @@ describe("ShareArtifactButton", () => {
 			status: "changed",
 			inspection: { ...inspection, shareId: SHARE_ID, secretFindings: ["GitHub token"], fingerprint: "fp-2" },
 		});
-		await openPopover();
-		await userEvent.click(await screen.findByRole("button", { name: "Republish" }));
+		await openPopover(file.path, "report.html", "Republish");
 		expect(await screen.findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
 		expect(screen.getByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
 		expect(screen.getByRole("alert").textContent).toContain("GitHub token");
@@ -180,11 +218,11 @@ describe("ShareArtifactButton", () => {
 		expect(publishSpy).toHaveBeenLastCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-2", shareId: SHARE_ID });
 	});
 
-	it("keeps offering Republish after a cancelled republish", async () => {
-		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "cancelled" });
-		await openPopover();
-		await userEvent.click(await screen.findByRole("button", { name: "Republish" }));
+	it("keeps offering Republish, without republishing again, after a cancelled republish", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "cancelled" });
+		await openPopover(file.path, "report.html", "Republish");
 		expect(await screen.findByRole("button", { name: "Republish" })).toBeTruthy();
+		expect(publishSpy).toHaveBeenCalledTimes(1);
 		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
 	});
 
