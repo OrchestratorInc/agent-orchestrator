@@ -101,6 +101,36 @@ const SAFE_OPERATIONS = new Set(["query", "mutation", "route", "react_render", "
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
 const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
+const DEBUG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Electron main's own bundles. Any install path before .vite/build is dropped.
+const MAIN_BUNDLE = /[\\/]\.vite[\\/]build[\\/]([A-Za-z0-9_][A-Za-z0-9_.-]{0,80}\.js)$/;
+
+// The app-relative URL Sentry matches against an uploaded source map's debug
+// ID: app://renderer/assets/... for the renderer, app:///.vite/build/... for main.
+function safeAbsPath(filename: unknown, renderer: boolean): string | undefined {
+	if (typeof filename !== "string") return undefined;
+	if (renderer) {
+		const asset = filename.startsWith("app://renderer/") ? filename.slice("app://renderer/".length) : filename;
+		return SAFE_APP_ASSET.test(asset) ? `app://renderer/${asset}` : undefined;
+	}
+	const bundle = MAIN_BUNDLE.exec(filename)?.[1];
+	return bundle ? `app:///.vite/build/${bundle}` : undefined;
+}
+
+function absPathOf(frame: { filename?: string; abs_path?: string }, renderer: boolean): { abs_path?: string } {
+	const absPath = safeAbsPath(renderer ? frame.filename : frame.abs_path ?? frame.filename, renderer);
+	return absPath ? { abs_path: absPath } : {};
+}
+
+function safeDebugImages(event: Sentry.ErrorEvent, renderer: boolean): Array<{ type: "sourcemap"; code_file: string; debug_id: string }> {
+	const images = new Map<string, string>();
+	for (const image of event.debug_meta?.images ?? []) {
+		if (image.type !== "sourcemap" || typeof image.debug_id !== "string" || !DEBUG_ID.test(image.debug_id)) continue;
+		const codeFile = safeAbsPath(image.code_file, renderer);
+		if (codeFile) images.set(codeFile, image.debug_id.toLowerCase());
+	}
+	return [...images].slice(0, 8).map(([code_file, debug_id]) => ({ type: "sourcemap", code_file, debug_id }));
+}
 let childProcessHookInstalled = false;
 
 function sentryQueuePath(cacheRoot: string): string {
@@ -152,7 +182,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
 		.slice(-8)
-		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), ...(typeof frame.colno === "number" && Number.isSafeInteger(frame.colno) && frame.colno >= 1 && frame.colno <= 10_000_000 ? { colno: frame.colno } : {}), in_app: true }));
+		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...absPathOf(frame, renderer), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), ...(typeof frame.colno === "number" && Number.isSafeInteger(frame.colno) && frame.colno >= 1 && frame.colno <= 10_000_000 ? { colno: frame.colno } : {}), in_app: true }));
 	const topFrame = frames?.at(-1);
 	const topLocation = renderer && topFrame && "filename" in topFrame && typeof topFrame.filename === "string" && "lineno" in topFrame && typeof topFrame.lineno === "number"
 		? `${topFrame.filename.replace(/-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/, "")}:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
@@ -166,6 +196,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const topFunction = topFrame?.function === "renderer_frame" ? rendererLocation ?? "renderer_frame"
 		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
+	const debugImages = frames?.length ? safeDebugImages(event, renderer) : [];
 	const title = renderer
 		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
@@ -181,6 +212,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		release: version,
 		environment,
 		exception: { values: [{ type: exceptionType, value: "", ...(frames?.length ? { stacktrace: { frames } } : {}) }] },
+		...(debugImages.length ? { debug_meta: { images: debugImages } } : {}),
 	};
 }
 
@@ -271,10 +303,15 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || EXPECTED_NOISE.test(safe.message)) return;
 			const category = safe.tags?.category;
 			const code = safe.tags?.code;
+			// The SDK replaces frame debug IDs with main's own lookup, so renderer
+			// chunk IDs travel as images keyed by the frame's app URL.
+			const debugImages = [...new Map((safe.exception?.frames ?? []).filter((frame) => frame.filename && frame.debug_id).map((frame) => [`app://renderer/${frame.filename}`, frame.debug_id as string])).entries()]
+				.map(([code_file, debug_id]) => ({ type: "sourcemap" as const, code_file, debug_id }));
 			Sentry.captureEvent({
 				message: "Renderer error",
 				level: safe.level ?? "error",
-				...(safe.exception ? { exception: { values: [{ type: safe.exception.type, value: "", stacktrace: { frames: safe.exception.frames.map((frame) => ({ ...frame, in_app: true })) } }] } } : {}),
+				...(safe.exception ? { exception: { values: [{ type: safe.exception.type, value: "", stacktrace: { frames: safe.exception.frames.map(({ debug_id: _debugId, ...frame }) => ({ ...frame, in_app: true })) } }] } } : {}),
+				...(debugImages.length ? { debug_meta: { images: debugImages } } : {}),
 				tags: {
 					"ao.origin": "renderer",
 					"ao.kind": safe.kind,
@@ -339,12 +376,13 @@ export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapt
 		for (const frame of value.frames) {
 			if (!frame || typeof frame !== "object" || Array.isArray(frame)) return null;
 			const entry = frame as Record<string, unknown>;
-			if (Object.keys(entry).some((key) => key !== "function" && key !== "filename" && key !== "lineno" && key !== "colno")) return null;
+			if (Object.keys(entry).some((key) => key !== "function" && key !== "filename" && key !== "lineno" && key !== "colno" && key !== "debug_id")) return null;
 			if (typeof entry.function !== "string" || entry.function.length > 128 || !SAFE_FUNCTION.test(entry.function)) return null;
 			if (entry.filename !== undefined && (typeof entry.filename !== "string" || !SAFE_APP_ASSET.test(entry.filename))) return null;
 			if (entry.lineno !== undefined && (typeof entry.lineno !== "number" || !Number.isSafeInteger(entry.lineno) || entry.lineno < 1 || entry.lineno > 1_000_000)) return null;
+			if (entry.debug_id !== undefined && (typeof entry.debug_id !== "string" || !DEBUG_ID.test(entry.debug_id) || entry.filename === undefined)) return null;
 			if (entry.colno !== undefined && (typeof entry.colno !== "number" || !Number.isSafeInteger(entry.colno) || entry.colno < 1 || entry.colno > 10_000_000)) return null;
-			frames.push({ function: safeSentryFunctionName(entry.function, "renderer_frame"), ...(entry.filename === undefined ? {} : { filename: entry.filename as string }), ...(entry.lineno === undefined ? {} : { lineno: entry.lineno as number }), ...(entry.colno === undefined ? {} : { colno: entry.colno as number }) });
+			frames.push({ function: safeSentryFunctionName(entry.function, "renderer_frame"), ...(entry.filename === undefined ? {} : { filename: entry.filename as string }), ...(entry.lineno === undefined ? {} : { lineno: entry.lineno as number }), ...(entry.colno === undefined ? {} : { colno: entry.colno as number }), ...(entry.debug_id === undefined ? {} : { debug_id: (entry.debug_id as string).toLowerCase() }) });
 		}
 		exception = { type: value.type, frames };
 	}

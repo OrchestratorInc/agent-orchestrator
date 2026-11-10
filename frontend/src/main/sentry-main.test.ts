@@ -347,7 +347,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(same.fingerprint).toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherFrame.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", abs_path: "app://renderer/assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
 	});
 
@@ -364,7 +364,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(first.message).toBe("Renderer TypeError in assets/_shell:42:7 (unknown)");
 		expect(first.fingerprint).toEqual(same.fingerprint);
 		expect(otherColumn.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", abs_path: "app://renderer/assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
 	});
 
 	it("separates dev renderer sites by line when no packaged asset name exists", async () => {
@@ -526,6 +526,34 @@ describe("Electron main error sampling and budget", () => {
 		} finally {
 			rmSync(unsampledDir, { recursive: true, force: true });
 		}
+	});
+
+	it("titles an anonymous renderer frame by bundle file and line and keeps its debug ID", async () => {
+		const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
+		const sent = sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent;
+		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
+		const event = beforeSendOf()(sent);
+		expect(event?.message).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
+		expect(event?.exception?.values?.[0]?.value).toBe("");
+		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ abs_path: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45 });
+		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
+		expect(sanitizeRendererCapture({ consentGeneration: "g", kind: "exception", message: "m", exception: { type: "Error", frames: [{ function: "renderer_frame", filename: "assets/x-BjAotn5p.js", debug_id: "not-a-uuid" }] } })).toBeNull();
+	});
+
+	it("maps main bundle frames and debug images to app URLs without install paths", async () => {
+		const debugId = "0a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+		const bundle = "/Users/alice/Applications/Orchestrator.app/Contents/Resources/app.asar/.vite/build/main.js";
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const event = beforeSendOf()({
+			type: undefined,
+			exception: { values: [{ type: "TypeError", value: "private", stacktrace: { frames: [{ function: "startDaemon", filename: bundle, lineno: 10, colno: 2 }, { function: "x", filename: "/Users/alice/other.js", lineno: 1 }] } }] },
+			debug_meta: { images: [{ type: "sourcemap", code_file: bundle, debug_id: debugId }, { type: "sourcemap", code_file: "/Users/alice/other.js", debug_id: debugId }] },
+		});
+		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ function: "startDaemon", abs_path: "app:///.vite/build/main.js" });
+		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app:///.vite/build/main.js", debug_id: debugId }]);
+		expect(JSON.stringify(event)).not.toMatch(/alice|Applications/);
 	});
 
 	it("caps each final fingerprint at three events per UTC day", () => {
