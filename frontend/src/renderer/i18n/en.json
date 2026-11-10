@@ -3695,6 +3695,8 @@
 	"usage.projectFilter": "Project",
 	"usage.allProjects": "All projects",
 	"usage.refresh": "Refresh",
+	"usage.filter": "Filter",
+	"usage.removeFilter": "Remove filter {{filter}}",
 	"usage.loading": "Loading usage",
 	"usage.empty.title": "No usage in this period",
 	"usage.empty.body": "Usage appears here once an agent session finishes a turn.",
