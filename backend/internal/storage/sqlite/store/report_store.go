@@ -103,9 +103,8 @@ func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]d
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ClaimPendingReportBatch atomically claims every pending report for a project.
-// A due, attention, or piggyback trigger therefore includes earlier batch work.
-func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+// ClaimPendingReportBatch 按编排会话领取报告；空归属保留项目主编排器的旧任务批次。
+func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, orchestratorID domain.SessionID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return nil, domain.ErrInvalidReport
 	}
@@ -114,7 +113,7 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 	var rows []gen.Report
 	err := s.inTx(ctx, "claim project report batch", func(q *gen.Queries) error {
 		scheduled, err := q.ListPendingReportsByProjectSchedule(ctx, gen.ListPendingReportsByProjectScheduleParams{
-			ProjectID: string(projectID), Limit: 1,
+			ProjectID: string(projectID), OrchestratorSessionID: string(orchestratorID), RowLimit: 1,
 		})
 		if err != nil || len(scheduled) == 0 {
 			return err
@@ -123,14 +122,15 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 		if batchID == "" {
 			batchID = "report-batch:" + scheduled[0].ID
 			if err := q.AssignPendingReportsToBatch(ctx, gen.AssignPendingReportsToBatchParams{
-				DeliveryBatchID: batchID, ProjectID: string(projectID),
+				DeliveryBatchID: batchID, ProjectID: string(projectID), OrchestratorSessionID: string(orchestratorID),
 			}); err != nil {
 				return err
 			}
 		}
 		rows, err = q.ClaimPendingReportsByBatch(ctx, gen.ClaimPendingReportsByBatchParams{
 			ProjectID: string(projectID), DeliveryBatchID: batchID,
-			ClaimToken: token, ClaimedAt: nullTime(at),
+			OrchestratorSessionID: string(orchestratorID),
+			ClaimToken:            token, ClaimedAt: nullTime(at),
 		})
 		return err
 	})

@@ -36,23 +36,26 @@ LIMIT ?;
 
 -- name: ListPendingReportsByProjectSchedule :many
 SELECT * FROM reports
-WHERE project_id = ? AND delivery_state = 'pending'
+WHERE reports.project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = sqlc.arg(orchestrator_session_id))
 ORDER BY available_at, created_at, id
-LIMIT ?;
+LIMIT sqlc.arg(row_limit);
 
 -- name: AssignPendingReportsToBatch :exec
 UPDATE reports
 SET delivery_batch_id = sqlc.arg(delivery_batch_id)
-WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
-  AND delivery_batch_id = '';
+WHERE reports.project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
+  AND delivery_batch_id = ''
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = sqlc.arg(orchestrator_session_id));
 
 -- name: ClaimPendingReportsByBatch :many
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = sqlc.arg(claim_token),
     claimed_at = sqlc.arg(claimed_at), delivery_attempts = delivery_attempts + 1,
     last_error = ''
-WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
+WHERE reports.project_id = sqlc.arg(project_id) AND delivery_state = 'pending'
   AND delivery_batch_id = sqlc.arg(delivery_batch_id)
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = sqlc.arg(orchestrator_session_id))
 RETURNING *;
 
 -- name: AcknowledgeReportBatch :many

@@ -1026,6 +1026,18 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		cfg.AgentConfig.Permissions = permissions
 	}
+	if cfg.Kind == domain.KindWorker && cfg.ParentSessionID != "" {
+		parent, found, err := m.store.GetSession(ctx, cfg.ParentSessionID)
+		if err != nil {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("resolve task orchestrator: %w", err)
+		}
+		if found && parent.ProjectID == cfg.ProjectID {
+			cfg.OrchestratorSessionID = parent.OrchestratorSessionID
+			if parent.Kind == domain.KindOrchestrator && parent.IndependentOrchestrator {
+				cfg.OrchestratorSessionID = parent.ID
+			}
+		}
+	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
 	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
@@ -1330,7 +1342,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if prep != nil {
 		branch = prep.record.Metadata.Branch
 	} else if branch == "" {
-		branch = DefaultSpawnBranch(id, cfg.Kind, sessionPrefix(project), projectKind, m.dataDir)
+		branch = spawnBranch(rec, sessionPrefix(project), projectKind, m.dataDir)
 	}
 
 	// An asynchronous Chat spawn stops here and answers the caller. Everything
@@ -2057,15 +2069,16 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			baseBranch = ""
 		}
 		workspaceCfg := ports.WorkspaceConfig{
-			ProjectID:        cfg.ProjectID,
-			SessionID:        id,
-			Kind:             cfg.Kind,
-			SessionPrefix:    sessionPrefix(project),
-			Branch:           branch,
-			FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
-			RequireNewBranch: cfg.RequireNewBranch,
-			BaseBranch:       baseBranch,
-			BaseRef:          baseRefs[filepath.Clean(project.Path)],
+			IndependentOrchestrator: cfg.IndependentOrchestrator,
+			ProjectID:               cfg.ProjectID,
+			SessionID:               id,
+			Kind:                    cfg.Kind,
+			SessionPrefix:           sessionPrefix(project),
+			Branch:                  branch,
+			FreshBranch:             cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+			RequireNewBranch:        cfg.RequireNewBranch,
+			BaseBranch:              baseBranch,
+			BaseRef:                 baseRefs[filepath.Clean(project.Path)],
 		}
 		ws, err := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
@@ -2110,18 +2123,19 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		})
 	}
 	info, err := workspaceProject.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
-		ProjectID:        cfg.ProjectID,
-		SessionID:        id,
-		Kind:             cfg.Kind,
-		SessionPrefix:    sessionPrefix(project),
-		Branch:           branch,
-		FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
-		RequireNewBranch: cfg.RequireNewBranch,
-		RootRepoPath:     project.Path,
-		BaseBranch:       project.Config.WorktreeBaseBranch(),
-		BaseRef:          baseRefs[filepath.Clean(project.Path)],
-		Repos:            childRepos,
-		Assets:           assets,
+		IndependentOrchestrator: cfg.IndependentOrchestrator,
+		ProjectID:               cfg.ProjectID,
+		SessionID:               id,
+		Kind:                    cfg.Kind,
+		SessionPrefix:           sessionPrefix(project),
+		Branch:                  branch,
+		FreshBranch:             cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+		RequireNewBranch:        cfg.RequireNewBranch,
+		RootRepoPath:            project.Path,
+		BaseBranch:              project.Config.WorktreeBaseBranch(),
+		BaseRef:                 baseRefs[filepath.Clean(project.Path)],
+		Repos:                   childRepos,
+		Assets:                  assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
@@ -4574,14 +4588,15 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	} else {
 		var restoreErr error
 		ws, restoreErr = m.workspace.Restore(ctx, ports.WorkspaceConfig{
-			ProjectID:     rec.ProjectID,
-			SessionID:     rec.ID,
-			Kind:          rec.Kind,
-			SessionPrefix: sessionPrefix(project),
-			Branch:        rec.Metadata.Branch,
-			BaseBranch:    project.Config.WorktreeBaseBranch(),
-			BaseRef:       rec.Metadata.DiffBaseRef,
-			Path:          rec.Metadata.WorkspacePath,
+			IndependentOrchestrator: rec.IndependentOrchestrator,
+			ProjectID:               rec.ProjectID,
+			SessionID:               rec.ID,
+			Kind:                    rec.Kind,
+			SessionPrefix:           sessionPrefix(project),
+			Branch:                  rec.Metadata.Branch,
+			BaseBranch:              project.Config.WorktreeBaseBranch(),
+			BaseRef:                 rec.Metadata.DiffBaseRef,
+			Path:                    rec.Metadata.WorkspacePath,
 		})
 		if restoreErr != nil {
 			m.logger.Error("restore-all: workspace restore failed", "sessionID", rec.ID, "error", restoreErr)
@@ -4700,14 +4715,15 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, err
 		}
 		ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
-			ProjectID:     rec.ProjectID,
-			SessionID:     rec.ID,
-			Kind:          rec.Kind,
-			SessionPrefix: sessionPrefix(project),
-			Branch:        rec.Metadata.Branch,
-			BaseBranch:    project.Config.WorktreeBaseBranch(),
-			BaseRef:       rec.Metadata.DiffBaseRef,
-			Path:          rec.Metadata.WorkspacePath,
+			IndependentOrchestrator: rec.IndependentOrchestrator,
+			ProjectID:               rec.ProjectID,
+			SessionID:               rec.ID,
+			Kind:                    rec.Kind,
+			SessionPrefix:           sessionPrefix(project),
+			Branch:                  rec.Metadata.Branch,
+			BaseBranch:              project.Config.WorktreeBaseBranch(),
+			BaseRef:                 rec.Metadata.DiffBaseRef,
+			Path:                    rec.Metadata.WorkspacePath,
 		})
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -5850,17 +5866,19 @@ func normalizeWorkspacePath(p string) string {
 
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
-		ProjectID:         cfg.ProjectID,
-		IssueID:           cfg.IssueID,
-		AutomationRunID:   cfg.AutomationRunID,
-		ClientRequestID:   cfg.ClientRequestID,
-		ClientRequestHash: cfg.ClientRequestHash,
-		Kind:              cfg.Kind,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		Harness:           cfg.Harness,
-		DisplayName:       cfg.DisplayName,
-		Activity:          domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		IndependentOrchestrator: cfg.IndependentOrchestrator,
+		OrchestratorSessionID:   cfg.OrchestratorSessionID,
+		ProjectID:               cfg.ProjectID,
+		IssueID:                 cfg.IssueID,
+		AutomationRunID:         cfg.AutomationRunID,
+		ClientRequestID:         cfg.ClientRequestID,
+		ClientRequestHash:       cfg.ClientRequestHash,
+		Kind:                    cfg.Kind,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+		Harness:                 cfg.Harness,
+		DisplayName:             cfg.DisplayName,
+		Activity:                domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
@@ -6111,12 +6129,20 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.OrchestratorRules = rules
 	case domain.KindWorker:
 		if projectID != "" {
-			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
+			worker, _, err := m.store.GetSession(ctx, sessionID)
 			if err != nil {
 				return "", err
 			}
-			if ok {
-				cfg.OrchestratorSessionID = string(orchestratorID)
+			if worker.OrchestratorSessionID != "" {
+				cfg.OrchestratorSessionID = string(worker.OrchestratorSessionID)
+			} else {
+				orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
+				if err != nil {
+					return "", err
+				}
+				if ok {
+					cfg.OrchestratorSessionID = string(orchestratorID)
+				}
 			}
 		}
 		rules, err := buildProjectRules(projectRulesConfig{
@@ -6229,7 +6255,7 @@ func (m *Manager) activeOrchestratorSessionID(ctx context.Context, project domai
 		return "", false, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
 	for _, rec := range recs {
-		if rec.Kind == domain.KindOrchestrator && !rec.IsTerminated {
+		if rec.Kind == domain.KindOrchestrator && !rec.IndependentOrchestrator && !rec.IsTerminated {
 			return rec.ID, true, nil
 		}
 	}

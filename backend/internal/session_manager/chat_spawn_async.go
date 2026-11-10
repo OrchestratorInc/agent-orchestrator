@@ -498,8 +498,10 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, err
 	}
 	cfg := ports.SpawnConfig{
-		WorkflowSpawn: identity,
-		ProjectID:     rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
+		IndependentOrchestrator: rec.IndependentOrchestrator,
+		OrchestratorSessionID:   rec.OrchestratorSessionID,
+		WorkflowSpawn:           identity,
+		ProjectID:               rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}
@@ -521,7 +523,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	projectKind := projectKindForSession(project, rec.ProjectID)
 	branch := rec.Metadata.Branch
 	if branch == "" {
-		branch = DefaultSpawnBranch(rec.ID, rec.Kind, sessionPrefix(project), projectKind, m.dataDir)
+		branch = spawnBranch(rec, sessionPrefix(project), projectKind, m.dataDir)
 	}
 	retried, _, _, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 		cfg: cfg, project: project, projectKind: projectKind,

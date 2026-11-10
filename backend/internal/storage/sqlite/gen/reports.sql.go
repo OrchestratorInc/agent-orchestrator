@@ -107,17 +107,19 @@ func (q *Queries) AcknowledgeReportBatch(ctx context.Context, arg AcknowledgeRep
 const assignPendingReportsToBatch = `-- name: AssignPendingReportsToBatch :exec
 UPDATE reports
 SET delivery_batch_id = ?1
-WHERE project_id = ?2 AND delivery_state = 'pending'
+WHERE reports.project_id = ?2 AND delivery_state = 'pending'
   AND delivery_batch_id = ''
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = ?3)
 `
 
 type AssignPendingReportsToBatchParams struct {
-	DeliveryBatchID string
-	ProjectID       string
+	DeliveryBatchID       string
+	ProjectID             string
+	OrchestratorSessionID string
 }
 
 func (q *Queries) AssignPendingReportsToBatch(ctx context.Context, arg AssignPendingReportsToBatchParams) error {
-	_, err := q.db.ExecContext(ctx, assignPendingReportsToBatch, arg.DeliveryBatchID, arg.ProjectID)
+	_, err := q.db.ExecContext(ctx, assignPendingReportsToBatch, arg.DeliveryBatchID, arg.ProjectID, arg.OrchestratorSessionID)
 	return err
 }
 
@@ -126,16 +128,18 @@ UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
     claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
     last_error = ''
-WHERE project_id = ?3 AND delivery_state = 'pending'
+WHERE reports.project_id = ?3 AND delivery_state = 'pending'
   AND delivery_batch_id = ?4
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = ?5)
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
 `
 
 type ClaimPendingReportsByBatchParams struct {
-	ClaimToken      string
-	ClaimedAt       sql.NullTime
-	ProjectID       string
-	DeliveryBatchID string
+	ClaimToken            string
+	ClaimedAt             sql.NullTime
+	ProjectID             string
+	DeliveryBatchID       string
+	OrchestratorSessionID string
 }
 
 func (q *Queries) ClaimPendingReportsByBatch(ctx context.Context, arg ClaimPendingReportsByBatchParams) ([]Report, error) {
@@ -144,6 +148,7 @@ func (q *Queries) ClaimPendingReportsByBatch(ctx context.Context, arg ClaimPendi
 		arg.ClaimedAt,
 		arg.ProjectID,
 		arg.DeliveryBatchID,
+		arg.OrchestratorSessionID,
 	)
 	if err != nil {
 		return nil, err
@@ -511,18 +516,20 @@ func (q *Queries) ListPendingReports(ctx context.Context, arg ListPendingReports
 
 const listPendingReportsByProjectSchedule = `-- name: ListPendingReportsByProjectSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
-WHERE project_id = ? AND delivery_state = 'pending'
+WHERE reports.project_id = ?1 AND delivery_state = 'pending'
+  AND reports.session_id IN (SELECT id FROM sessions WHERE orchestrator_session_id = ?2)
 ORDER BY available_at, created_at, id
-LIMIT ?
+LIMIT ?3
 `
 
 type ListPendingReportsByProjectScheduleParams struct {
-	ProjectID string
-	Limit     int64
+	ProjectID             string
+	OrchestratorSessionID string
+	RowLimit              int64
 }
 
 func (q *Queries) ListPendingReportsByProjectSchedule(ctx context.Context, arg ListPendingReportsByProjectScheduleParams) ([]Report, error) {
-	rows, err := q.db.QueryContext(ctx, listPendingReportsByProjectSchedule, arg.ProjectID, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listPendingReportsByProjectSchedule, arg.ProjectID, arg.OrchestratorSessionID, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

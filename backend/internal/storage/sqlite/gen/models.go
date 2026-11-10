@@ -932,6 +932,8 @@ type Session struct {
 	BranchNaming                     bool
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
+	IndependentOrchestrator          int64
+	OrchestratorSessionID            string
 }
 
 type SessionAgentAccount struct {

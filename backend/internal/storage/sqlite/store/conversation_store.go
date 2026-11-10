@@ -773,7 +773,7 @@ func (s *Store) commitChatSpawn(
 				return err
 			}
 			for _, session := range sessions {
-				if session.Kind == domain.KindOrchestrator && session.ID != rec.ID && !session.IsTerminated {
+				if session.Kind == domain.KindOrchestrator && session.IndependentOrchestrator == 0 && session.ID != rec.ID && !session.IsTerminated {
 					return errors.New("native Chat handoff has a competing live orchestrator")
 				}
 			}

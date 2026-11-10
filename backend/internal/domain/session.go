@@ -267,6 +267,10 @@ type SessionMetadata struct {
 type SessionRecord struct {
 	ID        SessionID `json:"id"`
 	ProjectID ProjectID `json:"projectId,omitempty"`
+	// IndependentOrchestrator 将独立编排会话与沿用项目历史的主编排器区分开。
+	IndependentOrchestrator bool `json:"independentOrchestrator,omitempty"`
+	// OrchestratorSessionID 固定独立编排器的任务归属；空值沿用项目主编排器。
+	OrchestratorSessionID SessionID `json:"orchestratorSessionId,omitempty"`
 	// AutomationRunID is the optional durable origin for an unattended spawn.
 	// It is internal lifecycle data, not part of the session API read model.
 	AutomationRunID *AutomationRunID `json:"-"`

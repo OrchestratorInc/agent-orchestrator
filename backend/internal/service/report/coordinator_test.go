@@ -58,6 +58,7 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	if store.reports[0].DeliveryState != domain.ReportPending {
 		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
 	}
+	now = now.Add(OrchestratorBusyRetry)
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
@@ -321,12 +322,16 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 	}
 	return pending, nil
 }
-func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ClaimPendingReportBatch(ctx context.Context, project domain.ProjectID, owner domain.SessionID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	belongs := func(report domain.ReportRecord) bool {
+		worker, _, _ := s.GetSession(ctx, report.SessionID)
+		return worker.OrchestratorSessionID == owner
+	}
 	batchID := ""
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && belongs(s.reports[i]) {
 			batchID = s.reports[i].DeliveryBatchID
 			if batchID == "" {
 				batchID = "report-batch:" + s.reports[i].ID
@@ -336,7 +341,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 	}
 	var claimed []domain.ReportRecord
 	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending && belongs(s.reports[i]) {
 			if s.reports[i].DeliveryBatchID != "" && s.reports[i].DeliveryBatchID != batchID {
 				continue
 			}

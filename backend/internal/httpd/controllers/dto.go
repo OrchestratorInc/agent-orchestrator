@@ -1699,6 +1699,8 @@ type ReviewIDParam struct {
 type SpawnOrchestratorRequest struct {
 	ProjectID domain.ProjectID `json:"projectId"`
 	Clean     bool             `json:"clean,omitempty"`
+	// NewSession 创建独立的编排会话，与 Clean 互斥；省略时保持项目主编排器的幂等入口。
+	NewSession bool `json:"newSession,omitempty"`
 	// Mode applies only when this request creates a project orchestrator. An
 	// idempotent ensure returns the existing orchestrator unchanged, and a clean
 	// replacement inherits the existing orchestrator's currently committed mode.

@@ -264,6 +264,7 @@ var shippedMigrations = map[int64]string{
 	20261106012326188: "20261106012326188_m4_task_commits.sql",
 	20261106020806766: "20261106020806766_m4_integration_previews.sql",
 	20261106025428494: "20261106025428494_m4_integration_operations.sql",
+	20261110012007956: "20261110012007956_independent_orchestrator_sessions.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

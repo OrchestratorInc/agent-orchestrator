@@ -16,8 +16,12 @@ var ErrActivityProjectionContention = errors.New("activity projection contention
 // SpawnConfig is the request to start a new session: which project/issue, which
 // agent harness, and the branch/prompt the agent launches with.
 type SpawnConfig struct {
-	ProjectID domain.ProjectID
-	IssueID   domain.IssueID
+	// IndependentOrchestrator 显式创建独立编排会话，不复用项目主编排器。
+	IndependentOrchestrator bool
+	// OrchestratorSessionID 由 daemon 根据派发来源解析，不接受外部指定的任务归属。
+	OrchestratorSessionID domain.SessionID
+	ProjectID             domain.ProjectID
+	IssueID               domain.IssueID
 	// AutomationRunID makes one scheduled occurrence idempotent across daemon
 	// restarts. Ordinary interactive spawns leave this unset.
 	AutomationRunID *domain.AutomationRunID

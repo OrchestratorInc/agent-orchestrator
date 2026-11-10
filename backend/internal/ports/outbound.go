@@ -572,9 +572,11 @@ type WorkspaceTaskNamer interface {
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
-	ProjectID domain.ProjectID
-	SessionID domain.SessionID
-	Kind      domain.SessionKind
+	// IndependentOrchestrator 使用会话目录，避免多个编排器复用主编排器工作区。
+	IndependentOrchestrator bool
+	ProjectID               domain.ProjectID
+	SessionID               domain.SessionID
+	Kind                    domain.SessionKind
 	// SessionPrefix is the human-readable project prefix used to name the
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
@@ -629,14 +631,16 @@ type WorkspaceInfo struct {
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
 // and child RepoPath values are absolute paths to the canonical repositories.
 type WorkspaceProjectConfig struct {
-	ProjectID        domain.ProjectID
-	SessionID        domain.SessionID
-	Kind             domain.SessionKind
-	SessionPrefix    string
-	Branch           string
-	FreshBranch      bool
-	RequireNewBranch bool
-	RootRepoPath     string
+	// 独立编排器按会话隔离根目录，避免复用项目主编排器的固定目录。
+	IndependentOrchestrator bool
+	ProjectID               domain.ProjectID
+	SessionID               domain.SessionID
+	Kind                    domain.SessionKind
+	SessionPrefix           string
+	Branch                  string
+	FreshBranch             bool
+	RequireNewBranch        bool
+	RootRepoPath            string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string

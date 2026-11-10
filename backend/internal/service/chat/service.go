@@ -628,7 +628,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		sessionRecord.Metadata.ControllerGeneration == "" && sessionRecord.Metadata.ProviderConversationID == ""
 
 	scope := domain.ConversationScopeSession
-	if cfg.Kind == domain.KindOrchestrator {
+	if cfg.Kind == domain.KindOrchestrator && !sessionRecord.IndependentOrchestrator {
 		scope = domain.ConversationScopeProject
 	}
 	now := s.now()

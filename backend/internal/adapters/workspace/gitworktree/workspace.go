@@ -472,11 +472,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		return ports.WorkspaceProjectInfo{}, err
 	}
 	rootPath, err := w.managedPath(ports.WorkspaceConfig{
-		ProjectID:     cfg.ProjectID,
-		SessionID:     cfg.SessionID,
-		Kind:          cfg.Kind,
-		SessionPrefix: cfg.SessionPrefix,
-		Branch:        firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
+		IndependentOrchestrator: cfg.IndependentOrchestrator,
+		ProjectID:               cfg.ProjectID,
+		SessionID:               cfg.SessionID,
+		Kind:                    cfg.Kind,
+		SessionPrefix:           cfg.SessionPrefix,
+		Branch:                  firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
 	})
 	if err != nil {
 		return ports.WorkspaceProjectInfo{}, err
@@ -721,11 +722,15 @@ func (w *Workspace) repairWorkspaceRootDefault(ctx context.Context, repo string)
 	return worktreeRefs{seedRef: ref, baseRef: ref}, nil
 }
 
+// copyWorkspaceAssets 保留路径校验，并跳过旧登记记录中的本机 CodeGraph 检索索引。
 func copyWorkspaceAssets(sourceRoot, destinationRoot string, assets []ports.WorkspaceProjectAssetConfig) error {
 	for _, asset := range assets {
 		rel, err := cleanRelativePath(asset.RelativePath)
 		if err != nil || hasWorkspaceManagedComponent(rel) {
 			return fmt.Errorf("gitworktree: workspace asset %q: %w", asset.RelativePath, ErrUnsafePath)
+		}
+		if rel == ".codegraph" {
+			continue
 		}
 		source, err := physicalAbs(asset.SourcePath)
 		if err != nil || !assetPathWithin(sourceRoot, source) {
@@ -742,6 +747,7 @@ func copyWorkspaceAssets(sourceRoot, destinationRoot string, assets []ports.Work
 	return nil
 }
 
+// copyWorkspaceAssetTree 复制资料及安全的相对符号链接，排除管理数据与带运行文件的 SQLite 数据库组。
 func copyWorkspaceAssetTree(sourceRoot, source, destination string) error {
 	info, err := os.Lstat(source)
 	if err != nil {
@@ -791,8 +797,45 @@ func copyWorkspaceAssetTree(sourceRoot, source, destination string) error {
 		if err != nil {
 			return err
 		}
+		regularFiles := make(map[string]bool, len(entries))
 		for _, entry := range entries {
-			if entry.Name() == ".git" || entry.Name() == ".ao" {
+			regularFiles[entry.Name()] = entry.Type().IsRegular()
+		}
+		skipped := make(map[string]bool)
+		sqliteSuffixes := []string{"-wal", "-shm", "-journal"}
+		for _, entry := range entries {
+			if !regularFiles[entry.Name()] || skipped[entry.Name()] {
+				continue
+			}
+			for _, suffix := range sqliteSuffixes {
+				base, ok := strings.CutSuffix(entry.Name(), suffix)
+				if !ok || !regularFiles[base] {
+					continue
+				}
+				file, err := os.Open(filepath.Join(source, base))
+				if err != nil {
+					return err
+				}
+				var header [16]byte
+				_, readErr := io.ReadFull(file, header[:])
+				_ = file.Close()
+				if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+					return readErr
+				}
+				if string(header[:]) != "SQLite format 3\x00" {
+					continue
+				}
+				// 主库和日志必须成组排除，否则复制过程中可能拼出不一致的数据库。
+				skipped[base] = true
+				for _, companion := range sqliteSuffixes {
+					skipped[base+companion] = regularFiles[base+companion]
+				}
+				slog.Info("gitworktree: skipping SQLite workspace runtime files", "database", filepath.Join(source, base))
+				break
+			}
+		}
+		for _, entry := range entries {
+			if entry.Name() == ".git" || entry.Name() == ".ao" || entry.Name() == ".codegraph" || skipped[entry.Name()] {
 				continue
 			}
 			if err := copyWorkspaceAssetTree(sourceRoot, filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
@@ -2351,6 +2394,7 @@ func physicalAbs(path string) (string, error) {
 	return abs, nil
 }
 
+// validateConfig 按主编排器或独立会话的目录规则检查路径标识。
 func validateConfig(cfg ports.WorkspaceConfig) error {
 	if cfg.ProjectID == "" {
 		return errors.New("gitworktree: project id is required")
@@ -2358,7 +2402,7 @@ func validateConfig(cfg ports.WorkspaceConfig) error {
 	if err := validatePathComponent("project id", string(cfg.ProjectID)); err != nil {
 		return err
 	}
-	if cfg.Kind == domain.KindOrchestrator {
+	if cfg.Kind == domain.KindOrchestrator && !cfg.IndependentOrchestrator {
 		prefix := resolvedSessionPrefix(cfg)
 		if err := validatePathComponent("session prefix", prefix); err != nil {
 			return err
@@ -2379,12 +2423,13 @@ func validateConfig(cfg ports.WorkspaceConfig) error {
 
 func validateWorkspaceProjectConfig(cfg ports.WorkspaceProjectConfig) error {
 	if err := validateConfig(ports.WorkspaceConfig{
-		ProjectID:     cfg.ProjectID,
-		SessionID:     cfg.SessionID,
-		Kind:          cfg.Kind,
-		SessionPrefix: cfg.SessionPrefix,
-		Branch:        firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
-		BaseBranch:    cfg.BaseBranch,
+		IndependentOrchestrator: cfg.IndependentOrchestrator,
+		ProjectID:               cfg.ProjectID,
+		SessionID:               cfg.SessionID,
+		Kind:                    cfg.Kind,
+		SessionPrefix:           cfg.SessionPrefix,
+		Branch:                  firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
+		BaseBranch:              cfg.BaseBranch,
 	}); err != nil {
 		return err
 	}
@@ -2423,9 +2468,10 @@ func validatePathComponent(name, value string) error {
 	return nil
 }
 
+// managedPath 仅给项目主编排器保留固定目录，其余会话按 ID 隔离。
 func (w *Workspace) managedPath(cfg ports.WorkspaceConfig) (string, error) {
 	var path string
-	if cfg.Kind == domain.KindOrchestrator {
+	if cfg.Kind == domain.KindOrchestrator && !cfg.IndependentOrchestrator {
 		prefix := resolvedSessionPrefix(cfg)
 		path = filepath.Join(w.managedRoot, string(cfg.ProjectID), "orchestrator", prefix+"-orchestrator")
 	} else {

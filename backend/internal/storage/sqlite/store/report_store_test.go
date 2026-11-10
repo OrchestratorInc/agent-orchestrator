@@ -186,7 +186,7 @@ func TestReportStoreDurableBatchIdentityExcludesLaterReportsOnRetry(t *testing.T
 	}
 	create("first")
 	create("second")
-	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now)
+	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "", "token-1", now)
 	if err != nil || len(claimed) != 2 || claimed[0].DeliveryBatchID == "" || claimed[0].DeliveryBatchID != claimed[1].DeliveryBatchID {
 		t.Fatalf("claimed = %+v, err = %v", claimed, err)
 	}
@@ -195,14 +195,14 @@ func TestReportStoreDurableBatchIdentityExcludesLaterReportsOnRetry(t *testing.T
 		t.Fatal(err)
 	}
 	create("later")
-	retried, err := s.ClaimPendingReportBatch(ctx, "ao", "token-2", now)
+	retried, err := s.ClaimPendingReportBatch(ctx, "ao", "", "token-2", now)
 	if err != nil || len(retried) != 2 || retried[0].DeliveryBatchID != batchID {
 		t.Fatalf("retried = %+v, err = %v", retried, err)
 	}
 	if _, err := s.AcknowledgeReportBatch(ctx, "ao", "token-2", now); err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.ClaimPendingReportBatch(ctx, "ao", "token-3", now)
+	next, err := s.ClaimPendingReportBatch(ctx, "ao", "", "token-3", now)
 	if err != nil || len(next) != 1 || next[0].ID != "later" || next[0].DeliveryBatchID == batchID {
 		t.Fatalf("next = %+v, err = %v", next, err)
 	}
@@ -263,7 +263,7 @@ func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now); err != nil || len(claimed) != 1 {
+	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "", "token-1", now); err != nil || len(claimed) != 1 {
 		t.Fatalf("claimed = %+v, err = %v", claimed, err)
 	}
 	if _, err := s.DeferReportBatch(ctx, "ao", "token-1", now.Add(5*time.Second), "composer is not empty"); err != nil {

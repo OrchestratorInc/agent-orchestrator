@@ -37,7 +37,7 @@ type DeliveryStore interface {
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
-	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
+	ClaimPendingReportBatch(context.Context, domain.ProjectID, domain.SessionID, string, time.Time) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
@@ -147,21 +147,44 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 		if pending[0].AvailableAt.After(now) {
 			return pending[0].AvailableAt.Sub(now), nil
 		}
-		if err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
+		if err := c.deliverProject(ctx, pending[0]); err != nil {
 			return c.retryDelay, err
 		}
 	}
 }
 
-func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
-	target, ok, err := c.activeOrchestrator(ctx, projectID)
+// deliverProject 根据派发时的持久归属投递，不把独立编排器的任务送给项目内其他会话。
+func (c *Coordinator) deliverProject(ctx context.Context, report domain.ReportRecord) error {
+	projectID := report.ProjectID
+	worker, _, err := c.store.GetSession(ctx, report.SessionID)
+	if err != nil {
+		return err
+	}
+	owner := worker.OrchestratorSessionID
+	var target domain.SessionRecord
+	var ok bool
+	if owner == "" {
+		target, ok, err = c.activeOrchestrator(ctx, projectID)
+	} else {
+		target, ok, err = c.store.GetSession(ctx, owner)
+		ok = ok && target.ProjectID == projectID && target.Kind == domain.KindOrchestrator &&
+			!target.IsTerminated && target.Activity.State != domain.ActivityExited
+	}
 	if err != nil {
 		return err
 	}
 	if !ok {
+		batch, err := c.claim(ctx, projectID, owner)
+		if err != nil {
+			return err
+		}
+		_, err = c.store.DeferReportBatch(ctx, projectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), "task orchestrator unavailable")
+		if owner != "" || err != nil {
+			return err
+		}
 		return fmt.Errorf("project %s has no active orchestrator", projectID)
 	}
-	batch, err := c.claim(ctx, projectID)
+	batch, err := c.claim(ctx, projectID, owner)
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
@@ -210,7 +233,7 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 	}
 	var selected domain.SessionRecord
 	for _, rec := range recs {
-		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		if rec.Kind != domain.KindOrchestrator || rec.IndependentOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
 			continue
 		}
 		if selected.ID == "" || rec.CreatedAt.After(selected.CreatedAt) {
@@ -228,9 +251,9 @@ type PreparedBatch struct {
 	Reports   []domain.ReportRecord
 }
 
-func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (PreparedBatch, error) {
+func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID, orchestratorID domain.SessionID) (PreparedBatch, error) {
 	token := c.newToken()
-	reports, err := c.store.ClaimPendingReportBatch(ctx, projectID, token, c.now().UTC())
+	reports, err := c.store.ClaimPendingReportBatch(ctx, projectID, orchestratorID, token, c.now().UTC())
 	for i := range reports {
 		session, found, lookupErr := c.store.GetSession(ctx, reports[i].SessionID)
 		if lookupErr == nil && found {
@@ -257,7 +280,11 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
 	}
-	return c.claim(ctx, rec.ProjectID)
+	var owner domain.SessionID
+	if rec.IndependentOrchestrator {
+		owner = rec.ID
+	}
+	return c.claim(ctx, rec.ProjectID, owner)
 }
 
 // AcceptPiggyback acknowledges reports after the combined user turn is accepted.

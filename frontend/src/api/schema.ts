@@ -6627,6 +6627,7 @@ export interface components {
             /** Format: date-time */
             hibernatedAt?: null | string;
             id: string;
+            independentOrchestrator?: boolean;
             isPinned: boolean;
             isTerminated: boolean;
             issueId?: string;
@@ -6642,6 +6643,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            orchestratorSessionId?: string;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -9232,6 +9234,7 @@ export interface components {
             clean?: boolean;
             /** @enum {string} */
             mode?: "chat" | "tui";
+            newSession?: boolean;
             projectId: string;
         };
         SpawnOrchestratorResponse: {

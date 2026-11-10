@@ -18,6 +18,7 @@ import (
 )
 
 var workspaceRootIgnoreDenylist = []string{
+	".codegraph/",
 	"node_modules/",
 	"dist/",
 	"build/",
@@ -153,6 +154,7 @@ func validateWorkspaceParent(ctx context.Context, parent string) error {
 	return nil
 }
 
+// detectWorkspaceChildren 登记子仓库与资料目录，将本机 CodeGraph 检索索引留在原工作区。
 func detectWorkspaceChildren(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
@@ -164,7 +166,7 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 			continue
 		}
 		name := entry.Name()
-		if name == ".git" {
+		if name == ".git" || name == ".codegraph" {
 			continue
 		}
 		child := filepath.Join(parent, name)

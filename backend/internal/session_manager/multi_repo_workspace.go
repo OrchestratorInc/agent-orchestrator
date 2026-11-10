@@ -104,15 +104,16 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 	for _, plan := range plans {
 		projectID := domain.ProjectID(plan.project.ID)
 		workspaceCfg := ports.WorkspaceConfig{
-			ProjectID:        projectID,
-			SessionID:        id,
-			Kind:             cfg.Kind,
-			SessionPrefix:    sessionPrefix(plan.project),
-			Branch:           branch,
-			FreshBranch:      freshBranch,
-			RequireNewBranch: cfg.RequireNewBranch,
-			BaseBranch:       plan.baseBranch,
-			BaseRef:          plan.baseRef,
+			IndependentOrchestrator: cfg.IndependentOrchestrator,
+			ProjectID:               projectID,
+			SessionID:               id,
+			Kind:                    cfg.Kind,
+			SessionPrefix:           sessionPrefix(plan.project),
+			Branch:                  branch,
+			FreshBranch:             freshBranch,
+			RequireNewBranch:        cfg.RequireNewBranch,
+			BaseBranch:              plan.baseBranch,
+			BaseRef:                 plan.baseRef,
 			// The exact commit this repo planned from. Empty keeps the
 			// adapter's default-branch seeding; non-empty makes the adapter
 			// seed from it (and refuse when it cannot) instead of resolving the

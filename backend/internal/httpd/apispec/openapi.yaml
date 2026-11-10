@@ -20925,6 +20925,8 @@ components:
           - string
         id:
           type: string
+        independentOrchestrator:
+          type: boolean
         isPinned:
           type: boolean
         isTerminated:
@@ -20960,6 +20962,8 @@ components:
           - tui
           type: string
         model:
+          type: string
+        orchestratorSessionId:
           type: string
         outputType:
           enum:
@@ -27690,6 +27694,8 @@ components:
           - chat
           - tui
           type: string
+        newSession:
+          type: boolean
         projectId:
           type: string
       required:

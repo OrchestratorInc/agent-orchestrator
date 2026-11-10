@@ -2630,6 +2630,7 @@ func capActivityText(v string, maxLen int) string {
 	return strings.ToValidUTF8(string([]byte(v)[:head])+marker+string([]byte(v)[len(v)-tail:]), "?")
 }
 
+// spawnOrchestrator 保留主编排器的复用语义，仅显式 newSession 请求创建独立会话。
 func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/orchestrators")
@@ -2654,7 +2655,21 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
 	}
-	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	if in.NewSession && in.Clean {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "ORCHESTRATOR_OPTIONS_CONFLICT", "newSession and clean cannot be combined", nil)
+		return
+	}
+	var sess domain.Session
+	var err error
+	if in.NewSession {
+		sess, _, _, err = c.Svc.Spawn(r.Context(), ports.SpawnConfig{
+			ProjectID: in.ProjectID, Kind: domain.KindOrchestrator, IndependentOrchestrator: true,
+			DisplayName: "Orchestrator", RequestedMode: in.Mode, Async: true,
+			AgentConfig: ports.AgentConfig{Permissions: in.ApprovalMode},
+		})
+	} else {
+		sess, err = c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
+	}
 	if err != nil {
 		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
