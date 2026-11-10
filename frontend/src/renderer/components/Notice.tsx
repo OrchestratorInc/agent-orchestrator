@@ -1,5 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
-import { createContext, type CSSProperties, type ComponentPropsWithoutRef, type ReactNode, useCallback, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, type CSSProperties, type ComponentPropsWithoutRef, type ReactNode, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
@@ -108,62 +108,64 @@ export function NoticeDismissAction({ children }: { children: ReactNode }) {
 	return <Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={dismiss}>{children}</Button>;
 }
 
-// Notices register here and portal into the one frame NoticeViewport draws,
-// so several of them stack in the corner instead of overlapping.
-type SlotEntry = { id: string; label: string };
+// Notices register here. NoticeViewport draws one host per notice, sorted by
+// `order`, and each notice portals into its own host, so the stack's DOM, focus
+// and reading order match what is on screen.
+type SlotEntry = { id: string; label: string; order: number };
 let slotEntries: readonly SlotEntry[] = [];
-let slotHost: HTMLElement | null = null;
-let slotSnapshot: { slots: readonly SlotEntry[]; host: HTMLElement | null } = { slots: slotEntries, host: slotHost };
+const slotHosts = new Map<string, HTMLElement>();
 const slotListeners = new Set<() => void>();
 function emitSlots() {
-	slotSnapshot = { slots: slotEntries, host: slotHost };
 	for (const listener of slotListeners) listener();
 }
 function subscribeSlots(listener: () => void) {
 	slotListeners.add(listener);
 	return () => { slotListeners.delete(listener); };
 }
-const readSlots = () => slotSnapshot;
+const readSlots = () => slotEntries;
+const hostRefs = new Map<string, (element: HTMLDivElement | null) => void>();
+function hostRef(id: string) {
+	let ref = hostRefs.get(id);
+	if (!ref) {
+		ref = (element) => {
+			if (element) slotHosts.set(id, element);
+			else if (slotHosts.has(id)) slotHosts.delete(id);
+			else return;
+			emitSlots();
+		};
+		hostRefs.set(id, ref);
+	}
+	return ref;
+}
 
 /** Puts its notice in the corner frame while mounted. Lower `order` sits higher. */
 export function NoticeSlot({ id, label, order = 0, children }: { id: string; label: string; order?: number; children: ReactNode }) {
 	useLayoutEffect(() => {
-		slotEntries = [...slotEntries.filter((entry) => entry.id !== id), { id, label }];
+		slotEntries = [...slotEntries.filter((entry) => entry.id !== id), { id, label, order }]
+			.sort((left, right) => left.order - right.order);
 		emitSlots();
 		return () => {
 			slotEntries = slotEntries.filter((entry) => entry.id !== id);
 			emitSlots();
 		};
-	}, [id, label]);
-	const { host } = useSyncExternalStore(subscribeSlots, readSlots, readSlots);
-	return host ? createPortal(<div className="toast-enter" style={{ order }}>{children}</div>, host) : null;
+	}, [id, label, order]);
+	const host = useSyncExternalStore(subscribeSlots, () => slotHosts.get(id) ?? null, () => null);
+	return host ? createPortal(children, host) : null;
 }
 
 /** Mounted once in the shell; draws the corner frame while any notice is shown. */
 export function NoticeViewport() {
 	const { t } = useTranslation();
-	const { slots } = useSyncExternalStore(subscribeSlots, readSlots, readSlots);
+	const slots = useSyncExternalStore(subscribeSlots, readSlots, readSlots);
 	// Settings is a modal that blocks pointer and focus outside it.
 	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
-	const ownHost = useRef<HTMLElement | null>(null);
-	const setHost = useCallback((element: HTMLDivElement | null) => {
-		if (element) {
-			ownHost.current = element;
-			slotHost = element;
-			emitSlots();
-			return;
-		}
-		if (slotHost === ownHost.current) {
-			slotHost = null;
-			emitSlots();
-		}
-		ownHost.current = null;
-	}, []);
 	if (slots.length === 0 || settingsOpen) return null;
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
 	return createPortal(<NoticeFrame label={slots.length === 1 ? slots[0]!.label : t("notify.title")}>
-		<div ref={setHost} className="flex flex-col gap-2" />
+		<div className="flex flex-col gap-2">
+			{slots.map((slot) => <div key={slot.id} ref={hostRef(slot.id)} className="toast-enter" />)}
+		</div>
 	</NoticeFrame>, document.body);
 }
 

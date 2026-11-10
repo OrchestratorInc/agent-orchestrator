@@ -20,14 +20,17 @@ const MAX_LOGOS = 3;
 export function SessionImportOffer() {
 	const { t } = useTranslation();
 	const closed = useUiStore((state) => state.sessionImportOfferClosed);
+	// Like agent updates, it waits until the first-run prompt is done.
+	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const openFolderImport = useSessionImportStore((state) => state.openFolderImport);
 	const readiness = useAgentReadinessQuery(!closed);
 	const agents = (readiness.data?.agents ?? [])
 		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && agent.installation.state === "installed" && agent.authentication.state !== "unauthorized")
 		.map((agent) => agent.id as AgentId);
-	useImportOfferShown("home", !closed && agents.length > 0);
-	if (closed || agents.length === 0) return null;
+	const shown = !closed && !firstRunPromptActive && agents.length > 0;
+	useImportOfferShown("home", shown);
+	if (!shown) return null;
 	const hidden = agents.length - MAX_LOGOS;
 	const title = t("sessionImport.offerTitle");
 	return (

@@ -26,7 +26,7 @@ function renderOffer(...agents: ReturnType<typeof agent>[]) {
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false });
+	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false, firstRunPromptActive: false });
 	useSessionImportStore.setState({ dialog: null });
 });
 
@@ -81,4 +81,10 @@ it("dismisses from the close button the same way", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Dismiss import suggestion" }));
 	await waitFor(() => expect(screen.queryByRole("region")).not.toBeInTheDocument());
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
+});
+
+it("waits for the first-run prompt, like agent updates", () => {
+	useUiStore.setState({ firstRunPromptActive: true });
+	renderOffer(agent("codex", true, "authorized"));
+	expect(screen.queryByRole("region")).not.toBeInTheDocument();
 });
