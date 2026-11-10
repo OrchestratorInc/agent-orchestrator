@@ -368,3 +368,25 @@ func TestKillCancelsTerminalStartWaitingForPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Orchestrator spawns always ask for async, automations included. An
+// automation's Terminal run is marked launched only after its prompt is
+// delivered, so that launch keeps running inside the request.
+func TestAutomationTerminalLaunchStaysSynchronous(t *testing.T) {
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	m, st, _, _ := newAsyncTerminalManager(rt, msg)
+	deferred := deferredBackground(m)
+	cfg := asyncTerminalConfig("nightly triage")
+	run := domain.AutomationRunID("run-1")
+	cfg.Kind, cfg.AutomationRunID = domain.KindOrchestrator, &run
+
+	rec, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*deferred) != 0 || rt.created != 1 || len(msg.msgs) != 1 || !st.sessions[rec.ID].AutomationLaunchCompleted {
+		t.Fatalf("background=%d runtimes=%d prompts=%d launched=%t, want a completed synchronous launch",
+			len(*deferred), rt.created, len(msg.msgs), st.sessions[rec.ID].AutomationLaunchCompleted)
+	}
+}

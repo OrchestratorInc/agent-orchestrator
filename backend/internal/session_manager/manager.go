@@ -1200,9 +1200,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 
 	// A caller with a UI to return to gets the session as soon as it is
 	// addressable, in either mode; the worktree and the agent start in the
-	// background (chat_spawn_async.go).
+	// background (chat_spawn_async.go). An automation's Terminal launch stays
+	// synchronous: its run is marked launched only once the prompt is delivered.
 	asyncStart := cfg.Async && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker) &&
-		(mode == domain.SessionModeTUI || m.chat != nil)
+		((mode == domain.SessionModeChat && m.chat != nil) || (mode == domain.SessionModeTUI && cfg.AutomationRunID == nil))
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
