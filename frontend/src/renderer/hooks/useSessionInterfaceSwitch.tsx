@@ -556,6 +556,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		notice,
 		onConversationWorkChange,
 		switchControl,
+		// A switch is being requested or running, so its control shows its progress.
+		switchPending: Boolean(switchControl && (interfaceSwitch.starting || showStatus)),
 		// For a menu: the same switch as a plain action, absent while one is running.
 		switchAction: session && showAction && !showStatus ? {
 			disabled: !(Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)) || interfaceSwitch.starting || activeTransition || chatLeaveLocked,

@@ -1026,6 +1026,7 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
+	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
 	controllerTransitioning,
@@ -1069,6 +1070,8 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
+	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1792,6 +1795,7 @@ export function CloudSessionChatSurface({
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
+			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

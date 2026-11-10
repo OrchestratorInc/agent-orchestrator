@@ -10,6 +10,8 @@ type TerminalTabFrameProps = {
 	label: string;
 	/** Shown on hover or focus: the tab's close button or menu. It takes the icon's slot, or the tab's right edge when there is no icon. */
 	action?: ReactNode;
+	/** Closes the tab; a middle-click runs it, as the slot's close button does. */
+	onClose?: () => void;
 	/** Keep the action showing at rest (unsaved dot, running switch). */
 	actionPinned?: boolean;
 	buttonRef?: Ref<HTMLButtonElement>;
@@ -41,6 +43,7 @@ export function TerminalTabFrame({
 	label,
 	action,
 	actionPinned = false,
+	onClose,
 	buttonRef,
 	buttonProps,
 	editingContent,
@@ -63,6 +66,13 @@ export function TerminalTabFrame({
 				if (event.target !== event.currentTarget) return;
 				buttonProps?.onClick?.(event as unknown as ReactMouseEvent<HTMLButtonElement>);
 			}}
+			// No autoscroll or selection paste on the press; the release closes.
+			onMouseDown={onClose ? (event) => { if (event.button === 1) event.preventDefault(); } : undefined}
+			onAuxClick={onClose ? (event) => {
+				if (event.button !== 1) return;
+				event.preventDefault();
+				onClose();
+			} : undefined}
 		>
 			{editingContent ? (
 				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-control leading-none">

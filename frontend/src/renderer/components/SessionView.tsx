@@ -2027,21 +2027,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local session's tab menus hold the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	// A session's tab menus hold the interface switch and, in a local terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	// The agent rows apply while there is a switch to offer, or a terminal's
-	// agent to pick and no switch running. Then the tab also shows its ⋮ button;
-	// otherwise the running switch's status takes the tab's action slot.
+	// The agent rows apply while there is a switch to offer, or a local
+	// terminal's agent to pick and no switch running.
 	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
-		if (!session || session.cloud) return undefined;
-		const picksAgent = interfaceUi.target === "chat" && !interfaceUi.switchControl;
-		if (!interfaceUi.switchAction && !picksAgent) return undefined;
-		return { session, hostId, blocked: agentWorking, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+		if (!session) return undefined;
+		const picksAgent = !session.cloud && interfaceUi.target === "chat";
+		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
+		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
-	const sessionTabActions = sessionTabAgentMenu
-		? <SessionTabMenuButton key={uiSessionId} />
-		: session ? (interfaceUi.switchControl ?? null) : null;
+	// The session tab's action slot holds its ⋮ menu, as every other tab's holds
+	// its close button. While an interface switch is requested or running, the
+	// switch's status (cancel on hover) takes the slot and stays visible.
+	const sessionTabActionPinned = interfaceUi.switchPending;
+	const sessionTabActions = !session
+		? null
+		: sessionTabActionPinned
+			? interfaceUi.switchControl
+			: <SessionTabMenuButton key={uiSessionId} />;
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
@@ -2068,8 +2073,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<SessionTopbarActions route={sessionTopbarRoute} />
 		</div>
 	);
-	// While an interface switch runs, its status replaces the tab menu and stays visible.
-	const sessionTabActionPinned = Boolean(interfaceUi.switchControl && !interfaceUi.switchAction);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -2555,6 +2558,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenFile={openCenterFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
+									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}

@@ -251,6 +251,13 @@ export function SplitGroupTab({
 							if (event.detail > 1) return;
 							member.onSelect();
 						}}
+						// A middle-click closes this member's pane, as its close button does.
+						onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+						onAuxClick={(event) => {
+							if (event.button !== 1) return;
+							event.preventDefault();
+							member.onClose();
+						}}
 						onPointerDown={(event) => {
 							// A member drags on its own; the group tab itself stays in place.
 							event.stopPropagation();

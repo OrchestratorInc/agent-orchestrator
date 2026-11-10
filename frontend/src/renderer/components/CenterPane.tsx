@@ -136,7 +136,8 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const [dragging, setDragging] = useState(false);
 	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
+		// A middle-click closes the tab and a right-click opens its menu; neither drags.
+		if (event.button !== 0 || (event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
 		const item = itemRef.current;
 		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
@@ -722,9 +723,9 @@ type SessionPaneTabProps = {
 	providerIcon?: boolean;
 	icon?: ReactNode;
 	title?: string;
-	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
+	/** The control in the tab's icon slot: its ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest, e.g. while an interface switch runs. */
+	/** Keep the action showing at rest, while an interface switch is in flight. */
 	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;

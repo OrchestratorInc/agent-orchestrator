@@ -173,6 +173,7 @@ export function ShellTerminalTab({
 				<TerminalTabFrame
 					wide={Boolean(agent)}
 					action={closeAction}
+					onClose={closeAction ? onClose : undefined}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,
