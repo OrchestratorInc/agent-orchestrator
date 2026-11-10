@@ -248,6 +248,26 @@ describe("ChatWorkspace retry", () => {
 		}
 	});
 
+	it("tells the user a held message goes out once the other app closes the chat", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, harness: "claude-code", controller: { state: "hibernated" }, openElsewhere: true }}
+					onResumeAgent={retry}
+				/>,
+			);
+			expect(screen.getByText("This is open elsewhere")).toBeVisible();
+			expect(screen.getByText("Close it there. Orchestrator then sends your message.")).toBeVisible();
+			expect(screen.queryByRole("button", { name: /^Retry$/ })).not.toBeInTheDocument();
+			act(() => vi.advanceTimersByTime(60_000));
+			expect(retry).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("offers a retry on the failed turn and reports the clicked turn", async () => {
 		const onRetryTurn = vi.fn();
 		render(<ChatWorkspace snapshot={failedSnapshot()} retryControl={{ retry: onRetryTurn }} />);

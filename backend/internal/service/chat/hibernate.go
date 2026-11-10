@@ -61,6 +61,10 @@ func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) e
 // SetChatView records a short-lived view lease. Registration and the final
 // hibernation check use the same controller gate, so opening a view either
 // prevents shutdown or waits for shutdown and then wakes the native session.
+func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) bool) {
+	s.otherWriter = check
+}
+
 func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID string, active bool) error {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
@@ -187,10 +191,11 @@ type hibernateOptions struct {
 	// ignoreViews lets a refresh run under an open view: the user's next
 	// message is about to wake the session anyway.
 	ignoreViews bool
+	otherWriter bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.otherWriter {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -561,7 +566,7 @@ func (s *Service) admitController(ctx context.Context, id domain.SessionID, wake
 }
 
 func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error {
-	if s.wakeChat == nil {
+	if s.wakeChat == nil || s.isHeldElsewhere(id) {
 		return ErrNoController
 	}
 	if controller, err := s.Controller(id); err == nil {
@@ -682,6 +687,9 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.wakeMu.Unlock()
 		}()
 		ctx := context.Background()
+		if !s.waitForOtherWriter(ctx, id) {
+			return
+		}
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			if s.stoppedForUpdate(id) {
 				s.log.Warn("chat session could not wake during a harness update; queued messages kept for its resume", "session", id, "err", err)
@@ -703,6 +711,63 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()
+}
+
+var otherWriterPoll = 2 * time.Second
+
+func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionRecord) bool {
+	if s.otherWriter == nil || rec.HibernatedAt != nil {
+		return false
+	}
+	controller, err := s.Controller(rec.ID)
+	if err != nil || controller.State() != ports.ChatControllerReady || !s.otherWriter(ctx, rec, controller.started) {
+		return false
+	}
+	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
+	if err != nil {
+		s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
+	}
+	if stopped {
+		s.setHeldElsewhere(rec.ID, true)
+		s.log.Info("chat session stopped because another process writes it", "session", rec.ID)
+	}
+	return stopped
+}
+
+func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) bool {
+	if !s.isHeldElsewhere(id) {
+		return true
+	}
+	defer s.setHeldElsewhere(id, false)
+	for {
+		rec, err := s.requireChatSession(ctx, id)
+		if err != nil || rec.IsTerminated {
+			return false
+		}
+		if rec.HibernatedAt == nil || !s.otherWriter(ctx, rec, time.Time{}) {
+			return true
+		}
+		time.Sleep(otherWriterPoll)
+	}
+}
+
+func (s *Service) setHeldElsewhere(id domain.SessionID, held bool) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	if !held {
+		delete(s.heldElsewhere, id)
+		return
+	}
+	if s.heldElsewhere == nil {
+		s.heldElsewhere = make(map[domain.SessionID]bool)
+	}
+	s.heldElsewhere[id] = true
+}
+
+func (s *Service) isHeldElsewhere(id domain.SessionID) bool {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	return s.heldElsewhere[id]
 }
 
 func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {

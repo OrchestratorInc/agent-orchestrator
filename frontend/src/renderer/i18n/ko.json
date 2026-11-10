@@ -74,6 +74,7 @@
 	"chat.archived.body": "기록은 유지됩니다. 계속하려면 세션을 복원하세요.",
 	"chat.controller.openElsewhere": "다른 곳에서 열려 있습니다",
 	"chat.controller.couldNotConnect": "에이전트에 연결할 수 없습니다",
+	"chat.controller.heldElsewhereBody": "그곳에서 닫으세요. 그러면 Orchestrator가 메시지를 보냅니다.",
 	"chat.controller.openElsewhereBody": "여기서 계속하려면 그곳에서 닫으세요.",
 	"chat.controller.openElsewhereRecheck": "Orchestrator가 {{seconds}}초마다 다시 확인합니다.",
 	"chat.controller.openElsewhereCodex": "Codex는 닫힌 채팅을 한동안 유지할 수 있습니다.",

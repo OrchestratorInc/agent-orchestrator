@@ -106,7 +106,9 @@ type Service struct {
 	usageLimitAccounts    usageLimitAccountReader
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
-	updateStops map[domain.SessionID]bool
+	updateStops   map[domain.SessionID]bool
+	heldElsewhere map[domain.SessionID]bool
+	otherWriter   func(context.Context, domain.SessionRecord, time.Time) bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -1237,6 +1239,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
 	}
 	s.mu.Lock()
+	controller.started = s.now()
 	s.ownerControllers[owner] = controller
 	if owner.Kind == domain.ConversationOwnerSession {
 		s.controllers[cfg.SessionID] = controller
@@ -1375,9 +1378,9 @@ func (s *Service) Send(
 	if err := validateFileReferenceContent(msg, string(id)); err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if s.switchBeforeSend(ctx, record) {
-		// The provider stopped on its old release. The hibernated path below
-		// queues this message and wakes the session on the installed one.
+	if s.switchBeforeSend(ctx, record) || s.stopForOtherWriter(ctx, record) {
+		// The provider stopped. The hibernated path below queues this message
+		// and wakes the session.
 		if record, err = s.requireChatSession(ctx, id); err != nil {
 			return domain.ConversationTurn{}, err
 		}
@@ -2013,7 +2016,8 @@ type Snapshot struct {
 	// driver lands, and the abilities already differ per install today. Nil when no
 	// controller is live, because an unstarted session's abilities are not yet known
 	// and guessing them is how a control appears and then vanishes.
-	Capabilities ports.ChatCapabilities
+	Capabilities  ports.ChatCapabilities
+	OpenElsewhere bool
 }
 
 // SnapshotReader is the durable read the service serves snapshots from. Kept
@@ -2150,6 +2154,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
+		OpenElsewhere:                    s.isHeldElsewhere(id),
 		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,
@@ -2270,6 +2275,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Harness:                          record.Harness,
 		Mode:                             domain.NormalizeSessionMode(record.Mode),
 		Controller:                       state,
+		OpenElsewhere:                    s.isHeldElsewhere(id),
 		Turns:                            withDispatchingTurnRunning(rows.Turns, dispatching...),
 		Messages:                         rows.Messages,
 		Activities:                       rows.Activities,

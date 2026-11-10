@@ -306,6 +306,50 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	return false
 }
 
+const claudeTranscriptTail = 1 << 20
+
+func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) bool {
+	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
+		return false
+	}
+	return adoptedOwnedElsewhere(ctx, rec) ||
+		!since.IsZero() && claudeTurnsWrittenElsewhere(rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+}
+
+func claudeTurnsWrittenElsewhere(path, workspace string, since time.Time) bool {
+	if path == "" || workspace == "" {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.ModTime().After(since) {
+		return false
+	}
+	start := max(info.Size()-claudeTranscriptTail, 0)
+	tail := make([]byte, info.Size()-start)
+	if _, err := file.ReadAt(tail, start); err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	for line := range bytes.SplitSeq(tail, []byte{'\n'}) {
+		var record struct {
+			Type      string    `json:"type"`
+			CWD       string    `json:"cwd"`
+			Timestamp time.Time `json:"timestamp"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Type != "user" && record.Type != "assistant" {
+			continue
+		}
+		if record.CWD != "" && record.Timestamp.After(since) && !pathWithin(workspace, record.CWD) {
+			return true
+		}
+	}
+	return false
+}
+
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside
 // this session's own AO workspace is an earlier AO attempt, not another owner.
 func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) bool {
