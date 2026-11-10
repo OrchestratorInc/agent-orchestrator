@@ -22,7 +22,6 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -51,10 +50,25 @@ func Env(ctx context.Context, rootPath, workspacePath string) map[string]string 
 		"CONDUCTOR_IS_LOCAL":       "1",
 		"CONDUCTOR_PORT":           strconv.Itoa(port(workspacePath)),
 	}
-	if resolution, err := gitdefault.New("git", nil).Inspect(ctx, rootPath); err == nil {
-		env["CONDUCTOR_DEFAULT_BRANCH"] = resolution.Branch
+	if branch := defaultBranch(ctx, rootPath); branch != "" {
+		env["CONDUCTOR_DEFAULT_BRANCH"] = branch
 	}
 	return env
+}
+
+func defaultBranch(ctx context.Context, root string) string {
+	if !slices.ContainsFunc([]string{settingsFile, localSettingsFile, legacyFile}, func(name string) bool {
+		_, err := os.Stat(filepath.Join(root, name))
+		return err == nil
+	}) {
+		return ""
+	}
+	out, err := aoprocess.CommandContext(ctx, "git", "-C", root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	_, branch, _ := strings.Cut(strings.TrimSpace(string(out)), "/")
+	return branch
 }
 
 // port is the first of the ten ports Conductor gives each workspace, below

@@ -188,7 +188,7 @@ func TestEnvGivesEachWorkspaceAStablePortBlock(t *testing.T) {
 
 func TestEnvSetsTheRepositoryDefaultBranch(t *testing.T) {
 	ctx := context.Background()
-	root := repo(t, map[string]string{"a": "1"}, "a")
+	root := repo(t, map[string]string{"a": "1", ".conductor/settings.toml": ""}, "a")
 	for _, args := range [][]string{
 		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init"},
 		{"remote", "add", "origin", "https://example.com/r.git"},
@@ -206,6 +206,12 @@ func TestEnvSetsTheRepositoryDefaultBranch(t *testing.T) {
 	}
 	if _, ok := Env(ctx, t.TempDir(), workspace)["CONDUCTOR_DEFAULT_BRANCH"]; ok {
 		t.Fatal("a folder without a default branch got CONDUCTOR_DEFAULT_BRANCH")
+	}
+	if err := os.Remove(filepath.Join(root, ".conductor", "settings.toml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Env(ctx, root, workspace)["CONDUCTOR_DEFAULT_BRANCH"]; ok {
+		t.Fatal("a repository without Conductor settings looked up its default branch")
 	}
 }
 
