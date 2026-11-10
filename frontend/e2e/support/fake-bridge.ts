@@ -165,8 +165,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onProgress: () => () => undefined,
 				},
 				artifactSnapshot: {
-					get: async () => null,
-					request: async () => null,
+					request: async () => false,
 				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
@@ -1120,8 +1119,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onProgress: () => () => undefined,
 				},
 				artifactSnapshot: {
-					get: async () => null,
-					request: async () => null,
+					request: async () => false,
 				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),

@@ -1,8 +1,9 @@
 /**
  * The disk cache of artifact preview images, and the queue that fills it.
  *
- * `get` answers from disk; `request` renders what is missing, at most
- * one at a time, and each artifact once however many cards ask.
+ * Cards load a cached image through the snapshot scheme, which `get` answers
+ * from disk; `request` renders what is missing, at most one at a time, and
+ * each artifact once however many cards ask.
  * Files live under the app data dir and are pruned oldest-read first, so the
  * cache stays bounded.
  */
@@ -10,8 +11,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { IpcMain } from "electron";
-import { type ArtifactSnapshotJob, ARTIFACT_SNAPSHOT_VERSION, parseArtifactSnapshotJob } from "../shared/artifact-snapshot";
+import type { IpcMain, Protocol } from "electron";
+import {
+	ARTIFACT_SNAPSHOT_SCHEME,
+	ARTIFACT_SNAPSHOT_VERSION,
+	type ArtifactSnapshotIdentity,
+	type ArtifactSnapshotJob,
+	parseArtifactSnapshotJob,
+	parseArtifactSnapshotUrl,
+} from "../shared/artifact-snapshot";
 
 /** The most the cache keeps; the oldest-read files go first. */
 export const SNAPSHOT_CACHE_MAX_BYTES = 150 * 1024 * 1024;
@@ -36,8 +44,8 @@ export type SnapshotResult = Buffer | null | typeof SNAPSHOT_DROPPED;
 export type ArtifactSnapshotStore = ReturnType<typeof createArtifactSnapshotStore>;
 
 /** The cache file name for a job: the same file, version and theme share one. URLs are left out, as they carry ports and tokens that change between launches. */
-export function artifactSnapshotKey(job: ArtifactSnapshotJob): string {
-	const identity = [ARTIFACT_SNAPSHOT_VERSION, job.hostId ?? "", job.cloud?.orgId ?? "", job.sessionId, job.path, job.updatedAt, job.theme, job.styleTheme];
+export function artifactSnapshotKey(snapshot: ArtifactSnapshotIdentity): string {
+	const identity = [ARTIFACT_SNAPSHOT_VERSION, snapshot.hostId ?? "", snapshot.cloud?.orgId ?? "", snapshot.sessionId, snapshot.path, snapshot.updatedAt, snapshot.theme, snapshot.styleTheme];
 	return createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 40);
 }
 
@@ -53,8 +61,8 @@ export function createArtifactSnapshotStore(options: {
 	const fileFor = (key: string) => path.join(directory, `${key}.webp`);
 	const inFlight = new Map<string, Promise<SnapshotResult>>();
 	const failedAt = new Map<string, number>();
-	const waiting: Array<{ key: string; priority: number; seq: number; start: () => void; drop: () => void }> = [];
-	let seq = 0;
+	// Oldest first; the newest request is at the end.
+	const waiting: Array<{ start: () => void; drop: () => void }> = [];
 	// One render at a time: every job shares the renderer's single window, and starting a job
 	// unmounts the previous one's preview, so two at once would wipe each other mid-render.
 	let running = false;
@@ -118,25 +126,15 @@ export function createArtifactSnapshotStore(options: {
 	}
 
 	function pump(): void {
-		if (running || waiting.length === 0) return;
-		// Cards on screen first, then the newest: the cards being looked at are the ones that asked last.
-		let best = 0;
-		for (let index = 1; index < waiting.length; index++) {
-			const a = waiting[index]!;
-			const b = waiting[best]!;
-			if (a.priority > b.priority || (a.priority === b.priority && a.seq > b.seq)) best = index;
-		}
-		waiting.splice(best, 1)[0]?.start();
+		if (running) return;
+		// The newest first: a card asks once it has been on screen a while, so the last to ask is the one being looked at.
+		waiting.pop()?.start();
 	}
 
-	function enqueue(key: string, job: ArtifactSnapshotJob, priority: number): Promise<SnapshotResult> {
+	function enqueue(job: ArtifactSnapshotJob, key: string): Promise<SnapshotResult> {
 		return new Promise((resolve) => {
-			const finish = (bytes: SnapshotResult) => resolve(bytes);
 			waiting.push({
-				key,
-				priority,
-				seq: (seq += 1),
-				drop: () => finish(SNAPSHOT_DROPPED),
+				drop: () => resolve(SNAPSHOT_DROPPED),
 				start: () => {
 					running = true;
 					void (async () => {
@@ -144,55 +142,42 @@ export function createArtifactSnapshotStore(options: {
 							const bytes = await render(job);
 							await write(key, bytes);
 							failedAt.delete(key);
-							finish(bytes);
+							resolve(bytes);
 						} catch (error) {
 							failedAt.set(key, error instanceof SnapshotUnavailableError ? Number.POSITIVE_INFINITY : now());
-							finish(null);
+							resolve(null);
 						} finally {
-							if (gapMs > 0) await new Promise((resolve) => setTimeout(resolve, gapMs));
+							if (gapMs > 0) await new Promise((wait) => setTimeout(wait, gapMs));
 							running = false;
 							pump();
 						}
 					})();
 				},
 			});
-			// The lowest priority, oldest request goes first when too many wait.
-			while (waiting.length > SNAPSHOT_MAX_QUEUED) {
-				let worst = 0;
-				for (let index = 1; index < waiting.length; index++) {
-					const a = waiting[index]!;
-					const b = waiting[worst]!;
-					if (a.priority < b.priority || (a.priority === b.priority && a.seq < b.seq)) worst = index;
-				}
-				waiting.splice(worst, 1)[0]?.drop();
-			}
+			// The oldest request goes first when too many wait.
+			while (waiting.length > SNAPSHOT_MAX_QUEUED) waiting.shift()?.drop();
 			pump();
 		});
 	}
 
 	return {
-		/** The image already cached for the job, or null. */
-		async get(job: ArtifactSnapshotJob): Promise<Buffer | null> {
-			return read(artifactSnapshotKey(job));
+		/** The image already cached for the snapshot, or null. */
+		async get(snapshot: ArtifactSnapshotIdentity): Promise<Buffer | null> {
+			return read(artifactSnapshotKey(snapshot));
 		},
 		/**
 		 * The job's image, rendered if it is not cached yet; null when it cannot be rendered,
 		 * SNAPSHOT_DROPPED when the queue was full and the request should be made again.
-		 * A higher `priority` (a card on screen) renders first.
 		 */
-		async request(job: ArtifactSnapshotJob, priority = 0): Promise<SnapshotResult> {
+		async request(job: ArtifactSnapshotJob): Promise<SnapshotResult> {
 			const key = artifactSnapshotKey(job);
 			const cached = await read(key);
 			if (cached) return cached;
 			const existing = inFlight.get(key);
-			if (existing) {
-				const queued = waiting.find((entry) => entry.key === key);
-				if (queued && priority > queued.priority) queued.priority = priority;
-				return existing;
-			}
+			if (existing) return existing;
 			const failed = failedAt.get(key);
 			if (failed !== undefined && now() - failed < SNAPSHOT_RETRY_MS) return null;
-			const pending = enqueue(key, job, priority);
+			const pending = enqueue(job, key);
 			inFlight.set(key, pending);
 			void pending.finally(() => {
 				if (inFlight.get(key) === pending) inFlight.delete(key);
@@ -203,15 +188,29 @@ export function createArtifactSnapshotStore(options: {
 	};
 }
 
-/** Answers the renderer's `get` and `request` for cached artifact previews. */
-export function registerArtifactSnapshotIpc(deps: { ipcMain: Pick<IpcMain, "handle">; store: Pick<ArtifactSnapshotStore, "get" | "request"> }): void {
-	const asBytes = (bytes: SnapshotResult) => (bytes === SNAPSHOT_DROPPED ? bytes : bytes ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : null);
-	deps.ipcMain.handle("artifactSnapshot:get", async (_event, value: unknown) => {
+/** Answers the renderer's request to render a missing snapshot: true once it is cached. */
+export function registerArtifactSnapshotIpc(deps: { ipcMain: Pick<IpcMain, "handle">; store: Pick<ArtifactSnapshotStore, "request"> }): void {
+	deps.ipcMain.handle("artifactSnapshot:request", async (_event, value: unknown) => {
 		const job = parseArtifactSnapshotJob(value);
-		return job ? asBytes(await deps.store.get(job)) : null;
+		if (!job) return false;
+		const result = await deps.store.request(job);
+		return result !== null && result !== SNAPSHOT_DROPPED;
 	});
-	deps.ipcMain.handle("artifactSnapshot:request", async (_event, value: unknown, priority: unknown) => {
-		const job = parseArtifactSnapshotJob(value);
-		return job ? asBytes(await deps.store.request(job, priority === 1 ? 1 : 0)) : null;
+}
+
+/**
+ * Serves cached snapshots to the cards' <img>s, so a cached card costs one image load and no
+ * script. A snapshot that is not cached yet is a 404, which the card answers by drawing live.
+ * The image never changes for a URL (the URL names the file's version and theme), so it may be
+ * kept; a miss may not, as the next visit may find the image rendered.
+ */
+export function registerArtifactSnapshotProtocol(deps: { protocol: Pick<Protocol, "handle">; store: Pick<ArtifactSnapshotStore, "get"> }): void {
+	deps.protocol.handle(ARTIFACT_SNAPSHOT_SCHEME, async (request) => {
+		const snapshot = parseArtifactSnapshotUrl(request.url);
+		const bytes = snapshot ? await deps.store.get(snapshot) : null;
+		if (!bytes) return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
+		return new Response(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), {
+			headers: { "content-type": "image/webp", "cache-control": "max-age=31536000, immutable" },
+		});
 	});
 }

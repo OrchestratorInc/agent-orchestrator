@@ -210,7 +210,8 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { createArtifactSnapshotStore, registerArtifactSnapshotIpc } from "./main/artifact-snapshots";
+import { createArtifactSnapshotStore, registerArtifactSnapshotIpc, registerArtifactSnapshotProtocol } from "./main/artifact-snapshots";
+import { ARTIFACT_SNAPSHOT_SCHEME } from "./shared/artifact-snapshot";
 import { createArtifactSnapshotRenderer } from "./main/artifact-snapshot-window";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -624,6 +625,9 @@ protocol.registerSchemesAsPrivileged([
 		scheme: RENDERER_SCHEME,
 		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
+	// Cached artifact previews, loaded by the cards' <img>s (main/artifact-snapshots.ts). Secure, so
+	// the app:// renderer may show them.
+	{ scheme: ARTIFACT_SNAPSHOT_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
 // Only the app's single instance claims (or, for a loopback dev build,
@@ -3594,13 +3598,11 @@ const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
 	preload: preloadPath(),
 	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
 });
-registerArtifactSnapshotIpc({
-	ipcMain,
-	store: createArtifactSnapshotStore({
-		directory: path.join(desktopDataDir, "artifact-previews"),
-		render: artifactSnapshotRenderer.render,
-	}),
+const artifactSnapshotStore = createArtifactSnapshotStore({
+	directory: path.join(desktopDataDir, "artifact-previews"),
+	render: artifactSnapshotRenderer.render,
 });
+registerArtifactSnapshotIpc({ ipcMain, store: artifactSnapshotStore });
 registerCloudArtifactIpc({
 	ipcMain,
 	openInBrowser: (target) => openFileInDefaultBrowser(target),
@@ -4314,6 +4316,7 @@ app.whenReady().then(async () => {
 	}
 
 	registerRendererProtocol();
+	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))

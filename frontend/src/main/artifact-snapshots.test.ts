@@ -2,8 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ArtifactSnapshotJob } from "../shared/artifact-snapshot";
-import { artifactSnapshotKey, createArtifactSnapshotStore, registerArtifactSnapshotIpc, SNAPSHOT_DROPPED, SNAPSHOT_MAX_QUEUED, SnapshotUnavailableError } from "./artifact-snapshots";
+import { type ArtifactSnapshotJob, artifactSnapshotUrl, parseArtifactSnapshotUrl } from "../shared/artifact-snapshot";
+import {
+	artifactSnapshotKey,
+	createArtifactSnapshotStore,
+	registerArtifactSnapshotIpc,
+	registerArtifactSnapshotProtocol,
+	SNAPSHOT_DROPPED,
+	SNAPSHOT_MAX_QUEUED,
+	SnapshotUnavailableError,
+} from "./artifact-snapshots";
 
 const job = (overrides: Partial<ArtifactSnapshotJob> = {}): ArtifactSnapshotJob => ({
 	sessionId: "s1",
@@ -101,7 +109,7 @@ describe("artifact snapshot store", () => {
 		expect(render).toHaveBeenCalledTimes(1);
 	});
 
-	it("renders cards on screen before the newest request, and tells a dropped request apart from a failure", async () => {
+	it("renders the newest request first, and tells a dropped request apart from a failure", async () => {
 		const order: string[] = [];
 		const gates: Array<() => void> = [];
 		const render = vi.fn((request: ArtifactSnapshotJob) => new Promise<Buffer>((resolve) => {
@@ -111,18 +119,17 @@ describe("artifact snapshot store", () => {
 		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
 		const first = store.request(job({ path: "first.html" }));
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
-		const below = store.request(job({ path: "below.html" }), 0);
-		const newestBelow = store.request(job({ path: "newest-below.html" }), 0);
-		const onScreen = store.request(job({ path: "on-screen.html" }), 1);
+		const older = store.request(job({ path: "older.html" }));
+		const newest = store.request(job({ path: "newest.html" }));
 		gates.shift()?.();
 		await first;
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(2));
-		expect(order[1]).toBe("on-screen.html");
-		// A queue over its limit drops its lowest-priority, oldest request, and says so.
-		const fillers = Array.from({ length: SNAPSHOT_MAX_QUEUED + 1 }, (_, n) => store.request(job({ path: `fill-${n}.html` }), 0));
-		expect(await below).toBe(SNAPSHOT_DROPPED);
+		expect(order[1]).toBe("newest.html");
+		// A queue over its limit drops its oldest request, and says so.
+		const fillers = Array.from({ length: SNAPSHOT_MAX_QUEUED + 1 }, (_, n) => store.request(job({ path: `fill-${n}.html` })));
+		expect(await older).toBe(SNAPSHOT_DROPPED);
 		// Let every remaining render finish, so nothing is still writing when the directory goes.
-		const settled = Promise.all([newestBelow, onScreen, ...fillers]);
+		const settled = Promise.all([newest, ...fillers]);
 		const opener = setInterval(() => gates.splice(0).forEach((open) => open()), 2);
 		await settled;
 		clearInterval(opener);
@@ -145,16 +152,52 @@ describe("artifact snapshot store", () => {
 });
 
 describe("registerArtifactSnapshotIpc", () => {
-	it("answers only well-formed jobs", async () => {
+	it("renders only well-formed jobs, and answers whether the snapshot is now cached", async () => {
 		const handlers = new Map<string, (event: unknown, value: unknown) => unknown>();
-		const store = { get: vi.fn(async () => Buffer.from("a")), request: vi.fn(async () => Buffer.from("b")) };
+		const store = { request: vi.fn<(request: ArtifactSnapshotJob) => Promise<Buffer | null | typeof SNAPSHOT_DROPPED>>(async () => Buffer.from("b")) };
 		registerArtifactSnapshotIpc({ ipcMain: { handle: (channel, handler) => void handlers.set(channel, handler as never) }, store });
-		expect(await handlers.get("artifactSnapshot:get")?.({}, { nope: true })).toBeNull();
+		const request = handlers.get("artifactSnapshot:request")!;
+		expect(await request({}, { nope: true })).toBe(false);
 		// Main refuses another host's artifact whatever the renderer decided.
-		expect(await handlers.get("artifactSnapshot:request")?.({}, job({ hostId: "host-2" }))).toBeNull();
+		expect(await request({}, job({ hostId: "host-2" }))).toBe(false);
 		expect(store.request).not.toHaveBeenCalled();
-		expect(store.get).not.toHaveBeenCalled();
-		const bytes = (await handlers.get("artifactSnapshot:request")?.({}, job())) as Uint8Array;
-		expect(Buffer.from(bytes).toString()).toBe("b");
+		expect(await request({}, job())).toBe(true);
+		store.request.mockResolvedValueOnce(SNAPSHOT_DROPPED).mockResolvedValueOnce(null);
+		expect(await request({}, job())).toBe(false);
+		expect(await request({}, job())).toBe(false);
+	});
+});
+
+describe("snapshot URLs", () => {
+	it("name the same snapshot as the job they were made from", () => {
+		const cloudJob = job({ hostId: "local", cloud: { orgId: "org-1" }, path: "dir/a b&c=?.html", styleTheme: "nord", theme: "light" });
+		const parsed = parseArtifactSnapshotUrl(artifactSnapshotUrl(cloudJob));
+		expect(parsed).toBeDefined();
+		expect(artifactSnapshotKey(parsed!)).toBe(artifactSnapshotKey(cloudJob));
+		expect(artifactSnapshotKey(parseArtifactSnapshotUrl(`${artifactSnapshotUrl(job())}&r=1`)!)).toBe(artifactSnapshotKey(job()));
+	});
+
+	it("refuse another host's artifact and any other URL", () => {
+		expect(parseArtifactSnapshotUrl(artifactSnapshotUrl(job({ hostId: "host-2" })))).toBeUndefined();
+		expect(parseArtifactSnapshotUrl(artifactSnapshotUrl(job()).replace("://cache/", "://other/"))).toBeUndefined();
+		expect(parseArtifactSnapshotUrl("https://example.com/?s=s1&p=a&u=1&t=dark&y=")).toBeUndefined();
+		expect(parseArtifactSnapshotUrl("not a url")).toBeUndefined();
+	});
+});
+
+describe("registerArtifactSnapshotProtocol", () => {
+	it("serves a cached snapshot as a WebP and a missing one as an uncacheable 404", async () => {
+		let handler: ((request: Request) => Promise<Response>) | undefined;
+		const store = createArtifactSnapshotStore({ directory, render: async () => Buffer.from("webp-bytes") });
+		registerArtifactSnapshotProtocol({ protocol: { handle: (_scheme, handle) => void (handler = handle as never) }, store });
+		const missing = await handler!(new Request(artifactSnapshotUrl(job())));
+		expect(missing.status).toBe(404);
+		expect(missing.headers.get("cache-control")).toBe("no-store");
+		await store.request(job());
+		const found = await handler!(new Request(artifactSnapshotUrl(job())));
+		expect(found.status).toBe(200);
+		expect(found.headers.get("content-type")).toBe("image/webp");
+		expect(Buffer.from(await found.arrayBuffer()).toString()).toBe("webp-bytes");
+		expect((await handler!(new Request(artifactSnapshotUrl(job({ hostId: "host-2" }))))).status).toBe(404);
 	});
 });

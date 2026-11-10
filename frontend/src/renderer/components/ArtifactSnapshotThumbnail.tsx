@@ -1,42 +1,17 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ArtifactSnapshotJob } from "../../shared/artifact-snapshot";
+import { useEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { type ArtifactSnapshotJob, artifactSnapshotUrl } from "../../shared/artifact-snapshot";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
 import { LOCAL_HOST } from "../lib/hosts";
-import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
-/** Decoded images kept for cards that scroll away and come back; the bytes themselves live on disk. */
-const MEMORY_LIMIT = 300;
-/** A request the queue pushed out is made again after this long. */
-const RETRY_DROPPED_MS = 1_500;
+/** How long a live card stays on screen with its preview drawn before its snapshot is taken. */
+const SNAPSHOT_AFTER_MS = 1_500;
 
-type Remembered = { url: string; users: number };
-// A Map iterates in insertion order, so re-inserting on every use keeps it least recently used first.
-const images = new Map<string, Remembered>();
-
-function remember(key: string, url: string): Remembered {
-	const entry = images.get(key) ?? { url, users: 0 };
-	images.delete(key);
-	images.set(key, entry);
-	for (const [oldest, old] of images) {
-		if (images.size <= MEMORY_LIMIT) break;
-		if (old.users > 0) continue;
-		images.delete(oldest);
-		URL.revokeObjectURL(old.url);
-	}
-	return entry;
-}
-
-/** A card showing the image holds it, so eviction never revokes a URL that is on screen, and uses refresh its place. */
-function hold(key: string, entry: Remembered): () => void {
-	images.delete(key);
-	images.set(key, entry);
-	entry.users += 1;
-	return () => {
-		entry.users -= 1;
-	};
-}
+// Snapshot URLs that answered "not cached", so a card that comes back goes straight to its live
+// preview; and those rendered since, whose URL gets a fresh query so no failed load is reused.
+const missing = new Set<string>();
+const rendered = new Set<string>();
 
 // One observer for every card on the page, not one each.
 const themeListeners = new Set<() => void>();
@@ -79,102 +54,75 @@ function snapshotJob(row: ArtifactRow, appearance: string): ArtifactSnapshotJob 
 	};
 }
 
-type Result = { key: string; url?: string; failed?: boolean };
-
 /**
- * A card's preview as a cached image: the file on disk when there is one, else
- * the one main renders once, and never a live render of the file. An artifact
- * main cannot render (another host's, or a render that failed) falls back to
- * the live preview so the card still shows something. While one is rendering
- * the card shows its kind's icon.
+ * A card's preview as a cached image when there is one: a plain <img> main serves from disk,
+ * with no script and no live render. A card with none yet draws live, exactly as without the
+ * cache, so a first visit is never slower; once it has been on screen with its preview drawn,
+ * main renders the snapshot in the background for every later visit.
  */
 export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: ArtifactRow; previewLive?: boolean }) {
-	const container = useRef<HTMLSpanElement>(null);
 	const appearance = useSyncExternalStore(subscribeToTheme, themeSnapshot);
-	const [near, setNear] = useState(false);
-	const [inView, setInView] = useState(false);
-	const [attempt, setAttempt] = useState(0);
-	const [result, setResult] = useState<Result>();
+	const [, missed] = useReducer((count: number) => count + 1, 0);
 	const job = snapshotJob(row, appearance);
-	const key = job ? [job.cloud?.orgId ?? "", job.sessionId, job.path, job.updatedAt, appearance].join("|") : "";
-	const cached = key ? images.get(key) : undefined;
-	const priority = inView ? 1 : 0;
-	const priorityRef = useRef(priority);
-	priorityRef.current = priority;
-	// Whether a render request for the current key is waiting on main.
-	const requested = useRef(false);
+	const url = job ? artifactSnapshotUrl(job) : "";
+	if (!job || missing.has(url)) return <LiveThumbnail job={job} previewLive={previewLive} row={row} url={url} />;
+	return (
+		<span className="pointer-events-none absolute inset-0 block overflow-hidden bg-[var(--solid-muted,var(--muted))]" aria-hidden="true">
+			<img
+				alt=""
+				className="size-full object-cover object-top"
+				draggable={false}
+				onError={() => {
+					missing.add(url);
+					missed();
+				}}
+				src={rendered.has(url) ? `${url}&r=1` : url}
+			/>
+		</span>
+	);
+}
+
+/** The live preview, which asks for its snapshot once it has been drawn on screen for a while. */
+function LiveThumbnail({ row, previewLive, job, url }: { row: ArtifactRow; previewLive: boolean; job?: ArtifactSnapshotJob; url: string }) {
+	const container = useRef<HTMLSpanElement>(null);
 
 	useEffect(() => {
 		const element = container.current;
-		if (!element || cached) return;
-		// "Near" starts the request; "in view" puts it ahead of cards only inside the margin.
-		const nearObserver = new IntersectionObserver(([entry]) => {
-			if (entry?.isIntersecting) setNear(true);
-		}, { rootMargin: "300px" });
-		const viewObserver = new IntersectionObserver(([entry]) => setInView(Boolean(entry?.isIntersecting)));
-		nearObserver.observe(element);
-		viewObserver.observe(element);
-		return () => {
-			nearObserver.disconnect();
-			viewObserver.disconnect();
-		};
-	}, [cached]);
-
-	useEffect(() => {
-		if (!job || !near || cached) return;
-		let current = true;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		const finish = (bytes: Uint8Array | null | "dropped") => {
-			if (!current) return;
-			requested.current = false;
-			if (bytes === "dropped") {
-				// The queue was full: not a failure. Ask again once it has had time to drain.
-				retry = setTimeout(() => setAttempt((count) => count + 1), RETRY_DROPPED_MS);
+		if (!job || !element) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const check = () => {
+			const state = element.querySelector("[data-preview-state]")?.getAttribute("data-preview-state");
+			// Wait for the live preview, so the snapshot never competes with it.
+			if (state === "loading") {
+				timer = setTimeout(check, SNAPSHOT_AFTER_MS);
 				return;
 			}
-			if (!bytes) {
-				setResult({ key, failed: true });
-				return;
-			}
-			const entry = remember(key, URL.createObjectURL(new Blob([bytes as BlobPart], { type: "image/webp" })));
-			setResult({ key, url: entry.url });
+			// A card past the page's live-preview limit shows its icon; its snapshot is the only preview it gets.
+			if (state !== "content" && previewLive) return;
+			observer.disconnect();
+			void aoBridge.artifactSnapshot.request(job).then((ok) => {
+				if (!ok) return;
+				missing.delete(url);
+				rendered.add(url);
+			}, () => undefined);
 		};
-		aoBridge.artifactSnapshot.get(job)
-			.then((bytes) => {
-				if (bytes || !current) return bytes;
-				requested.current = true;
-				return aoBridge.artifactSnapshot.request(job, priorityRef.current);
-			})
-			.then(finish, () => finish(null));
+		// Only a card that stays in view: a fast scroll past a card does not render it.
+		const observer = new IntersectionObserver(([entry]) => {
+			clearTimeout(timer);
+			if (entry?.isIntersecting) timer = setTimeout(check, SNAPSHOT_AFTER_MS);
+		});
+		observer.observe(element);
 		return () => {
-			current = false;
-			clearTimeout(retry);
+			observer.disconnect();
+			clearTimeout(timer);
 		};
-		// The job is a pure function of the key; listing it would rerun this on every row object.
+		// The job is a pure function of the URL; listing it would rerun this on every row object.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [key, near, cached, attempt]);
+	}, [url, previewLive]);
 
-	// Once a card scrolls into view, a request still waiting in the queue moves ahead of those below the fold.
-	useEffect(() => {
-		if (!job || !requested.current || !inView) return;
-		void aoBridge.artifactSnapshot.request(job, 1).catch(() => undefined);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [inView]);
-
-	const KindIcon = artifactFileIcon(row);
-	const entry = cached ?? (result?.key === key && result.url ? images.get(key) : undefined);
-	useEffect(() => (entry ? hold(key, entry) : undefined), [key, entry]);
-	if (!job) return <ArtifactThumbnail row={row} previewLive={previewLive} />;
-	if (result?.key === key && result.failed && !entry) return <ArtifactThumbnail row={row} previewLive={previewLive} />;
 	return (
-		<span ref={container} className="pointer-events-none absolute inset-0 block overflow-hidden bg-[var(--solid-muted,var(--muted))]" aria-hidden="true">
-			{entry ? (
-				<img alt="" className="size-full object-cover object-top" decoding="async" draggable={false} src={entry.url} />
-			) : (
-				<span className="absolute inset-0 grid place-items-center text-passive">
-					<KindIcon aria-hidden="true" className="size-7" />
-				</span>
-			)}
+		<span ref={container} className="pointer-events-none absolute inset-0 block">
+			<ArtifactThumbnail row={row} previewLive={previewLive} />
 		</span>
 	);
 }

@@ -240,8 +240,7 @@ if (typeof window !== "undefined") {
 			onFrameNavigated: () => () => undefined,
 		},
 		artifactSnapshot: {
-			get: async () => null,
-			request: async () => null,
+			request: async () => false,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),

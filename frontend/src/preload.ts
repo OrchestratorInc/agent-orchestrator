@@ -458,10 +458,10 @@ const api = {
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
 	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	// Cards load them from the snapshot scheme; this only asks for a missing one.
 	artifactSnapshot: {
-		get: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:get", job) as Promise<Uint8Array | null>,
-		/** Renders a missing preview; priority 1 for a card on screen. "dropped" means the queue was full: ask again. */
-		request: (job: unknown, priority?: number) => ipcRenderer.invoke("artifactSnapshot:request", job, priority) as Promise<Uint8Array | null | "dropped">,
+		/** Renders a missing preview; true once it is cached. */
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<boolean>,
 	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {

@@ -72,6 +72,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 		userId: "u-1",
 	}),
 }));
+// These tests are about the live preview a card draws before it is cached; the cached image path has its own tests.
+vi.mock("./ArtifactSnapshotThumbnail", async () => {
+	const { ArtifactThumbnail } = await import("./ArtifactThumbnail");
+	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
+});
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
 		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
