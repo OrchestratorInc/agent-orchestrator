@@ -189,6 +189,13 @@ export function AgentModelField({
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
 	};
+	// A pinned default is saved like any other pick, so only this action returns
+	// a local role to following the agent's own model and effort.
+	const pinned = followCatalogDefaults && (isConcreteModelID(model) || effort !== "");
+	const followAgentDefault = () => {
+		onModelChange("");
+		onEffortChange("");
+	};
 	const selectCustomModel = (value: string) => {
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
@@ -200,6 +207,8 @@ export function AgentModelField({
 					<AgentModelCombobox
 						aria-label={label}
 						preserveDefaultSelection
+						onUseDefault={pinned ? followAgentDefault : undefined}
+						useDefaultLabel={t("settings.models.useAgentModel")}
 						value={model}
 						models={models}
 						emptyLabel={unsetLabel}

@@ -19,7 +19,8 @@ does not list them, and effort choices are limited to the Cloud API values.
 Cloud saves explicit model and effort selections even when the local catalog
 marks them as defaults, since Cloud runtime defaults may differ. Local settings
 also save an explicit pick that equals the catalog default, pinning the role to
-it; an untouched picker stays unset and follows the agent default. An unset model
+it; an untouched picker stays unset and follows the agent default, and "Use
+agent model" in a pinned role's menu clears its model and effort. An unset model
 shows the catalog's default model name rather than a placeholder. Each role's
 agent is fixed and shown read-only (a project without a reviewer shows the
 worker agent it reviews with); model, effort, permissions, and Cursor mode stay
