@@ -33,6 +33,8 @@ import {
 } from "react";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Root, RootContent } from "mdast";
+import type { Processor } from "unified";
 import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "@/components/app-icons";
@@ -694,3 +696,92 @@ const COMPONENTS: Components = {
 
 	img: MarkdownImage,
 };
+
+/**
+ * What markdown leaves literal in a person's own message. Pasted text keeps its
+ * look: `# notes` is not a heading, four spaces are not a code block, a `---`
+ * under a line is not a rule, and `<Component>` stays visible text. Images,
+ * tables, footnotes, link definitions and strikethrough are out for the same
+ * reason. The daemon's find splits these messages the same way
+ * (`FindUserBlocks`), so change both together.
+ */
+const USER_LITERAL_CONSTRUCTS = [
+	"headingAtx", "setextUnderline", "thematicBreak", "codeIndented", "htmlFlow", "htmlText",
+	"definition", "labelStartImage", "table", "strikethrough",
+	"gfmFootnoteDefinition", "gfmFootnoteCall", "gfmPotentialFootnoteCall",
+];
+
+function remarkUserSubset(this: Processor) {
+	const data = this.data();
+	(data.micromarkExtensions ??= []).push({ disable: { null: USER_LITERAL_CONSTRUCTS } });
+}
+
+type MarkdownParent = { children: RootContent[] };
+
+/** A newline the person typed is a line break, as it was in the plain bubble. */
+function splitSoftBreaks(parent: MarkdownParent) {
+	parent.children = parent.children.flatMap((child): RootContent[] => {
+		if ("children" in child) splitSoftBreaks(child as MarkdownParent);
+		if (child.type !== "text" || !child.value.includes("\n")) return [child];
+		return child.value.split("\n").flatMap((value, index): RootContent[] => [
+			...(index > 0 ? [{ type: "break" } as const] : []),
+			...(value ? [{ type: "text", value } as const] : []),
+		]);
+	});
+}
+
+function remarkSoftBreaks() {
+	return (tree: Root) => splitSoftBreaks(tree);
+}
+
+const USER_PLUGINS: Options["remarkPlugins"] = [remarkGfm, remarkSessionLinks, remarkUserSubset, remarkSoftBreaks];
+
+const UserTextRenderer = createContext<((text: string) => ReactNode) | undefined>(undefined);
+
+/** Hands the message's words to the bubble's own text renderer (inline images, chips), inside lists and emphasis too. */
+function UserProse({ children }: { children?: ReactNode }) {
+	const render = useContext(UserTextRenderer);
+	if (!render) return <>{children}</>;
+	if (typeof children === "string") return <>{render(children)}</>;
+	if (!Array.isArray(children)) return <>{children}</>;
+	return <>{children.map((child, index) => typeof child === "string" ? <Fragment key={index}>{render(child)}</Fragment> : child)}</>;
+}
+
+const USER_COMPONENTS: Components = {
+	...COMPONENTS,
+	// Paragraphs the person split with a blank line keep a blank line's gap.
+	p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0 [p+&]:mt-[1lh]"><UserProse>{children}</UserProse></p>,
+	li: ({ children, className }) => (
+		<li className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
+			<UserProse>{children}</UserProse>
+		</li>
+	),
+	em: ({ children }) => <em><UserProse>{children}</UserProse></em>,
+	strong: ({ children }) => <strong className="font-semibold"><UserProse>{children}</UserProse></strong>,
+	// Every fence is code here, a ```mermaid one included: nothing in a person's
+	// own message runs or renders as something else.
+	pre: ({ children }) => {
+		const fence = fenceOf(children);
+		return fence ? <CodeBlock code={fence.code} language={fence.language} /> : <>{children}</>;
+	},
+};
+
+/**
+ * A person's own message with the light markdown people type: lists, task
+ * boxes, bold and italic, inline and fenced code, links and quotes. Display
+ * only: the stored text, the text sent to the agent and the Copy action all
+ * stay the raw source. Links open only when clicked.
+ */
+export const UserMarkdown = memo(function UserMarkdown({ text, renderText }: {
+	text: string;
+	/** Renders each run of plain text, for inline images and chips; keep it stable. */
+	renderText?: (text: string) => ReactNode;
+}) {
+	return (
+		<UserTextRenderer.Provider value={renderText}>
+			<Markdown remarkPlugins={USER_PLUGINS} components={USER_COMPONENTS} urlTransform={chatUrlTransform}>
+				{text}
+			</Markdown>
+		</UserTextRenderer.Provider>
+	);
+});
