@@ -2038,13 +2038,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
 		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
-	// The session tab's action slot holds its ⋮ menu, as every other tab's holds
-	// its close button. While an interface switch is requested or running, the
-	// switch's status (cancel on hover) takes the slot and stays visible.
-	const sessionTabActionPinned = interfaceUi.switchPending;
+	// The session tab always shows its ⋮ menu after the title; the other tabs
+	// show a close button on hover. While an interface switch is requested or
+	// running, the switch's status (cancel on hover) takes the ⋮'s place.
+	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
-		: sessionTabActionPinned
+		: interfaceUi.switchPending
 			? interfaceUi.switchControl
 			: <SessionTabMenuButton key={uiSessionId} />;
 	const sessionHeaderActions = (

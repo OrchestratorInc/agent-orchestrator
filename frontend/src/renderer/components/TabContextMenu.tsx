@@ -71,10 +71,9 @@ export type TabMenuSpec = {
 );
 
 /**
- * The rows of a tab's menu, in order: Close tab for a tab that closes, the
- * tab's own actions, Split (while split panes are on), then Archive for a
- * session behind one separator. A tab that cannot close lists Close tab,
- * disabled, before Archive. A split group's tab leads with Ungroup.
+ * The rows of a tab's menu, in order: the tab's own actions, Split (while
+ * split panes are on), Close tab, then Archive for a session behind one
+ * separator. A split group's tab leads with Ungroup.
  */
 export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	const { t } = useTranslation();
@@ -96,17 +95,6 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 		);
 	}
 	if (!own) return entries;
-
-	// Closing is the commonest tab action, so a tab that closes leads with it.
-	const close: MenuEntry = {
-		kind: "item",
-		id: "close-tab",
-		icon: <X aria-hidden="true" />,
-		label: t("tabMenu.close"),
-		onSelect: own.onClose,
-		shortcutId: own.closeShortcut ? "close-shell-terminal" : undefined,
-	};
-	if (own.onClose) entries.push(close, { kind: "separator", id: "close-sep" });
 
 	if (session && agentMenu && agentMenu.session.id === session.session.id) {
 		if (agentMenu.picksAgent) {
@@ -168,8 +156,14 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 			{ kind: "separator", id: "split-sep" },
 		);
 	}
-	// A tab that cannot close (the session's own, a reviewer) still lists Close tab, disabled.
-	if (!own.onClose) entries.push(close);
+	entries.push({
+		kind: "item",
+		id: "close-tab",
+		icon: <X aria-hidden="true" />,
+		label: t("tabMenu.close"),
+		onSelect: own.onClose,
+		shortcutId: own.closeShortcut ? "close-shell-terminal" : undefined,
+	});
 	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions).
 	if (session?.canArchive) {
 		entries.push(
@@ -202,7 +196,7 @@ function isMenuKey(event: KeyboardEvent) {
 /**
  * Right-click menu for one tab of a session tab strip, listing the tab's
  * `useTabMenuItems` rows. Shift+F10 and the context menu key open it from a
- * focused tab. The tab inside gets the spec too, for its ⋮ button.
+ * focused tab.
  */
 export function TabContextMenu({ children, spec, disabled = false }: { children: ReactNode; spec: TabMenuSpec; disabled?: boolean }) {
 	// Radix gives a context menu no open prop; remounting closes it, for a row
@@ -225,7 +219,7 @@ export function TabContextMenu({ children, spec, disabled = false }: { children:
 						);
 					}}
 				>
-					<TabMenuSpecContext.Provider value={spec}>{children}</TabMenuSpecContext.Provider>
+					{children}
 				</span>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-56">
@@ -240,7 +234,7 @@ export function TabContextMenu({ children, spec, disabled = false }: { children:
 }
 
 /** The ⋮ button's menu for one tab: the same `useTabMenuItems` rows as its right-click menu. */
-export function TabDropdownMenu({ spec, label, children }: { spec: TabMenuSpec; label: string; children?: ReactNode }) {
+export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: string }) {
 	const [open, setOpen] = useState(false);
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
@@ -253,7 +247,7 @@ export function TabDropdownMenu({ spec, label, children }: { spec: TabMenuSpec; 
 					title={label}
 					type="button"
 				>
-					{children ?? <MoreVertical aria-hidden="true" className="size-icon-sm" />}
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
 				</Pressable>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-56">
@@ -270,18 +264,9 @@ export function TabDropdownMenu({ spec, label, children }: { spec: TabMenuSpec; 
 /** The spec of the tab a control sits in, so its ⋮ button opens that tab's menu. */
 export const TabMenuSpecContext = createContext<TabMenuSpec | undefined>(undefined);
 
-/**
- * The ⋮ button every tab shows in its icon slot, opening the menu of the tab
- * it sits in. A tab with no menu (one being renamed) shows none.
- */
-export function TabMenuButton({ label, children }: { label?: string; children?: ReactNode }) {
-	const { t } = useTranslation();
-	const spec = useContext(TabMenuSpecContext);
-	return spec ? <TabDropdownMenu label={label ?? t("tabMenu.actions")} spec={spec}>{children}</TabDropdownMenu> : null;
-}
-
 /** The session tab's ⋮ button, placed by the session view in the tab's action slot. */
 export function SessionTabMenuButton() {
 	const { t } = useTranslation();
-	return <TabMenuButton label={t("session.actionsMenu")} />;
+	const spec = useContext(TabMenuSpecContext);
+	return spec ? <TabDropdownMenu label={t("session.actionsMenu")} spec={spec} /> : null;
 }

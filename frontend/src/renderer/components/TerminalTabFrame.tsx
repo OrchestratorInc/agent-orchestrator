@@ -9,13 +9,14 @@ type TerminalTabFrameProps = {
 	icon?: ReactNode;
 	label: string;
 	/**
-	 * Shown after the title on hover or focus: the tab's ⋮ menu, on every tab,
-	 * or a running interface switch's status on the session's tab.
+	 * Shown after the title on hover or focus: the close button of a tab that
+	 * closes; on the session's tab, its ⋮ menu (pinned) or a running interface
+	 * switch's status.
 	 */
 	action?: ReactNode;
-	/** Closes the tab; a middle-click runs it, as the menu's Close tab does. */
+	/** Closes the tab; a middle-click runs it, as the close button does. */
 	onClose?: () => void;
-	/** Keep the action showing at rest (unsaved dot, running switch). */
+	/** Keep the action showing at rest (the session's ⋮, an unsaved dot). */
 	actionPinned?: boolean;
 	buttonRef?: Ref<HTMLButtonElement>;
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
@@ -25,7 +26,7 @@ type TerminalTabFrameProps = {
 	editingValue?: string;
 };
 
-/** The control in a tab's trailing slot, shared so every tab's ⋮ button matches. */
+/** The control in a tab's trailing slot, shared so close buttons and menus match. */
 export const terminalTabActionClassName =
 	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
 
@@ -98,7 +99,7 @@ export function TerminalTabFrame({
 				className={cn(
 					"mr-2 grid size-icon-base shrink-0 place-items-center",
 					// Clickable only while revealed: a tap or a click on a faded slot
-					// selects the tab (the frame forwards it) instead of opening the menu.
+					// selects the tab (the frame forwards it) instead of closing it.
 					!action
 						? "pointer-events-none"
 						: !actionPinned

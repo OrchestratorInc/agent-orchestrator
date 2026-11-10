@@ -8,8 +8,8 @@ import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { TabContextMenu, TabMenuButton } from "./TabContextMenu";
-import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
+import { TabContextMenu } from "./TabContextMenu";
+import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
@@ -31,10 +31,10 @@ type ShellTerminalTabProps = {
 //
 // Renaming happens inline: double-click, F2, or Rename in the right-click menu.
 // Enter or blur commits, Escape cancels, and an empty or unchanged name is
-// discarded. The close control (the ⋮ menu in the session strip) is a sibling
+// discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
 // invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
-// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
+// the shared TerminalTabFrame, which shows that sibling after the title on hover.
 export function ShellTerminalTab({
 	shell,
 	isActive,
@@ -141,8 +141,11 @@ export function ShellTerminalTab({
 		type: "button" as const,
 	};
 	if (appearance === "connected") {
-		// The tab's ⋮ menu, with Close tab first; none while renamed or still opening.
-		const closable = !isEditing && !shell.optimistic;
+		const closeAction = isEditing || shell.optimistic ? undefined : (
+			<Pressable {...closeControl} className={terminalTabActionClassName}>
+				<X aria-hidden="true" className="size-icon-sm" />
+			</Pressable>
+		);
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
@@ -169,8 +172,8 @@ export function ShellTerminalTab({
 			>
 				<TerminalTabFrame
 					wide={Boolean(agent)}
-					action={closable ? <TabMenuButton /> : undefined}
-					onClose={closable ? onClose : undefined}
+					action={closeAction}
+					onClose={closeAction ? onClose : undefined}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,

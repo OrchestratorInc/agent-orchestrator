@@ -10,6 +10,7 @@ import {
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
+import { X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -23,7 +24,8 @@ import { ShellAgentIcon } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { TabContextMenu, TabMenuButton, type TabMenuSpec } from "./TabContextMenu";
+import { TabContextMenu, type TabMenuSpec } from "./TabContextMenu";
+import { terminalTabActionClassName } from "./TerminalTabFrame";
 
 /**
  * A terminal shown in a split pane. Shell terminals come from the shared
@@ -276,13 +278,23 @@ export function SplitGroupTab({
 						{focused ? (
 							<span className="inline-flex min-w-0 items-center">
 								{segment}
-								{/* The group's ⋮ menu (Ungroup, then the focused member's rows), after the label on hover, as on every tab. */}
+								{/* After the label on hover, like the close button on other tabs. */}
 								<span
-									className="pointer-events-none mr-2 grid size-icon-base shrink-0 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+									className="pointer-events-none mr-2 grid size-icon-base shrink-0 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
 									data-terminal-tab-action
-									onPointerDown={(event) => event.stopPropagation()}
 								>
-									<TabMenuButton />
+									<Pressable
+										aria-label={t("splitPane.closePane", { name: member.label })}
+										className={terminalTabActionClassName}
+										onClick={(event) => {
+											event.stopPropagation();
+											member.onClose();
+										}}
+										onPointerDown={(event) => event.stopPropagation()}
+										type="button"
+									>
+										<X aria-hidden="true" className="size-icon-sm" />
+									</Pressable>
 								</span>
 							</span>
 						) : (

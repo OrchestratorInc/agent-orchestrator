@@ -145,15 +145,6 @@ describe("tab menus", () => {
 		expect(labels.at(-1)).toMatch(/^Archive session/);
 	});
 
-	it("leads a closing tab's menu with Close tab, and keeps it disabled last on the session tab", async () => {
-		const { dropdownRows } = await renderBoth(file("src/app.ts"), undefined, false);
-		expect(dropdownRows[0]).toMatch(/^menuitem\|Close tab.*\|enabled$/);
-		cleanup();
-		const session = await renderBoth(sessionSpec, terminalAgent, false);
-		const labels = session.dropdownRows.filter((row) => !row.startsWith("separator"));
-		expect(labels.at(-2)).toMatch(/^menuitem\|Close tab.*\|disabled$/);
-	});
-
 	it("keeps Split rows out of both menus while split panes are off", async () => {
 		const { contextRows, dropdownRows } = await renderBoth(file("src/app.ts"), undefined, false);
 		expect([...contextRows, ...dropdownRows].some((row) => row.includes("Split"))).toBe(false);

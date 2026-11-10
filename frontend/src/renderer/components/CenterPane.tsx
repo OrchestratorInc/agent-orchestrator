@@ -41,7 +41,7 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
-import { TabContextMenu, TabMenuButton, type TabMenuSpec } from "./TabContextMenu";
+import { TabContextMenu, TabMenuSpecContext, type TabMenuSpec } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -721,9 +721,9 @@ type SessionPaneTabProps = {
 	provider?: string;
 	icon?: ReactNode;
 	title?: string;
-	/** The control in the tab's trailing slot: its ⋮ menu, or a running interface switch's status. */
+	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest, while an interface switch is in flight. */
+	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
 	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
@@ -781,13 +781,7 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={
-				rename.isEditing ? undefined
-				: tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span>
-				// A reviewer's tab has its menu's ⋮, like every other tab.
-				: !session && tabMenu ? <TabMenuButton />
-				: undefined
-			}
+			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
 			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
@@ -837,5 +831,9 @@ export function SessionPaneTab({
 			}
 		: { kind: "plain", tabKey };
 	// The ⋮ button in the action slot opens this same spec.
-	return <TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>;
+	return (
+		<TabMenuSpecContext.Provider value={menu}>
+			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>
+		</TabMenuSpecContext.Provider>
+	);
 }
