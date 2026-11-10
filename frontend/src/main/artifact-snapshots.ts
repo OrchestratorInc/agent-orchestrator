@@ -209,7 +209,7 @@ export function registerArtifactSnapshotProtocol(deps: { protocol: Pick<Protocol
 		const snapshot = parseArtifactSnapshotUrl(request.url);
 		const bytes = snapshot ? await deps.store.get(snapshot) : null;
 		if (!bytes) return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
-		return new Response(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), {
+		return new Response(new Uint8Array(bytes), {
 			headers: { "content-type": "image/webp", "cache-control": "max-age=31536000, immutable" },
 		});
 	});
