@@ -253,8 +253,7 @@ beforeEach(() => {
 	postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
-	// The simplified top bar is a Developer Mode preview; this suite covers it.
-	useUiStore.setState({ developerMode: true, inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
 describe("optimistic orchestrator topbar", () => {
@@ -377,39 +376,6 @@ describe("SessionTopbarActions route", () => {
 	});
 });
 
-describe("SessionTopbarActions without Developer Mode", () => {
-	beforeEach(() => useUiStore.setState({ developerMode: false }));
-
-	it("keeps the previous orchestrator row: New task and a labeled Open Kanban", () => {
-		renderTopbar(orchestrator);
-
-		const buttons = within(screen.getByTestId("workspace-topbar-actions")).getAllByRole("button");
-		const newTask = screen.getByRole("button", { name: "New task" });
-		const kanban = screen.getByRole("button", { name: "Open Kanban" });
-		expect(kanban).toHaveTextContent("Open Kanban");
-		expect(screen.queryByRole("button", { name: "Board" })).not.toBeInTheDocument();
-		expect(buttons.indexOf(newTask)).toBeLessThan(buttons.indexOf(kanban));
-		expect(screen.queryByTestId("session-actions-divider")).not.toBeInTheDocument();
-	});
-
-	it("keeps the Archive button on a worker", () => {
-		renderTopbarSessions([worker, orchestrator], worker.id);
-
-		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
-	});
-
-	it("closes the archive confirm on the first Escape", async () => {
-		const user = userEvent.setup();
-		renderTopbarSessions([worker, orchestrator], worker.id);
-
-		await user.click(screen.getByRole("button", { name: "Archive session" }));
-		await screen.findByRole("dialog");
-
-		await user.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
-});
-
 describe("SessionTopbarActions orchestrator actions", () => {
 	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the session cue runner for %s projects", (kind) => {
@@ -455,7 +421,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 			},
 		]);
 
-		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
 		expect(indicator).toBeNull();
 	});
@@ -469,7 +435,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		} satisfies WorkspaceSession;
 		renderBoardActions([worker, exitedOrchestrator]);
 
-		await userEvent.click(screen.getByRole("button", { name: "Orchestrator agent, Exited" }));
+		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
 		expect(navigateMock).toHaveBeenCalledTimes(1);

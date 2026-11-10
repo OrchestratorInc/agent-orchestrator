@@ -2320,6 +2320,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview readable local agent histories from Git folders and Standalone */
+        get: operations["scanSessionImport"];
+        put?: never;
+        /** Import selected histories as idle AO sessions without starting providers */
+        post: operations["importSelectedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -4518,6 +4536,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/limit-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn keeping limit readings, and reading limits in the background, on or off */
+        put: operations["setUsageLimitHistory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/limit-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read each login's five-hour and weekly windows from the limit readings AO took */
+        get: operations["getUsageLimitWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -4535,6 +4587,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the user's model prices and the catalog models a model can price as */
+        get: operations["getUsagePrices"];
+        /** Replace the user's model prices and reprice the usage they change */
+        put: operations["setUsagePrices"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read token and estimated cost usage over a window, by day or hour, for the usage page */
+        get: operations["getUsageReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -4544,23 +4631,6 @@ export interface paths {
         };
         /** List compact token and estimated cost usage for session cards */
         get: operations["listCompactSessionUsage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/usage/sessions/{sessionId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get detailed token and estimated cost usage for one session */
-        get: operations["getSessionUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4644,6 +4714,7 @@ export interface components {
             sourceKind?: "environment" | "file" | "command" | "keychain";
         };
         AgentAccountLimitWindow: {
+            durationMinutes?: number;
             id: string;
             label: string;
             /** Format: date-time */
@@ -5684,6 +5755,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -5995,6 +6067,7 @@ export interface components {
             activities: components["schemas"]["ConversationActivityResponse"][];
             /** Format: int64 */
             afterSequence?: number;
+            batchedDeliveries?: components["schemas"]["DomainConversationBatchedDelivery"][];
             branchMaterialization?: components["schemas"]["ConversationBranchMaterializationResponse"];
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
@@ -6220,6 +6293,11 @@ export interface components {
             /** Format: date-time */
             lastActivityAt: string;
             state: string;
+        };
+        DomainConversationBatchedDelivery: {
+            deliveredWithTurnId: string;
+            steerActivityId?: string;
+            turnId: string;
         };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -7194,6 +7272,34 @@ export interface components {
             harness?: string;
             userRequest: string;
         };
+        SessionImportCandidate: {
+            folder?: string;
+            harness: string;
+            id: string;
+            /** Format: date-time */
+            lastActivity: string;
+            messageCount: number;
+            projectId?: string;
+            sessionId?: string;
+            shortened?: boolean;
+            title: string;
+        };
+        SessionImportPreview: {
+            candidates: components["schemas"]["SessionImportCandidate"][];
+        };
+        SessionImportRequest: {
+            ids: string[];
+        };
+        SessionImportResponse: {
+            results: components["schemas"]["SessionImportResult"][];
+        };
+        SessionImportResult: {
+            error?: string;
+            id: string;
+            sessionId?: string;
+            /** @enum {string} */
+            status: "created" | "already_imported" | "failed";
+        };
         SessionInterfaceTransition: {
             /** Format: date-time */
             completedAt?: null | string;
@@ -7411,12 +7517,6 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             tool: string;
-        };
-        SessionUsageResponse: {
-            harnesses: components["schemas"]["UsageHarnessResponse"][];
-            incomplete: boolean;
-            sessionId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
         };
         SessionWait: {
             /** @enum {string} */
@@ -8119,11 +8219,6 @@ export interface components {
             expectedFileFingerprint: string;
             path: string;
         };
-        UsageHarnessResponse: {
-            harness: string;
-            models: components["schemas"]["UsageModelResponse"][];
-            totals: components["schemas"]["UsageTotalsResponse"];
-        };
         UsageHookMetadata: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -8134,24 +8229,147 @@ export interface components {
             subagentTranscriptPath?: string;
             transcriptPath?: string;
         };
-        UsageModelResponse: {
-            modelId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
+        UsageLimitHistoryRequest: {
+            enabled: null | boolean;
         };
-        UsageTotalsResponse: {
-            /** @description Deprecated compatibility alias for cachedInputTokens. */
-            cacheReadTokens: null | number;
-            /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
-            cachedInputTokens: null | number;
-            estimatedCost: null | components["schemas"]["EstimatedCostResponse"];
-            /** @description Total input, including cached and uncached input. */
-            inputTokens: null | number;
-            /** @description Total output, including provider-specific subsets such as reasoning output. */
-            outputTokens: null | number;
-            /** @description Canonical input plus output. Null when either component is unknown. */
-            processedTokens: null | number;
-            /** @description Input not read from an existing provider cache. Includes cache writes. */
-            uncachedInputTokens: null | number;
+        UsageLimitHistoryResponse: {
+            enabled: boolean;
+        };
+        UsageLimitLogin: {
+            accountId: string;
+            email?: string;
+            plan?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            windows: components["schemas"]["UsageLimitSpan"][];
+        };
+        UsageLimitPoint: {
+            /** Format: date-time */
+            at: string;
+            /** Format: double */
+            usedPercent: number;
+        };
+        UsageLimitSpan: {
+            durationMinutes?: number;
+            /** Format: date-time */
+            firstReadAt: string;
+            label: string;
+            /** Format: date-time */
+            lastReadAt: string;
+            /** Format: double */
+            peakUsedPercent: number;
+            points?: components["schemas"]["UsageLimitPoint"][];
+            readings: number;
+            /** Format: date-time */
+            resetsAt: string;
+            /** Format: date-time */
+            startsAt?: null | string;
+            /** @enum {string} */
+            state: "final" | "partial" | "open";
+            windowId: string;
+        };
+        UsageLimitWindowsResponse: {
+            /** Format: date-time */
+            firstReadingAt?: null | string;
+            logins: components["schemas"]["UsageLimitLogin"][];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsagePriceOverride: {
+            /** @description Decimal USD per million cache-read tokens. Defaults to the input price. */
+            cacheReadUsdPerMillion?: string;
+            /** @description Decimal USD per million cache-write tokens. Defaults to the input price. */
+            cacheWriteUsdPerMillion?: string;
+            /** @description Decimal USD per million uncached input tokens. Set with output. */
+            inputUsdPerMillion?: string;
+            /** @description Model ID as usage rows store it. */
+            modelId: string;
+            /** @description Decimal USD per million output tokens. Set with input. */
+            outputUsdPerMillion?: string;
+            /** @description Catalog model to price as, provider/model, in place of rates. */
+            priceAs?: string;
+        };
+        UsagePricesRequest: {
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsagePricesResponse: {
+            /** @description Catalog models a model can price as, provider/model. */
+            models: string[];
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsageReportResponse: {
+            days: number;
+            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
+            periods: string[];
+            /** @enum {string} */
+            resolution: "day" | "hour";
+            rows: components["schemas"]["UsageReportRowResponse"][];
+            sessions: components["schemas"]["UsageReportSessionResponse"][];
+            /** Format: date-time */
+            since: string;
+            timeZone: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsageReportRowResponse: {
+            /** Format: int64 */
+            cacheReadCostNanos: number;
+            /** Format: int64 */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description What cache reads saved against paying input rates for those tokens.
+             */
+            cacheSavingsNanos: number;
+            /** Format: int64 */
+            cacheWriteCostNanos: number;
+            /** Format: int64 */
+            cacheWriteTokens: number;
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: int64 */
+            inputCostNanos: number;
+            /**
+             * Format: int64
+             * @description Uncached input that was not written to the cache.
+             */
+            inputTokens: number;
+            model: string;
+            /** Format: int64 */
+            outputCostNanos: number;
+            /** Format: int64 */
+            outputTokens: number;
+            period: string;
+            /**
+             * Format: int64
+             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
+             */
+            premiumNanos: number;
+            /** Format: int64 */
+            pricedEvents: number;
+            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
+            speed: string;
+        };
+        UsageReportSessionResponse: {
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: date-time */
+            lastUsedAt: string;
+            /** Format: int64 */
+            pricedEvents: number;
+            projectId?: string;
+            sessionId: string;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
         };
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
@@ -16271,6 +16489,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanSessionImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportPreview"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSelectedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24979,6 +25286,107 @@ export interface operations {
             };
         };
     };
+    setUsageLimitHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageLimitHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitHistoryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageLimitWindows: {
+        parameters: {
+            query?: {
+                /** @description Days of readings to read; they are kept for 14. Defaults to 7. */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitWindowsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getMemoryPressure: {
         parameters: {
             query?: never;
@@ -24995,6 +25403,151 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsagePricesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageReport: {
+        parameters: {
+            query?: {
+                /** @description Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7. */
+                days?: number;
+                /** @description Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0. */
+                offset?: number;
+                /** @description IANA time zone that days and hours are bucketed in. Defaults to UTC. */
+                tz?: string;
+                /** @description Read one project only. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageReportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */
@@ -25036,56 +25589,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListCompactSessionUsageResponse"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getSessionUsage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session identifier, e.g. project-1. */
-                sessionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionUsageResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

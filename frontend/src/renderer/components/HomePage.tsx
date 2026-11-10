@@ -24,6 +24,7 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
+import { SessionImportOffer } from "./SessionImportOffer";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
@@ -348,6 +349,7 @@ function HomePageContent() {
 						)}
 					</section>
 
+					{workspaceQuery.isSuccess && recentProjects.length === 0 ? <SessionImportOffer /> : null}
 				</div>
 
 				<CreateProjectFlow

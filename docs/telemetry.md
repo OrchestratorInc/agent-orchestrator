@@ -128,6 +128,11 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Reliability data, such as an error type and context, a crash message and
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
+- Slow database writes: when one write holds the daemon's database write lock
+  for a second or more, `ao.daemon.write_lock_held` sends how long it was held
+  (`duration_ms`) and the names and line numbers of the four innermost code
+  functions that held it (`caller`). It never includes file paths, database
+  contents, or message text
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
@@ -512,6 +517,33 @@ people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
+
+## Chat import
+
+When desktop product telemetry is enabled, Orchestrator.inc records these events
+when you import chats from other agents:
+
+| Event | When it is sent | Import-specific properties |
+| --- | --- | --- |
+| `ao.session_imports.offer_shown` | An import offer appears | `surface` |
+| `ao.session_imports.scan_completed` | A scan for chats ends | `outcome`, `candidate_count`, `duration_ms` |
+| `ao.session_imports.completed` | An import ends | `source`, `created_count`, `existing_count`, `failed_count`, `folder_count`, `agents` |
+| `ao.session_imports.first_opened` | The first open of an imported chat ends | `agent`, `outcome`, `error_code`, `duration_ms` |
+
+`surface` is `home` or `project_board`. `source` is `home_folders`,
+`project_offer`, `project_dialog`, or `settings`. The scan `outcome` is
+`succeeded` or `failed`. The first-open `outcome` is `succeeded`, `failed`, or
+`open_elsewhere`. `agents` lists the agents of the imported chats, such as
+`claude-code,codex`, and `agent` names one; both accept only the ids of agents
+AO can import from. `error_code` is the API error code, such as
+`CHAT_RESUME_FAILED`.
+
+The offer and scan events are sent at most once per surface each time the app
+starts. The import and first-open events are sent only when you import or open
+an imported chat.
+
+No chat title, chat content, folder name, path, project identifier, session
+identifier, or error message is sent.
 
 ## What Orchestrator.inc does not intentionally send
 

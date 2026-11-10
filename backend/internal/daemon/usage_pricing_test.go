@@ -22,7 +22,7 @@ import (
 // last-known-good catalog was still being loaded asynchronously.
 func TestUsagePricingRuntimePublishesLKGBeforeStartReturnsAndWaitsOnShutdown(t *testing.T) {
 	dataDir := t.TempDir()
-	_, err := catalogsync.Sync(dataDir, []byte(`{
+	catalog, err := catalogsync.Catalog([]byte(`{
   "anthropic/claude-test": {
     "litellm_provider": "anthropic",
     "mode": "chat",
@@ -41,12 +41,11 @@ func TestUsagePricingRuntimePublishesLKGBeforeStartReturnsAndWaitsOnShutdown(t *
     "input_cost_per_token": 0,
     "output_cost_per_token": 0
   }
-}`), catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	})
+}`))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pricing.NewCache(dataDir).Install(t.Context(), catalog); err != nil {
 		t.Fatal(err)
 	}
 	store := sqlitetest.MustOpenAt(t, dataDir)
@@ -178,7 +177,7 @@ func seedDaemonClaudeUsage(t *testing.T, store *sqlite.Store, projectID, model s
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
-	transcript := `{"type":"assistant","uuid":"one","message":{"id":"msg-1","model":"` + model + `","stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
+	transcript := `{"type":"assistant","uuid":"one","message":{"id":"msg-` + projectID + `","model":"` + model + `","stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
 	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -244,20 +243,12 @@ func daemonClaudePricingSnapshot(t *testing.T, includeLate bool) *pricing.Snapsh
 		late = `,
   "anthropic/claude-late": {"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.000002}`
 	}
-	root := t.TempDir()
 	upstream := []byte(`{
   "anthropic/claude-old": {"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.000002}` + late + `,
   "openai/gpt-test": {"litellm_provider":"openai","mode":"chat","input_cost_per_token":0,"output_cost_per_token":0},
   "zai/glm-test": {"litellm_provider":"zai","mode":"chat","input_cost_per_token":0,"output_cost_per_token":0}
 }`)
-	if _, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := pricing.NewCache(root).Load(t.Context())
+	catalog, err := catalogsync.Catalog(upstream)
 	if err != nil {
 		t.Fatal(err)
 	}

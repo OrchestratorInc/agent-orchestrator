@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
-export type HarnessDetailTab = "account" | "models" | "health";
+export type HarnessDetailTab = "account" | "models" | "health" | "import";
 export type HarnessTone = "ok" | "error" | "off";
 
 const SPLIT_LAYOUT_MIN_WIDTH = 720;

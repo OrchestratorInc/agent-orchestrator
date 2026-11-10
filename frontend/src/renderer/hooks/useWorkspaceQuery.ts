@@ -1,9 +1,10 @@
 import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import { useUiStore } from "../stores/ui-store";
+import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
@@ -139,6 +140,7 @@ export function toWorkspaceSession(
 		workspaceCleanup: session.workspaceCleanup,
 		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		chatProviderPreserved: session.chatProviderPreserved,
+		needsResume: session.needsResume,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -162,7 +164,7 @@ export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
-const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
+export const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
@@ -245,6 +247,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		needsResume: session.needsResume,
 		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -892,10 +895,12 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 			subscribed: options.subscribed,
 		})),
 	});
+	// Pins removed here that the host has not confirmed yet (it may be offline).
+	const unpins = useRemoteUnpinStore((state) => state.unpins);
 	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
 	return {
 		data: hostIds.flatMap((hostId, index) => projects[index]?.data
-			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? [])
+			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
 		loadedProjectHostIds: live((index) => projects[index]?.data !== undefined),
 		loadedSessionHostIds: live((index) => sessions[index]?.data !== undefined),
@@ -907,10 +912,15 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 /** A host-qualified project detail query for the board. It shares the remote
  * session query's key, so session mutations refresh both detail surfaces. */
 export function useRemoteProjectQuery(hostId: string, projectId: string) {
+	const unpins = useRemoteUnpinStore((state) => state.unpins);
+	const select = useCallback((workspaces: WorkspaceSummary[]) => {
+		const workspace = workspaces.find((candidate) => candidate.id === projectId);
+		return workspace && withRemoteUnpins(workspace, unpins);
+	}, [projectId, unpins]);
 	return useQuery({
 		queryKey: remoteWorkspaceQueryKey(hostId),
 		queryFn: () => fetchRemoteWorkspaces(hostId),
-		select: (workspaces) => workspaces.find((workspace) => workspace.id === projectId),
+		select,
 		enabled: Boolean(hostId && projectId),
 		retry: 1,
 	});
