@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
@@ -428,3 +428,166 @@ export function ArtifactActionsMenu({
 	);
 }
 
+
+type ArtifactActionsMenuProps = Parameters<typeof ArtifactActionsMenu>[0];
+
+/**
+ * An icon-only ArtifactActionsMenu for one card of a long list. The Artifacts
+ * page draws one per artifact, and the menu, its tooltips, share popover and
+ * delete dialog cost far more to mount than the buttons a closed menu shows.
+ * Until the pointer or focus first enters the card (its `li`), this draws
+ * those buttons with the markup the closed menu gives them and starts the same
+ * queries; then it mounts the menu in their place and keeps it.
+ *
+ * Focus on a replaced button moves to its replacement before the next paint,
+ * and a press that still reaches a replaced button, as a touch or a scripted
+ * click can, is passed on to its replacement.
+ */
+export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
+	const { t } = useTranslation();
+	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, verticalDots = false } = props;
+	const [active, setActive] = useState(false);
+	const pinRef = useRef<HTMLButtonElement>(null);
+	const openRef = useRef<HTMLButtonElement>(null);
+	const menuRef = useRef<HTMLButtonElement>(null);
+	const cardRef = useRef<HTMLElement | null>(null);
+	// Each stand-in's place among its card's buttons, where its replacement goes.
+	const places = useRef(new Map<HTMLButtonElement, number>());
+	// What reached the stand-ins before the menu replaced them, to repeat on it.
+	const replay = useRef<{ focus?: number; presses: Array<[place: number, press: Press]> }>({ presses: [] });
+	// The queries the menu starts, so it offers the same items when it first opens.
+	useShareAvailable();
+	useCloudMeUserId(Boolean(session.cloud));
+	useCloudArtifactAccess(session, Boolean(session.cloud) && !props.downloadUrl);
+
+	useEffect(() => {
+		const stand = [pinRef.current, openRef.current, menuRef.current].filter((button): button is HTMLButtonElement => Boolean(button));
+		const card = menuRef.current?.closest("li") ?? menuRef.current?.parentElement?.parentElement ?? null;
+		if (!card) return;
+		cardRef.current = card;
+		let activated = false;
+		const activate = (event: Event) => {
+			if (activated) return;
+			activated = true;
+			const buttons = [...card.querySelectorAll("button")];
+			for (const button of stand) places.current.set(button, buttons.indexOf(button));
+			const target = event.target instanceof HTMLButtonElement ? places.current.get(event.target) : undefined;
+			if (event.type === "focusin" && target !== undefined) replay.current.focus = target;
+			card.removeEventListener("pointermove", activate);
+			card.removeEventListener("focusin", activate);
+			setActive(true);
+		};
+		const pass = (event: Event) => {
+			const button = event.currentTarget as HTMLButtonElement;
+			const press: Press = event.type === "click" ? "click" : event as PointerEvent;
+			activate(event);
+			const place = places.current.get(button) ?? -1;
+			// Still in the page, the menu has yet to replace it: repeat the press once it has.
+			if (button.isConnected) replay.current.presses.push([place, press]);
+			else passOn(card, place, press);
+		};
+		card.addEventListener("pointermove", activate);
+		card.addEventListener("focusin", activate);
+		for (const button of stand) {
+			button.addEventListener("pointerdown", pass);
+			button.addEventListener("click", pass);
+		}
+		return () => {
+			card.removeEventListener("pointermove", activate);
+			card.removeEventListener("focusin", activate);
+			for (const button of stand) {
+				button.removeEventListener("pointerdown", pass);
+				button.removeEventListener("click", pass);
+			}
+		};
+	}, []);
+
+	useLayoutEffect(() => {
+		const card = cardRef.current;
+		if (!active || !card) return;
+		const { focus, presses } = replay.current;
+		replay.current = { presses: [] };
+		if (focus !== undefined) {
+			const focused = document.activeElement;
+			const button = card.querySelectorAll("button")[focus];
+			if (button && (!focused || focused === document.body || !focused.isConnected)) button.focus();
+		}
+		for (const [place, press] of presses) passOn(card, place, press);
+	}, [active]);
+
+	if (active) return <ArtifactActionsMenu {...props} />;
+	const actionClassName = cn(className);
+	return (
+		<>
+			{onTogglePin && !pinInMenu ? (
+				<Button
+					ref={pinRef}
+					aria-label={`${t(pinned ? "artifacts.unpin" : "artifacts.pin")}: ${artifact.name}`}
+					aria-pressed={pinned}
+					className={actionClassName}
+					data-slot="tooltip-trigger"
+					data-state="closed"
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+				>
+					{pinned ? <PinOff aria-hidden="true" className="size-icon-sm" /> : <Pin aria-hidden="true" className="size-icon-sm" />}
+				</Button>
+			) : null}
+			{onOpenInSession ? (
+				<Button
+					ref={openRef}
+					aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+					className={actionClassName}
+					data-slot="tooltip-trigger"
+					data-state="closed"
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+				>
+					<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			) : null}
+			<span className="inline-flex">
+				<Button
+					ref={menuRef}
+					aria-expanded={false}
+					aria-haspopup="menu"
+					aria-label={`${t("files.moreFileActions")}: ${artifact.name}`}
+					className={actionClassName}
+					data-state="closed"
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+				>
+					{verticalDots ? <MoreVertical aria-hidden="true" className="size-icon-sm" /> : <Ellipsis aria-hidden="true" className="size-icon-sm" />}
+				</Button>
+			</span>
+		</>
+	);
+}
+
+type Press = "click" | PointerEvent;
+
+/** Sends a press that reached a stand-in to the button now in its place. */
+function passOn(card: HTMLElement, place: number, event: Press) {
+	const button = place < 0 ? undefined : card.querySelectorAll("button")[place];
+	if (!button) return;
+	if (event === "click") {
+		button.click();
+		return;
+	}
+	const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+	button.dispatchEvent(new Pointer("pointerdown", {
+		bubbles: true,
+		cancelable: true,
+		button: event.button,
+		ctrlKey: event.ctrlKey,
+		metaKey: event.metaKey,
+		shiftKey: event.shiftKey,
+		altKey: event.altKey,
+		clientX: event.clientX,
+		clientY: event.clientY,
+		...("pointerType" in event ? { pointerType: event.pointerType, pointerId: event.pointerId, isPrimary: event.isPrimary } : {}),
+	}));
+}

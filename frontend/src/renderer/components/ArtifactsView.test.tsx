@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
@@ -602,6 +602,17 @@ describe("ArtifactsView", () => {
 		await userEvent.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
 		const dialog = screen.getByRole("dialog", { name: "caching-options.md" });
 		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
+	});
+
+	it("opens a card's menu from the keyboard before the pointer has visited the card", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The card draws stand-in buttons until focus or the pointer reaches it; focus moves to the menu's own.
+		act(() => project.getByRole("button", { name: "More actions: pricing.md" }).focus());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+		await user.keyboard("{Enter}");
+		expect(await screen.findByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
