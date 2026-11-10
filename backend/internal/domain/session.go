@@ -486,17 +486,17 @@ type SessionRecord struct {
 	// before the session becomes visible; cancellation and startup reconciliation
 	// delete it after reclaiming the worktree.
 	IsTaskPreparation bool `json:"-"`
-	// ProvisionState is how far a Chat spawn has got. A Chat spawn answers the
-	// API as soon as the row and its conversation exist, so a session can be
-	// visible — and receive queued messages — before its worktree and controller
-	// do. Sessions written before asynchronous spawn existed read back as
+	// ProvisionState is how far an asynchronous spawn has got. It answers the
+	// API as soon as the row exists, so a session can be visible (a Chat one
+	// receiving queued messages) before its worktree and agent do. Sessions
+	// written before asynchronous spawn existed read back as
 	// SessionProvisionReady.
 	ProvisionState SessionProvisionState `json:"provisionState,omitempty" enum:"provisioning,ready,failed"`
 	// ProvisionError explains a failed start in the user's terms. It is kept on
 	// the row rather than discarded with it, because the user is already looking
 	// at the session by the time the start can fail.
 	ProvisionError string `json:"provisionError,omitempty"`
-	// ProvisionSteps is the checklist an asynchronous Chat start works through,
+	// ProvisionSteps is the checklist an asynchronous start works through,
 	// in order. It is written only by that background start, at each stage
 	// boundary, and kept after the start settles. A step still running when the
 	// session reads ProvisionState failed is the step that failed.
@@ -632,9 +632,10 @@ type SessionProvisionState string
 type TaskPreparationToken string
 
 const (
-	// SessionProvisionProvisioning means the row and its conversation exist; the
-	// worktree, the agent controller, or both do not yet. Messages sent now are
-	// queued and dispatched by the controller when it arrives.
+	// SessionProvisionProvisioning means the row exists; the worktree, the
+	// agent, or both do not yet. A Chat session queues messages sent now and
+	// dispatches them when its controller arrives; a Terminal session is not
+	// offered for attach until its agent holds the opening prompt.
 	SessionProvisionProvisioning SessionProvisionState = "provisioning"
 	// SessionProvisionReady means the session owns everything a spawn creates. This is
 	// the zero value's meaning, so rows predating asynchronous spawn are ready.

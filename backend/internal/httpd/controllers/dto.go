@@ -722,11 +722,12 @@ type SpawnSessionRequest struct {
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
 	Attachments []AttachmentInput `json:"attachments,omitempty"`
-	// Async answers as soon as a project Chat session is addressable: the
-	// session reads as provisioning with its prompt queued, and the worktree,
-	// setup and agent start in the background. Clients follow provisionState
-	// to learn whether the start succeeded. Ignored for standalone and TUI
-	// sessions, which always start before the response.
+	// Async answers as soon as a project session is addressable: the session
+	// reads as provisioning, and the worktree, setup and agent (with its
+	// opening prompt) start in the background. Clients follow provisionState
+	// to learn whether the start succeeded; a Terminal session offers its
+	// terminalHandleId only once ready. Ignored for standalone sessions, which
+	// always start before the response.
 	Async bool `json:"async,omitempty"`
 }
 
