@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Linking, StyleSheet, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import type { ShouldStartLoadRequest } from "react-native-webview/lib/WebViewTypes";
@@ -13,6 +13,27 @@ function stayInPage(request: ShouldStartLoadRequest): boolean {
 	if (/^(about|data):/i.test(request.url)) return true;
 	if (/^https?:/i.test(request.url)) void Linking.openURL(request.url).catch(() => {});
 	return false;
+}
+
+// A diagram page whose process keeps dying gives up after this many fresh mounts.
+const MAX_PROCESS_RESTARTS = 2;
+
+/**
+ * A diagram WebView's mount, for when its web content process dies: iOS ends
+ * WKWebView content processes in the background, and Android can lose the
+ * renderer under memory pressure, which leaves a blank box. `gone` mounts the
+ * page afresh (bump `key` with `mount`) up to a limit, then calls `giveUp`, as
+ * the chat's render frames do (useRenderPage).
+ */
+export function useDiagramRemount(): { mount: number; gone: (giveUp: () => void) => void } {
+	const [mount, setMount] = useState(0);
+	const restarts = useRef(0);
+	const gone = useCallback((giveUp: () => void) => {
+		restarts.current += 1;
+		if (restarts.current > MAX_PROCESS_RESTARTS) giveUp();
+		else setMount((value) => value + 1);
+	}, []);
+	return useMemo(() => ({ mount, gone }), [mount, gone]);
 }
 
 /**
@@ -30,6 +51,9 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
 	const [runtime, setRuntime] = useState<string>();
 	const [failed, setFailed] = useState(false);
 	const [rendered, setRendered] = useState(false);
+	const page = useDiagramRemount();
+	// A page mounted afresh after its process died draws again before it shows.
+	useEffect(() => setRendered(false), [page.mount]);
 	useEffect(() => {
 		if (!renderable) return;
 		let live = true;
@@ -53,11 +77,14 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
 		<View style={styles.screen}>
 			{html ? (
 				<WebView
+					key={page.mount}
 					source={{ html }}
 					originWhitelist={["*"]}
 					onShouldStartLoadWithRequest={stayInPage}
 					onMessage={onMessage}
 					onError={() => setFailed(true)}
+					onContentProcessDidTerminate={() => page.gone(() => setFailed(true))}
+					onRenderProcessGone={() => page.gone(() => setFailed(true))}
 					// Under the clear glass bar, the diagram scrolls on beneath it.
 					contentInsetAdjustmentBehavior="automatic"
 					nestedScrollEnabled
