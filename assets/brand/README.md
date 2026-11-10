@@ -41,6 +41,9 @@ when the bundle changes, tracked by `Assets.car.sha256`.
 | `packages/mobile/assets/notification-icon.png` | Android notification icon (white silhouette). |
 | `packages/mobile/assets/splash-icon.png`, `favicon.png`, `mascot.png` | Splash screen, web favicon, onboarding and connection lamp. |
 
+To see the iOS icon in every appearance, as a device draws it, run
+`packages/mobile/scripts/preview-icon.sh`.
+
 Glass renders that need no tile (Android foreground, splash, mobile mascot)
 come from rendering the bundle on a black and a white tile and solving for
 each pixel's alpha, so they carry the same glass shading as the app icon.
