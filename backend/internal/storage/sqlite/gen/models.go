@@ -803,6 +803,11 @@ type SessionCleanupFact struct {
 	ReportOnly           bool
 }
 
+type SessionCommitAttribution struct {
+	SessionID string
+	CoAuthor  string
+}
+
 type SessionHarnessRelease struct {
 	SessionID string
 	Launch    string

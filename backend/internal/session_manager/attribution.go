@@ -64,8 +64,8 @@ type attributionChoice int
 
 const (
 	// attributionFromSettings is for a session starting now, in a new or a
-	// reused worktree: today's beta and project switches decide, and the
-	// choice is recorded on each worktree's branch.
+	// reused worktree: today's beta and project switches decide, and a
+	// trailer is recorded for the session.
 	attributionFromSettings attributionChoice = iota
 	// attributionRecorded is for an existing session whose reclaimed worktree
 	// was recreated: it keeps the choice it started with.
@@ -81,49 +81,43 @@ const (
 // child repository has its own worktree below it; every one is configured.
 // Failures are logged, never fatal: a missing trailer must not stop a session
 // from starting.
-func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, workspacePath string, choice attributionChoice) {
+func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) {
 	if workspacePath == "" {
 		return
 	}
-	hooksDir := attribution.HooksDir(m.dataDir)
 	coAuthor := ""
-	if choice == attributionFromSettings && m.commitTrailerWanted(ctx, project) {
-		coAuthor = attribution.Bot.CoAuthor()
+	switch choice {
+	case attributionFromSettings:
+		if m.commitTrailerWanted(ctx, project) {
+			coAuthor = attribution.Bot.CoAuthor()
+			if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
+				m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
+			}
+		}
+	case attributionRecorded:
+		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
+		if err != nil {
+			m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
+		}
+		coAuthor = recorded
 	}
+	base := attribution.HooksDir(m.dataDir)
 	if coAuthor == "" {
-		if _, err := os.Stat(hooksDir); err != nil {
+		if _, err := os.Stat(base); err != nil {
 			return
 		}
 	}
-	installed := false
 	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
-		want := coAuthor
-		if choice == attributionRecorded {
-			want = attribution.RecordedChoice(ctx, worktree)
-		}
-		if want == "" {
-			if attribution.ConfiguredFor(ctx, worktree, hooksDir) {
+		if coAuthor == "" {
+			if attribution.ConfiguredFor(ctx, worktree, base) {
 				if err := attribution.RemoveFromWorktree(ctx, worktree); err != nil {
 					m.logger.Warn("attribution: remove from worktree", "path", worktree, "error", err)
 				}
 			}
-		} else {
-			if !installed {
-				if err := attribution.InstallHooks(hooksDir); err != nil {
-					m.logger.Warn("attribution: install git hooks", "error", err)
-					return
-				}
-				installed = true
-			}
-			if err := attribution.ConfigureWorktree(ctx, worktree, hooksDir, want); err != nil {
-				m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
-				continue
-			}
+			continue
 		}
-		if choice == attributionFromSettings {
-			if err := attribution.RecordChoice(ctx, worktree, want); err != nil {
-				m.logger.Warn("attribution: record choice", "path", worktree, "error", err)
-			}
+		if err := attribution.ConfigureWorktree(ctx, worktree, base, coAuthor); err != nil {
+			m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
 		}
 	}
 }

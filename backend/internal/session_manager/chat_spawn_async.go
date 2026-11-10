@@ -200,14 +200,14 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
-		if err := m.provisionWorkspace(ctx, in.project, ws.Path); err != nil {
+		if err := m.provisionWorkspace(ctx, in.project, id, ws.Path); err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
 			return
 		}
 	} else {
 		// A reused workspace skips Setup but still credits Orchestrator.
-		m.applyCommitAttribution(ctx, in.project, ws.Path, attributionFromSettings)
+		m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
 	}
 	if err := ctx.Err(); err != nil {
 		m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)

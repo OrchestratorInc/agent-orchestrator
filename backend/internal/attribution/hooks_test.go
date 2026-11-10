@@ -30,7 +30,8 @@ type repo struct {
 	t        *testing.T
 	main     string
 	worktree string
-	hooks    string
+	hooks    string // HooksDir: the base holding one directory per repository
+	repo     string // the hooks directory ConfigureWorktree chose for this repository
 }
 
 func (r repo) git(dir string, args ...string) string {
@@ -76,12 +77,10 @@ func newRepo(t *testing.T, coAuthor string, setup func(r repo)) repo {
 	}
 	r.git(r.main, "config", "extensions.worktreeConfig", "true")
 	r.git(r.main, "worktree", "add", "-q", "-b", "orchestrator/s-1/root", r.worktree)
-	if err := InstallHooks(r.hooks); err != nil {
-		t.Fatal(err)
-	}
 	if err := ConfigureWorktree(context.Background(), r.worktree, r.hooks, coAuthor); err != nil {
 		t.Fatal(err)
 	}
+	r.repo = r.git(r.worktree, "config", "--worktree", "--get", "core.hooksPath")
 	return r
 }
 
@@ -227,11 +226,28 @@ func TestHookCommentCharacters(t *testing.T) {
 			t.Fatal("HEAD moved on a comment-only message")
 		}
 	})
+	t.Run("backslashes in the comment string are literal", func(t *testing.T) {
+		if !gitAtLeast(t, 2, 45) {
+			t.Skip("core.commentString needs git 2.45 or later")
+		}
+		r := newRepo(t, testCoAuthor, nil)
+		r.git(r.worktree, "config", "core.commentString", `\\`)
+		// One backslash is not the two-backslash comment string: a real line.
+		if err := editorCommit(r, `\ one backslash is message`); err != nil {
+			t.Fatal(err)
+		}
+		if msg := r.message("HEAD"); countTrailer(msg) != 1 {
+			t.Fatalf("message:\n%s", msg)
+		}
+	})
 	for _, cs := range []struct{ key, value string }{
 		{"core.commentString", "//"},
 		{"core.commentChar", "["},
 	} {
 		t.Run(cs.key+"="+cs.value, func(t *testing.T) {
+			if cs.key == "core.commentString" && !gitAtLeast(t, 2, 45) {
+				t.Skip("core.commentString needs git 2.45 or later")
+			}
 			r := newRepo(t, testCoAuthor, nil)
 			r.git(r.worktree, "config", cs.key, cs.value)
 			if err := editorCommit(r, "fix: literal\n"+cs.value+" a comment"); err != nil {
@@ -386,8 +402,8 @@ func TestHookPicksUpHooksPathSetLater(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("hooksPath set after the session started was not run: %v", err)
 	}
-	if got := r.git(r.worktree, "config", "--worktree", "--get", "core.hooksPath"); got != r.hooks {
-		t.Fatalf("worktree hooksPath = %q, want %q", got, r.hooks)
+	if got := r.git(r.worktree, "config", "--worktree", "--get", "core.hooksPath"); got != r.repo {
+		t.Fatalf("worktree hooksPath = %q, want %q", got, r.repo)
 	}
 }
 
@@ -459,10 +475,10 @@ func TestConfigureWorktreeAddsRepositoryOnDemandHooks(t *testing.T) {
 		writeHook(t, filepath.Join(r.main, ".git", "hooks"), "reference-transaction",
 			"#!/bin/sh\ncat >/dev/null\necho ran >> \"$(git rev-parse --git-common-dir)/ref-tx.log\"\n")
 	})
-	if _, err := os.Stat(filepath.Join(r.hooks, "reference-transaction")); err != nil {
+	if _, err := os.Stat(filepath.Join(r.repo, "reference-transaction")); err != nil {
 		t.Fatalf("on-demand hook not installed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(r.hooks, "post-index-change")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(r.repo, "post-index-change")); !os.IsNotExist(err) {
 		t.Fatalf("hook the repository lacks was installed: %v", err)
 	}
 	r.commit("-m", "feat: refs")
@@ -471,28 +487,43 @@ func TestConfigureWorktreeAddsRepositoryOnDemandHooks(t *testing.T) {
 	}
 }
 
-func TestRecordChoiceSurvivesRecreatedWorktree(t *testing.T) {
-	r := newRepo(t, testCoAuthor, nil)
+func TestRepositoriesGetTheirOwnHooksDirectory(t *testing.T) {
+	// The first repository has a reference-transaction hook; the second does not.
+	first := newRepo(t, testCoAuthor, func(r repo) {
+		writeHook(t, filepath.Join(r.main, ".git", "hooks"), "reference-transaction", "#!/bin/sh\ncat >/dev/null\n")
+	})
+	second := newRepo(t, testCoAuthor, nil)
 	ctx := context.Background()
-	if err := RecordChoice(ctx, r.worktree, testCoAuthor); err != nil {
+	if err := RemoveFromWorktree(ctx, second.worktree); err != nil {
 		t.Fatal(err)
 	}
-	r.git(r.main, "worktree", "remove", "--force", r.worktree)
-	r.git(r.main, "worktree", "add", "-q", r.worktree, "orchestrator/s-1/root")
-	if got := RecordedChoice(ctx, r.worktree); got != testCoAuthor {
-		t.Fatalf("recorded choice = %q", got)
-	}
-	if ConfiguredFor(ctx, r.worktree, r.hooks) {
-		t.Fatal("a recreated worktree kept the old hooks config")
-	}
-	if err := RecordChoice(ctx, r.worktree, ""); err != nil {
+	if err := ConfigureWorktree(ctx, second.worktree, first.hooks, testCoAuthor); err != nil {
 		t.Fatal(err)
 	}
-	if got := RecordedChoice(ctx, r.worktree); got != "" {
-		t.Fatalf("cleared choice = %q", got)
+	dir := second.git(second.worktree, "config", "--worktree", "--get", "core.hooksPath")
+	if dir == first.repo || filepath.Dir(dir) != first.hooks {
+		t.Fatalf("second repository hooks dir = %q, first = %q", dir, first.repo)
 	}
-	if err := RecordChoice(ctx, r.worktree, ""); err != nil {
-		t.Fatalf("clearing twice: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "reference-transaction")); !os.IsNotExist(err) {
+		t.Fatalf("second repository got the first one's on-demand hook: %v", err)
+	}
+	// A second worktree of the same repository shares the directory.
+	other := filepath.Join(filepath.Dir(first.worktree), "wt-2")
+	first.git(first.main, "worktree", "add", "-q", "-b", "orchestrator/s-2/root", other)
+	if err := ConfigureWorktree(ctx, other, first.hooks, testCoAuthor); err != nil {
+		t.Fatal(err)
+	}
+	if got := first.git(other, "config", "--worktree", "--get", "core.hooksPath"); got != first.repo {
+		t.Fatalf("same repository, different hooks dir: %q vs %q", got, first.repo)
+	}
+	if !ConfiguredFor(ctx, other, first.hooks) {
+		t.Fatal("ConfiguredFor = false for a configured worktree")
+	}
+	if err := RemoveFromWorktree(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if ConfiguredFor(ctx, other, first.hooks) {
+		t.Fatal("ConfiguredFor = true after RemoveFromWorktree")
 	}
 }
 
@@ -522,4 +553,18 @@ func TestHookIgnoresPersonalTrailerCommands(t *testing.T) {
 	if msg != want {
 		t.Fatalf("message:\n%s\nwant:\n%s", msg, want)
 	}
+}
+
+// gitAtLeast reports whether the installed git is at least major.minor.
+func gitAtLeast(t *testing.T, major, minor int) bool {
+	t.Helper()
+	out, err := exec.Command("git", "version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotMajor, gotMinor int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(strings.TrimSpace(string(out)), "git version "), "%d.%d", &gotMajor, &gotMinor); err != nil {
+		t.Fatalf("parse %q: %v", out, err)
+	}
+	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
 }

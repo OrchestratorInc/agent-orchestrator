@@ -2,8 +2,6 @@ package sessionmanager
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,15 +51,14 @@ func TestApplyCommitAttributionFollowsBetaAndProjectToggle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			wt := attributionWorktree(t, root, "s-1")
-			m := &Manager{dataDir: filepath.Join(root, "data"), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 			beta := tc.beta
-			m.SetCommitAttributionEnabled(func(context.Context) bool { return beta })
+			m, _ := attributionManager(t, root, &beta)
 			project := domain.ProjectRecord{ID: "p", Config: domain.ProjectConfig{Attribution: domain.AttributionConfig{DisableCommitTrailer: tc.disable}}}
-			m.applyCommitAttribution(ctx, project, wt, attributionFromSettings)
+			m.applyCommitAttribution(ctx, project, domain.SessionID(filepath.Base(wt)), wt, attributionFromSettings)
 			hooks := worktreeConfig(t, wt, "core.hooksPath")
 			coAuthor := worktreeConfig(t, wt, attribution.ConfigCoAuthor)
 			if tc.wantHooks {
-				if hooks != attribution.HooksDir(m.dataDir) || coAuthor != attribution.Bot.CoAuthor() {
+				if filepath.Dir(hooks) != attribution.HooksDir(m.dataDir) || coAuthor != attribution.Bot.CoAuthor() {
 					t.Fatalf("hooksPath=%q coauthor=%q", hooks, coAuthor)
 				}
 				return
@@ -142,7 +139,7 @@ func TestApplyCommitAttributionConfiguresWorkspaceRootAndChildren(t *testing.T) 
 	if got := m.sessionGitWorktrees(ctx, project, session); len(got) != 3 || got[0] != session || got[1] != api || got[2] != web {
 		t.Fatalf("worktrees = %v", got)
 	}
-	m.applyCommitAttribution(ctx, project, session, attributionFromSettings)
+	m.applyCommitAttribution(ctx, project, domain.SessionID(filepath.Base(session)), session, attributionFromSettings)
 	for _, dir := range []string{session, api, web} {
 		if msg := commitMessage(t, dir); !strings.Contains(msg, attribution.Bot.Trailer()) {
 			t.Fatalf("commit in %s has no trailer:\n%s", dir, msg)
@@ -172,22 +169,22 @@ func TestApplyCommitAttributionUndoesReusedWorktreeWhenOff(t *testing.T) {
 			wt := filepath.Join(root, "orchestrator", "p-orchestrator")
 			attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/p-orchestrator")
 			beta := true
-			m, _ := attributionManager(t, root, &beta)
+			m, st := attributionManager(t, root, &beta)
 			project := domain.ProjectRecord{ID: "p"}
-			m.applyCommitAttribution(ctx, project, wt, attributionFromSettings)
+			m.applyCommitAttribution(ctx, project, "first", wt, attributionFromSettings)
 			if msg := commitMessage(t, wt); !strings.Contains(msg, attribution.Bot.Trailer()) {
 				t.Fatalf("first session has no trailer:\n%s", msg)
 			}
 
 			tc.off(&beta, &project)
-			m.applyCommitAttribution(ctx, project, wt, attributionFromSettings)
+			m.applyCommitAttribution(ctx, project, "next", wt, attributionFromSettings)
 			if hooks, co := worktreeConfig(t, wt, "core.hooksPath"), worktreeConfig(t, wt, attribution.ConfigCoAuthor); hooks != "" || co != "" {
 				t.Fatalf("reused worktree still configured: hooksPath=%q coauthor=%q", hooks, co)
 			}
 			if msg := commitMessage(t, wt); strings.Contains(msg, "Co-authored-by") {
 				t.Fatalf("next session still adds the trailer:\n%s", msg)
 			}
-			if got := attribution.RecordedChoice(ctx, wt); got != "" {
+			if got, _ := st.SessionCommitAttribution(ctx, "next"); got != "" {
 				t.Fatalf("recorded choice = %q, want none", got)
 			}
 		})
@@ -219,17 +216,21 @@ func TestRecreatedWorktreeKeepsTheSessionsChoice(t *testing.T) {
 			beta := true
 			m, _ := attributionManager(t, root, &beta)
 			project := domain.ProjectRecord{ID: "p"}
-			m.applyCommitAttribution(ctx, project, other, attributionFromSettings)
+			m.applyCommitAttribution(ctx, project, domain.SessionID(filepath.Base(other)), other, attributionFromSettings)
 
 			beta = tc.betaAtStart
-			m.applyCommitAttribution(ctx, project, wt, attributionFromSettings)
+			m.applyCommitAttribution(ctx, project, domain.SessionID(filepath.Base(wt)), wt, attributionFromSettings)
 			// The worktree is reclaimed and later recreated on the same branch.
 			runManagerGit(t, repoDir, "worktree", "remove", "--force", wt)
 			runManagerGit(t, repoDir, "worktree", "add", "-q", wt, branch)
 			beta = !tc.betaAtStart
-			m.applyCommitAttribution(ctx, project, wt, attributionRecorded)
+			m.applyCommitAttribution(ctx, project, domain.SessionID(filepath.Base(wt)), wt, attributionRecorded)
 			if got := strings.Contains(commitMessage(t, wt), attribution.Bot.Trailer()); got != tc.want {
 				t.Fatalf("trailer after recreate = %v, want %v", got, tc.want)
+			}
+			// The choice lives in Orchestrator's store, not the person's repository config.
+			if out, _ := exec.Command("git", "-C", repoDir, "config", "--local", "--get-regexp", "(?i)orchestrator").Output(); len(out) != 0 {
+				t.Fatalf("repository config holds attribution state:\n%s", out)
 			}
 		})
 	}
@@ -308,10 +309,10 @@ func TestProvisionWorkspaceDispatchesHookInstalledBySetup(t *testing.T) {
 		`printf '#!/bin/sh\ncat >/dev/null\necho ran >> "$(git rev-parse --path-format=absolute --git-common-dir)/ref-tx.log"\n' > "$hooks/reference-transaction" && ` +
 		`chmod +x "$hooks/reference-transaction"`
 	project := domain.ProjectRecord{ID: "p", Path: filepath.Join(root, "repo"), Config: domain.ProjectConfig{PostCreate: []string{install}}}
-	if err := m.provisionWorkspace(ctx, project, wt); err != nil {
+	if err := m.provisionWorkspace(ctx, project, "s-1", wt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(attribution.HooksDir(m.dataDir), "reference-transaction")); err != nil {
+	if _, err := os.Stat(filepath.Join(worktreeConfig(t, wt, "core.hooksPath"), "reference-transaction")); err != nil {
 		t.Fatalf("no dispatcher for the hook setup installed: %v", err)
 	}
 	if msg := commitMessage(t, wt); !strings.Contains(msg, attribution.Bot.Trailer()) {
