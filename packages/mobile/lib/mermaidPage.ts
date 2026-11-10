@@ -77,12 +77,21 @@ function withoutScripts(markup: string): string {
 	return markup.replace(/<script\b[\s\S]*?<\/script\s*>/gi, "").replace(/<\/?script\b[^>]*>/gi, "");
 }
 
-// Posts the diagram's height once laid out (after a frame, so the SVG has its size).
+// Posts the diagram's height once laid out (after a frame, so the SVG has its
+// size), and again whenever it changes: the SVG scales with the frame's width,
+// so a resized window (iPad Split View, Stage Manager) changes its height.
 const REPORT_SCRIPT = `var post = function (message) { window.ReactNativeWebView.postMessage(JSON.stringify(message)); };
+var measure = function () { return Math.ceil(document.getElementById("diagram").getBoundingClientRect().height); };
 var report = function (svg) {
 	requestAnimationFrame(function () {
-		var height = Math.ceil(document.getElementById("diagram").getBoundingClientRect().height);
-		post(svg === undefined ? { type: "rendered", height: height } : { type: "rendered", height: height, svg: svg });
+		var last = measure();
+		post(svg === undefined ? { type: "rendered", height: last } : { type: "rendered", height: last, svg: svg });
+		var follow = function () {
+			var height = measure();
+			if (height > 0 && height !== last) { last = height; post({ type: "rendered", height: height }); }
+		};
+		if (window.ResizeObserver) new ResizeObserver(follow).observe(document.getElementById("diagram"));
+		else window.addEventListener("resize", follow);
 	});
 };`;
 

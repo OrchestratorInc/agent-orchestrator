@@ -41,6 +41,13 @@ describe("inline diagrams", () => {
 		expect(mermaidPageHtml({ runtime: "", code: "graph TD; A-->B", colors })).toContain("report(undefined)");
 	});
 
+	it("posts the height again when the diagram's size changes", () => {
+		for (const html of [mermaidPageHtml({ runtime: "", code: "graph TD; A-->B", colors, inline: true }), mermaidSvgPageHtml({ svg: "<svg/>", colors, inline: true })]) {
+			expect(html).toContain("new ResizeObserver(follow).observe(document.getElementById(\"diagram\"))");
+			expect(html).toContain('window.addEventListener("resize", follow)');
+		}
+	});
+
 	it("draws a cached diagram without the engine, and without any script it carries", () => {
 		const html = mermaidSvgPageHtml({ svg: '<svg><script>alert(1)</script><g/></svg>', colors, inline: true });
 		expect(html).toContain("<svg><g/></svg>");

@@ -4,16 +4,23 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { isRenderableDiagram } from "../../../shared/files/file-formats";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
-import { stayInDiagramPage } from "../MermaidDiagram";
+import { stayInDiagramPage, useDiagramRemount } from "../MermaidDiagram";
 import { mermaidPageHtml, mermaidSvgPageHtml, parseDiagramMessage } from "../mermaidPage";
 import { loadMermaidRuntime } from "../mermaidRuntime";
 import { cachedDiagram, diagramCacheKey, storeDiagram } from "../mermaidSvgCache";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
-import { radius, space, type } from "../tokens";
+import { radius, space, touchTarget, type } from "../tokens";
 
 // Before the diagram reports its height, the frame holds this much room.
 const PLACEHOLDER_HEIGHT = 160;
+
+// A switch segment draws one caption line high; its touch area reaches the
+// platform's target, as the code block's own actions do, so a scrolling chat
+// neither misses it nor hits it by accident.
+const SEGMENT_HEIGHT = type.caption1.lineHeight + space.hair * 2;
+const SEGMENT_SLOP = Math.max(0, Math.ceil((touchTarget - SEGMENT_HEIGHT) / 2));
+const SEGMENT_HIT_SLOP = { top: SEGMENT_SLOP, bottom: SEGMENT_SLOP, left: space.xxs, right: space.xxs };
 
 /**
  * A ```mermaid fence in a reply or a markdown document, drawn as its diagram,
@@ -39,8 +46,11 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 	const [failed, setFailed] = useState(false);
 	const [height, setHeight] = useState<number>();
 	const [showCode, setShowCode] = useState(false);
-	// Read once per source and theme: storing this mount's own SVG must not reload its frame.
-	const cached = useMemo(() => drawable ? cachedDiagram(key) : undefined, [drawable, key]);
+	// A frame whose web process died mounts afresh, from the cached SVG once there is one.
+	const page = useDiagramRemount();
+	// Read once per source, theme and mount: storing this mount's own SVG must not reload its frame.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const cached = useMemo(() => drawable ? cachedDiagram(key) : undefined, [drawable, key, page.mount]);
 	useEffect(() => {
 		if (!drawable || cached || runtime) return;
 		let live = true;
@@ -84,6 +94,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 						accessibilityRole="radio"
 						accessibilityState={{ selected }}
 						onPress={() => { if (!selected) { haptics.select(); setShowCode(label === "Code"); } }}
+						hitSlop={SEGMENT_HIT_SLOP}
 						style={[styles.switchItem, selected && styles.switchItemOn]}
 					>
 						<Text style={[styles.switchText, selected && styles.switchTextOn]}>{label}</Text>
@@ -101,11 +112,15 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 					<View style={{ height: height ?? PLACEHOLDER_HEIGHT }}>
 						{html ? (
 							<WebView
+								key={page.mount}
 								source={{ html }}
 								originWhitelist={["*"]}
 								onShouldStartLoadWithRequest={stayInDiagramPage}
 								onMessage={onMessage}
 								onError={() => setFailed(true)}
+								// iOS ends WKWebView content processes in the background; Android can lose the renderer.
+								onContentProcessDidTerminate={() => page.gone(() => setFailed(true))}
+								onRenderProcessGone={() => page.gone(() => setFailed(true))}
 								scrollEnabled={false}
 								javaScriptEnabled
 								allowFileAccess={false}
