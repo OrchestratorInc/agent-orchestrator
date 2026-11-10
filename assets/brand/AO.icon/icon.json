@@ -1,18 +1,17 @@
 {
-  "color-space-for-untagged-svg-colors" : "display-p3",
   "fill" : {
     "linear-gradient" : [
-      "srgb:0.10000,0.10500,0.11500,1.00000",
-      "srgb:0.00000,0.00000,0.00000,1.00000"
+      "srgb:0.10000,0.09800,0.09800,1.00000",
+      "srgb:0.01000,0.01000,0.01000,1.00000"
     ],
     "orientation" : {
       "start" : {
-        "x" : 0.5,
+        "x" : 0.3,
         "y" : 0
       },
       "stop" : {
-        "x" : 0.5,
-        "y" : 0.85
+        "x" : 0.6,
+        "y" : 1
       }
     }
   },
@@ -24,10 +23,10 @@
           "image-name" : "ruto.svg",
           "name" : "Ruto",
           "position" : {
-            "scale" : 0.86,
+            "scale" : 1.258,
             "translation-in-points" : [
-              -6,
-              16
+              1,
+              1
             ]
           }
         }
@@ -50,10 +49,10 @@
           "image-name" : "baton.svg",
           "name" : "Baton",
           "position" : {
-            "scale" : 0.86,
+            "scale" : 1.258,
             "translation-in-points" : [
-              -6,
-              16
+              1,
+              1
             ]
           }
         }

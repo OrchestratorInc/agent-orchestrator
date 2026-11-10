@@ -1,12 +1,12 @@
 # Brand mark
 
-Every Orchestrator icon, logo and mascot image comes from two sources here.
-Change a source, rerun the script, and commit the outputs. Never edit an
-output by hand.
+Every Orchestrator icon, logo and mascot image comes from two sources. Change
+a source, rerun the script, and commit the outputs. Never edit an output by
+hand.
 
 | Source | What it holds |
 | --- | --- |
-| [`ruto.svg`](ruto.svg) | Ruto, the mark, on the 1024 icon grid. Four paths, found by `id`: `baton-edge` (flat logo only, keeps the white baton visible on light surfaces), `baton`, `body` (eyes cut out) and `eyes` (painted dark). |
+| The `Ruto` section of [`scripts/generate-brand-assets.swift`](../../scripts/generate-brand-assets.swift) | Ruto, the mark, as drawn on the desktop icon before Liquid Glass and traced onto its 1024 grid: the outline, eye holes and baton, the face gradient, and the colours of the chamfered rims and eye walls. The script builds the rims from the outline and writes the result to [`ruto.svg`](ruto.svg), with the parts in two groups, `baton` and `body`. |
 | [`AO.icon/icon.json`](AO.icon/icon.json) | The Liquid Glass settings, an Apple Icon Composer document: the dark gradient tile, Ruto and the baton as separate glass groups with specular highlights and shadows, and where they sit on the tile. Open `AO.icon` in Icon Composer to tune it; its `Assets/` layers are written by the script. |
 
 ```sh
@@ -23,6 +23,7 @@ when the bundle changes, tracked by `Assets.car.sha256`.
 
 | File | Used by |
 | --- | --- |
+| `ruto.svg` | The whole mark on the 1024 grid, the vector source of truth for everything below. |
 | `AO.icon/Assets/{ruto,baton}.svg` | The Icon Composer layers. |
 | `frontend/assets/Assets.car` | macOS 26+ app icon (Liquid Glass, light, dark, tinted, clear), named by `CFBundleIconName` in `frontend/forge.config.ts`. |
 | `frontend/assets/icon.icns` | App icon before macOS 26, the dmg volume icon and the dictation helper. The glass tile rendered at the 824 pt macOS icon body with the standard drop shadow, 16 to 1024 px. |
@@ -36,7 +37,7 @@ when the bundle changes, tracked by `Assets.car.sha256`.
 | `docs/assets/readme/logo.png` | Repository README header (192 px for a 96 pt slot). |
 | `packages/mobile/assets/AO.icon` | iOS icon (Expo builds it from the bundle). |
 | `packages/mobile/assets/icon.png` | Expo fallback icon: full-bleed square, no rounding, no alpha. |
-| `packages/mobile/assets/android-icon-{background,foreground,monochrome}.png` | Android adaptive icon. The foreground and monochrome layers keep Ruto inside the 66 dp safe zone. |
+| `packages/mobile/assets/android-icon-{background,foreground,monochrome}.png` | Android adaptive icon. The foreground and monochrome layers are scaled so Ruto stays inside the 66 dp safe zone. |
 | `packages/mobile/assets/notification-icon.png` | Android notification icon (white silhouette). |
 | `packages/mobile/assets/splash-icon.png`, `favicon.png`, `mascot.png` | Splash screen, web favicon, onboarding and connection lamp. |
 

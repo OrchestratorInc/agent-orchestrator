@@ -1,7 +1,8 @@
-// Regenerates every Orchestrator icon, logo and mascot file from the two
-// sources in assets/brand (see assets/brand/README.md):
-//   ruto.svg           the mark: paths baton-edge, baton, body (eyes cut out), eyes
-//   AO.icon/icon.json  the Liquid Glass settings, an Icon Composer document
+// Regenerates every Orchestrator icon, logo and mascot file from two sources
+// (see assets/brand/README.md):
+//   the Ruto section below      the mark's geometry and shading; written out
+//                               as assets/brand/ruto.svg
+//   assets/brand/AO.icon/icon.json  the Liquid Glass settings, an Icon Composer document
 // Needs macOS 26+ with Xcode 26+ (ictool, actool). Run from anywhere:
 //   swift scripts/generate-brand-assets.swift
 // Outputs are committed. Never edit one by hand: change a source and rerun.
@@ -46,45 +47,174 @@ func write(_ data: Data, to relative: String) {
     print("wrote \(relative)")
 }
 
-// MARK: - Source
+// MARK: - Ruto
 
-let source = try String(contentsOf: brand.appendingPathComponent("ruto.svg"), encoding: .utf8)
+// Ruto as drawn on the pre-glass desktop icon, traced onto its 1024 grid
+// (that icon's tile spans x 104-918). The rims are mitred chamfers built from
+// the outline: every edge gets an outer line, a band and an inner ridge,
+// coloured by which way the edge faces. Writes assets/brand/ruto.svg.
 
-func firstMatch(_ pattern: String) -> String {
-    let regex = try! NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
-    guard let match = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)) else {
-        fatalError("assets/brand/ruto.svg does not match \(pattern)")
+typealias Point = (x: Double, y: Double)
+
+func arc(_ cx: Double, _ cy: Double, _ r: Double, _ from: Double, _ to: Double) -> [Point] {
+    let steps = max(2, Int(abs(to - from) / 7.5))
+    return (0...steps).map { i in
+        let angle = (from + (to - from) * Double(i) / Double(steps)) * .pi / 180
+        return (cx + r * cos(angle), cy + r * sin(angle))
     }
-    return String(source[Range(match.range, in: source)!])
 }
 
-/// A path from ruto.svg, without its id.
-func element(_ id: String) -> String {
-    firstMatch("<path id=\"\(id)\"[^>]*/>").replacingOccurrences(of: " id=\"\(id)\"", with: "")
+func legBottom(_ left: Double, _ right: Double) -> [Point] {
+    arc(right - 7, 756, 7, 0, 90) + arc(left + 7, 756, 7, 90, 180)
 }
 
-func paint(_ element: String, _ attribute: String, _ color: String) -> String {
-    element.replacingOccurrences(of: "\(attribute)=\"[^\"]*\"", with: "\(attribute)=\"\(color)\"", options: .regularExpression)
+let outline: [Point] = arc(323, 352, 28, 180, 270) + arc(663, 352, 28, 270, 360)
+    + [(691, 476), (727, 476)] // shoulder, then the raised arm
+    + arc(751, 416, 6, 195, 286) + arc(804, 432, 6, 286, 374)
+    + [(787, 529), (745, 561), (691, 561)]
+    + legBottom(628, 691) + [(628, 698), (591, 698)]
+    + legBottom(528, 591) + [(528, 698), (459, 698)]
+    + legBottom(394, 459) + [(394, 698), (357, 698)]
+    + legBottom(295, 357)
+    + [(295, 571), (272, 571), (272, 598), (281, 605)] // trunk
+    + arc(275, 655, 6, 0, 90) + [(241, 661), (207, 627)]
+    + arc(221, 490, 14, 180, 270) + [(295, 476)]
+let pupils: [CGRect] = [CGRect(x: 381, y: 437, width: 43, height: 48), CGRect(x: 568, y: 437, width: 43, height: 48)]
+// The baton: round cap centre, tilt in degrees, width and length into the hand.
+let baton = (x: 835.5, y: 236.0, angle: 16.95, width: 17.5, length: 218.0)
+// Everything Ruto covers, for crops.
+let markBounds = CGRect(x: 207, y: 227, width: 637, height: 536)
+
+typealias Bands = [(from: Double, to: Double, up: String, left: String, right: String, down: String)]
+let bodyBands: Bands = [
+    (0, 1.5, "#B6F0FF", "#68CCF7", "#0A8CD2", "#0981C2"),
+    (1.5, 8, "#9CDEFA", "#5FC4F7", "#0B80CA", "#0C78BC"),
+    (8, 10, "#D2F2FE", "#A0E0FE", "#31B6FC", "#34B5F8"),
+]
+// The eye walls slope down into the dark pupils.
+let eyeBands: Bands = [
+    (0, 8, "#88DCFD", "#6CCCFC", "#1E94D8", "#1484C8"),
+    (8, 10, "#B7EBFE", "#B7EEFE", "#2FA1E2", "#31A3E2"),
+]
+
+func number(_ value: Double) -> String {
+    let text = String(format: "%.1f", value)
+    return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
 }
 
-let defs = firstMatch("<defs>.*?</defs>")
+func pathData(_ points: [Point]) -> String {
+    "M" + points.map { "\(number($0.x)) \(number($0.y))" }.joined(separator: "L") + "Z"
+}
+
+func signedArea(_ points: [Point]) -> Double {
+    zip(points, points.dropFirst() + [points[0]]).reduce(0) { $0 + $1.0.x * $1.1.y - $1.1.x * $1.0.y } / 2
+}
+
+/// Drops repeated points; orients outlines clockwise on screen and holes the other way.
+func contour(_ points: [Point], hole: Bool) -> [Point] {
+    var out: [Point] = []
+    for point in points where out.last.map({ hypot(point.x - $0.x, point.y - $0.y) > 0.5 }) ?? true { out.append(point) }
+    if let first = out.first, let last = out.last, hypot(first.x - last.x, first.y - last.y) < 0.5 { out.removeLast() }
+    return (signedArea(out) < 0) != hole ? out.reversed() : out
+}
+
+/// The outward normal of each edge.
+func normals(_ points: [Point]) -> [Point] {
+    points.indices.map { i in
+        let a = points[i], b = points[(i + 1) % points.count]
+        let length = hypot(b.x - a.x, b.y - a.y)
+        return ((b.y - a.y) / length, (a.x - b.x) / length)
+    }
+}
+
+/// The contour moved inward by a depth, corners mitred.
+func inset(_ points: [Point], _ normals: [Point], _ depth: Double) -> [Point] {
+    points.indices.map { i in
+        let a = normals[(i + normals.count - 1) % normals.count], b = normals[i]
+        let k = 1 + a.x * b.x + a.y * b.y
+        return (points[i].x - depth * (a.x + b.x) / k, points[i].y - depth * (a.y + b.y) / k)
+    }
+}
+
+/// The band colour for an edge facing `normal`, blended between the four
+/// keyed directions in a few steps so neighbouring edges share paths.
+func shade(_ normal: Point, _ band: (from: Double, to: Double, up: String, left: String, right: String, down: String)) -> String {
+    let keys = [band.right, band.down, band.left, band.up] // screen angles 0, 90, 180, 270
+    var angle = atan2(normal.y, normal.x) * 180 / .pi
+    if angle < 0 { angle += 360 }
+    let index = min(3, Int(angle / 90))
+    let t = ((angle - Double(index) * 90) / 90 * 6).rounded() / 6
+    let rgb = { (hex: String) in stride(from: 1, to: 7, by: 2).map { Double(Int(hex.dropFirst($0).prefix(2), radix: 16)!) } }
+    let a = rgb(keys[index]), b = rgb(keys[(index + 1) % 4])
+    return "#" + (0..<3).map { String(format: "%02X", Int((a[$0] + (b[$0] - a[$0]) * t).rounded())) }.joined()
+}
+
+func bevel(_ contours: [([Point], Bands)]) -> String {
+    var paths: [String: String] = [:]
+    for (points, bands) in contours {
+        let normal = normals(points)
+        var rings: [Double: [Point]] = [:]
+        for band in bands { rings[band.from] = inset(points, normal, band.from); rings[band.to] = inset(points, normal, band.to) }
+        for i in points.indices {
+            let j = (i + 1) % points.count
+            for band in bands {
+                let outer = rings[band.from]!, inner = rings[band.to]!
+                paths[shade(normal[i], band), default: ""] += pathData([outer[i], outer[j], inner[j], inner[i]])
+            }
+        }
+    }
+    return paths.keys.sorted().map { "<path fill=\"\($0)\" stroke=\"\($0)\" stroke-width=\".5\" stroke-linejoin=\"round\" d=\"\(paths[$0]!)\"/>" }.joined()
+}
+
+let rutoOutline = contour(outline, hole: false)
+let eyeHoles = pupils.map { contour([(Double($0.minX), Double($0.minY)), (Double($0.minX), Double($0.maxY)),
+                                     (Double($0.maxX), Double($0.maxY)), (Double($0.maxX), Double($0.minY))], hole: true) }
+let outlineData = ([rutoOutline] + eyeHoles).map(pathData).joined()
+
+func batonRect(_ fill: String, from top: Double = -baton.width / 2, extra: String = "") -> String {
+    "<rect x=\"\(number(-baton.width / 2))\" y=\"\(number(top))\" width=\"\(number(baton.width))\" height=\"\(number(baton.length - top))\""
+        + " rx=\"\(number(baton.width / 2))\" fill=\"\(fill)\"\(extra) transform=\"translate(\(number(baton.x)) \(number(baton.y))) rotate(\(baton.angle))\"/>"
+}
+
+let rutoDefs = "<defs>"
+    + "<path id=\"ruto-outline\" fill-rule=\"evenodd\" d=\"\(outlineData)\"/>"
+    + "<clipPath id=\"ruto-clip\"><use href=\"#ruto-outline\"/></clipPath>"
+    + "<linearGradient id=\"ruto-face\" x1=\"300\" y1=\"330\" x2=\"520\" y2=\"779\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0\" stop-color=\"#76CEFE\"/><stop offset=\".5\" stop-color=\"#43B8F9\"/><stop offset=\".75\" stop-color=\"#32B1F7\"/><stop offset=\"1\" stop-color=\"#2AACF4\"/></linearGradient>"
+    + "<radialGradient id=\"ruto-corner\" cx=\"312\" cy=\"342\" r=\"110\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\".2\"/><stop offset=\"1\" stop-color=\"#fff\" stop-opacity=\"0\"/></radialGradient>"
+    + "<linearGradient id=\"ruto-pupil\" x2=\"1\" y2=\"1\"><stop offset=\"0\" stop-color=\"#090A0B\"/><stop offset=\"1\" stop-color=\"#1A1B1C\"/></linearGradient>"
+    + "<linearGradient id=\"ruto-stick\" x2=\"1\"><stop offset=\"0\" stop-color=\"#414142\"/><stop offset=\".07\" stop-color=\"#EEECEE\"/><stop offset=\".3\" stop-color=\"#FEFDFC\"/><stop offset=\".55\" stop-color=\"#F2EEEA\"/><stop offset=\".75\" stop-color=\"#E7E4DE\"/><stop offset=\".87\" stop-color=\"#D5D2CA\"/><stop offset=\".94\" stop-color=\"#BBB5B0\"/><stop offset=\"1\" stop-color=\"#90908C\"/></linearGradient>"
+    + "<linearGradient id=\"ruto-sunk\" y2=\"1\" x2=\"0\"><stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\".55\"/><stop offset=\"1\" stop-color=\"#fff\" stop-opacity=\"0\"/></linearGradient>"
+    + "</defs>"
+let batonMarkup = batonRect("url(#ruto-stick)")
+let bodyMarkup = pupils.map { "<rect x=\"\(Int($0.minX))\" y=\"\(Int($0.minY))\" width=\"\(Int($0.width))\" height=\"\(Int($0.height))\" fill=\"url(#ruto-pupil)\"/>" }.joined()
+    + "<use href=\"#ruto-outline\" fill=\"url(#ruto-face)\"/>"
+    + "<rect x=\"200\" y=\"300\" width=\"300\" height=\"250\" fill=\"url(#ruto-corner)\" clip-path=\"url(#ruto-clip)\"/>"
+    + bevel([(rutoOutline, bodyBands)] + eyeHoles.map { ($0, eyeBands) })
+    // the baton shows faintly through the top of the hand
+    + "<g clip-path=\"url(#ruto-clip)\">" + batonRect("url(#ruto-sunk)", from: 168, extra: " opacity=\".8\"") + "</g>"
+
 let layerHeader = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">"
-// Icon Composer layers: the glass shows the tile through the eye holes.
-let rutoLayer = layerHeader + defs + element("body") + "</svg>"
-let batonLayer = layerHeader + element("baton") + "</svg>"
-// Flat logo for the app UI, docs and site: the whole mark, cropped square.
-func flat(viewBox: String) -> String {
-    source
-        .replacingOccurrences(of: "viewBox=\"0 0 1024 1024\"", with: "viewBox=\"\(viewBox)\"")
-        .replacingOccurrences(of: " id=\"(baton-edge|baton|body|eyes)\"", with: "", options: .regularExpression)
+let source = layerHeader + rutoDefs + "<g id=\"baton\">" + batonMarkup + "</g><g id=\"body\">" + bodyMarkup + "</g></svg>"
+
+// Icon Composer layers, one glass group each.
+let rutoLayer = layerHeader + rutoDefs + bodyMarkup + "</svg>"
+let batonLayer = layerHeader + rutoDefs + batonMarkup + "</svg>"
+/// The whole mark, cropped to a square around Ruto with `fill` of its width.
+func flat(fill: CGFloat) -> String {
+    let side = markBounds.width / fill
+    let viewBox = [markBounds.midX - side / 2, markBounds.midY - side / 2, side, side].map { number(Double($0)) }.joined(separator: " ")
+    return source.replacingOccurrences(of: "viewBox=\"0 0 1024 1024\"", with: "viewBox=\"\(viewBox)\"")
+        .replacingOccurrences(of: " width=\"1024\" height=\"1024\"", with: "")
 }
-let flatLogo = flat(viewBox: "121 88 820 820")
+// Flat logo for docs and the site: a tight square.
+let flatLogo = flat(fill: 0.92)
 // The app's mascot slot (sidebar brand, startup, first run): Ruto fills 80% of
 // the width, the optical size the brand row was designed around.
-let appMascot = flat(viewBox: "31 -2 1000 1000")
+let appMascot = flat(fill: 0.8)
 // One-colour silhouette (eyes cut out) for template, monochrome and
-// notification icons. The wider baton-edge keeps the baton visible small.
-let silhouette = layerHeader + paint(element("baton-edge"), "stroke", "#000") + paint(element("body"), "fill", "#000") + "</svg>"
+// notification icons. The baton is drawn thicker so it survives small sizes.
+let silhouette = layerHeader + "<path fill=\"#000\" fill-rule=\"evenodd\" d=\"\(outlineData)\"/>"
+    + batonRect("#000", extra: " stroke=\"#000\" stroke-width=\"12\"") + "</svg>"
 
 // MARK: - Drawing
 
@@ -301,6 +431,7 @@ func ico(_ images: [CGImage]) -> Data {
 
 // MARK: - Icon Composer bundle
 
+write(Data(source.utf8), to: "assets/brand/ruto.svg")
 write(Data(rutoLayer.utf8), to: "assets/brand/AO.icon/Assets/ruto.svg")
 write(Data(batonLayer.utf8), to: "assets/brand/AO.icon/Assets/baton.svg")
 
@@ -438,9 +569,20 @@ do {
     writePNG(context.makeImage()!, "packages/mobile/assets/icon.png")
 }
 
-// Android adaptive icon: 108 dp layers, of which 72 dp show through the mask,
-// so the iOS layout shrinks by 72/108 to keep Ruto inside the 66 dp safe zone.
-let adaptive: CGFloat = 72.0 / 108.0
+// Android adaptive icon: 108 dp layers, masked to any shape that keeps a
+// centred 66 dp circle. Ruto is scaled down from the iOS layout until its
+// farthest pixel sits 32 dp from the centre.
+func farthest(_ image: CGImage) -> CGFloat {
+    let data = pixels(image)
+    var radius: CGFloat = 0
+    for y in 0..<image.height {
+        for x in 0..<image.width where data[(y * image.width + x) * 4 + 3] >= 128 {
+            radius = max(radius, hypot(CGFloat(x) + 0.5 - CGFloat(image.width) / 2, CGFloat(y) + 0.5 - CGFloat(image.height) / 2))
+        }
+    }
+    return radius
+}
+let adaptive = min(72.0 / 108.0, 32.0 / 108.0 * 1024 / max(farthest(foreground), farthest(placed(silhouette))))
 let adaptiveRect = CGRect(x: 512 - 512 * adaptive, y: 512 - 512 * adaptive, width: 1024 * adaptive, height: 1024 * adaptive)
 writePNG(background(1024), "packages/mobile/assets/android-icon-background.png")
 do {
@@ -461,10 +603,4 @@ writePNG(fitted(foreground, width: 1024, height: 1024, box: CGSize(width: 760, h
 writePNG(resized(ictool(platform: "iOS", size: 1024), 256, 256), "packages/mobile/assets/favicon.png")
 // Cropped to the artwork, not its glow. lib/ui.tsx MASCOT_ASPECT is 200 / 256,
 // and WAND_TIP_X/Y there locate the baton tip in this crop.
-// The eyes are painted in, as in the flat logo, so they stay dark on light themes.
-do {
-    let context = canvas(1024, 1024)
-    draw(placed(layerHeader + element("eyes") + "</svg>"), in: context, rect: CGRect(x: 0, y: 0, width: 1024, height: 1024))
-    draw(foreground, in: context, rect: CGRect(x: 0, y: 0, width: 1024, height: 1024))
-    writePNG(fitted(context.makeImage()!, width: 256, height: 200, box: CGSize(width: 256, height: 200), threshold: 128), "packages/mobile/assets/mascot.png")
-}
+writePNG(fitted(foreground, width: 256, height: 200, box: CGSize(width: 256, height: 200), threshold: 128), "packages/mobile/assets/mascot.png")

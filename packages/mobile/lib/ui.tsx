@@ -132,8 +132,8 @@ export const Dot = memo(function Dot({
 });
 
 // `mascot.png` is the Liquid Glass Ruto from assets/brand, cropped to its
-// artwork by scripts/generate-brand-assets.swift, with the eyes painted dark so
-// they stay dark on light themes.
+// artwork by scripts/generate-brand-assets.swift. Its pupils are painted dark,
+// so they stay dark on light themes.
 // Its aspect ratio, as height / width.
 export const MASCOT_ASPECT = 200 / 256;
 // Where the wand tip sits in the artwork, as fractions of its width and height.
