@@ -6828,7 +6828,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 		}
 		stepCtx, cancel := context.WithTimeout(ctx, timeout)
 		out := &setupOutput{}
-		err := runWorkspaceStep(stepCtx, workspacePath, command, scriptEnv(projectEnv, sourcePath, workspacePath), out)
+		err := runWorkspaceStep(stepCtx, workspacePath, command, scriptEnv(stepCtx, projectEnv, sourcePath, workspacePath), out)
 		timedOut := ctx.Err() == nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
@@ -6839,8 +6839,8 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 	return nil
 }
 
-func scriptEnv(projectEnv map[string]string, sourcePath, workspacePath string) map[string]string {
-	env := conductorimport.Env(sourcePath, workspacePath)
+func scriptEnv(ctx context.Context, projectEnv map[string]string, sourcePath, workspacePath string) map[string]string {
+	env := conductorimport.Env(ctx, sourcePath, workspacePath)
 	env["AO_SOURCE_TREE_PATH"], env["AO_WORKTREE_PATH"] = sourcePath, workspacePath
 	return agentlaunch.MergeEnv(projectEnv, env)
 }

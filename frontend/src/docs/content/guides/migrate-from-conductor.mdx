@@ -71,7 +71,7 @@ Open **Project settings → Scripts**. If the repository has `.conductor/setting
 | `prompts.general` | agent rules |
 | `.worktreeinclude`, `file_include_globs`, or the default `.env*` | a **Setup** step that copies those files into each new worktree |
 
-`settings.local.toml` overrides `settings.toml`, as in Conductor. Conductor ignores `conductor.json` when `settings.toml` exists, and so does the import. The import adds to the project and never replaces anything: it skips a step the project already has, a variable name you already set, and a Cue name already in use. Running it again changes nothing.
+`settings.local.toml` overrides `settings.toml`, as in Conductor. Conductor ignores `conductor.json` when `settings.toml` exists, and so does the import. Your own `~/.conductor/settings.toml` applies under both, as in Conductor, except its model and tool-approval settings. The import adds to the project and never replaces anything: it skips a step the project already has, a variable name you already set, and a Cue name already in use. Running it again changes nothing.
 
 The review lists every key it leaves out, such as `git.*`, `run_mode`, other `prompts.*`, hidden actions, and Cloud-only actions and variables.
 
@@ -100,7 +100,7 @@ Local Setup and Cleanup steps, terminals, and Cues also get the Conductor names,
 | `CONDUCTOR_WORKSPACE_NAME` | the worktree folder name | use `AO_SESSION_ID` |
 | `CONDUCTOR_IS_LOCAL` | `1` | not set |
 | `CONDUCTOR_PORT` | the first of ten ports for the worktree, from 10000 to 32699 | not set |
-| `CONDUCTOR_DEFAULT_BRANCH` | not set | not set |
+| `CONDUCTOR_DEFAULT_BRANCH` | the repository's default branch, such as `main` | not set |
 
 Each worktree keeps its `CONDUCTOR_PORT`. Orchestrator picks it from the worktree's path, so two worktrees can rarely get the same ports; if a dev server reports that its port is in use, set the port in that command. The import review marks each step and Cue that uses a name Orchestrator does not set; replace it before you rely on that command.
 

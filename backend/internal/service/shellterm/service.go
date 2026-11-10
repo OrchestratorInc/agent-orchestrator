@@ -1135,7 +1135,7 @@ func (s *Service) conductorEnv(ctx context.Context, projectID domain.ProjectID, 
 	if err != nil || root == "" {
 		return nil
 	}
-	return conductorimport.Env(root, workingDir)
+	return conductorimport.Env(ctx, root, workingDir)
 }
 
 // resolveProjectRootOrDataDir picks the project root when a project is named,

@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 
 func repo(t *testing.T, files map[string]string, tracked ...string) string {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	for name, body := range files {
 		path := filepath.Join(root, name)
@@ -81,7 +81,7 @@ code_review = "Be strict."
 branch_prefix = "me/"
 `,
 		".conductor/settings.local.toml": `[scripts]
-setup = "bun install\ncp \"$CONDUCTOR_ROOT_PATH/.env\" . && echo $CONDUCTOR_DEFAULT_BRANCH"
+setup = "bun install\ncp \"$CONDUCTOR_ROOT_PATH/.env\" . && echo $CONDUCTOR_BASE_DIR"
 
 [environment_variables.local]
 API_URL = "http://127.0.0.1"
@@ -93,7 +93,7 @@ API_URL = "http://127.0.0.1"
 	if err != nil {
 		t.Fatal(err)
 	}
-	setup := "bun install\ncp \"$CONDUCTOR_ROOT_PATH/.env\" . && echo $CONDUCTOR_DEFAULT_BRANCH"
+	setup := "bun install\ncp \"$CONDUCTOR_ROOT_PATH/.env\" . && echo $CONDUCTOR_BASE_DIR"
 	if plan.Source != ".conductor/settings.toml" {
 		t.Fatalf("source = %q", plan.Source)
 	}
@@ -110,7 +110,7 @@ API_URL = "http://127.0.0.1"
 	if !reflect.DeepEqual(plan.Cues, wantCues) {
 		t.Fatalf("cues = %+v", plan.Cues)
 	}
-	wantWarnings := []Item{{Key: "scripts.setup", Detail: "CONDUCTOR_DEFAULT_BRANCH"}}
+	wantWarnings := []Item{{Key: "scripts.setup", Detail: "CONDUCTOR_BASE_DIR"}}
 	if !reflect.DeepEqual(plan.Warnings, wantWarnings) {
 		t.Fatalf("warnings = %+v", plan.Warnings)
 	}
@@ -172,18 +172,72 @@ func TestReadWithoutConductorSettings(t *testing.T) {
 }
 
 func TestEnvGivesEachWorkspaceAStablePortBlock(t *testing.T) {
-	seen := map[string]bool{}
+	seen := map[int]bool{}
 	for i := range 200 {
 		workspace := fmt.Sprintf("/work/repo-%d", i)
-		env := Env("/work/repo", workspace)
-		base, err := strconv.Atoi(env["CONDUCTOR_PORT"])
-		if err != nil || base < 10000 || base+9 >= 32768 || base%10 != 0 || env["CONDUCTOR_PORT"] != Env("/other", workspace)["CONDUCTOR_PORT"] {
-			t.Fatalf("port for %s = %q", workspace, env["CONDUCTOR_PORT"])
+		base := port(workspace)
+		if base < 10000 || base+9 >= 32768 || base%10 != 0 || base != port(workspace) {
+			t.Fatalf("port for %s = %d", workspace, base)
 		}
-		seen[env["CONDUCTOR_PORT"]] = true
+		seen[base] = true
 	}
 	if len(seen) < 180 {
 		t.Fatalf("200 workspaces share %d port blocks", len(seen))
+	}
+}
+
+func TestEnvSetsTheRepositoryDefaultBranch(t *testing.T) {
+	ctx := context.Background()
+	root := repo(t, map[string]string{"a": "1"}, "a")
+	for _, args := range [][]string{
+		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init"},
+		{"remote", "add", "origin", "https://example.com/r.git"},
+		{"update-ref", "refs/remotes/origin/trunk", "HEAD"},
+		{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	workspace := filepath.Join(t.TempDir(), "lima")
+	env := Env(ctx, root, workspace)
+	if env["CONDUCTOR_DEFAULT_BRANCH"] != "trunk" || env["CONDUCTOR_ROOT_PATH"] != root || env["CONDUCTOR_WORKSPACE_NAME"] != "lima" || env["CONDUCTOR_IS_LOCAL"] != "1" {
+		t.Fatalf("env = %v", env)
+	}
+	if _, ok := Env(ctx, t.TempDir(), workspace)["CONDUCTOR_DEFAULT_BRANCH"]; ok {
+		t.Fatal("a folder without a default branch got CONDUCTOR_DEFAULT_BRANCH")
+	}
+}
+
+func TestReadPutsUserSettingsBelowTheRepository(t *testing.T) {
+	root := repo(t, map[string]string{
+		".conductor/settings.toml": "[scripts.run.dev]\ncommand = \"pnpm dev\"\n",
+	}, ".conductor/settings.toml")
+	user := filepath.Join(os.Getenv("HOME"), ".conductor", "settings.toml")
+	if err := os.MkdirAll(filepath.Dir(user), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	body := "\"$schema\" = \"https://conductor.build/schemas/settings.schema.json\"\ntool_approvals_enabled = true\n\n[models]\ndefault = \"gpt-5.5\"\n\n[scripts.run.dev]\ncommand = \"pnpm dev:user\"\n\n[scripts.run.lint]\ncommand = \"pnpm lint\"\n\n[environment_variables]\nUSER_ONLY = \"1\"\n"
+	if err := os.WriteFile(user, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Read(context.Background(), root, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCues := []CueDraft{{Key: "scripts.run.dev", Name: "dev", Command: "pnpm dev"}, {Key: "scripts.run.lint", Name: "lint", Command: "pnpm lint"}}
+	if plan.Source != ".conductor/settings.toml" || !reflect.DeepEqual(plan.Cues, wantCues) || plan.Config.Env["USER_ONLY"] != "1" || len(plan.Skipped) != 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	bare := repo(t, map[string]string{"a": "1"}, "a")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(os.Getenv("HOME"), ".conductor", "settings.toml")), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), ".conductor", "settings.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := Read(context.Background(), bare, domain.ProjectConfig{}); err != nil || plan.Source != "" || len(plan.Cues) != 0 {
+		t.Fatalf("a repository without Conductor settings imported user settings: %+v, %v", plan, err)
 	}
 }
 

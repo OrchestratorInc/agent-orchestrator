@@ -21,6 +21,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -37,16 +38,22 @@ const (
 
 var conductorVar = regexp.MustCompile(`CONDUCTOR_[A-Z0-9_]+`)
 
+var envNames = []string{"CONDUCTOR_ROOT_PATH", "CONDUCTOR_WORKSPACE_PATH", "CONDUCTOR_WORKSPACE_NAME", "CONDUCTOR_IS_LOCAL", "CONDUCTOR_PORT", "CONDUCTOR_DEFAULT_BRANCH"}
+
 // Env sets Conductor's workspace variables for Setup, Cleanup, terminals and
 // Cues, so imported commands run unchanged.
-func Env(rootPath, workspacePath string) map[string]string {
-	return map[string]string{
+func Env(ctx context.Context, rootPath, workspacePath string) map[string]string {
+	env := map[string]string{
 		"CONDUCTOR_ROOT_PATH":      rootPath,
 		"CONDUCTOR_WORKSPACE_PATH": workspacePath,
 		"CONDUCTOR_WORKSPACE_NAME": filepath.Base(workspacePath),
 		"CONDUCTOR_IS_LOCAL":       "1",
 		"CONDUCTOR_PORT":           strconv.Itoa(port(workspacePath)),
 	}
+	if resolution, err := gitdefault.New("git", nil).Inspect(ctx, rootPath); err == nil {
+		env["CONDUCTOR_DEFAULT_BRANCH"] = resolution.Branch
+	}
+	return env
 }
 
 // port is the first of the ten ports Conductor gives each workspace, below
@@ -60,8 +67,7 @@ func port(workspacePath string) int {
 }
 
 func setByAO(name string) bool {
-	_, ok := Env("", "")[name]
-	return ok
+	return slices.Contains(envNames, name)
 }
 
 // Item is one review row: the Conductor key and its command, names or reason.
@@ -137,7 +143,41 @@ func load(repo *os.Root, plan *Plan) (map[string]any, error) {
 			plan.Source = name
 		}
 	}
-	return settings, nil
+	if plan.Source == "" {
+		return settings, nil
+	}
+	user, err := userSettings()
+	if err != nil || user == nil {
+		return settings, err
+	}
+	overlay(user, settings)
+	return user, nil
+}
+
+func userSettings() (map[string]any, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil
+	}
+	dir, err := os.OpenRoot(filepath.Join(home, ".conductor"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dir.Close() }()
+	body, err := readFile(dir, "settings.toml")
+	if err != nil || body == nil {
+		return nil, err
+	}
+	var layer map[string]any
+	if err := toml.Unmarshal(body, &layer); err != nil {
+		return nil, fmt.Errorf("~/.conductor/settings.toml: %w", err)
+	}
+	delete(layer, "models")
+	delete(layer, "tool_approvals_enabled")
+	return layer, nil
 }
 
 func readFile(repo *os.Root, name string) ([]byte, error) {

@@ -125,7 +125,7 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 			continue
 		}
 		out := &cleanupOutput{}
-		env := scriptEnv(project.Config.Env, project.Path, workspacePath)
+		env := scriptEnv(ctx, project.Config.Env, project.Path, workspacePath)
 		stepCtx, cancel := ctx, context.CancelFunc(func() {})
 		if timeout > 0 {
 			stepCtx, cancel = context.WithTimeout(ctx, timeout)
