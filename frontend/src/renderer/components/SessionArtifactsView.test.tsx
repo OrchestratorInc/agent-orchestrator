@@ -147,6 +147,21 @@ describe("SessionArtifactsView for a cloud session", () => {
 		sendSessionMessageMock.mockReset().mockResolvedValue({});
 	});
 
+	it("lists the session's artifacts two to a row without repeating the session name", () => {
+		const current = cloudSession();
+		current.title = "Quarterly planning";
+		current.artifactFiles = [
+			{ kind: "markdown", name: "plan.md", path: "plan.md", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 20, updatedAt: "2026-09-22T00:00:00Z" },
+		];
+		renderView(<SessionArtifactsView session={current} />);
+
+		const gallery = screen.getAllByRole("listitem")[0]!.closest("ul")!;
+		expect(gallery).toHaveClass("grid-cols-2");
+		expect(within(gallery).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(gallery).queryByText("Quarterly planning")).not.toBeInTheDocument();
+	});
+
 	it("previews metadata-only HTML in the session gallery with at most four live pages", async () => {
 		const current = cloudSession();
 		current.artifactFiles = Array.from({ length: 6 }, (_, index) => ({
