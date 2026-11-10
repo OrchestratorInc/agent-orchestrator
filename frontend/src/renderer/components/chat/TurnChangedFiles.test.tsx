@@ -1,8 +1,10 @@
 import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
-import { ActivityRow, TurnChangedFiles } from "./ChatTimelineItems";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActivityRow, TurnChangedFiles, TurnResults } from "./ChatTimelineItems";
+import { ChatImageSourceProvider } from "./chat-image-source";
 import { ActivityRun } from "./ActivityRun";
 import type { ConversationActivity, TurnDiff } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -586,5 +588,65 @@ describe("ActivityRow command labels", () => {
 		);
 		expect(screen.getByText("stopped")).toBeInTheDocument();
 		expect(screen.queryByLabelText("running")).not.toBeInTheDocument();
+	});
+});
+
+describe("TurnResults", () => {
+	beforeEach(() => {
+		// Thumbnails stay unloaded until seen, so nothing here fetches file bytes.
+		vi.stubGlobal("IntersectionObserver", class {
+			observe() {}
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	const root = "/Users/me/.ao/data/artifacts/session-1";
+	const artifacts = [
+		{ kind: "markdown" as const, name: "guide.md", path: "guide.md", size: 10, updatedAt: "2026-11-10T10:00:00Z" },
+	];
+	const resultsDiff: TurnDiff = {
+		files: [
+			{ path: `${root}/guide.md`, additions: 26, deletions: 0, status: "added" },
+			{ path: "src/a.ts", additions: 1, deletions: 0, status: "modified" },
+		],
+	};
+
+	function renderResults(onOpenFile = vi.fn()) {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults diff={resultsDiff} onOpenFile={onOpenFile} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		return onOpenFile;
+	}
+
+	it("shows a created artifact as a card instead of a changed file", async () => {
+		const onOpenFile = renderResults();
+		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
+		expect(screen.getByText("Created")).toBeInTheDocument();
+		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
+		expect(screen.getByText("a.ts")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
+		expect(onOpenFile).toHaveBeenCalledWith(`${root}/guide.md`);
+	});
+
+	it("drops the changed-files card when the turn only made artifacts", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults diff={{ files: [resultsDiff.files[0]!] }} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("guide.md")).toBeInTheDocument();
+		expect(screen.queryByText(/Files? Changed/)).not.toBeInTheDocument();
 	});
 });

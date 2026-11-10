@@ -21,7 +21,10 @@ import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
-import { useChatSessionId } from "./chat-image-source";
+import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
+import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
+import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -3814,6 +3817,99 @@ function fileChangeIcon(status: DiffStatus): StepIcon {
 		default:
 			return "write";
 	}
+}
+
+/** Fills a 5:4 tile with a page laid out 1000 wide, as the Summary's previews do. */
+const TURN_ARTIFACT_PAGE_HEIGHT = 800;
+
+/**
+ * The end-of-turn results: deliverables the turn created or edited as preview
+ * cards, then every other changed file in the changed-files card. An artifact
+ * is the thing the reader asked for, not a code change to review, so it never
+ * appears in both.
+ */
+export function TurnResults({
+	diff,
+	items,
+	onReview,
+	onOpenFile,
+}: {
+	diff: TurnDiff;
+	items?: ConversationItem[];
+	onReview?: () => void;
+	onOpenFile?: (path: string, line?: number) => void;
+}) {
+	const source = useChatArtifactFiles();
+	const pathHints = useMemo(() => turnPathHints(items), [items]);
+	const split = useMemo(
+		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints)),
+		[diff, source?.sessionId, source?.artifacts, pathHints],
+	);
+	const files = useMemo<TurnDiff>(() => ({ ...diff, files: split.files }), [diff, split.files]);
+	return (
+		<>
+			{split.artifacts.length > 0 && source ? (
+				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenFile={onOpenFile} />
+			) : null}
+			<TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} />
+		</>
+	);
+}
+
+/** Preview cards for the deliverables one turn created or edited. */
+export function TurnArtifacts({
+	artifacts,
+	sessionId,
+	cloud,
+	onOpenFile,
+}: {
+	artifacts: TurnArtifact[];
+	sessionId: string;
+	cloud?: ArtifactRow["cloud"];
+	/** Opens the path in the inspector, which shows an artifact in its Artifacts tab. */
+	onOpenFile?: (path: string, line?: number) => void;
+}) {
+	return (
+		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
+			<span className="text-xs text-muted-foreground">
+				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
+			</span>
+			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+				{artifacts.map(({ artifact, status, diffPath }) => {
+					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
+					const verb = fileChangeVerb(status);
+					const body = (
+						<>
+							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
+							</span>
+							<span className="flex min-w-0 flex-col">
+								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
+							</span>
+						</>
+					);
+					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					return (
+						<li key={artifact.path} className="min-w-0">
+							{onOpenFile ? (
+								<Pressable
+									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+									className={tileClass}
+									onClick={() => onOpenFile(diffPath)}
+									title={artifact.path}
+								>
+									{body}
+								</Pressable>
+							) : (
+								<div className={tileClass} title={artifact.path}>{body}</div>
+							)}
+						</li>
+					);
+				})}
+			</ul>
+		</section>
+	);
 }
 
 /**

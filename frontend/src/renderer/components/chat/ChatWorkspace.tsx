@@ -140,7 +140,7 @@ import {
 	OriginMessage,
 	SteerMessage,
 	TurnActions,
-	TurnChangedFiles,
+	TurnResults,
 	TurnOutcome,
 	LiveResponseStatus,
 	LiveStepChoices,
@@ -2086,7 +2086,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -5622,7 +5622,7 @@ const TurnGroup = memo(function TurnGroup({
 			{/* Changed-files review is a settled result, not live activity. Keep it
 			    below the completed assistant response and its bottom action row. */}
 			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
-				<TurnChangedFiles
+				<TurnResults
 					diff={group.diff}
 					items={group.items}
 					onReview={onOpenFiles}
