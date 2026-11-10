@@ -208,7 +208,9 @@ func samePath(a, b string) bool {
 
 // TestWindowsAOCmdRunsWhenInvokedQuoted runs the batch sibling instead of
 // grepping it. cmd expands %0 against the working directory when it resolves a
-// bare quoted `"ao.cmd"` from PATH, so the script has to embed the shim path.
+// bare quoted `"ao.cmd"` from PATH, so the script has to let cmd resolve the
+// shim path itself. cmd also parses the file in the console's OEM code page,
+// so a non-ASCII data directory would garble an embedded UTF-8 path.
 func TestWindowsAOCmdRunsWhenInvokedQuoted(t *testing.T) {
 	if os.Getenv("AO_TEST_PIN_CHILD") == "1" {
 		exe, err := os.Executable()
@@ -226,37 +228,51 @@ func TestWindowsAOCmdRunsWhenInvokedQuoted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installDir, dataDir := t.TempDir(), t.TempDir()
+	installDir := t.TempDir()
 	canonical := filepath.Join(installDir, "ao.exe")
 	if err := os.WriteFile(canonical, binary, 0o700); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)
 	}
-	pinned := PinnedDir(func() (string, error) { return canonical, nil }, dataDir)
-	if pinned == "" || samePath(pinned, installDir) {
-		t.Fatalf("PinnedDir = %q, want the shim directory", pinned)
-	}
-	shim := filepath.Join(pinned, "ao.exe")
-	comspec := os.Getenv("ComSpec")
-	run := "-test.run=TestWindowsAOCmdRunsWhenInvokedQuoted"
-	for name, command := range map[string]string{
-		"bare":   comspec + ` /d /c ao.cmd ` + run,
-		"quoted": comspec + ` /d /s /c ""ao.cmd" ` + run + `"`,
+	for _, testCase := range []struct {
+		name    string
+		dataDir func(*testing.T) string
+	}{
+		{"ascii", func(t *testing.T) string { return t.TempDir() }},
+		{"non-ascii", func(t *testing.T) string { return filepath.Join(t.TempDir(), "José dätä") }},
 	} {
-		cmd := exec.Command(comspec)
-		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: command}
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			if !strings.EqualFold(key, "PATH") {
-				cmd.Env = append(cmd.Env, entry)
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := testCase.dataDir(t)
+			if err := os.MkdirAll(dataDir, 0o700); err != nil {
+				t.Fatal(err)
 			}
-		}
-		cmd.Env = append(cmd.Env, "PATH="+pinned+";"+os.Getenv("PATH"), "AO_TEST_PIN_CHILD=1")
-		// A different working directory is what exposed the %~dp0 bug.
-		cmd.Dir = t.TempDir()
-		output, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(strings.ToLower(string(output)), strings.ToLower("IDENTITY="+shim)) {
-			t.Fatalf("%s ao.cmd invocation: %v\n%s", name, err, output)
-		}
+			pinned := PinnedDir(func() (string, error) { return canonical, nil }, dataDir)
+			if pinned == "" || samePath(pinned, installDir) {
+				t.Fatalf("PinnedDir = %q, want the shim directory", pinned)
+			}
+			shim := filepath.Join(pinned, "ao.exe")
+			comspec := os.Getenv("ComSpec")
+			run := "-test.run=TestWindowsAOCmdRunsWhenInvokedQuoted"
+			for name, command := range map[string]string{
+				"bare":   comspec + ` /d /c ao.cmd ` + run,
+				"quoted": comspec + ` /d /s /c ""ao.cmd" ` + run + `"`,
+			} {
+				cmd := exec.Command(comspec)
+				cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: command}
+				for _, entry := range os.Environ() {
+					key, _, _ := strings.Cut(entry, "=")
+					if !strings.EqualFold(key, "PATH") {
+						cmd.Env = append(cmd.Env, entry)
+					}
+				}
+				cmd.Env = append(cmd.Env, "PATH="+pinned+";"+os.Getenv("PATH"), "AO_TEST_PIN_CHILD=1")
+				// A different working directory is what exposed the %~dp0 bug.
+				cmd.Dir = t.TempDir()
+				output, err := cmd.CombinedOutput()
+				if err != nil || !strings.Contains(strings.ToLower(string(output)), strings.ToLower("IDENTITY="+shim)) {
+					t.Fatalf("%s %s ao.cmd invocation: %v\n%s", testCase.name, name, err, output)
+				}
+			}
+		})
 	}
 }
 
@@ -301,9 +317,27 @@ func TestWindowsShimRefreshesWhileRunning(t *testing.T) {
 	if err := child.Start(); err != nil {
 		t.Fatalf("start shim ao: %v", err)
 	}
+	// A t.Fatal between Start and the explicit Wait below would leave the child
+	// blocked on stdin, and its image keeps t.TempDir cleanup failing with
+	// access denied.
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
 	ready := make([]byte, len("READY\n"))
-	if _, err := io.ReadFull(stdout, ready); err != nil {
-		t.Fatalf("shim ao did not start: %v", err)
+	read := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(stdout, ready)
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatalf("shim ao did not start: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("shim ao did not start: no READY within 30s")
 	}
 
 	updated := time.Now().Add(2 * time.Minute).Truncate(time.Second)
@@ -341,6 +375,50 @@ func TestWindowsShimRefreshesWhileRunning(t *testing.T) {
 			t.Fatalf("stale shim copies survive the process that held them: %v", stale)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestWindowsShimRefreshesIdleCopy covers the common app-update path: nothing
+// holds the shim's copy, so the refresh replaces it in place and never leaves
+// the shim directory without an ao.exe.
+func TestWindowsShimRefreshesIdleCopy(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := append(append([]byte(nil), binary...), 0)
+	canonical := filepath.Join(t.TempDir(), "ao.exe")
+	if err := os.WriteFile(canonical, binary, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	shimDir := t.TempDir()
+	if err := ensureWindowsAOExecutable(shimDir, canonical); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, updated, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	updatedAt := time.Now().Add(time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(canonical, updatedAt, updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWindowsAOExecutable(shimDir, canonical); err != nil {
+		t.Fatalf("refresh an idle shim: %v", err)
+	}
+	shimBinary, err := os.ReadFile(filepath.Join(shimDir, "ao.exe"))
+	if err != nil || !bytes.Equal(shimBinary, updated) {
+		t.Fatalf("refreshed AO executable: %v, identical=%v", err, bytes.Equal(shimBinary, updated))
+	}
+	stale, err := filepath.Glob(filepath.Join(shimDir, "ao.exe.old-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("idle refresh renamed the old copy aside instead of replacing it: %v", stale)
 	}
 }
 

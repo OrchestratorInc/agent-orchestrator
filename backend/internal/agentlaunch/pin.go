@@ -94,12 +94,20 @@ func ensureShimDir(exe, dataDir string) (string, error) {
 	script := "#!/bin/sh\nexec '" + strings.ReplaceAll(absolute, "'", `'"'"'`) + "' \"$@\"\n"
 	if runtime.GOOS == "windows" {
 		name = "ao.cmd"
-		// The batch sibling runs the copy in the shim directory. It needs the
-		// absolute path, not %~dp0: when cmd resolves a bare quoted `"ao.cmd"`
-		// from PATH it expands %0 against the working directory, which pointed at
-		// a nonexistent <cwd>\ao.exe. %PATHEXT% prefers ao.exe, so only an
-		// explicit `ao.cmd` reaches this file.
-		script = "@echo off\r\n\"" + strings.ReplaceAll(filepath.Join(shimDir, "ao.exe"), "%", "%%") + "\" %*\r\n"
+		// The batch sibling runs the copy beside it. cmd has to resolve that path
+		// itself rather than read it from the file: Go writes UTF-8, while cmd
+		// parses a batch file in the console's OEM code page, so an embedded
+		// non-ASCII data directory came out garbled ("The system cannot find the
+		// path specified"). %~dp0 is the script's own directory for a bare or
+		// fully qualified call; a quoted `"ao.cmd"` resolved from PATH expands %0
+		// against the working directory, so %~dp$PATH:0 searches PATH for the
+		// batch file in that case. %PATHEXT% prefers ao.exe, so only an explicit
+		// `ao.cmd` reaches this file.
+		script = "@echo off\r\n" +
+			"setlocal\r\n" +
+			"set \"AO_SHIM_DIR=%~dp0\"\r\n" +
+			"if not exist \"%AO_SHIM_DIR%ao.exe\" set \"AO_SHIM_DIR=%~dp$PATH:0\"\r\n" +
+			"\"%AO_SHIM_DIR%ao.exe\" %*\r\n"
 	}
 	pinMu.Lock()
 	defer pinMu.Unlock()
@@ -177,25 +185,50 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
 		return fmt.Errorf("copy Orchestrator executable: %w", err)
 	}
-	// A running shim (for example `ao mcp` reading stdin) keeps its image open,
-	// so removing or replacing the file in place fails with access denied and
-	// the pin silently drops back to the unreadable install directory. Renaming
-	// the old file aside frees the name without disturbing the running image.
-	aside := ""
-	if _, statErr := os.Stat(target); statErr == nil {
-		aside = filepath.Join(shimDir, fmt.Sprintf("ao.exe.old-%d", time.Now().UnixNano()))
-		if err := os.Rename(target, aside); err != nil {
+	// Windows refuses to replace a running image (an in-session `ao mcp` holds
+	// its own exe), and an antivirus scanner can keep the freshly written copy
+	// open. Both moves retry a bounded number of times, because the alternative
+	// is dropping the pin back to the unreadable install directory.
+	//
+	// Replacing in place keeps the common case free of any moment where the shim
+	// directory has no ao.exe. Only a running image needs the rename-aside
+	// sequence: renaming the old file frees the name without disturbing the
+	// process that still has it mapped.
+	if err := retryShimRename(func() error { return os.Rename(tempPath, target) }); err != nil {
+		aside := filepath.Join(shimDir, fmt.Sprintf("ao.exe.old-%d", time.Now().UnixNano()))
+		if err := retryShimRename(func() error { return os.Rename(target, aside) }); err != nil {
 			return fmt.Errorf("replace Orchestrator executable shim: %w", err)
 		}
-	}
-	if err := os.Rename(tempPath, target); err != nil {
-		if aside != "" {
+		if err := retryShimRename(func() error { return os.Rename(tempPath, target) }); err != nil {
 			_ = os.Rename(aside, target)
+			return fmt.Errorf("install Orchestrator executable shim: %w", err)
 		}
-		return fmt.Errorf("install Orchestrator executable shim: %w", err)
 	}
 	removeStaleShimExecutables(shimDir)
 	return nil
+}
+
+const (
+	shimRenameAttempts = 3
+	shimRenameDelay    = 100 * time.Millisecond
+)
+
+// retryShimRename retries a move that failed because the file is briefly held
+// open. Any other error returns immediately.
+func retryShimRename(move func() error) error {
+	var err error
+	for attempt := 0; attempt < shimRenameAttempts; attempt++ {
+		if err = move(); err == nil {
+			return nil
+		}
+		if !retryableShimRenameError(err) {
+			return err
+		}
+		if attempt < shimRenameAttempts-1 {
+			time.Sleep(shimRenameDelay)
+		}
+	}
+	return err
 }
 
 // removeStaleShimExecutables drops copies that an earlier pin renamed aside
