@@ -152,26 +152,35 @@ describe("artifactFormatLabel", () => {
 
 describe("artifactCacheEntry", () => {
 	it("names one version of a file, and keeps its extension", () => {
-		const entry = artifactCacheEntry("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
-		expect(entry).toEqual(artifactCacheEntry("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
+		const entry = artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
+		expect(entry).toEqual(artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
 		expect(entry.name.startsWith(`${entry.prefix}-`)).toBe(true);
 		expect(entry.name).toMatch(/\.pdf$/);
 	});
 
 	it("shares its prefix with the file's other versions only", () => {
-		const entry = artifactCacheEntry("ao-1", "spec.pdf", "v1");
-		const rewritten = artifactCacheEntry("ao-1", "spec.pdf", "v2");
+		const entry = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v1");
+		const rewritten = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v2");
 		expect(rewritten.prefix).toBe(entry.prefix);
 		expect(rewritten.name).not.toBe(entry.name);
-		expect(artifactCacheEntry("ao-2", "spec.pdf", "v1").prefix).not.toBe(entry.prefix);
-		expect(artifactCacheEntry("ao-1", "other.pdf", "v1").prefix).not.toBe(entry.prefix);
+		expect(artifactCacheEntry("host.a", "ao-2", "spec.pdf", "v1").prefix).not.toBe(entry.prefix);
+		expect(artifactCacheEntry("host.a", "ao-1", "other.pdf", "v1").prefix).not.toBe(entry.prefix);
+	});
+
+	it("keeps the same session and path on two paired machines apart", () => {
+		const onA = artifactCacheEntry("host.a", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");
+		const onB = artifactCacheEntry("host.b", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");
+		expect(onB.prefix).not.toBe(onA.prefix);
+		expect(onB.name).not.toBe(onA.name);
+		// Downloading B's copy never evicts A's.
+		expect(artifactCacheEvictions([{ name: onA.name, size: 10, modified: 1 }, { name: onB.name, size: 10, modified: 2 }], onB, () => false)).toEqual([]);
 	});
 });
 
 describe("artifactCacheEvictions", () => {
-	const v1 = artifactCacheEntry("ao-1", "spec.pdf", "v1");
-	const v2 = artifactCacheEntry("ao-1", "spec.pdf", "v2");
-	const other = artifactCacheEntry("ao-1", "other.pdf", "v1");
+	const v1 = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v1");
+	const v2 = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v2");
+	const other = artifactCacheEntry("host.a", "ao-1", "other.pdf", "v1");
 	const file = (name: string, size = 10, modified = 1) => ({ name, size, modified });
 	const idle = () => false;
 
@@ -188,14 +197,14 @@ describe("artifactCacheEvictions", () => {
 	});
 
 	it("keeps one copy of an unlisted file opened again and again", () => {
-		const opens = ["2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", "2026-11-10T10:09:00Z"].map((openedAt) => artifactCacheEntry("ao-1", "report/spec.pdf", openedAt));
+		const opens = ["2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", "2026-11-10T10:09:00Z"].map((openedAt) => artifactCacheEntry("host.a", "ao-1", "report/spec.pdf", openedAt));
 		const latest = opens[opens.length - 1];
 		expect(artifactCacheEvictions(opens.map((entry) => file(entry.name)), latest, idle).sort()).toEqual(opens.slice(0, -1).map((entry) => entry.name).sort());
 	});
 
 	it("drops the least recently written other files while over the cap", () => {
-		const a = artifactCacheEntry("ao-1", "a.pdf", "v1");
-		const b = artifactCacheEntry("ao-1", "b.pdf", "v1");
+		const a = artifactCacheEntry("host.a", "ao-1", "a.pdf", "v1");
+		const b = artifactCacheEntry("host.a", "ao-1", "b.pdf", "v1");
 		const files = [file(a.name, 60, 1), file(b.name, 60, 2), file(v2.name, 60, 3)];
 		expect(artifactCacheEvictions(files, v2, idle, 130)).toEqual([a.name]);
 		expect(artifactCacheEvictions(files, v2, idle, 200)).toEqual([]);
