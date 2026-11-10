@@ -199,11 +199,17 @@ type outputTypeReconciler interface {
 	ReconcileSessionOutputType(ctx context.Context, id domain.SessionID) error
 }
 
+// terminalTitleSource reads the titles terminal programs last set.
+type terminalTitleSource interface {
+	ListSessionTerminalTitles(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]string, error)
+}
+
 // Service is the controller-facing session service. It delegates command-side
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
 	manager             commander
+	terminalTitles      terminalTitleSource
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
@@ -214,6 +220,7 @@ type Service struct {
 	usageArchiveFlush   func(context.Context)
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
+	asyncSpawns         asyncSpawnAttempts
 	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
@@ -305,7 +312,7 @@ type Deps struct {
 	DataDir   string
 	Telemetry ports.EventSink
 	// Milestones durably records the install's first spawned session, so
-	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
+	// ao.sessions.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
 	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
 	// nil, neither is reported from this service.
@@ -342,6 +349,7 @@ func NewWithDeps(d Deps) *Service {
 		backgroundContext = context.Background()
 	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, shareLinks: d.ShareLinks}
+	s.terminalTitles, _ = d.Store.(terminalTitleSource)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -349,6 +357,9 @@ func NewWithDeps(d Deps) *Service {
 	}
 	if s.clock == nil {
 		s.clock = time.Now
+	}
+	if setter, ok := d.Manager.(provisionObserverSetter); ok {
+		setter.SetProvisionObserver(s.observeProvision)
 	}
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
@@ -453,7 +464,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 }
 
 // spawnWithTelemetry is the only path from the service into manager.Spawn, so
-// every created session emits ao.session.spawned or ao.session.spawn_failed
+// every created session emits ao.sessions.spawned or ao.sessions.spawn_failed
 // exactly once. Client-request replays return before reaching it.
 func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
 	// CLI and orchestrator workers use this same naming policy as desktop tasks.
@@ -462,7 +473,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		cfg.NameFromPrompt = true
 		cfg.KeepDisplayName = cfg.DisplayName != ""
 	}
-	start := s.now()
+	start := s.monoNow()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
@@ -471,18 +482,37 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// sees that row cannot take this spawn's first_for_install claim.
 	s.firstSession.begin(firstSession)
 	createdBy := s.spawnCreatedBy(ctx, cfg)
-	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	// An asynchronous Chat start answers before it is usable; the provision
+	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
+	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
+	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
+	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
+		if acc.deferred {
+			abandoned := s.abandonAsyncSpawn(acc)
+			// Releases the outcome of a background start that already settled.
+			acc.answer(answeredMs)
+			if !abandoned {
+				return domain.SessionRecord{}, 0, 0, err
+			}
+		}
 		s.firstSession.finish(s.milestones, firstSession, false)
-		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
+		elapsed := answeredMs
+		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
+	}
+	s.recordCreatedBy(ctx, rec.ID, createdBy)
+	if acc.deferred {
+		acc.answer(answeredMs)
+		return rec, promptBytes, systemPromptBytes, nil
 	}
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
-	s.recordCreatedBy(ctx, rec.ID, createdBy)
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
+	elapsed := answeredMs
+	facts := s.spawnFactsFromRequest(ctx, createdBy, true)
+	s.emitSpawned(rec, elapsed, elapsed, firstForInstall, firstKnown, facts)
 	if firstSession {
-		s.emitFirstSessionSpawned(ctx, rec, project)
+		s.emitFirstSessionSpawned(rec, project, facts.requestID)
 	}
 	return rec, promptBytes, systemPromptBytes, nil
 }
@@ -542,7 +572,7 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// firstSessionClaims decides first_for_install on ao.session.spawned. The
+// firstSessionClaims decides first_for_install on ao.sessions.spawned. The
 // prior-session check runs before Spawn, which persists a seed row before
 // provisioning, so a spawn that saw an empty install (eligible) can still be
 // provisioning when a later spawn that saw its row (ineligible) finishes.
@@ -581,36 +611,44 @@ func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeed
 	return ports.FirstForInstall(m, "session_spawned", eligible)
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
+// emitSpawned reports a session that became usable. durationMs keeps its
+// original meaning, the time until the spawn request was answered (negative
+// omits it); spawnDurationMs runs from acceptance to the usable harness.
+func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDurationMs int64, firstForInstall, firstKnown bool, facts spawnFacts) {
 	if s.telemetry == nil {
 		return
 	}
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
-		"harness":     string(rec.Harness),
-		"duration_ms": durationMs,
-		"created_by":  string(createdBy),
+		"kind":              telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
+		"harness":           string(rec.Harness),
+		"spawn_duration_ms": nonNegativeMs(spawnDurationMs),
+	}
+	if durationMs >= 0 {
+		payload["duration_ms"] = durationMs
+	}
+	if facts.createdBy.Valid() {
+		payload["created_by"] = string(facts.createdBy)
 	}
 	// Absent for spawns that no client request started (schedules, intake).
-	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
-		payload["surface"] = string(surface)
+	if facts.surface != "" {
+		payload["surface"] = string(facts.surface)
 	}
 	if firstKnown {
 		payload["first_for_install"] = firstForInstall
 	}
-	if actor, ok := s.githubActor(ctx); ok {
-		payload["github_actor"] = actor
+	if facts.githubActor != "" {
+		payload["github_actor"] = facts.githubActor
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
 		SessionID:  &sessionID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  facts.requestID,
 		Payload:    payload,
 	})
 }
@@ -633,8 +671,8 @@ func (s *Service) githubActor(ctx context.Context) (string, bool) {
 
 // emitFirstSessionSpawned is deprecated: it fires whenever the sessions table is
 // empty, so it repeats after a user clears their sessions. Use
-// ao.session.spawned with first_for_install=true. Kept for dashboard continuity.
-func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) {
+// ao.sessions.spawned with first_for_install=true. Kept for dashboard continuity.
+func (s *Service) emitFirstSessionSpawned(rec domain.SessionRecord, project domain.ProjectRecord, requestID string) {
 	if s.telemetry == nil {
 		return
 	}
@@ -648,43 +686,57 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 		payload["since_first_project_ms"] = s.now().Sub(project.RegisteredAt).Milliseconds()
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_session_spawned",
+		Name:       "ao.sessions.first_spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
 		SessionID:  &sessionID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  requestID,
 		Payload:    payload,
 	})
 }
 
-func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, err error, durationMs int64) {
+// spawnFailure names the attempt a spawn_failed describes.
+type spawnFailure struct {
+	kind      domain.SessionKind
+	harness   domain.AgentHarness
+	projectID domain.ProjectID
+	requestID string
+}
+
+// emitSpawnFailed reports one failed start attempt. durationMs keeps its
+// original meaning (negative omits it); spawnDurationMs runs from acceptance
+// to the failure, measured on the same boundary as a success.
+func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDurationMs int64) {
 	if s.telemetry == nil {
 		return
 	}
-	projectID := cfg.ProjectID
+	projectID := f.projectID
 	apiErr := toSpawnAPIError(err)
 	errorKind, errorCode := telemetrymeta.ErrorKindAndCode(apiErr)
 	payload := map[string]any{
-		"component":   "session_service",
-		"operation":   "spawn_session",
-		"kind":        telemetrymeta.SessionKind(cfg.Kind, cfg.ProjectID),
-		"harness":     string(cfg.Harness),
-		"duration_ms": durationMs,
-		"error_kind":  errorKind,
-		"fingerprint": telemetrymeta.Fingerprint("session_service", "spawn_session", string(cfg.Kind), string(cfg.Harness), errorKind, errorCode),
+		"component":         "session_service",
+		"operation":         "spawn_session",
+		"kind":              telemetrymeta.SessionKind(f.kind, f.projectID),
+		"harness":           string(f.harness),
+		"spawn_duration_ms": nonNegativeMs(spawnDurationMs),
+		"error_kind":        errorKind,
+		"fingerprint":       telemetrymeta.Fingerprint("session_service", "spawn_session", string(f.kind), string(f.harness), errorKind, errorCode),
+	}
+	if durationMs >= 0 {
+		payload["duration_ms"] = durationMs
 	}
 	if errorCode != "" {
 		payload["error_code"] = errorCode
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawn_failed",
+		Name:       "ao.sessions.spawn_failed",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelError,
 		ProjectID:  &projectID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  f.requestID,
 		Payload:    payload,
 	})
 }
@@ -975,6 +1027,21 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
+		// Known conditions (open elsewhere, resume in progress, terminated) keep
+		// their codes; any other failure of a pending import is logged in full
+		// and reported by importResumeAPIError. The record is read even after
+		// the request's budget ran out, so a timeout is still recognized.
+		var known *apierr.Error
+		if !errors.As(mapSessionError(err), &known) {
+			if rec, ok, readErr := s.store.GetSession(context.WithoutCancel(ctx), id); readErr == nil && ok && rec.NeedsImportResume() {
+				if s.logger != nil {
+					s.logger.Warn("resume imported session", "session", id, "err", err)
+				}
+				apiErr := importResumeAPIError(err)
+				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
+				return ResumeAgentOutcome{}, apiErr
+			}
+		}
 		apiErr := toAPIError(err)
 		s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 		return ResumeAgentOutcome{}, apiErr
@@ -984,6 +1051,20 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// importResumeAPIError reports a pending import's failure without its raw
+// text: a reason written for the user (or a failed Setup step, as a native
+// spawn shows it) is a conflict the user can act on, a timeout asks for a
+// retry, and anything else is a server fault with a fixed message.
+func importResumeAPIError(err error) *apierr.Error {
+	if message, ok := sessionmanager.ImportFailureNotice(err); ok {
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", message, nil)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apierr.Unavailable("SESSION_IMPORT_RESUME_TIMEOUT", "Preparing this imported chat took too long. Try again.")
+	}
+	return apierr.Internal("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureFallback)
 }
 
 // StartAccountTransition moves the session's agent to another provider account
@@ -1564,6 +1645,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 			return nil, fmt.Errorf("list workspace cleanup facts: %w", err)
 		}
 	}
+	titles := s.storedTerminalTitles(ctx, ids)
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
@@ -1571,6 +1653,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 		if err != nil {
 			return nil, err
 		}
+		sess.TerminalTitle = presentedTerminalTitle(rec, titles[rec.ID])
 		out = append(out, sess)
 	}
 	if s.statusRecoveryRevision() != recoveryRevision {
@@ -1668,7 +1751,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1735,7 +1818,9 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SessionRecord:              rec,
 		WorkspaceCleanup:           cleanup.WorkspaceDisposition,
 		WorkspaceCleanupReportOnly: cleanup.ReportOnly,
+		WorkspacePublished:         strings.TrimSpace(rec.Metadata.WorkspacePath) != "",
 		StatusReadiness:            readiness,
+		NeedsResume:                rec.NeedsImportResume(),
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1804,6 +1889,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentNotExited):
 		return apierr.Conflict("AGENT_NOT_EXITED",
 			"The agent is still running; only exited agents can be resumed", nil)
+	case errors.Is(err, sessionmanager.ErrSessionOpenElsewhere):
+		return apierr.Conflict("SESSION_OPEN_ELSEWHERE", sessionmanager.ErrSessionOpenElsewhere.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrResumeInProgress):
 		return apierr.Conflict("AGENT_RESUME_IN_PROGRESS",
 			"The agent is already being resumed", nil)
@@ -2056,7 +2143,34 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	sess.TerminalTitle = presentedTerminalTitle(rec, s.storedTerminalTitles(ctx, []domain.SessionID{rec.ID})[rec.ID])
+	return sess, nil
+}
+
+// storedTerminalTitles is cosmetic: a failed read falls back to existing labels
+// instead of failing the board.
+func (s *Service) storedTerminalTitles(ctx context.Context, ids []domain.SessionID) map[domain.SessionID]string {
+	if s.terminalTitles == nil {
+		return nil
+	}
+	titles, err := s.terminalTitles.ListSessionTerminalTitles(ctx, ids)
+	if err != nil && s.logger != nil {
+		s.logger.Warn("list terminal titles failed", "err", err)
+	}
+	return titles
+}
+
+// presentedTerminalTitle applies the label precedence: an explicit name wins,
+// then a meaningful program title. The orchestrator keeps its fixed identity.
+func presentedTerminalTitle(rec domain.SessionRecord, stored string) string {
+	if rec.DisplayNameExplicit || rec.Kind == domain.KindOrchestrator || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return ""
+	}
+	return domain.MeaningfulTerminalTitle(stored, rec.Metadata.WorkspacePath)
 }
 
 // currentWorkspaceCleanup is the teardown recorded for an archived session,

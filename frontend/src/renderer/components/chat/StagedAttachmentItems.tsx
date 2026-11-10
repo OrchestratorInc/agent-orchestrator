@@ -1,9 +1,75 @@
-import { File as FileIcon, X } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
+import { readAttachmentNames } from "../../lib/chat-attachment-names";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { ChatImage } from "./ChatImage";
-import { attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+import { Pressable } from "../ui/pressable";
+import { ChatImage, ChatImageAttachmentRow, ChatImageDialog } from "./ChatImage";
+import { AttachmentFilePreview } from "./AttachmentFilePreview";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS, attachmentName, attachmentPreviewKind, attachmentTypeLabel, attachmentURL, formatAttachmentSize, IMAGE_ATTACHMENT_PATH } from "./messageAttachments";
+
+/**
+ * The attachments above a user's bubble: one row, capped to the bubble's width,
+ * that scrolls sideways and fades out at an edge with more past it. Outside the
+ * bubble so a long message's fold can never clip them. Lists inside it use
+ * `contents`, so every kind of attachment shares the row. The single inner row
+ * is what the fade watches resize as images load.
+ */
+export function AttachmentStrip({ className, children }: { className?: string; children: ReactNode }) {
+	const scroller = useRef<HTMLDivElement>(null);
+	useEdgeFade(scroller, "x");
+	return (
+		// Padded out and pulled back so a tile's focus ring isn't clipped by the scroller.
+		<div ref={scroller} className={cn("edge-fade edge-fade-x scrollbar-none -m-0.5 max-w-[min(78%,560px)] overflow-x-auto overflow-y-hidden overscroll-x-contain p-0.5", className)}>
+			<div className="flex w-max items-start gap-2">{children}</div>
+		</div>
+	);
+}
+
+/** A file chip's words: the name, then its type and, when it is known, its size. */
+export function AttachmentFileText({ name, bytes, nameClassName }: { name: string; bytes?: number; nameClassName?: string }) {
+	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ");
+	return (
+		<>
+			<span className={cn("truncate", nameClassName)}>{name}</span>
+			{details ? <span className="shrink-0 tabular-nums opacity-70">{details}</span> : null}
+		</>
+	);
+}
+
+/** A file tile's contents: the name on top, then its type as a pill and its size when known. */
+export function AttachmentFileCard({ name, bytes }: { name: string; bytes?: number }) {
+	const type = attachmentTypeLabel(name);
+	return (
+		<>
+			<span className="line-clamp-2 text-foreground">{name}</span>
+			<span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+				{type ? <span className={ATTACHMENT_TILE_PILL_CLASS}>{type}</span> : null}
+				{bytes === undefined ? null : <span className="whitespace-nowrap text-micro tabular-nums">{formatAttachmentSize(bytes)}</span>}
+			</span>
+		</>
+	);
+}
+
+/** The composer strip's image: a small square that opens the picture at full size. */
+export function AttachmentThumbnail({ src, name }: { src: string; name: string }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			<Pressable
+				onClick={() => setOpen(true)}
+				aria-label={t("chat.image.open", { name })}
+				className="size-6 shrink-0 cursor-zoom-in overflow-hidden rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+			>
+				<img src={src} alt="" className="block size-full object-cover" />
+			</Pressable>
+			<ChatImageDialog open={open} onOpenChange={setOpen} url={src} label={name} />
+		</>
+	);
+}
 
 /**
  * A message's staged files, as its bubble draws them. The message editor draws
@@ -28,37 +94,36 @@ export function StagedAttachmentItems({
 	const { t } = useTranslation();
 	if (paths.length === 0) return null;
 	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
+	const originalNames = readAttachmentNames();
 	return (
-		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{paths.map((path) => {
-				const name = attachmentName(path);
-				const image = IMAGE_ATTACHMENT_PATH.test(path);
-				// An image with no preview URL shows as a file chip, but it still can't go.
-				const remove = image ? undefined : onRemove;
-				return image && apiBaseUrl !== null ? (
-					<li key={path} className="max-w-full">
-						<ChatImage
-							src={attachmentURL(apiBaseUrl, sessionId, path)}
-							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
-						/>
-					</li>
-				) : (
-					<li
-						key={path}
-						title={path}
-						className="group/attachment flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
-					>
-						<span className="relative flex size-3.5 shrink-0">
-							<FileIcon
-								aria-hidden="true"
-								className={cn(
-									"size-3.5",
-									remove && "group-focus-within/attachment:opacity-0 group-hover/attachment:opacity-0",
-								)}
+		<ChatImageAttachmentRow>
+			<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
+				{paths.map((path) => {
+					const name = originalNames[path] ?? attachmentName(path);
+					const image = IMAGE_ATTACHMENT_PATH.test(path);
+					// An image with no preview URL shows as a file chip, but it still can't go.
+					const remove = image ? undefined : onRemove;
+					const previewKind = attachmentPreviewKind(path);
+					return image && apiBaseUrl !== null ? (
+						<li key={path} className="max-w-full">
+							<ChatImage
+								src={attachmentURL(apiBaseUrl, sessionId, path)}
+								alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
 							/>
-							{/* Remove takes the icon's place on hover, so the chip keeps its size. */}
+						</li>
+					) : (
+						<li
+							key={path}
+							title={name}
+							className={cn("group/attachment", ATTACHMENT_TILE_CLASS)}
+						>
+							<AttachmentFileCard name={name} />
+							{previewKind && apiBaseUrl !== null ? (
+								<AttachmentFilePreview kind={previewKind} url={attachmentURL(apiBaseUrl, sessionId, path)} name={name} />
+							) : null}
+							{/* Remove appears in the corner on hover, so the card keeps its size. */}
 							{remove ? (
-								<span className="absolute -inset-[5px] flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">
+								<span className="absolute right-0.5 top-0.5 flex opacity-0 group-focus-within/attachment:opacity-100 group-hover/attachment:opacity-100">
 									<Button
 										type="button"
 										variant="destructive-ghost"
@@ -70,11 +135,10 @@ export function StagedAttachmentItems({
 									</Button>
 								</span>
 							) : null}
-						</span>
-						<span className="truncate">{name}</span>
-					</li>
-				);
-			})}
-		</ul>
+						</li>
+					);
+				})}
+			</ul>
+		</ChatImageAttachmentRow>
 	);
 }

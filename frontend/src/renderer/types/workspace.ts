@@ -173,6 +173,11 @@ export type WorkspaceSession = {
 	 * "running" on a failed session is the step that failed.
 	 */
 	provisionSteps?: SessionProvisionStep[];
+	/**
+	 * The daemon has a recorded workspace for this session, so workspace reads
+	 * can succeed. Absent from older daemons, which is treated as published.
+	 */
+	workspacePublished?: boolean;
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
@@ -184,6 +189,8 @@ export type WorkspaceSession = {
 	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
+	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
+	needsResume?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
 	/** Whether SCM review feedback is automatically injected into the worker. */
@@ -382,6 +389,7 @@ function sessionLastMessageTimestamp(session: WorkspaceSession): number {
 	return (
 		validTimestamp(session.lastInteractionAt) ??
 		validTimestamp(session.lastUserMessageAt) ??
+		(session.needsResume ? validTimestamp(session.activity?.lastActivityAt) : undefined) ??
 		validTimestamp(session.createdAt) ??
 		0
 	);
@@ -401,11 +409,22 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else creation), newest first. */
+/** Worker sessions ordered by the user's latest message (else an unopened import's source activity, else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
+}
+
+/**
+ * Whether workspace reads can succeed. The daemon reports whether it has a
+ * recorded workspace: an asynchronous start publishes one partway through, a
+ * failed start can keep one, and an agent-only retry reuses it. Until then
+ * every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND. An older
+ * daemon does not report it, so its sessions are treated as published.
+ */
+export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspacePublished">): boolean {
+	return session.workspacePublished !== false;
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
@@ -418,13 +437,13 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.
  */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
+	return Boolean(session && !session.needsResume && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
 /** Whether a session can accept a Cue from its topbar. The daemon makes the
  * final decision, including whether a command Cue's worktree still exists. */
 export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
+	return Boolean(session && sessionIsActive(session) && !session.needsResume && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {

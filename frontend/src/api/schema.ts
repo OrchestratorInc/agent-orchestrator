@@ -2320,6 +2320,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview readable local agent histories from Git folders and Standalone */
+        get: operations["scanSessionImport"];
+        put?: never;
+        /** Import selected histories as idle AO sessions without starting providers */
+        post: operations["importSelectedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -5684,6 +5702,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -5711,12 +5730,15 @@ export interface components {
             statusReadiness: "checking" | "ready" | "unavailable";
             terminalGeneration?: string;
             terminalHandleId?: string;
+            terminalTitle?: string;
             terminateOnPrMerge: boolean;
             /** Format: date-time */
             updatedAt: string;
             /** @enum {string} */
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
             workspaceCleanupReportOnly?: boolean;
+            /** @description Whether the session has a recorded workspace that workspace reads can use. */
+            workspacePublished: boolean;
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
@@ -7191,6 +7213,34 @@ export interface components {
             harness?: string;
             userRequest: string;
         };
+        SessionImportCandidate: {
+            folder?: string;
+            harness: string;
+            id: string;
+            /** Format: date-time */
+            lastActivity: string;
+            messageCount: number;
+            projectId?: string;
+            sessionId?: string;
+            shortened?: boolean;
+            title: string;
+        };
+        SessionImportPreview: {
+            candidates: components["schemas"]["SessionImportCandidate"][];
+        };
+        SessionImportRequest: {
+            ids: string[];
+        };
+        SessionImportResponse: {
+            results: components["schemas"]["SessionImportResult"][];
+        };
+        SessionImportResult: {
+            error?: string;
+            id: string;
+            sessionId?: string;
+            /** @enum {string} */
+            status: "created" | "already_imported" | "failed";
+        };
         SessionInterfaceTransition: {
             /** Format: date-time */
             completedAt?: null | string;
@@ -7594,6 +7644,7 @@ export interface components {
             handleId: string;
             projectId?: string;
             sessionId?: string;
+            terminalTitle?: string;
             title: string;
             workingDir: string;
         };
@@ -7788,6 +7839,7 @@ export interface components {
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
+            displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";
@@ -16266,6 +16318,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanSessionImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportPreview"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSelectedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

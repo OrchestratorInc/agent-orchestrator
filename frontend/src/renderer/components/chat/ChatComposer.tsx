@@ -119,6 +119,8 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
@@ -657,10 +659,12 @@ export const ChatComposer = memo(function ChatComposer({
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
-			return attachments.map((attachment, index) => ({
-				...attachment,
-				stagedPath: paths[index],
-			}));
+			return attachments.map((attachment, index) => {
+				const stagedPath = paths[index];
+				// Staging renames the file, and the sent message keeps only that path.
+				if (stagedPath) rememberAttachmentName(stagedPath, attachment.name);
+				return { ...attachment, stagedPath };
+			});
 		},
 		[onStageAttachments],
 	);
@@ -2173,21 +2177,24 @@ export const ChatComposer = memo(function ChatComposer({
 									return (
 									<li
 										key={file.id}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										{preview ? (
-											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
+											<AttachmentThumbnail src={preview} name={file.name} />
 										) : (
 											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
 												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
 											</div>
 										)}
-										<span
-											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.name}
-										>
-											{file.name}
-										</span>
+										{preview ? (
+											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
+												{file.name}
+											</span>
+										) : (
+											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
+												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
+											</span>
+										)}
 										<Button
 											type="button"
 											variant="destructive-ghost"
@@ -2221,7 +2228,7 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
 										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
