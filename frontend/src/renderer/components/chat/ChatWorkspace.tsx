@@ -173,6 +173,7 @@ import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
+import { ChatTokenSkills } from "./ComposerTokenChip";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -217,6 +218,8 @@ import {
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
+
+const NO_SKILLS: ChatSkill[] = [];
 
 const EMPTY_CHAT_PLACEHOLDERS = [
 	"Fix a failing test in this project",
@@ -2012,6 +2015,7 @@ function ChatWorkspaceContent({
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
+							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -2053,6 +2057,7 @@ function ChatWorkspaceContent({
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
+							</ChatTokenSkills.Provider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>

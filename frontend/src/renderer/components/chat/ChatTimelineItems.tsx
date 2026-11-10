@@ -126,6 +126,8 @@ import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { ComposerTokenText, copyTokenWires } from "./ComposerTokenChip";
+import { messageTokenScope, sessionTokenScope } from "./sentComposerTokens";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
@@ -1016,6 +1018,9 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// The chips its send recorded: under the session, or by its text when it was sent
+	// before the session existed.
+	const tokenScopes = [sessionTokenScope(sessionId), messageTokenScope(body)];
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1091,13 +1096,19 @@ export function HumanMessage({
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
 								{body ? (
-									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty" onCopy={copyTokenWires}>
 										<ProseWithInlineImages
 											text={body}
 											attachments={attachments}
 											sessionId={sessionId}
 											apiBaseUrl={apiBaseUrl}
-											renderText={(text) => <SessionLinkedText text={text} />}
+											renderText={(text) => (
+												<ComposerTokenText
+													text={text}
+													scopes={tokenScopes}
+													renderText={(prose) => <SessionLinkedText text={prose} />}
+												/>
+											)}
 										/>
 									</p>
 								) : null}
@@ -3357,13 +3368,19 @@ export function SteerMessage({
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
-								<p>
+								<p onCopy={copyTokenWires}>
 									<ProseWithInlineImages
 										text={body}
 										attachments={attachments}
 										sessionId={sessionId}
 										apiBaseUrl={apiBaseUrl}
-										renderText={(text) => text}
+										renderText={(text) => (
+											<ComposerTokenText
+												text={text}
+												scopes={[sessionTokenScope(sessionId), messageTokenScope(body)]}
+												renderText={(prose) => prose}
+											/>
+										)}
 									/>
 								</p>
 							) : null}
