@@ -2,9 +2,11 @@ import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
+import { Check, Coffee, Copy, Eye, EyeOff, Globe, Info, KeyRound, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
 import { apiClient } from "../../lib/api-client";
+import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../../lib/mobile-pairing-code";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { fetchDevices, mobileDevicesQueryKey } from "./MobileDevicesSection";
 import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { useUiStore } from "../../stores/ui-store";
@@ -255,6 +257,10 @@ interface MobileStatus {
 	tailscaleHost: string;
 	port: number;
 	password: string;
+	/** The host refuses the pairing password: a device needs its own token or the account's. */
+	requireDeviceCredentials?: boolean;
+	/** When the pairing password last authenticated a remote request. */
+	passwordLastUsedAt?: string | null;
 	warning: string;
 	securePairing: {
 		enabled: boolean;
@@ -352,7 +358,8 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 export function ConnectMobileContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [copied, setCopied] = useState(false);
+	const [copied, setCopied] = useState<"code" | "password" | null>(null);
+	const [passwordShown, setPasswordShown] = useState(false);
 	const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
 	// The code crossfades only after the user has generated or regenerated one
 	// on this visit; opening the page shows whatever exists without a transition.
@@ -551,6 +558,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const stayAwake = useStayAwake(active);
 
 
+	const setRequireDeviceCredentials = useMutation({
+		mutationFn: async (requireDeviceCredentials: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/require-device-credentials", { body: { enabled: requireDeviceCredentials } });
+			if (error) throw apiErrorException(error);
+			return data;
+		},
+		onMutate: async (requireDeviceCredentials) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, requireDeviceCredentials });
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
@@ -597,6 +621,28 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
+	// The QR and the code beside it carry a one-time pairing code, not the
+	// password that works until it is rotated. Settings prefetches it with the
+	// status, so the code is there on the first paint.
+	const devices = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, enabled: active && status?.enabled === true });
+	const pairingCode = useQuery({
+		queryKey: mobilePairingCodeQueryKey,
+		queryFn: fetchPairingCode,
+		enabled: active && status?.enabled === true,
+		refetchInterval: PAIRING_CODE_REFRESH_MS,
+		staleTime: PAIRING_CODE_REFRESH_MS,
+	}).data ?? "";
+	// A code is spent when a device pairs, and a new password drops unused
+	// codes: either change fetches the next one.
+	const codeSpentBy = devices.data === undefined || !status ? null : `${status.password}|${devices.data.map((device) => device.id).join(",")}`;
+	const lastCodeSpentBy = useRef<string | null>(null);
+	useEffect(() => {
+		if (codeSpentBy === null) return;
+		if (lastCodeSpentBy.current !== null && lastCodeSpentBy.current !== codeSpentBy) {
+			void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
+		}
+		lastCodeSpentBy.current = codeSpentBy;
+	}, [codeSpentBy, queryClient]);
 	const secureActive = mode === "tailscale" && (status?.securePairing?.active ?? false);
 	// Tunnel-only hosts deliberately have no LAN address. Use the same daemon
 	// endpoint list for both the offer and the address shown beside it.
@@ -621,6 +667,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setBrowserRemoteAccess.isPending ||
+		setRequireDeviceCredentials.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -630,16 +677,18 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setRequireDeviceCredentials.reset();
 		setLinkError("");
 	};
 
-	const copyPassword = async () => {
-		if (!status?.password) return;
+	const copy = async (what: "code" | "password") => {
+		const text = what === "code" ? pairingCode : status?.password;
+		if (!text) return;
 		try {
-			await navigator.clipboard.writeText(status.password);
-			setCopied(true);
+			await navigator.clipboard.writeText(text);
+			setCopied(what);
 			if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
-			copiedTimeoutRef.current = setTimeout(() => setCopied(false), 1500);
+			copiedTimeoutRef.current = setTimeout(() => setCopied(null), 1500);
 		} catch {
 			// Clipboard can reject (permissions / non-secure context).
 		}
@@ -682,6 +731,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		(setRequireDeviceCredentials.error instanceof Error && setRequireDeviceCredentials.error.message) ||
 		stayAwake.error ||
 		linkError ||
 		null;
@@ -726,6 +776,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const showRealQR =
 		enabled &&
 		!secureBlocked &&
+		pairingCode !== "" &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
 	// Computed once so the rendered v2 QR and its data attribute cannot drift.
 	const qrValue = showRealQR
@@ -733,7 +784,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				hostId: status?.hostId ?? "",
 				host: activeHost,
 				platform: "",
-				password: status?.password ?? "",
+				password: pairingCode,
 				endpoints: status?.endpoints ?? [],
 			})
 		: null;
@@ -811,18 +862,18 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-address">
 							{`${activeHost}:${activePort}`}
 						</dd>
-						<dt className="text-settings-muted">{t("mobile.password")}</dt>
+						<dt className="text-settings-muted">{t("mobile.pairingCode")}</dt>
 						<dd className="flex min-w-0 items-center">
-							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
+							<span className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-code">{pairingCode}</span>
 							<span className="ml-2 flex shrink-0 items-center">
 								<Button
 									type="button"
 									variant="quiet"
 									size="icon-xs"
-									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									onClick={() => void copyPassword()}
+									aria-label={copied === "code" ? t("mobile.pairingCodeCopied") : t("mobile.copyPairingCode")}
+									onClick={() => void copy("code")}
 								>
-									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+									{copied === "code" ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
 								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -852,6 +903,39 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								</Tooltip>
 							</span>
 						</dd>
+						{/* The password works until it is rotated, so it stays hidden until
+						    asked for. It is for an app from before pairing codes. */}
+						{!status.requireDeviceCredentials && (
+							<>
+								<dt className="text-settings-muted">{t("mobile.password")}</dt>
+								<dd className="flex min-w-0 items-center">
+									<span className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-password">
+										{passwordShown ? status.password : "•".repeat(status.password.length)}
+									</span>
+									<span className="ml-2 flex shrink-0 items-center">
+										<Button
+											type="button"
+											variant="quiet"
+											size="icon-xs"
+											aria-label={passwordShown ? t("mobile.hidePassword") : t("mobile.showPassword")}
+											aria-pressed={passwordShown}
+											onClick={() => setPasswordShown((shown) => !shown)}
+										>
+											{passwordShown ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}
+										</Button>
+										<Button
+											type="button"
+											variant="quiet"
+											size="icon-xs"
+											aria-label={copied === "password" ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+											onClick={() => void copy("password")}
+										>
+											{copied === "password" ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+										</Button>
+									</span>
+								</dd>
+							</>
+						)}
 					</dl>
 				)}
 
@@ -945,6 +1029,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						else stayAwake.set(false, true);
 					}}
 				/>
+			)}
+			{enabled && (
+				<SettingsRow
+					icon={KeyRound}
+					label={t("mobile.requireDeviceCredentials.label")}
+					description={
+						<>
+							{t("mobile.requireDeviceCredentials.help")}
+							{status.passwordLastUsedAt && !status.requireDeviceCredentials
+								? ` ${t("mobile.requireDeviceCredentials.lastUsed", { when: new Date(status.passwordLastUsedAt).toLocaleString() })}`
+								: null}
+						</>
+					}
+					data-testid="mobile-require-device-credentials"
+				>
+					<Switch
+						aria-label={t("mobile.requireDeviceCredentials.label")}
+						disabled={busy}
+						checked={status.requireDeviceCredentials ?? false}
+						onCheckedChange={(next) => {
+							clearActionErrors();
+							setRequireDeviceCredentials.mutate(next);
+						}}
+					/>
+				</SettingsRow>
 			)}
 			<SettingsRow
 				icon={MonitorSmartphone}

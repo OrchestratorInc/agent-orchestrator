@@ -16,6 +16,7 @@ const { mobileStatus } = vi.hoisted(() => ({
 		tailscaleHost: "100.72.46.7",
 		port: 3011,
 		password: "fake-password-for-testing",
+		requireDeviceCredentials: false,
 		// The daemon always advertises its endpoints now, and a v2 code is built
 		// from that list — there is no v1 form left to fall back to when it is
 		// missing, so a fixture without it is not a realistic daemon.
@@ -56,6 +57,11 @@ vi.mock("../hooks/useAwake", () => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
+// Each fetch makes a new code, as the daemon does.
+vi.mock("../lib/mobile-pairing-code", () => {
+	let made = 0;
+	return { mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => `Next${++made}` };
+});
 // An app with no AO sign-in pairs signed out; signing in to pair is covered in
 // settings/ConnectMobileContent.signin.test.tsx.
 vi.mock("../lib/cloud-session", () => ({
@@ -86,6 +92,8 @@ import {
 function renderMobileSettings(
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
+	// Settings prefetches the one-time pairing code with the status.
+	client.setQueryData(["mobile-pairing-code"], "Code1234");
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -118,6 +126,7 @@ beforeEach(() => {
 	window.localStorage.clear();
 	mobileStatus.enabled = true;
 	mobileStatus.password = "fake-password-for-testing";
+	mobileStatus.requireDeviceCredentials = false;
 	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
@@ -152,7 +161,8 @@ test("encodes the LAN address by default", async () => {
 	expect(offer.endpoints).toContainEqual(
 		expect.objectContaining({ kind: "lan", host: "192.168.1.42" }),
 	);
-	expect(offer.token).toBe("fake-password-for-testing");
+	// The code carries a one-time pairing code, never the password.
+	expect(offer.token).toBe("Code1234");
 	expect(offer.hostId).toBe("h_fixture");
 	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
 });
@@ -183,7 +193,7 @@ test("shows the tunnel-only QR without a LAN address and preserves pairing crede
 		name: "host.example.net",
 		platform: "",
 		endpoints: mobileStatus.endpoints,
-		token: "fake-password-for-testing",
+		token: "Code1234",
 	});
 	expect(await screen.findByTestId("mobile-pairing-address")).toHaveTextContent("host.example.net:443");
 	expect(screen.queryByText(/No network address found/i)).not.toBeInTheDocument();
@@ -223,11 +233,11 @@ test("withholds the QR when tunnel startup fails without advertising an endpoint
 test("vertically aligns the regenerate control with the password row", async () => {
 	renderMobileSettings();
 
-	// The password value and its icon actions share one centred flex row.
-	const regenerate = await screen.findByRole("button", { name: "Regenerate password" });
+	// The pairing code and its icon actions share one centred flex row.
+	const regenerate = await screen.findByRole("button", { name: "Revoke all devices" });
 	const row = regenerate.closest("dd");
 	expect(row).toHaveClass("flex", "items-center");
-	expect(row).toHaveTextContent("fake-password-for-testing");
+	expect(row).toHaveTextContent("Code1234");
 });
 
 // The blurred placeholder stays behind the spinner, so the code that arrives
@@ -1190,7 +1200,7 @@ test("renders cached state on first paint, with no transition on the code", asyn
 		mobileStatus.password = "regenerated-password";
 		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
-	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(screen.getByRole("button", { name: "Revoke all devices" }));
 	await waitFor(() => expect(qrPayload()).not.toBe(before));
 	await waitFor(() => {
 		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100");
@@ -1223,3 +1233,31 @@ test.each([false, true])("remembers the combined lid preference %s during a cold
 	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
 	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toHaveAttribute("aria-checked", String(lidClosed));
 });
+
+test("keeps the password hidden until asked for, and the QR never carries it", async () => {
+	renderMobileSettings();
+	const password = await screen.findByTestId("mobile-pairing-password");
+	expect(password).toHaveTextContent("•".repeat("fake-password-for-testing".length));
+	expect(document.body).not.toHaveTextContent("fake-password-for-testing");
+	expect(qrPayload()).not.toContain("fake-password-for-testing");
+	await userEvent.click(screen.getByRole("button", { name: "Show password" }));
+	expect(password).toHaveTextContent("fake-password-for-testing");
+	await userEvent.click(screen.getByRole("button", { name: "Hide password" }));
+	expect(document.body).not.toHaveTextContent("fake-password-for-testing");
+});
+
+test("requiring device credentials posts the choice and takes the password off the panel", async () => {
+	renderMobileSettings();
+	const toggle = await screen.findByRole("switch", { name: "Require device credentials" });
+	expect(toggle).not.toBeChecked();
+	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
+		mobileStatus.requireDeviceCredentials = true;
+		return { data: structuredClone(mobileStatus), error: undefined };
+	});
+	await userEvent.click(toggle);
+	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/require-device-credentials", { body: { enabled: true } });
+	await waitFor(() => expect(screen.queryByTestId("mobile-pairing-password")).not.toBeInTheDocument());
+	// A new device still pairs with the code.
+	expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+});
+
