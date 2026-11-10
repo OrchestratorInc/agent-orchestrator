@@ -58,13 +58,15 @@ func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) e
 	s.wakeChat = wake
 }
 
-// SetChatView records a short-lived view lease. Registration and the final
-// hibernation check use the same controller gate, so opening a view either
-// prevents shutdown or waits for shutdown and then wakes the native session.
+// SetOtherWriterCheck reports whether another process holds a chat, or wrote
+// to it after the given time when that time is set.
 func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) bool) {
 	s.otherWriter = check
 }
 
+// SetChatView records a short-lived view lease. Registration and the final
+// hibernation check use the same controller gate, so opening a view either
+// prevents shutdown or waits for shutdown and then wakes the native session.
 func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID string, active bool) error {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
