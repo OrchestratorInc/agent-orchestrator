@@ -719,8 +719,6 @@ type SessionPaneTabProps = {
 	session?: WorkspaceSession;
 	/** The agent shown without a session; its mark is the icon and its name joins the label. */
 	provider?: string;
-	/** Off where the agent's name is enough (the chat tab): the name still joins the label. */
-	providerIcon?: boolean;
 	icon?: ReactNode;
 	title?: string;
 	/** The control in the tab's trailing slot: its ⋮ menu, or a running interface switch's status. */
@@ -742,7 +740,6 @@ export function SessionPaneTab({
 	onRenamed,
 	session,
 	provider = session?.provider,
-	providerIcon = true,
 	icon,
 	title,
 	tabAction,
@@ -754,7 +751,7 @@ export function SessionPaneTab({
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = provider ? agentLabel(provider) : undefined;
-	const tabIcon = provider && providerIcon ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
+	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
