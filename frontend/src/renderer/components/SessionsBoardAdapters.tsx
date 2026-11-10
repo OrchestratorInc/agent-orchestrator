@@ -652,6 +652,8 @@ function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessi
 	return {
 		...session,
 		displayStatus: undefined,
+		// No red tint either: the card reads like every other ended session.
+		plainSurface: true,
 		statusPresentation: {
 			className: "hidden",
 			indicatorClassName: "hidden",

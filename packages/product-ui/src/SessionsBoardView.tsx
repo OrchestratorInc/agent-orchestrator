@@ -58,6 +58,8 @@ export type BoardSessionPresentation = {
 	provider: string;
 	status: SessionStatus;
 	statusPresentation?: BoardSessionStatusPresentation;
+	/** Paint the plain card surface instead of the status's own tint, such as the terminated red. */
+	plainSurface?: boolean;
 	title: string;
 	trackerIssueId?: string;
 	updatedAt: string;
@@ -341,7 +343,7 @@ export function SessionCardView({
 					? // A hover preview: one elevated surface, no outline, no motion.
 						"relative w-full rounded-lg bg-popover text-left"
 					: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
-				!still && (badge.cardClassName ?? "border-border bg-surface"),
+				!still && ((session.plainSurface ? undefined : badge.cardClassName) ?? "border-border bg-surface"),
 				interactive &&
 					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
