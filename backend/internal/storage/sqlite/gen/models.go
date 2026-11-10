@@ -39,6 +39,19 @@ type AgentInstallJob struct {
 	UpdatedAt           time.Time
 }
 
+type AgentLimitReading struct {
+	AccountID       string
+	Provider        string
+	Email           string
+	Plan            string
+	WindowID        string
+	Label           string
+	DurationMinutes int64
+	UsedPercent     float64
+	ResetsAtMs      sql.NullInt64
+	ReadAtMs        int64
+}
+
 type AgentModelCatalog struct {
 	AgentID          string
 	ProjectID        string
@@ -173,6 +186,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	LimitHistory         bool
 }
 
 type Automation struct {
@@ -424,6 +438,8 @@ type ConversationTurn struct {
 	BatchedInput          int64
 	ProviderInputText     string
 	FailureCode           string
+	BatchDeliveryKind     string
+	BatchDeliverySteerID  string
 }
 
 type Cue struct {
@@ -474,6 +490,8 @@ type ModelUsageEvent struct {
 	EstimatedCostNanos    sql.NullInt64
 	PricingVersion        string
 	BillingProviderSource sql.NullString
+	ServiceTier           sql.NullString
+	ProviderMessageID     sql.NullString
 }
 
 type Notification struct {
@@ -967,6 +985,16 @@ type UsagePRMeasurement struct {
 	MergedVia          string
 }
 
+type UsagePriceOverride struct {
+	ModelID              string
+	InputUsdPerMtok      sql.NullString
+	OutputUsdPerMtok     sql.NullString
+	CacheReadUsdPerMtok  sql.NullString
+	CacheWriteUsdPerMtok sql.NullString
+	PriceAs              sql.NullString
+	UpdatedAt            time.Time
+}
+
 type UsageProjectIdentity struct {
 	ProjectID   string
 	InstallID   string
@@ -995,6 +1023,10 @@ type UsageSource struct {
 	NextRetryAt     sql.NullTime
 	LastErrorCode   string
 	UpdatedAt       time.Time
+}
+
+type UsageTierRepair struct {
+	UsageSourceID int64
 }
 
 type WorkspaceRepo struct {

@@ -2040,6 +2040,104 @@ type ListUsageSessionsQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Optional project id filter for dashboard cards."`
 }
 
+// UsageReportQuery selects the usage page's window.
+type UsageReportQuery struct {
+	Days      int              `query:"days,omitempty" minimum:"1" maximum:"90" description:"Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7."`
+	Offset    int              `query:"offset,omitempty" minimum:"0" description:"Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0."`
+	TimeZone  string           `query:"tz,omitempty" description:"IANA time zone that days and hours are bucketed in. Defaults to UTC."`
+	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
+}
+
+// UsagePriceOverride is the user's own price for one stored model ID: rates in USD per million tokens, or a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID    string `json:"modelId" required:"true" maxLength:"256" description:"Model ID as usage rows store it."`
+	Input      string `json:"inputUsdPerMillion,omitempty" description:"Decimal USD per million uncached input tokens. Set with output."`
+	Output     string `json:"outputUsdPerMillion,omitempty" description:"Decimal USD per million output tokens. Set with input."`
+	CacheRead  string `json:"cacheReadUsdPerMillion,omitempty" description:"Decimal USD per million cache-read tokens. Defaults to the input price."`
+	CacheWrite string `json:"cacheWriteUsdPerMillion,omitempty" description:"Decimal USD per million cache-write tokens. Defaults to the input price."`
+	PriceAs    string `json:"priceAs,omitempty" maxLength:"256" description:"Catalog model to price as, provider/model, in place of rates."`
+}
+
+// UsagePricesResponse is the saved model prices and the catalog models a model can price as.
+type UsagePricesResponse struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+	Models    []string             `json:"models" required:"true" description:"Catalog models a model can price as, provider/model."`
+}
+
+// UsagePricesRequest replaces the whole set of model prices.
+type UsagePricesRequest struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+}
+
+// UsageLimitHistoryRequest turns keeping limit readings on or off.
+type UsageLimitHistoryRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UsageLimitHistoryResponse is whether limit readings are now kept.
+type UsageLimitHistoryResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// UsageLimitWindowsQuery is the period of limit readings to read.
+type UsageLimitWindowsQuery struct {
+	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
+}
+
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a period, built only from the limit readings AO took itself.
+type UsageLimitWindowsResponse struct {
+	Since          time.Time                `json:"since"`
+	Until          time.Time                `json:"until"`
+	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
+	Logins         []domain.UsageLimitLogin `json:"logins"`
+}
+
+// UsageReportResponse is token and estimated-cost usage over a window, by day or by hour in the requested time zone.
+type UsageReportResponse struct {
+	Days       int                          `json:"days"`
+	TimeZone   string                       `json:"timeZone"`
+	Resolution string                       `json:"resolution" enum:"day,hour"`
+	Since      time.Time                    `json:"since"`
+	Until      time.Time                    `json:"until"`
+	Periods    []string                     `json:"periods" description:"Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour."`
+	Rows       []UsageReportRowResponse     `json:"rows"`
+	Sessions   []UsageReportSessionResponse `json:"sessions"`
+}
+
+// UsageReportRowResponse is one period's usage for one harness, model and speed tier.
+type UsageReportRowResponse struct {
+	Period              string `json:"period"`
+	Harness             string `json:"harness"`
+	Model               string `json:"model"`
+	Speed               string `json:"speed" description:"standard, priority, fast, flex, ultrafast, or unknown."`
+	Events              int64  `json:"events"`
+	PricedEvents        int64  `json:"pricedEvents"`
+	InputTokens         int64  `json:"inputTokens" description:"Uncached input that was not written to the cache."`
+	CacheReadTokens     int64  `json:"cacheReadTokens"`
+	CacheWriteTokens    int64  `json:"cacheWriteTokens"`
+	OutputTokens        int64  `json:"outputTokens"`
+	InputCostNanos      int64  `json:"inputCostNanos"`
+	CacheReadCostNanos  int64  `json:"cacheReadCostNanos"`
+	CacheWriteCostNanos int64  `json:"cacheWriteCostNanos"`
+	OutputCostNanos     int64  `json:"outputCostNanos"`
+	CostNanos           int64  `json:"costNanos"`
+	PremiumNanos        int64  `json:"premiumNanos" description:"Part of costNanos above standard rates, from priority, fast or ultrafast processing."`
+	CacheSavingsNanos   int64  `json:"cacheSavingsNanos" description:"What cache reads saved against paying input rates for those tokens."`
+}
+
+// UsageReportSessionResponse is one session's usage over the report window.
+type UsageReportSessionResponse struct {
+	SessionID    string    `json:"sessionId"`
+	ProjectID    string    `json:"projectId,omitempty"`
+	Harness      string    `json:"harness"`
+	Title        string    `json:"title"`
+	Events       int64     `json:"events"`
+	PricedEvents int64     `json:"pricedEvents"`
+	Tokens       int64     `json:"tokens"`
+	CostNanos    int64     `json:"costNanos"`
+	LastUsedAt   time.Time `json:"lastUsedAt"`
+}
+
 // EstimatedCostResponse is a nano-USD estimate reused at every usage summary
 // scope. Coverage stays an API fact for aggregation, catalog backfills, and
 // contextual disclosure; it is never a pricing label or a mathematical
@@ -2179,45 +2277,6 @@ type SystemMemoryResponse struct {
 type MemoryPressureResponse struct {
 	PressureRaw    float64 `json:"pressureRaw" minimum:"0"`
 	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
-}
-
-// UsageTotalsResponse is the canonical telemetry aggregate for one scope.
-//
-// Provider-specific counters are no longer projected here: they live verbatim
-// in each event's bounded provider usage object, where a field the provider
-// adds later survives without a schema change on this boundary.
-type UsageTotalsResponse struct {
-	InputTokens         *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens   *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
-	UncachedInputTokens *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
-	OutputTokens        *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
-	ProcessedTokens     *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
-	CacheReadTokens     *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
-	EstimatedCost       *EstimatedCostResponse `json:"estimatedCost"`
-}
-
-// UsageModelResponse is telemetry grouped by model. The billing provider is a
-// pricing input rather than a product distinction: each event was costed
-// against its own provider's rates before reaching this aggregate, so one model
-// stays one row even when more than one provider served it.
-type UsageModelResponse struct {
-	ModelID string              `json:"modelId"`
-	Totals  UsageTotalsResponse `json:"totals"`
-}
-
-// UsageHarnessResponse groups model telemetry under one AO harness.
-type UsageHarnessResponse struct {
-	Harness string               `json:"harness"`
-	Totals  UsageTotalsResponse  `json:"totals"`
-	Models  []UsageModelResponse `json:"models"`
-}
-
-// SessionUsageResponse is detailed telemetry for the session inspector.
-type SessionUsageResponse struct {
-	SessionID  domain.SessionID       `json:"sessionId"`
-	Incomplete bool                   `json:"incomplete"`
-	Totals     UsageTotalsResponse    `json:"totals"`
-	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
@@ -3463,9 +3522,12 @@ type ConversationSnapshotResponse struct {
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
-	SessionID                  string `json:"sessionId"`
-	Harness                    string `json:"harness,omitempty"`
-	Mode                       string `json:"mode" enum:"chat,tui"`
+	// BatchedDeliveries links each queued turn AO batched into another turn's
+	// provider input. The turns list leaves those turns out.
+	BatchedDeliveries []domain.ConversationBatchedDelivery `json:"batchedDeliveries,omitempty"`
+	SessionID         string                               `json:"sessionId"`
+	Harness           string                               `json:"harness,omitempty"`
+	Mode              string                               `json:"mode" enum:"chat,tui"`
 	// Controller is reported separately from history so a client can tell "no
 	// messages yet" apart from "the agent is not running".
 	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,hibernated,stopped"`

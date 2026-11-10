@@ -28,9 +28,10 @@ import {
 	LoaderCircle,
 	Download,
 	LayoutGrid,
-	File,
+	Package,
 	Folder,
 	FolderOpen,
+	Gauge,
 	LogIn,
 	LogOut,
 	MoreVertical,
@@ -87,6 +88,8 @@ import {
 	type SessionRowMarker,
 } from "../lib/session-presentation";
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
+import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
+import { isArchivedSession } from "../lib/standalone-archive";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
@@ -114,7 +117,6 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
-	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
@@ -534,6 +536,7 @@ function useSelection() {
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
+	const goUsage = useCallback(() => void navigate({ to: "/usage" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
@@ -560,6 +563,7 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isUsage: pathname === "/usage",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -568,6 +572,7 @@ function useSelection() {
 		goHome,
 		goAutomations,
 		goArtifacts,
+		goUsage,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
@@ -576,7 +581,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Rows showing the red alert sit above the rest, but only in the default
@@ -749,6 +754,7 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
+	const developerMode = useUiStore((s) => s.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const artifactTotal = useMemo(
@@ -1162,13 +1168,24 @@ export function Sidebar({
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isArtifacts}
-							icon={<File aria-hidden="true" />}
+							icon={<Package aria-hidden="true" />}
 							label={t("artifacts.title")}
 							onClick={selection.goArtifacts}
 							tooltip={isCollapsed ? t("artifacts.title") : undefined}
 							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
 						/>
 					</SidebarMenuItem>
+					{developerMode ? (
+						<SidebarMenuItem>
+							<SidebarTopNavRow
+								active={selection.isUsage}
+								icon={<Gauge aria-hidden="true" />}
+								label={t("usage.title")}
+								onClick={selection.goUsage}
+								tooltip={isCollapsed ? t("usage.title") : undefined}
+							/>
+						</SidebarMenuItem>
+					) : null}
 				</SidebarMenu>
 
 				{/* Pinned — collapsible; hidden when empty. */}
@@ -1554,6 +1571,11 @@ function projectItemPropsEqual(previous: ProjectItemProps, next: ProjectItemProp
 		a.goSettings === b.goSettings && projectSelectionKey(previous.workspace, a) === projectSelectionKey(next.workspace, b);
 }
 
+/** Builds a menu's rows when the open menu mounts them. */
+function LazyMenuEntries({ build }: { build: () => MenuEntry[] }) {
+	return <MenuEntries entries={build()} />;
+}
+
 const ProjectItem = memo(function ProjectItem({
 	workspace,
 	avatarUrl,
@@ -1828,6 +1850,101 @@ const ProjectItem = memo(function ProjectItem({
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
+	// The project's board opens its archive once it is on screen, as Cmd+K's
+	// Open archive does.
+	const openArchive = () => {
+		useUiStore.getState().requestArchiveOpen(workspace.id, workspace.hostId);
+		selection.goProject(workspace.id);
+	};
+	// The ⋮ button and right-click show these same rows. Built only while a menu
+	// is open, so the archive count costs a closed row nothing.
+	const buildMenuEntries = (): MenuEntry[] => {
+		// The board's archive: every project row has a board, the Scratchpad's
+		// archive is its own section's entry. Hidden while empty, as the board's
+		// Archive button and Cmd+K's Open archive are.
+		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
+		return [
+			{
+				kind: "item",
+				id: "new-task",
+				icon: <Plus aria-hidden="true" />,
+				label: t("shell.newTask"),
+				disabled: isProjectRestarting,
+				onSelect: () => requestNewTask(workspace.id, workspace.hostId),
+			},
+			...(!isStandalone && (!workspace.shared || orchestrator)
+				? [{
+					kind: "item" as const,
+					id: "orchestrator",
+					icon: <OrchestratorIcon aria-hidden="true" />,
+					label: orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"),
+					disabled: isSpawning || isProjectProvisioning || isProjectRestarting,
+					onSelect: () => void openOrchestrator(),
+				}]
+				: []),
+			...(!isStandalone
+				? [{
+					kind: "item" as const,
+					id: "board",
+					icon: <LayoutGrid aria-hidden="true" />,
+					label: t("shell.openDashboard"),
+					onSelect: () => selection.goProject(workspace.id),
+				}]
+				: []),
+			...(archivedCount > 0
+				? [{
+					kind: "item" as const,
+					id: "archive",
+					icon: <Archive aria-hidden="true" />,
+					label: t("shell.archive"),
+					count: archivedCount,
+					ariaLabel: t("shell.archiveSessionsAria", { count: archivedCount }),
+					onSelect: openArchive,
+				}]
+				: []),
+			{ kind: "separator", id: "path-sep" },
+			// A remote host's path names a folder on that machine, not this one.
+			...(workspace.path && !workspace.hostId
+				? [{
+					kind: "item" as const,
+					id: "copy-path",
+					icon: <Copy aria-hidden="true" />,
+					label: t("editor.copyPath"),
+					onSelect: () => copyToClipboard(workspace.path),
+				}]
+				: []),
+			{ kind: "separator", id: "project-sep" },
+			...(canPin
+				? [{
+					kind: "item" as const,
+					id: "pin",
+					icon: isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />,
+					label: isPinned ? t("shell.unpinProject") : t("shell.pinProject"),
+					onSelect: () => setProjectPinned(workspace.id, !isPinned),
+				}]
+				: []),
+			...(!isStandalone
+				? [
+					{
+						kind: "item" as const,
+						id: "settings",
+						icon: <Settings aria-hidden="true" />,
+						label: t("shell.projectSettings"),
+						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
+					},
+					{
+						kind: "item" as const,
+						id: "remove",
+						icon: <Trash2 aria-hidden="true" />,
+						label: t("shell.removeProjectTitle"),
+						destructive: true,
+						disabled: isRemoving,
+						onSelect: removeProject,
+					},
+				]
+				: []),
+		];
+	};
 
 	const handleConfirmRemove = async () => {
 		setConfirmOpen(false);
@@ -2090,28 +2207,9 @@ const ProjectItem = memo(function ProjectItem({
 												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent side="right" align="start" className="min-w-44">
-												<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-													<Plus aria-hidden="true" />
-													{t("shell.newTask")}
-												</DropdownMenuItem>
-												{canPin ? (
-													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
-														{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-														{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
-													</DropdownMenuItem>
-												) : null}
-												<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
-													<Settings aria-hidden="true" />
-													{t("shell.projectSettings")}
-												</DropdownMenuItem>
-												<DropdownMenuItem
-													className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-													disabled={isRemoving}
-													onSelect={() => void removeProject()}
-												>
-													<Trash2 aria-hidden="true" />
-													{t("shell.removeProjectTitle")}
-												</DropdownMenuItem>
+												<MenuKitContext.Provider value={dropdownMenuKit}>
+													<LazyMenuEntries build={buildMenuEntries} />
+												</MenuKitContext.Provider>
 											</DropdownMenuContent>
 										</DropdownMenu>
 									</>
@@ -2217,54 +2315,7 @@ const ProjectItem = memo(function ProjectItem({
 				</motion.li>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-					<Plus aria-hidden="true" />
-					{t("shell.newTask")}
-				</ContextMenuItem>
-				{!isStandalone && (!workspace.shared || orchestrator) ? (
-					<ContextMenuItem
-						disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
-						onSelect={() => void openOrchestrator()}
-					>
-						<OrchestratorIcon aria-hidden="true" />
-						{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
-					</ContextMenuItem>
-				) : null}
-				{!isStandalone ? (
-					<ContextMenuItem onSelect={() => selection.goProject(workspace.id)}>
-						<LayoutGrid aria-hidden="true" />
-						{t("shell.openDashboard")}
-					</ContextMenuItem>
-				) : null}
-				{/* A remote host's path names a folder on that machine, not this one. */}
-				{workspace.path && !workspace.hostId ? (
-					<>
-						<ContextMenuSeparator />
-						<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>
-							<Copy aria-hidden="true" />
-							{t("editor.copyPath")}
-						</ContextMenuItem>
-					</>
-				) : null}
-				{!isStandalone ? <ContextMenuSeparator /> : null}
-				{canPin ? (
-					<ContextMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
-						{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-						{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
-					</ContextMenuItem>
-				) : null}
-				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
-					<Settings aria-hidden="true" />
-					{t("shell.projectSettings")}
-				</ContextMenuItem>}
-				{!isStandalone && <ContextMenuItem
-					className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-					disabled={isRemoving}
-					onSelect={() => void removeProject()}
-				>
-					<Trash2 aria-hidden="true" />
-					{t("shell.removeProjectTitle")}
-				</ContextMenuItem>}
+				<LazyMenuEntries build={buildMenuEntries} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2999,17 +3050,15 @@ const SessionActions = memo(function SessionActions({
 							size="icon-xs"
 							variant="quiet"
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-							className={cn(
-								SESSION_ACTION_CLASS,
-								session.isPinned && "text-foreground",
-							)}
+							className={SESSION_ACTION_CLASS}
 							onClick={(event) => {
 								event.stopPropagation();
 								session.isPinned ? unpinSession(session) : pinSession(session);
 							}}
 							type="button"
 						>
-							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+							{/* The same pin as a pinned project's unpin button. */}
+							<Pin aria-hidden="true" />
 						</Button>}
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				{session.cloud?.shared ? null : (

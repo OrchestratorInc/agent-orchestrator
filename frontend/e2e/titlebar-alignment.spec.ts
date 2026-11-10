@@ -95,7 +95,8 @@ for (const mode of ["chat", "tui"] as const) {
 			await nav.getByRole("button", { name: "Expand sidebar", exact: true }).click();
 		}
 		await expect.poll(() => page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="session-terminal-region"]')!.style.getPropertyValue("--ao-sidebar-collapse-progress"))).toBe("0");
-		const radius = await page.locator(".center-panel-surface").evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius));
+		// The floating macOS top bar draws the panel's rounded frame on ::after.
+		const radius = await page.locator(".center-panel-surface").evaluate((el) => parseFloat(getComputedStyle(el, "::after").borderTopLeftRadius));
 		expect(radius).toBeGreaterThan(0);
 		const positions = await page.evaluate(async () => {
 			const tab = document.querySelector<HTMLElement>('[role="tab"]')!;
