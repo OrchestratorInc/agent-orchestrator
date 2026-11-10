@@ -12,6 +12,10 @@ vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: f
 
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
 import { useUiStore } from "../stores/ui-store";
+import { appI18n } from "../i18n";
+import { sessionUiKey } from "../lib/hosts";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
+import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "./optimistic-session-kills";
 import { remoteWorkspaceQueryKey, useRemoteWorkspaces, useWorkspaceQuery, useWorkspaceSession } from "./useWorkspaceQuery";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -226,4 +230,59 @@ it("re-maps remote session titles when Developer Mode changes with unchanged hos
 
 	expect(client.getQueryData(["remote-workspaces", "box-a", "sessions"])).toBe(sessionsData);
 	expect(result.current.data[0]?.sessions[0]?.title).toBe("Fix login");
+});
+
+// A saved host whose lists are only in the cache: nothing below refetches, so
+// each change has to reach the memoized lists without new host data.
+function renderCachedHost(sessions: unknown[], projects: unknown[] = [{ id: "project-1", name: "Remote", path: "/remote" }]) {
+	vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(["remote-workspaces", "box-a", "projects"], projects);
+	client.setQueryData(["remote-workspaces", "box-a", "sessions"], sessions);
+	const cachedHostIds = ["box-a"];
+	const view = renderHook(() => useRemoteWorkspaces({ cachedHostIds }), {
+		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+	});
+	return { client, ...view };
+}
+
+it("applies and lifts an unpin made here while the host's lists stay the same", () => {
+	const pinnedAt = "2026-11-01T00:00:00Z";
+	const { client, result } = renderCachedHost([{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [], isPinned: true, pinnedAt }]);
+	const sessionsData = client.getQueryData(["remote-workspaces", "box-a", "sessions"]);
+	expect(result.current.data[0]?.sessions[0]?.isPinned).toBe(true);
+	try {
+		act(() => useRemoteUnpinStore.getState().add("box-a", "session-1", pinnedAt));
+		expect(result.current.data[0]?.sessions[0]?.isPinned).toBe(false);
+
+		act(() => useRemoteUnpinStore.getState().remove([sessionUiKey("session-1", "box-a")]));
+		expect(result.current.data[0]?.sessions[0]?.isPinned).toBe(true);
+		expect(client.getQueryData(["remote-workspaces", "box-a", "sessions"])).toBe(sessionsData);
+	} finally {
+		useRemoteUnpinStore.setState({ unpins: {} });
+	}
+});
+
+it("marks a remote session terminated while its kill is in flight, and lifts it when the kill is cleared", () => {
+	const { result } = renderCachedHost([{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }]);
+	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
+	try {
+		act(() => trackOptimisticSessionKill("session-1", "box-a"));
+		expect(result.current.data[0]?.sessions[0]?.isTerminated).toBe(true);
+	} finally {
+		act(() => clearOptimisticSessionKill("session-1", "box-a"));
+	}
+	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
+});
+
+it("renames a remote Scratchpad when the language changes", async () => {
+	const { result } = renderCachedHost([{ id: "session-1", harness: "codex", status: "working", prs: [] }], []);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	try {
+		await act(() => appI18n.changeLanguage("de"));
+		expect(result.current.data.map((project) => project.name)).toEqual(["Notizblock"]);
+	} finally {
+		await act(() => appI18n.changeLanguage("en"));
+	}
+	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
 });
