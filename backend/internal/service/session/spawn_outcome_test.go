@@ -247,6 +247,31 @@ func TestSessionReportsWhetherItsWorkspaceIsPublished(t *testing.T) {
 	}
 }
 
+// A Terminal session starting in the background already has its runtime while
+// the agent waits for its opening prompt. Offering the terminal then would let
+// typing race the prompt, so it is offered once the start is ready.
+func TestTerminalIsOfferedOnlyOnceTheStartIsReady(t *testing.T) {
+	st := newFakeStore()
+	for id, state := range map[domain.SessionID]domain.SessionProvisionState{
+		"starting": domain.SessionProvisionProvisioning, "failed": domain.SessionProvisionFailed,
+		"ready": domain.SessionProvisionReady, "legacy": "",
+	} {
+		rec := domain.SessionRecord{ID: id, ProjectID: "mer", Mode: domain.SessionModeTUI, ProvisionState: state}
+		rec.Metadata.RuntimeHandleID = "handle-" + string(id)
+		st.sessions[id] = rec
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	for id, want := range map[domain.SessionID]string{"starting": "", "failed": "", "ready": "handle-ready", "legacy": "handle-legacy"} {
+		got, err := svc.Get(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if got.TerminalHandleID != want {
+			t.Errorf("%s terminalHandleId = %q, want %q", id, got.TerminalHandleID, want)
+		}
+	}
+}
+
 // A start cancelled on purpose (killed mid-start, daemon shutdown) is not a
 // launch failure; a start that ran out of its time budget is.
 func TestCancelledAsyncChatStartIsNotASpawnFailure(t *testing.T) {
