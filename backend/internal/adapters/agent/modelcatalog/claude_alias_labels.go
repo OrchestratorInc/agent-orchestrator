@@ -29,19 +29,7 @@ func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.
 	if len(models) == 0 || len(reference) == 0 {
 		return models
 	}
-	newest := make(map[string][]int, len(claudeAliasFamilies))
-	for _, item := range reference {
-		if claudeAliasPattern.MatchString(strings.ToLower(strings.TrimSpace(item.ID))) {
-			continue
-		}
-		family, version := claudeFamilyVersion(item)
-		if family == "" {
-			continue
-		}
-		if current, ok := newest[family]; !ok || compareVersions(version, current) > 0 {
-			newest[family] = version
-		}
-	}
+	newest := newestClaudeFamilyVersions(reference)
 	if len(newest) == 0 {
 		return models
 	}
@@ -74,6 +62,72 @@ func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.
 		}
 	}
 	return out
+}
+
+// newestClaudeFamilyVersions is the newest version of each family among the
+// concrete models in reference. Aliases are never evidence of a version.
+func newestClaudeFamilyVersions(reference []ports.AgentModelInfo) map[string][]int {
+	newest := make(map[string][]int, len(claudeAliasFamilies))
+	for _, item := range reference {
+		if claudeAliasPattern.MatchString(strings.ToLower(strings.TrimSpace(item.ID))) {
+			continue
+		}
+		family, version := claudeFamilyVersion(item)
+		if family == "" {
+			continue
+		}
+		if current, ok := newest[family]; !ok || compareVersions(version, current) > 0 {
+			newest[family] = version
+		}
+	}
+	return newest
+}
+
+// ClaudeAliasFamily returns the family a Claude Code alias names ("opus" for
+// "opus[1m]"), or "" for anything else, including "default", whose model depends
+// on the account's plan rather than on a family.
+func ClaudeAliasFamily(alias string) string {
+	match := claudeAliasPattern.FindStringSubmatch(strings.ToLower(strings.TrimSpace(alias)))
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
+// ClaudeAliasSubstitution reports whether served is a real substitution for
+// alias, and if so what alias should have run ("Opus 5.5", or just "Opus" when
+// reference does not list the family). It uses the same reading of the provider
+// catalog as LabelClaudeAliasVersions, so it agrees with what the picker promised.
+//
+// Normal resolution is not a substitution: the newest model of the family, under
+// any spelling, including a dated snapshot ID.
+//
+// Only provable differences count, because the caller tells the user a model was
+// swapped: another family, or an older version than reference lists. Everything
+// else is reported as no substitution: an alias with no family, a served ID with
+// no readable family, a family reference does not list, and a version newer than
+// reference lists, which means the catalog is behind rather than the model wrong.
+func ClaudeAliasSubstitution(alias, served string, reference []ports.AgentModelInfo) (string, bool) {
+	family := ClaudeAliasFamily(alias)
+	if family == "" {
+		return "", false
+	}
+	servedFamily, servedVersion := claudeFamilyVersion(ports.AgentModelInfo{ID: served})
+	if servedFamily == "" {
+		return "", false
+	}
+	expected := strings.ToUpper(family[:1]) + family[1:]
+	newest, listed := newestClaudeFamilyVersions(reference)[family]
+	if listed {
+		expected += " " + formatVersion(newest)
+	}
+	if servedFamily != family {
+		return expected, true
+	}
+	if !listed || compareVersions(servedVersion, newest) >= 0 {
+		return "", false
+	}
+	return expected, true
 }
 
 // claudeFamilyVersion reads the family and major.minor version of a concrete

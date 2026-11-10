@@ -75,3 +75,34 @@ func TestLabelClaudeAliasVersionsDoesNotMutateInput(t *testing.T) {
 		t.Fatal("labeling must not mutate the caller's slice")
 	}
 }
+
+func TestClaudeAliasSubstitutionUsesTheProviderCatalog(t *testing.T) {
+	// The catalog decides, not a list of names: the newest listed Opus here is 4.8,
+	// so 4.8 is the normal answer and 4.7 is a substitution.
+	reference := []ports.AgentModelInfo{
+		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7"},
+		{ID: "claude-opus-4-8-20260101", Label: "Claude Opus 4.8"},
+		{ID: "opus", Label: "Opus 9.9"}, // aliases are never a reference
+	}
+	for _, tc := range []struct {
+		alias, served, expected string
+		substituted             bool
+	}{
+		{alias: "opus", served: "claude-opus-4-8"},
+		{alias: "opus", served: "claude-opus-4-8-20260101"},
+		{alias: "opus", served: "claude-opus-9"},
+		{alias: "OPUS[1m]", served: "claude-opus-4-8"},
+		{alias: "opus", served: "claude-opus-4-7", expected: "Opus 4.8", substituted: true},
+		{alias: "opus", served: "claude-haiku-5-5", expected: "Opus 4.8", substituted: true},
+		{alias: "sonnet", served: "claude-opus-4-8", expected: "Sonnet", substituted: true},
+		{alias: "sonnet", served: "claude-sonnet-1"}, // family not listed: version unknown
+		{alias: "default", served: "claude-opus-1"},  // no family to compare
+		{alias: "opus", served: "acme-large-1"},      // no readable family
+	} {
+		expected, substituted := ClaudeAliasSubstitution(tc.alias, tc.served, reference)
+		if expected != tc.expected || substituted != tc.substituted {
+			t.Errorf("ClaudeAliasSubstitution(%q, %q) = %q, %v; want %q, %v",
+				tc.alias, tc.served, expected, substituted, tc.expected, tc.substituted)
+		}
+	}
+}

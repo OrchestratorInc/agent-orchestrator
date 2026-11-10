@@ -526,24 +526,108 @@ func TestClaudePromptResponseFailureRecordsVersionTooOld(t *testing.T) {
 	}
 }
 
-func TestClaudeServedModelOnlyReportsAliases(t *testing.T) {
+// servedModelFixture writes a transcript answered by served and installs catalog
+// as the provider's model list, returning the launch config and session to query.
+func servedModelFixture(t *testing.T, served string, catalog []ports.AgentModelInfo, catalogErr error) (acpdriver.LaunchConfig, string) {
+	t.Helper()
 	configDir := t.TempDir()
 	sessionID := "8320947f-5806-4579-943f-b23a943bac1f"
 	projectDir := filepath.Join(configDir, "projects", "-work")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	transcript := `{"type":"assistant","message":{"model":"claude-opus-4-8"}}` + "\n"
+	transcript := `{"type":"assistant","message":{"model":"` + served + `"}}` + "\n"
 	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := acpdriver.LaunchConfig{Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
-
-	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
-	if served != "claude-opus-4-8" || !strings.Contains(reason, "opus") {
-		t.Fatalf("served = %q, reason = %q", served, reason)
+	previous := claudeServedModelCatalog
+	claudeServedModelCatalog = func(context.Context, acpdriver.LaunchConfig) ([]ports.AgentModelInfo, error) {
+		return catalog, catalogErr
 	}
-	if served, _ := claudeServedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
-		t.Fatalf("concrete model reported as rerouted to %q", served)
+	t.Cleanup(func() { claudeServedModelCatalog = previous })
+	// An empty pin shadows any the machine running the test has configured.
+	return acpdriver.LaunchConfig{WorkspacePath: t.TempDir(), Env: map[string]string{
+		"CLAUDE_CONFIG_DIR":              configDir,
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":   "",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL":  "",
+	}}, sessionID
+}
+
+func TestClaudeServedModelStaysSilentForNormalResolution(t *testing.T) {
+	catalog := []ports.AgentModelInfo{
+		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8"},
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"},
+		{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5"},
+		{ID: "opus", Label: "Opus 5.5", IsDefault: true},
+	}
+	for _, tc := range []struct{ name, selected, served string }{
+		{"alias to its newest model", "opus", "claude-opus-5-5"},
+		{"dated id of that model", "opus", "claude-opus-5-5-20260901"},
+		{"context variant", "opus[1m]", "claude-opus-5-5"},
+		{"served id with a context suffix", "opus", "claude-opus-5-5[1m]"},
+		{"newer than a stale catalog", "opus", "claude-opus-6"},
+		{"default names no family to compare", "default", "claude-sonnet-5-5"},
+		{"gateway id with no readable family", "opus", "acme-large-1"},
+		{"concrete selection is not an alias", "claude-opus-4-8", "claude-sonnet-5-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, sessionID := servedModelFixture(t, tc.served, catalog, nil)
+			if served, reason := claudeServedModel(context.Background(), cfg, sessionID, tc.selected); served != "" {
+				t.Fatalf("%s answered by %s reported as rerouted to %q: %q", tc.selected, tc.served, served, reason)
+			}
+		})
+	}
+}
+
+func TestClaudeServedModelReportsRealSubstitution(t *testing.T) {
+	catalog := []ports.AgentModelInfo{
+		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8"},
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"},
+		{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5"},
+	}
+	for _, tc := range []struct{ name, selected, served, reason string }{
+		{"older generation than the catalog", "opus", "claude-opus-4-8", `"opus" normally resolves to Opus 5.5, but claude-opus-4-8 answered this turn`},
+		{"older generation, dated", "opus[1m]", "claude-opus-4-5-20251101", `"opus[1m]" normally resolves to Opus 5.5, but claude-opus-4-5-20251101 answered this turn`},
+		{"another family", "opus", "claude-sonnet-5-5", `"opus" normally resolves to Opus 5.5, but claude-sonnet-5-5 answered this turn`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, sessionID := servedModelFixture(t, tc.served, catalog, nil)
+			served, reason := claudeServedModel(context.Background(), cfg, sessionID, tc.selected)
+			if served != tc.served || reason != tc.reason {
+				t.Fatalf("served = %q, reason = %q; want %q, %q", served, reason, tc.served, tc.reason)
+			}
+		})
+	}
+}
+
+// Without a catalog the expected version is unknown, so a same-family answer stays
+// silent, but an answer from another family is a swap whatever the catalog says.
+func TestClaudeServedModelWithoutCatalogReportsOnlyAnotherFamily(t *testing.T) {
+	unavailable := errors.New("provider unreachable")
+
+	cfg, sessionID := servedModelFixture(t, "claude-opus-4-8", nil, unavailable)
+	if served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus"); served != "" {
+		t.Fatalf("same family reported without a catalog: %q, %q", served, reason)
+	}
+
+	cfg, sessionID = servedModelFixture(t, "claude-sonnet-5-5", nil, unavailable)
+	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
+	if want := `"opus" normally resolves to Opus, but claude-sonnet-5-5 answered this turn`; served != "claude-sonnet-5-5" || reason != want {
+		t.Fatalf("served = %q, reason = %q; want %q", served, reason, want)
+	}
+}
+
+// A user who routes a family to a model of their choosing got what they asked for,
+// even when it is older or from another family.
+func TestClaudeServedModelStaysSilentForPinnedFamily(t *testing.T) {
+	catalog := []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}
+	for _, served := range []string{"claude-opus-4-8", "claude-sonnet-5-5"} {
+		cfg, sessionID := servedModelFixture(t, served, catalog, nil)
+		cfg.Env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = served
+		if got, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus"); got != "" {
+			t.Fatalf("pinned family reported as rerouted to %q: %q", got, reason)
+		}
 	}
 }

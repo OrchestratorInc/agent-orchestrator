@@ -25,10 +25,12 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 const minimumNodeMajor = 22
@@ -295,18 +297,53 @@ func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string)
 	return nil
 }
 
-// claudeServedModel reports what a Claude alias actually resolved to. The ACP
-// adapter does not surface the answering model, but Claude's own transcript
-// records it on every assistant message.
+// claudeServedModel reports a turn that a Claude alias did not answer with the
+// model it normally resolves to. The ACP adapter does not surface the answering
+// model, but Claude's own transcript records it on every assistant message.
+//
+// An alias naming a concrete model is the alias working, so the two differing as
+// strings means nothing: the transcript is compared with the provider catalog.
+// When the expected model cannot be established the turn stays silent, because the
+// notice tells the user a model was swapped and AO would have no evidence of that.
+// That covers a family the user pinned with ANTHROPIC_DEFAULT_*_MODEL, whose
+// resolution AO cannot read, and an unavailable catalog, except that another family
+// is provable without one. It is re-evaluated on the next turn.
 func claudeServedModel(ctx context.Context, cfg acpdriver.LaunchConfig, sessionID, selected string) (string, string) {
 	if !isClaudeNativeModelAlias(selected) {
 		return "", ""
 	}
 	served, err := claudecode.LastAssistantModel(ctx, cfg.Env, sessionID)
-	if err != nil || served == "" {
+	if err != nil || served == "" || claudeAliasPinned(ctx, cfg, selected) {
 		return "", ""
 	}
-	return served, fmt.Sprintf("The installed Claude Code resolves %q to %s", selected, served)
+	// A failed lookup leaves a nil catalog, which ClaudeAliasSubstitution reads as
+	// "version unknown" rather than as a fallback list of models.
+	models, _ := claudeServedModelCatalog(ctx, cfg)
+	expected, substituted := modelcatalog.ClaudeAliasSubstitution(selected, served, models)
+	if !substituted {
+		return "", ""
+	}
+	return served, fmt.Sprintf("%q normally resolves to %s, but %s answered this turn", selected, expected, served)
+}
+
+// claudeServedModelCatalog lists the models the provider reports for this session.
+var claudeServedModelCatalog = func(ctx context.Context, cfg acpdriver.LaunchConfig) ([]ports.AgentModelInfo, error) {
+	binary, err := claudecode.New().ResolveBinary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return claudecode.ProviderModels(ctx, binary, cfg.WorkspacePath, cfg.Env)
+}
+
+// claudeAliasPinned reports the user routing an alias's family to a model of their
+// choosing, which may be anything their gateway serves.
+func claudeAliasPinned(ctx context.Context, cfg acpdriver.LaunchConfig, alias string) bool {
+	family := modelcatalog.ClaudeAliasFamily(alias)
+	if family == "" {
+		return false
+	}
+	settings := agentcreds.ResolveClaudeSettings(ctx, cfg.WorkspacePath, cfg.Env, agentcreds.ResolveOptions{})
+	return settings.Env["ANTHROPIC_DEFAULT_"+strings.ToUpper(family)+"_MODEL"] != ""
 }
 
 func claudeNestedMap(meta map[string]any, key string) map[string]any {
