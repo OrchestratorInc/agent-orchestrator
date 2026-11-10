@@ -3525,7 +3525,7 @@
 	"remote.emptyHosts": "Хостов пока нет. Добавьте хост ниже.",
 	"remote.editHost": "Изменить {{label}}",
 	"remote.removeHost": "Удалить {{label}}",
-	"remote.setupHint": "Выполните ao remote-host enable на другом компьютере или добавьте --tunnel для доступа извне его сети. Используйте ao remote-host status, чтобы узнать HTTPS-адрес и пароль подключения.",
+	"remote.setupHint": "Выполните ao remote-host enable на другом компьютере или добавьте --tunnel для доступа извне его сети. Используйте ao remote-host status --show-password, чтобы узнать HTTPS-адрес и пароль подключения.",
 	"remote.keepPassword": "Оставьте поле пустым, чтобы сохранить текущий пароль",
 	"remote.saving": "Сохранение…",
 	"remote.saveHost": "Сохранить хост",

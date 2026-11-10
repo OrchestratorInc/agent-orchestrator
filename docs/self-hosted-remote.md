@@ -40,8 +40,8 @@ Cloudflare tunnel.
    ```
 
    It shows `Fixed address: it stays the same after restarts.` and an
-   `https://h-….useao.dev` address. It also prints the pairing password, so
-   do not paste its output anywhere.
+   `https://h-….useao.dev` address. It hides the pairing password unless you
+   pass `--show-password`.
 
 5. On your laptop or phone, sign in to the same AO account. The VM appears
    within about 30 seconds, under the VM's hostname. The desktop app looks for
@@ -114,8 +114,8 @@ in the background and read its output:
 
 5. Remove the log: `ssh USER@HOST 'rm -f ~/.ao/link.log'`.
 
-To check the host later without exposing the password, run
-`~/.local/bin/ao remote-host status | grep -v '^Password'`.
+To check the host later, run `~/.local/bin/ao remote-host status`. It hides
+the pairing password unless you pass `--show-password`.
 
 ## Use the VM
 

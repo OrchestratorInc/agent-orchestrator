@@ -45,12 +45,13 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 		absent     string
 	}{
 		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
-		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
+		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "Password hidden: run `ao remote-host status --show-password`"}, "pairing-secret"},
+		{"status --show-password", "status --show-password", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "Password: pairing-secret"}, "Password hidden"},
 		{"disable", "disable", []string{"POST /api/v1/mobile/disable"}, []string{"disabled"}, "pairing-secret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests = nil
-			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", tc.verb)
+			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, append([]string{"remote-host"}, strings.Fields(tc.verb)...)...)
 			if err != nil {
 				t.Fatal(err)
 			}
