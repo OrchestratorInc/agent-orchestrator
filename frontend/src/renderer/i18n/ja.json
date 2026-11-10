@@ -1490,7 +1490,6 @@
 	"settings.project.agent": "エージェント",
 	"settings.project.agents": "エージェント",
 	"settings.project.sharing": "共有",
-	"settings.project.shareProject": "このプロジェクトを共有",
 	"settings.project.agentsRequired": "ワーカーとオーケストレーターのエージェントは必須です。",
 	"settings.project.childReposEmpty": "子リポジトリは登録されていません。",
 	"settings.project.default": "プロジェクト設定",

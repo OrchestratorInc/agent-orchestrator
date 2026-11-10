@@ -1513,7 +1513,6 @@
 	"settings.project.agent": "Agente",
 	"settings.project.agents": "Agentes",
 	"settings.project.sharing": "Compartilhamento",
-	"settings.project.shareProject": "Compartilhar este projeto",
 	"settings.project.agentsRequired": "Os agentes worker e orchestrator são obrigatórios.",
 	"settings.project.childReposEmpty": "Nenhum repositório filho registrado.",
 	"settings.project.default": "Configuração do projeto",

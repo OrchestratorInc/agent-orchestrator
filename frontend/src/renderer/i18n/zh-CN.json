@@ -1472,7 +1472,6 @@
 	"settings.project.agent": "代理",
 	"settings.project.agents": "代理",
 	"settings.project.sharing": "共享",
-	"settings.project.shareProject": "共享此项目",
 	"settings.project.agentsRequired": "Worker 与编排代理为必填项。",
 	"settings.project.childReposEmpty": "尚未注册子仓库。",
 	"settings.project.default": "项目设置",

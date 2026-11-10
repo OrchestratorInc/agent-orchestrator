@@ -1490,7 +1490,6 @@
 	"settings.project.agent": "Agent",
 	"settings.project.agents": "Agenten",
 	"settings.project.sharing": "Freigabe",
-	"settings.project.shareProject": "Dieses Projekt teilen",
 	"settings.project.agentsRequired": "Worker- und Orchestrator-Agenten sind erforderlich.",
 	"settings.project.childReposEmpty": "Keine untergeordneten Repositories registriert.",
 	"settings.project.default": "Projekteinstellung",

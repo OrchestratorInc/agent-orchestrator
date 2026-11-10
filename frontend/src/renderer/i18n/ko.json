@@ -1490,7 +1490,6 @@
 	"settings.project.agent": "에이전트",
 	"settings.project.agents": "에이전트",
 	"settings.project.sharing": "공유",
-	"settings.project.shareProject": "이 프로젝트 공유",
 	"settings.project.agentsRequired": "워커 및 오케스트레이터 에이전트는 필수입니다.",
 	"settings.project.childReposEmpty": "등록된 하위 저장소가 없습니다.",
 	"settings.project.default": "프로젝트 설정",
