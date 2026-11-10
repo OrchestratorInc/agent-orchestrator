@@ -832,6 +832,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
 }
 
+// A list, quote or code block at either end of a message sits flush with the
+// bubble's padding instead of adding its own outer margin.
+const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
 /**
@@ -1133,7 +1137,7 @@ export function HumanMessage({
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
 								{body ? (
-									<div data-chat-message-body="" className="break-words text-pretty" onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+									<div data-chat-message-body="" className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 										<UserMarkdown
 											text={body}
 											renderText={renderText}
@@ -3398,7 +3402,7 @@ export function SteerMessage({
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
-								<div onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 									<UserMarkdown text={body} renderText={renderText} />
 								</div>
 							) : null}

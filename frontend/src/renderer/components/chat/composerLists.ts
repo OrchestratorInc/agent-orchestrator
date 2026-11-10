@@ -104,6 +104,8 @@ export function listIndent(line: string, previous: string[], outdent: boolean): 
 			target = outdent ? above.indent : " ".repeat(above.textColumn);
 			break;
 		}
+		// Reached this item's parent without a sibling above it: nothing to nest under.
+		if (!outdent && above.indent.length < current) break;
 	}
 	if (outdent) {
 		if (current === 0) return { remove: item.prefix.length, insert: "" };
