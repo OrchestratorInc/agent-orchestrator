@@ -10,7 +10,7 @@ vi.mock("../../lib/api-client", async (importOriginal) => ({
 	apiClient: api,
 }));
 
-import { InstallProblem, InstallProgress, useAgentInstalls, useGhInstall } from "./ToolInstalls";
+import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
 	agentId,
@@ -56,7 +56,7 @@ function AgentHarness({ agentId, onInstalled = () => undefined }: { agentId: str
 }
 
 beforeEach(() => {
-	api.GET.mockReset();
+	api.GET.mockReset().mockResolvedValue({ data: undefined });
 	api.POST.mockReset();
 });
 
@@ -79,6 +79,15 @@ describe("useGhInstall", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Homebrew is not installed.");
 		expect(screen.getByText("brew install gh")).toBeInTheDocument();
 		expect(screen.getByTestId("ended")).toHaveTextContent("true");
+	});
+
+	it("shows the command up front where it can't be installed from here", async () => {
+		// The daemon's answer on Linux, where installing gh needs sudo.
+		api.GET.mockResolvedValue({ data: { target: "gh", status: "unsupported", command: "sudo apt-get install -y gh", error: "AO cannot ask for your administrator password. Run the command below in a terminal." } });
+		render(wrap(<GhHarness />));
+		expect(await screen.findByRole("alert")).toHaveTextContent("administrator password");
+		expect(screen.getByText("sudo apt-get install -y gh")).toBeInTheDocument();
+		expect(api.POST).not.toHaveBeenCalled();
 	});
 
 	it("shows the request's own error when the install can't start", async () => {
@@ -143,10 +152,53 @@ describe("useAgentInstalls", () => {
 		expect(screen.getByText("npm i -g @openai/codex")).toBeInTheDocument();
 	});
 
+	it("hides the last failure while a retry is out", async () => {
+		const failed = { target: "codex", status: "failed", error: "npm exited with 1" };
+		serve([plan("codex")], [failed]);
+		api.POST.mockResolvedValueOnce({ data: failed });
+		render(wrap(<AgentHarness agentId="codex" />));
+		await waitFor(() => expect(screen.getByTestId("can")).toHaveTextContent("true"));
+		await userEvent.click(screen.getByRole("button", { name: "install agent" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("npm exited with 1");
+		let answer: (value: unknown) => void = () => undefined;
+		api.POST.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(screen.getByRole("button", { name: "install agent" }));
+		expect(screen.getByTestId("busy")).toHaveTextContent("true");
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(async () => answer({ data: failed }));
+	});
+
 	it("doesn't show an old failure from elsewhere as this page's", async () => {
 		serve([plan("codex")], [{ target: "codex", status: "failed", error: "an earlier failure" }]);
 		render(wrap(<AgentHarness agentId="codex" />));
 		await waitFor(() => expect(screen.getByTestId("can")).toHaveTextContent("true"));
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+});
+
+describe("agentRowState", () => {
+	const agent = (installation: string, auth: string, freshness = "fresh", readiness = "not_ready") => ({
+		id: "gemini",
+		label: "Gemini CLI",
+		effectiveReadiness: readiness,
+		installation: { state: installation },
+		authentication: { state: auth, freshness },
+		usageCount: 0,
+	}) as never;
+
+	it("offers sign-in when AO couldn't tell whether an installed agent is signed in", () => {
+		// What the daemon reports for Gemini CLI right after installing it.
+		expect(agentRowState(agent("installed", "unknown", "stale", "unknown"))).toBe("signin");
+		expect(agentRowState(agent("installed", "unauthorized"))).toBe("signin");
+	});
+
+	it("waits while a check is still running", () => {
+		expect(agentRowState(agent("installed", "unknown", "checking"))).toBe("checking");
+		expect(agentRowState(agent("unknown", "unknown"))).toBe("checking");
+	});
+
+	it("reads ready and not installed as they are", () => {
+		expect(agentRowState(agent("installed", "authorized", "fresh", "ready"))).toBe("ready");
+		expect(agentRowState(agent("not_installed", "unknown"))).toBe("missing");
 	});
 });
