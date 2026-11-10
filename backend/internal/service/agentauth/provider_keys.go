@@ -137,6 +137,8 @@ func (s *Service) SaveProviderKey(ctx context.Context, name, secret string, devi
 // share keeps the device setting the key already has, so a client that has
 // not loaded it yet never withdraws a published key by omission.
 func (s *Service) storeProviderKey(ctx context.Context, name, secret string, share *bool, harness string) error {
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
 	if share != nil && *share && !deviceSupported {
 		return apierr.Invalid("AGENT_AUTH_DEVICE_ENV_UNSUPPORTED", "Sharing a key with other apps isn't available on this device.", nil)
 	}
@@ -350,21 +352,32 @@ func (s *Service) RemoveProviderKey(ctx context.Context, name string) (ProviderK
 	if _, ok := providerKeyCatalog[name]; !ok {
 		return ProviderKey{}, unknownProviderKey(name)
 	}
+	if err := s.removeProviderKey(ctx, name); err != nil {
+		return ProviderKey{}, err
+	}
+	return s.providerKey(ctx, name)
+}
+
+// removeProviderKey does RemoveProviderKey's work under keysMu, so the
+// startup republication cannot publish a key again after it is removed.
+func (s *Service) removeProviderKey(ctx context.Context, name string) error {
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
 	keys, err := providerkeys.Load(s.dataDir)
 	if err != nil {
-		return ProviderKey{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO's provider key store could not be read.")
 	}
 	for _, n := range append([]string{name}, companionVariables[name]...) {
 		if err := s.withdrawProviderKey(ctx, n, keys[n]); err != nil {
-			return ProviderKey{}, err
+			return err
 		}
 		if err := providerkeys.Remove(ctx, s.dataDir, n); err != nil {
-			return ProviderKey{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be removed.")
+			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be removed.")
 		}
 		// Put back what the user exported before AO replaced it, if anything.
 		_ = providerkeys.RestoreInherited(n)
 	}
-	return s.providerKey(ctx, name)
+	return nil
 }
 
 // CheckProviderKey asks the provider whether it accepts secret, or the stored

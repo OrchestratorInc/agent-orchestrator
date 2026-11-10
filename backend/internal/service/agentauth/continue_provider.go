@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -26,48 +27,56 @@ var continueProviders = map[string]string{
 // key in its global .env. Continue's IDE extension does not read a shell env;
 // both the CLI and IDE resolve ${{ secrets.NAME }} from this file.
 func saveContinueProvider(ctx context.Context, envName, modelID, secret string) error {
+	_, err := saveContinueProviderUndoable(ctx, envName, modelID, secret)
+	return err
+}
+
+// saveContinueProviderUndoable is saveContinueProvider that also returns a
+// function restoring Continue's .env and config.yaml as they were, for a
+// caller whose later step fails.
+func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret string) (func(), error) {
 	provider, ok := continueProviders[envName]
 	if !ok {
-		return apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This Continue provider is not supported here.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This Continue provider is not supported here.", nil)
 	}
 	modelID = strings.TrimSpace(modelID)
 	if !providerModelID.MatchString(modelID) {
-		return apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a model ID for this Continue provider.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a model ID for this Continue provider.", nil)
 	}
 	if strings.ContainsAny(secret, " \t#\"'\\") {
-		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This provider key contains characters that Continue's environment file cannot store safely.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This provider key contains characters that Continue's environment file cannot store safely.", nil)
 	}
 	dir, err := continueGlobalDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	configPath := filepath.Join(dir, "config.yaml")
 	configData, err := readContinueFile(configPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if configData == nil {
 		// Continue loads config.yaml whenever it exists and falls back to the
 		// legacy config.json only without it, so creating one would hide
 		// every model, context provider and rule configured there.
 		if _, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil {
-			return apierr.Invalid("AGENT_AUTH_STORE_LEGACY", "Continue is set up with config.json. Move to config.yaml in Continue first, then save the key here.", nil)
+			return nil, apierr.Invalid("AGENT_AUTH_STORE_LEGACY", "Continue is set up with config.json. Move to config.yaml in Continue first, then save the key here.", nil)
 		} else if !os.IsNotExist(err) {
-			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration file could not be inspected.")
+			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration file could not be inspected.")
 		}
 	}
 	var doc yaml.Node
 	if len(configData) != 0 && yaml.Unmarshal(configData, &doc) != nil {
-		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's configuration file is invalid; repair it before saving a key here.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's configuration file is invalid; repair it before saving a key here.", nil)
 	}
 	root, err := mappingRoot(&doc)
 	if err != nil {
-		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's configuration file must be a YAML mapping.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's configuration file must be a YAML mapping.", nil)
 	}
 	if len(configData) == 0 {
 		for _, field := range [][2]string{{"name", "AO Providers"}, {"version", "0.0.1"}, {"schema", "v1"}} {
 			if err := upsertYAMLMappingString(root, field[0], field[1]); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -83,7 +92,7 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "models"}, models)
 	}
 	if models.Kind != yaml.SequenceNode {
-		return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's models setting is invalid; repair it before saving a key here.", nil)
+		return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Continue's models setting is invalid; repair it before saving a key here.", nil)
 	}
 	var entry *yaml.Node
 	for _, item := range models.Content {
@@ -115,17 +124,17 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 	}
 	for _, field := range fields {
 		if err := upsertYAMLMappingString(entry, field[0], field[1]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	encoded, err := yaml.Marshal(&doc)
 	if err != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration could not be encoded.")
+		return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Continue's configuration could not be encoded.")
 	}
 	envPath := filepath.Join(dir, ".env")
 	envData, err := readContinueFile(envPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var lines []string
 	replaced := false
@@ -145,10 +154,28 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 	if !replaced {
 		lines = append(lines, envName+"="+secret)
 	}
-	if err := atomicConfigWrite(ctx, dir, envPath, []byte(strings.Join(lines, "\n")+"\n")); err != nil {
-		return err
+	// Restoring puts each file back as it was, or removes one this save
+	// created, so a failed save leaves the earlier credential in place.
+	restore := func(path string, original []byte) {
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if original == nil {
+			_ = os.Remove(path)
+			return
+		}
+		_ = atomicConfigWrite(restoreCtx, dir, path, original)
 	}
-	return atomicConfigWrite(ctx, dir, configPath, encoded)
+	if err := atomicConfigWrite(ctx, dir, envPath, []byte(strings.Join(lines, "\n")+"\n")); err != nil {
+		return nil, err
+	}
+	if err := atomicConfigWrite(ctx, dir, configPath, encoded); err != nil {
+		restore(envPath, envData)
+		return nil, err
+	}
+	return func() {
+		restore(configPath, configData)
+		restore(envPath, envData)
+	}, nil
 }
 
 // continueGlobalDir is the folder Continue reads its global config.yaml and

@@ -128,6 +128,9 @@ type Service struct {
 	dataDir        string
 	selfExecutable func() (string, error)
 	mu             sync.Mutex
+	// keysMu serializes changes to AO's provider keys and their OS user
+	// environment copies: saves, removals and the startup republication.
+	keysMu         sync.Mutex
 	operations     map[string]*loginOperation
 	terminalStarts map[string]bool
 	closed         bool
@@ -145,10 +148,10 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
 	// Restore AO-managed provider variables before adapter authentication probes
 	// and model discovery run after a daemon restart.
+	republish := map[string]string{}
 	if keys, err := providerkeys.Load(dataDir); err == nil {
 		device, _ := providerkeys.DeviceNames(dataDir)
 		users, _ := providerkeys.UserValueNames(dataDir)
-		republish := map[string]string{}
 		for name, value := range keys {
 			// Recorded first, so a value the user exported before starting AO
 			// still reaches the sessions that must not receive AO's copy. A
@@ -169,17 +172,30 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 		// daemon restart, in the background so a slow or missing user bus
 		// never delays daemon startup. A value the user set there since is
 		// left in place.
-		if len(republish) > 0 {
-			go func() {
-				for name, value := range republish {
-					refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					_ = publishProviderKey(refreshCtx, name, value, value)
-					cancel()
-				}
-			}()
-		}
 	}
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	s := &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	if len(republish) > 0 {
+		go s.republishProviderKeys(republish)
+	}
+	return s
+}
+
+// republishProviderKeys restores the shared keys recorded at startup. Each
+// runs under keysMu and only if it is still stored with the same value and
+// still shared, so a removal or sharing change made meanwhile is never undone.
+func (s *Service) republishProviderKeys(republish map[string]string) {
+	for name, value := range republish {
+		s.keysMu.Lock()
+		keys, err := providerkeys.Load(s.dataDir)
+		device, deviceErr := providerkeys.DeviceNames(s.dataDir)
+		users, usersErr := providerkeys.UserValueNames(s.dataDir)
+		if err == nil && deviceErr == nil && usersErr == nil && keys[name] == value && device[name] && !users[name] {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = publishProviderKey(refreshCtx, name, value, value)
+			cancel()
+		}
+		s.keysMu.Unlock()
+	}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.

@@ -966,9 +966,15 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			return true, nil
 		}
 		if agentID == "continue" && name != "CONTINUE_API_KEY" {
-			if err := saveContinueProvider(ctx, name, model, secret); err != nil {
+			undo, err := saveContinueProviderUndoable(ctx, name, model, secret)
+			if err != nil {
 				return true, err
 			}
+			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+				undo()
+				return true, err
+			}
+			return true, nil
 		}
 		return true, s.storeProviderKey(ctx, name, secret, opts.Device, agentID)
 	}
